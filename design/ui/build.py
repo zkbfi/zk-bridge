@@ -6,7 +6,7 @@ sandboxed iframe (so their styles and scripts never collide), with the companion
 marks it and puts its id in the address (#<section>/<choice>), so a link points at one variation. Nothing is stored.
 
   python3 design/ui/build.py      ->  design/ui/dist/ui/index.html
-  cd design/ui && npx wrangler@4 deploy   (Worker zkb-fi-ui on the route zkb.fi/ui*; it takes precedence over the
+  cd design/ui && npx wrangler@4 deploy   (Worker zkb-fi-ui on the routes zkb.fi/ui* and next.zkb.fi/ui*; it takes precedence over the
                                           landing Worker's custom domain for that path only, and is outside the signed release)
 """
 import html
@@ -124,6 +124,12 @@ ROLES = [
         ("Stop passed", "stop-passed", None, None),
         ("Stop ahead", "stop-ahead", None, None),
         ("The pill's core", "core", None, None),
+    ]),
+    ("In-flight orbits (Explore)", [
+        ("Planet without its icon, tone 1", "planet-1", None, None),
+        ("Planet without its icon, tone 2", "planet-2", None, None),
+        ("Planet without its icon, tone 3", "planet-3", None, None),
+        ("Planet without its icon, tone 4", "planet-4", None, None),
     ]),
 ]
 

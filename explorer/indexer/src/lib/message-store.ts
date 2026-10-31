@@ -73,7 +73,8 @@ export const writeMessage = async (input: WriteMessageInput): Promise<MessageRow
 const coverFromStoredHead = async (database: IndexingDatabase, row: MessageRow): Promise<Partial<MessageRow> | null> => {
   if (row.coveredByHeadSlot !== null || row.sentBlockNumber === null) return null;
   const head = await database.find(lightClientHeads, { chainId: row.destinationChainId });
-  if (!head || !isCovered(head.executionBlockNumber, row.sentBlockNumber)) return null;
+  // The head of the deployment holds no execution block, so it covers nothing.
+  if (!head || head.executionBlockNumber === null || !isCovered(head.executionBlockNumber, row.sentBlockNumber)) return null;
   return { coveredByHeadSlot: head.slot, coveredAtTimestamp: head.updatedTimestamp };
 };
 

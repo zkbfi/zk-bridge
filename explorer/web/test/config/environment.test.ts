@@ -21,6 +21,16 @@ describe("readConfiguration", () => {
     expect(configuration.dataMode).toBe("live");
   });
 
+  it("reads the beacon API of each chain, dropping one trailing slash, and none when no variable names one", () => {
+    const configuration = readConfiguration({
+      VITE_EXPLORER_DEPLOYMENT_JSON: DEPLOYMENT,
+      VITE_EXPLORER_BEACON_URL_1: "https://beacon-eth.example.org/",
+      VITE_EXPLORER_BEACON_URL_369: " ",
+    });
+    expect(configuration.beaconUrls).toEqual({ 1: "https://beacon-eth.example.org" });
+    expect(readConfiguration({ VITE_EXPLORER_DATA: "fixture" }).beaconUrls).toEqual({});
+  });
+
   it("leaves the indexer unset when no variable names it, so the registry default decides later", () => {
     expect(readConfiguration({ VITE_EXPLORER_DEPLOYMENT_URL: "https://example.org/d.json" }).indexerUrl).toBeNull();
   });

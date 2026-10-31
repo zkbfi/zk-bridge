@@ -23,6 +23,11 @@
 //! that the light client stored after the run before. A node that has no update
 //! for a needed period (pruned history) gives an error that names the period.
 //!
+//! The handoff of the head period is asked for only when the light client does not store the next committee yet: when
+//! it does, an update signed in the next period is verified by that committee. A node without the updates route (chain
+//! 943) can therefore move a light client across one period border, as long as a proof runs before the source signs in
+//! the period after the stored next committee. After that the light client is stranded on such a node.
+//!
 //! # Old messages
 //!
 //! The bridge picks the ancestry path from the distance between the anchor and the source slot. Up to 8192 slots it
@@ -225,9 +230,20 @@ fn missing_period_error(period: u64, head_period: u64, latest_period: u64) -> Er
 
 /// The periods whose handoff updates a fold from `head_slot` needs: from the period of the head up to, and not
 /// including, the period of the latest update. The range stops after 64 periods, the size of one fold.
-pub fn handoff_periods(chain: ChainKind, head_slot: u64, latest: &LightClientUpdate) -> Range<u64> {
+///
+/// When the light client already stores the committee of the period after the head (`next_committee_known`), the
+/// handoff of the head period is left out: its only use is to prove that committee. The fold then starts with an update
+/// signed in the next period, which the stored next committee verifies. This is what lets a light client whose source
+/// node serves no `light_client/updates` (chain 943) cross a period border at all: an update signed in the next period
+/// moves it there, and the next committee it proves keeps it one period ahead.
+pub fn handoff_periods(
+    chain: ChainKind,
+    head_slot: u64,
+    next_committee_known: bool,
+    latest: &LightClientUpdate,
+) -> Range<u64> {
     let spec = chain.spec();
-    let first = spec.period_at_slot(head_slot);
+    let first = spec.period_at_slot(head_slot) + u64::from(next_committee_known);
     let last = spec.period_at_slot(latest.finalized_header.beacon.slot);
     first..last.min(first + MAX_FOLD_UPDATES as u64).max(first)
 }
@@ -241,10 +257,11 @@ pub fn handoff_periods(chain: ChainKind, head_slot: u64, latest: &LightClientUpd
 pub fn assemble_fold(
     chain: ChainKind,
     head_slot: u64,
+    next_committee_known: bool,
     handoffs: &BTreeMap<u64, LightClientUpdate>,
     latest: LightClientUpdate,
 ) -> Result<Vec<LightClientUpdate>> {
-    let periods = handoff_periods(chain, head_slot, &latest);
+    let periods = handoff_periods(chain, head_slot, next_committee_known, &latest);
     let latest_period = chain
         .spec()
         .period_at_slot(latest.finalized_header.beacon.slot);
@@ -1024,10 +1041,17 @@ impl HttpBeaconSource {
         next_committee_hash: B256,
         latest: LightClientUpdate,
     ) -> Result<UpdateInput> {
-        let periods = handoff_periods(self.chain, head.slot, &latest);
+        let next_committee_known = next_committee_hash != B256::ZERO;
+        let periods = handoff_periods(self.chain, head.slot, next_committee_known, &latest);
         let handoffs =
             fetch_period_updates(self.client.as_ref(), self.chain, periods.start, periods.end)?;
-        let folded = assemble_fold(self.chain, head.slot, &handoffs, latest)?;
+        let folded = assemble_fold(
+            self.chain,
+            head.slot,
+            next_committee_known,
+            &handoffs,
+            latest,
+        )?;
         let schedule = self.fork_schedule()?;
         let mut updates = self.attach_genesis_validators_root_branches(folded)?;
         self.repair_finalized_headers(&schedule, &mut updates)?;
@@ -2309,6 +2333,7 @@ mod tests {
         let fold = assemble_fold(
             ChainKind::Pulsechain,
             first.store.header_slot,
+            false,
             &handoffs,
             latest.clone(),
         )
@@ -2367,6 +2392,7 @@ mod tests {
         let fold_one = assemble_fold(
             ChainKind::Pulsechain,
             first.store.header_slot,
+            false,
             &handoffs,
             latest.clone(),
         )
@@ -2381,6 +2407,7 @@ mod tests {
         let fold_two = assemble_fold(
             ChainKind::Pulsechain,
             store_one.header_slot,
+            store_one.next_sync_committee.is_some(),
             &handoffs,
             latest,
         )
@@ -2412,6 +2439,7 @@ mod tests {
         let error = assemble_fold(
             ChainKind::Pulsechain,
             100 * PERIOD_SLOTS + 10,
+            false,
             &handoffs,
             latest,
         )
@@ -2436,11 +2464,159 @@ mod tests {
         let fold = assemble_fold(
             ChainKind::Pulsechain,
             first.store.header_slot,
+            false,
             &BTreeMap::new(),
             latest,
         )
         .unwrap();
         assert_eq!(fold.len(), 1);
+    }
+
+    /// The finality update of period `period + 1` from a store early in `period`: attested, finalized and signed in the
+    /// next period, proving the committee after it. `store_knows_next` says whether the store holds the next committee.
+    fn crossing_scenario(
+        period: u64,
+        store_knows_next: bool,
+    ) -> lc_testkit::synthetic::UpdateScenario {
+        let base = period * PERIOD_SLOTS;
+        build_update(
+            ChainKind::Pulsechain.spec(),
+            UpdateRecipe {
+                store_slot: base + 10,
+                finalized_slot: base + PERIOD_SLOTS + 100,
+                attested_slot: base + PERIOD_SLOTS + 200,
+                signature_slot: base + PERIOD_SLOTS + 201,
+                participants: 400,
+                include_next_committee: true,
+                store_knows_next_committee: store_knows_next,
+            },
+        )
+    }
+
+    /// Claim: a light client that stores the next committee crosses into the next period with the latest update alone,
+    /// with no handoff update from the node, and the program accepts that fold and proves the committee after it. A light
+    /// client that does not store the next committee still needs the handoff of its head period.
+    /// Why it matters: the beacon node of chain 943 serves no `light_client/updates`. Before this rule the source asked
+    /// for the handoff of the head period even when the light client held the committee it proves, found none, and
+    /// refused every update after a period border: the light client on Sepolia could never leave its first period.
+    #[test]
+    fn a_stored_next_committee_crosses_one_period_without_a_handoff() {
+        let known = crossing_scenario(100, true);
+        let head = known.store.header_slot;
+        assert_eq!(
+            handoff_periods(ChainKind::Pulsechain, head, true, &known.update),
+            101..101
+        );
+        let fold = assemble_fold(
+            ChainKind::Pulsechain,
+            head,
+            true,
+            &BTreeMap::new(),
+            known.update.clone(),
+        )
+        .expect("no handoff is needed");
+        assert_eq!(fold.len(), 1);
+        let output = verify_update_natively(&UpdateInput {
+            chain: ChainKind::Pulsechain,
+            store: known.store.clone(),
+            steps: steps_with_table_versions(ChainKind::Pulsechain, fold),
+        })
+        .expect("the stored next committee verifies the crossing");
+        assert_eq!(
+            ChainKind::Pulsechain
+                .spec()
+                .period_at_slot(output.newHeadSlot),
+            101
+        );
+        assert_eq!(output.syncCommitteeHash, committee_hash_of(101));
+        assert_eq!(output.nextSyncCommitteeHash, committee_hash_of(102));
+
+        let unknown = crossing_scenario(100, false);
+        let error = assemble_fold(
+            ChainKind::Pulsechain,
+            unknown.store.header_slot,
+            false,
+            &BTreeMap::new(),
+            unknown.update,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("sync committee period 100"),
+            "{error}"
+        );
+    }
+
+    /// Claim: the live case of 2026-10-31. The light client on Sepolia has its head in period 1366 and stores the
+    /// committees of 1366 and 1367; the node gives no update for 1366 but gives 1367; the newest update is in 1368. The
+    /// fold asks only for 1367, holds that handoff and the newest update, and the program accepts it from the store.
+    /// Why it matters: the proof failed with "no light-client update for sync committee period 1366" although the
+    /// update of 1366 could only prove the committee of 1367, which the light client already held.
+    #[test]
+    fn a_catch_up_starts_at_the_first_period_whose_next_committee_is_unknown() {
+        let store = crossing_scenario(1366, true).store;
+        assert_eq!(
+            ChainKind::Pulsechain
+                .spec()
+                .period_at_slot(store.header_slot),
+            1366
+        );
+        let handoffs = handoffs_of(1367..1368);
+        let latest = period_scenario(1368).update;
+        let latest_slot = latest.finalized_header.beacon.slot;
+        assert_eq!(
+            handoff_periods(ChainKind::Pulsechain, store.header_slot, true, &latest),
+            1367..1368
+        );
+        let fold = assemble_fold(
+            ChainKind::Pulsechain,
+            store.header_slot,
+            true,
+            &handoffs,
+            latest,
+        )
+        .expect("period 1366 is not needed");
+        assert_eq!(fold.len(), 2, "the handoff of 1367, then the newest update");
+        let output = verify_update_natively(&UpdateInput {
+            chain: ChainKind::Pulsechain,
+            store,
+            steps: steps_with_table_versions(ChainKind::Pulsechain, fold),
+        })
+        .expect("the stored committee of 1367 signs the first step");
+        assert_eq!(output.newHeadSlot, latest_slot);
+        assert_eq!(output.previousSyncCommitteeHash, committee_hash_of(1366));
+        assert_eq!(output.startNextSyncCommitteeHash, committee_hash_of(1367));
+        assert_eq!(output.syncCommitteeHash, committee_hash_of(1368));
+    }
+
+    /// Claim: with the next committee stored, a light client two periods behind still needs the handoff of the period
+    /// after its head, and only that one; the handoff of the head period is not asked for.
+    /// Why it matters: an update signed two periods past the head cannot be verified by any stored committee. The error
+    /// must name the period a node has to supply, so the operator knows the light client is stranded there.
+    #[test]
+    fn a_stored_next_committee_still_needs_the_handoffs_after_it() {
+        let first = period_scenario(100);
+        let latest = period_scenario(102).update;
+        assert_eq!(
+            handoff_periods(
+                ChainKind::Pulsechain,
+                first.store.header_slot,
+                true,
+                &latest
+            ),
+            101..102
+        );
+        let error = assemble_fold(
+            ChainKind::Pulsechain,
+            first.store.header_slot,
+            true,
+            &handoffs_of(100..101),
+            latest,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("sync committee period 101"),
+            "{error}"
+        );
     }
 
     /// Claim: the paging asks for the count that is left (never more than 128), starts each request after the highest

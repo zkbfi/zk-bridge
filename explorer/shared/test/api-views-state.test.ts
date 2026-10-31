@@ -136,6 +136,71 @@ describe("headView", () => {
     expect(view.lagSeconds).toBe(0);
   });
 
+  it("tells a head that came from an update, with the slot the light client started from", () => {
+    const view = headView({
+      side: pulsechain,
+      tracked: ethereum,
+      head: { ...head, initialSlot: 900n, initialHeadBlockNumber: 40n, genesisTime: 100n, secondsPerSlot: 12n },
+      finalizedSlot: 1_040,
+      headBlockTimestamp: 6_900,
+      trackedTip: tip(1, 99n, 7_000n),
+      ownTip: undefined,
+    });
+    expect(view).toMatchObject({
+      storedHeadSlot: 1_000,
+      storedHeadSource: "update",
+      storedHeadSlotTimestamp: 100 + 1_000 * 12,
+      initialized: true,
+      initializedAtSlot: 900,
+      initializedAtBlock: 40,
+      updateCount: 4,
+    });
+  });
+
+  it("shows the head set at deployment as the stored head, with no update, and measures the lag from its slot time", () => {
+    const deployment = {
+      chainId: 943,
+      slot: 11_463_040n,
+      headerRoot: hashOf("01"),
+      executionBlockNumber: null,
+      updatedTimestamp: null,
+      updateCount: 0,
+      initialSlot: 11_463_040n,
+      initialHeadBlockNumber: 25_767_020n,
+      genesisTime: 1_655_733_600n,
+      secondsPerSlot: 12n,
+    };
+    const slotTime = 1_655_733_600 + 11_463_040 * 12;
+    const view = headView({
+      side: pulsechain,
+      tracked: ethereum,
+      head: deployment,
+      finalizedSlot: 11_477_760,
+      headBlockTimestamp: null,
+      trackedTip: tip(1, 99n, BigInt(slotTime + 3_600)),
+      ownTip: undefined,
+    });
+    expect(view).toMatchObject({
+      storedHeadSlot: 11_463_040,
+      storedHeadSource: "deployment",
+      storedHeadExecutionBlock: null,
+      storedHeadExecutionTimestamp: null,
+      storedHeadSlotTimestamp: slotTime,
+      lastUpdateTimestamp: null,
+      updateCount: 0,
+      initialized: true,
+      initializedAtSlot: 11_463_040,
+      initializedAtBlock: 25_767_020,
+      lagSlots: 11_477_760 - 11_463_040,
+      lagSeconds: 3_600,
+    });
+  });
+
+  it("says a light client with no head is not initialized", () => {
+    const view = headView({ side: pulsechain, tracked: ethereum, head: undefined, finalizedSlot: 5, headBlockTimestamp: null, trackedTip: undefined, ownTip: undefined });
+    expect(view).toMatchObject({ initialized: false, storedHeadSource: null, initializedAtSlot: null, initializedAtBlock: null, storedHeadSlotTimestamp: null });
+  });
+
   it("reports unknown lags as null when the head, the beacon or the tip is missing", () => {
     const view = headView({ side: pulsechain, tracked: ethereum, head: undefined, finalizedSlot: null, headBlockTimestamp: null, trackedTip: undefined, ownTip: undefined });
     expect(view).toMatchObject({ storedHeadSlot: null, updateCount: 0, lagSlots: null, lagSeconds: null, trackedChainTipBlock: null, ownChainTipBlock: null });

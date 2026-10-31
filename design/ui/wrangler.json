@@ -2,7 +2,20 @@
   "$schema": "https://unpkg.com/wrangler@4/config-schema.json",
   "name": "zkb-fi-ui",
   "compatibility_date": "2026-10-01",
-  "assets": { "directory": "dist", "html_handling": "auto-trailing-slash", "not_found_handling": "none" },
-  "routes": [{ "pattern": "zkb.fi/ui*", "zone_name": "zkb.fi" }],
+  "assets": {
+    "directory": "dist",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "none"
+  },
+  "routes": [
+    {
+      "pattern": "zkb.fi/ui*",
+      "zone_name": "zkb.fi"
+    },
+    {
+      "pattern": "next.zkb.fi/ui*",
+      "zone_name": "zkb.fi"
+    }
+  ],
   "workers_dev": false
 }

@@ -24,6 +24,63 @@ describe("ChainTip:block", () => {
     expect(database.rows(chainTips)[0]?.baseFeePerGas).toBeNull();
   });
 
+  /** A light client deployed with head 11463040, on a beacon chain with genesis 1655733600 and 12 second slots. */
+  const deployed = ({ functionName }: { functionName: string }) =>
+    ({ head: 11_463_040n, headers: hashOf("cc"), genesisTime: 1_655_733_600n, secondsPerSlot: 12n })[functionName];
+
+  it("reads the head that the light client was deployed with, at the tip block, and stores it with no update", async () => {
+    const { database, client, context } = createContext(369, deployed);
+    database.queueSqlRows([]);
+    await callHandler(name, { event: createEvent({}, { block: { number: 7n, timestamp: 70n } }), context });
+    expect(client.readContract).toHaveBeenCalledWith(expect.objectContaining({ address: LIGHT_CLIENT_ON_PULSECHAIN, functionName: "head", blockNumber: 7n }));
+    expect(client.readContract).toHaveBeenCalledWith(expect.objectContaining({ functionName: "headers", args: [11_463_040n], blockNumber: 7n }));
+    expect(database.row(lightClientHeads, { chainId: 369 })).toEqual({
+      chainId: 369,
+      slot: 11_463_040n,
+      headerRoot: hashOf("cc"),
+      executionBlockNumber: null,
+      updatedTimestamp: null,
+      updateCount: 0,
+      initialSlot: 11_463_040n,
+      initialHeadBlockNumber: 7n,
+      genesisTime: 1_655_733_600n,
+      secondsPerSlot: 12n,
+    });
+  });
+
+  it("reads the light client only until it holds a head", async () => {
+    const { database, client, context } = createContext(369, deployed);
+    database.queueSqlRows([]);
+    await callHandler(name, { event: createEvent({}, { block: { number: 7n, timestamp: 70n } }), context });
+    client.readContract.mockClear();
+    database.queueSqlRows([]);
+    await callHandler(name, { event: createEvent({}, { block: { number: 12n, timestamp: 120n } }), context });
+    expect(client.readContract).not.toHaveBeenCalled();
+    expect(database.row(lightClientHeads, { chainId: 369 })).toMatchObject({ initialHeadBlockNumber: 7n });
+  });
+
+  it("stores no head while the light client is not deployed yet, and tries again at the next tip", async () => {
+    let code = false;
+    const { database, context } = createContext(369, (call) => {
+      if (!code) throw new Error('The contract function "head" returned no data ("0x").');
+      return deployed(call);
+    });
+    database.queueSqlRows([]);
+    await callHandler(name, { event: createEvent({}, { block: { number: 7n, timestamp: 70n } }), context });
+    expect(database.rows(lightClientHeads)).toEqual([]);
+    code = true;
+    database.queueSqlRows([]);
+    await callHandler(name, { event: createEvent({}, { block: { number: 12n, timestamp: 120n } }), context });
+    expect(database.row(lightClientHeads, { chainId: 369 })).toMatchObject({ slot: 11_463_040n, initialHeadBlockNumber: 12n });
+  });
+
+  it("stores no head when the light client holds slot zero", async () => {
+    const { database, context } = createContext(369, (call) => (call.functionName === "head" ? 0n : deployed(call)));
+    database.queueSqlRows([]);
+    await callHandler(name, { event: createEvent({}, { block: { number: 7n, timestamp: 70n } }), context });
+    expect(database.rows(lightClientHeads)).toEqual([]);
+  });
+
   it("ages the sends of the chain with the new clock, so that an old send leaves sent", async () => {
     const { database, context } = createContext(1);
     const messageId = hashOf("ab");
@@ -86,11 +143,55 @@ describe("BeaconLightClient:HeadUpdated", () => {
       executionBlockNumber: 4_000n,
       updatedTimestamp: 1_000n,
       updateCount: 1,
+      initialSlot: null,
+      initialHeadBlockNumber: null,
+      genesisTime: null,
+      secondsPerSlot: null,
     });
     database.queueSqlRows([]);
     await callHandler(name, { event: createEvent({ ...args, slot: 501n }, { block: { number: 101n, timestamp: 1_012n } }), context });
     expect(database.row(lightClientHeads, { chainId: 369 })).toMatchObject({ slot: 501n, updateCount: 2, updatedTimestamp: 1_012n });
     expect(database.rows(headUpdates)).toHaveLength(2);
+  });
+
+  it("keeps the head of the deployment that a tip read, and counts the first update as one", async () => {
+    const { database, context } = createContext(369, answer);
+    database.seed(lightClientHeads, {
+      chainId: 369,
+      slot: 400n,
+      headerRoot: hashOf("cc"),
+      executionBlockNumber: null,
+      updatedTimestamp: null,
+      updateCount: 0,
+      initialSlot: 400n,
+      initialHeadBlockNumber: 90n,
+      genesisTime: 5n,
+      secondsPerSlot: 12n,
+    });
+    database.queueSqlRows([]);
+    await callHandler(name, { event: createEvent(args), context });
+    expect(database.row(lightClientHeads, { chainId: 369 })).toEqual({
+      chainId: 369,
+      slot: 500n,
+      headerRoot: hashOf("11"),
+      executionBlockNumber: 4_000n,
+      updatedTimestamp: 1_000n,
+      updateCount: 1,
+      initialSlot: 400n,
+      initialHeadBlockNumber: 90n,
+      genesisTime: 5n,
+      secondsPerSlot: 12n,
+    });
+  });
+
+  it("reads the head of the deployment one block before the first update when no tip read it", async () => {
+    const { database, client, context } = createContext(369, (call) =>
+      call.functionName === "executionBlockNumber" ? 4_000n : ({ head: 400n, headers: hashOf("cc"), genesisTime: 5n, secondsPerSlot: 12n } as Record<string, unknown>)[call.functionName],
+    );
+    database.queueSqlRows([]);
+    await callHandler(name, { event: createEvent(args), context });
+    expect(client.readContract).toHaveBeenCalledWith(expect.objectContaining({ functionName: "head", blockNumber: 99n }));
+    expect(database.row(lightClientHeads, { chainId: 369 })).toMatchObject({ slot: 500n, updateCount: 1, initialSlot: 400n, initialHeadBlockNumber: 99n, genesisTime: 5n });
   });
 
   it("covers the messages that the new head reaches", async () => {

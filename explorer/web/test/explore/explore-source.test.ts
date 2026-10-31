@@ -1,6 +1,6 @@
 import { getAddress } from "viem";
 import { describe, expect, it } from "vitest";
-import { createIndexerExploreSource, parseProofs } from "../../src/explore/explore-source";
+import { createIndexerExploreSource, parseBeaconClocks, parseDelivered, parseProofs } from "../../src/explore/explore-source";
 import { recordedRequester, RECORDED_HEAD_UPDATES } from "./recorded";
 
 const source = createIndexerExploreSource(() => "https://indexer.zkb.fi/", recordedRequester);
@@ -44,5 +44,49 @@ describe("the Explore source over the indexer (recorded answers)", () => {
   it("refuses a malformed answer and asks for an indexer when none is set", async () => {
     expect(() => parseProofs({ items: [{ chainId: "x" }] })).toThrow(/chainId/);
     await expect(createIndexerExploreSource(() => null, recordedRequester).proofs()).rejects.toThrow(/Settings/);
+  });
+});
+
+describe("the in-flight orbits' reads", () => {
+  it("reads the delivered counts per direction", () => {
+    expect(parseDelivered({ now: 1, directions: [{ sourceChainId: 1, destinationChainId: 369, last24h: 3, last7d: 9, byToken: [] }] })).toEqual([{ sourceChainId: 1, last24h: 3, last7d: 9, timing: null }]);
+    expect(() => parseDelivered({ directions: [{ sourceChainId: 1, last24h: "x" }] })).toThrow(/last24h/);
+  });
+
+  it("reads each direction's timing: sent → delivered and each step, for 24 hours and 7 days", () => {
+    const window = (median: number | null) => ({
+      count: median === null ? 0 : 4,
+      sentToDelivered: { avg: median, median, p90: median === null ? null : median * 2 },
+      steps: { sent: { median: 768, p90: 768 }, final: { median: 100, p90: 300 }, ready: { median: 20, p90: 60 } },
+    });
+    const [out, back] = parseDelivered({
+      directions: [{ sourceChainId: 1, destinationChainId: 369, last24h: 4, last7d: 9, byToken: [] }],
+      timing: [
+        { sourceChainId: 1, last24h: window(900), last7d: window(1000) },
+        { sourceChainId: 369, last24h: window(null), last7d: window(null) },
+      ],
+    });
+    expect(out!.timing!.last24h).toEqual({
+      count: 4,
+      sentToDelivered: { avg: 900, median: 900, p90: 1800 },
+      steps: [
+        { avg: null, median: 768, p90: 768 },
+        { avg: null, median: 100, p90: 300 },
+        { avg: null, median: 20, p90: 60 },
+      ],
+    });
+    // A direction with no deliveries in 7 days still gets its (empty) timing.
+    expect(back).toMatchObject({ sourceChainId: 369, last24h: 0, last7d: 0, timing: { last24h: { count: 0 } } });
+    expect(() => parseDelivered({ directions: [], timing: [{ sourceChainId: 1, last24h: { count: 1, sentToDelivered: { median: "x" }, steps: {} } }] })).toThrow(/median/);
+  });
+
+  it("reads each tracked chain's beacon clock from a stored head's slot and slot time", () => {
+    const clocks = parseBeaconClocks({
+      heads: [
+        { chainId: 369, trackedChainId: 1, storedHeadSlot: 100, storedHeadSlotTimestamp: 1_606_825_223 },
+        { chainId: 1, trackedChainId: 369, storedHeadSlot: null, storedHeadSlotTimestamp: null },
+      ],
+    });
+    expect(clocks).toEqual([{ trackedChainId: 1, genesisTime: 1_606_824_023, secondsPerSlot: 12 }]);
   });
 });

@@ -9,7 +9,8 @@
 #   prove     the dapp's proof flow: start a job, read its state, read the latest proof of a direction
 #   webhook   the prover's callback; the backend's publicUrl names this host
 #   archive   evidence for messages that are sent and not yet delivered
-#   indexer   the explorer indexer (Ponder): the read API and GraphQL. /sql, /metrics and /status stay private.
+#   indexer   the explorer indexer (Ponder): the read API and GraphQL, and at / a live page of its data (JSON on
+#             request). /sql, /metrics and /status stay private.
 
 {
 	email {$ZKB_ACME_EMAIL}
@@ -53,6 +54,21 @@
 	@routes path /health /ready /api/* /graphql /graphql/*
 	handle @routes {
 		reverse_proxy 127.0.0.1:{$ZKB_INDEXER_PORT:42069}
+	}
+	# The address itself: a live page of the on-chain data (deploy/app-server/indexer-home, shipped with each release),
+	# or the summary as JSON for a client that asks for JSON.
+	@home_json {
+		path /
+		header Accept *application/json*
+	}
+	handle @home_json {
+		rewrite * /api/summary
+		reverse_proxy 127.0.0.1:{$ZKB_INDEXER_PORT:42069}
+	}
+	handle / {
+		root * /opt/zk-bridge/current/deploy/app-server/indexer-home
+		rewrite * /index.html
+		file_server
 	}
 	import not_found
 }

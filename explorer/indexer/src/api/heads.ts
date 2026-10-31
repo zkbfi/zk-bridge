@@ -38,7 +38,9 @@ const headOf = async (side: PairSide) => {
     tracked.beaconUrl === null
       ? null
       : await finalizedSlotCache.get(tracked.beaconUrl, () => fetchFinalizedSlot(tracked.beaconUrl as string));
-  const headBlockTimestamp = head === undefined ? null : await blockTimestamp(tracked, head.executionBlockNumber);
+  // The head of the deployment has no execution block; its lag is measured from the start time of its slot instead.
+  const headBlockTimestamp =
+    head === undefined || head.executionBlockNumber === null ? null : await blockTimestamp(tracked, head.executionBlockNumber);
   return headView({ side, tracked, head, finalizedSlot, headBlockTimestamp, trackedTip, ownTip });
 };
 

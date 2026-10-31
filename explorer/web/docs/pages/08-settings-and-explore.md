@@ -1,6 +1,6 @@
 # Settings, search and Explore
 
-Make the app yours: pick a theme, use your own RPC endpoint for each chain, swap any service the app reads, and find anything in the bridge from one search.
+Make the app yours: pick a theme, use your own RPC endpoint and beacon endpoint for each chain, swap any service the app reads, and find anything in the bridge from one search.
 
 ## Search
 
@@ -51,6 +51,19 @@ The theme also applies to these docs; their footer has the same choice.
 ### RPC endpoints
 
 One RPC endpoint for each chain of the pair. The app uses it to read balances, gas prices and token prices, and to send transactions. A new RPC endpoint must answer for its chain before Save keeps it. Each field shows a live check with its response time, or "down".
+
+### Beacon endpoints
+
+One beacon API for each chain of the pair: the chain's consensus layer, which a proof of that chain is made from. The default is valve.city's beacon route for the chain, with a public node behind it if valve.city does not answer:
+
+| Chain | Default | Then |
+|---|---|---|
+| Ethereum | `one.valve.city/beacon/vk_demo/1` | `ethereum-beacon-api.publicnode.com` |
+| PulseChain | `one.valve.city/beacon/vk_demo/369` | `rpc-pulsechain.g4mm4.io/beacon-api` |
+| Sepolia | `one.valve.city/beacon/vk_demo/11155111` | `lodestar-sepolia.chainsafe.io` |
+| PulseChain testnet v4 | `one.valve.city/beacon/vk_demo/943` | `rpc-testnet-pulsechain.g4mm4.io/beacon-api` |
+
+The live check asks the endpoint for its genesis (`/eth/v1/beacon/genesis`) and passes only when it is the genesis of that chain, so a beacon API of another chain shows "down"; hover the dot for the reason. A beacon API you set is used alone, without the fallback.
 
 ### Token and chain images
 

@@ -4,6 +4,7 @@
  * strictly; a value the indexer does not have stays null and shows as "—".
  */
 import { getAddress, type Address, type Hex } from "viem";
+import { secondsPerSlot } from "@zk-bridge/shared";
 
 /** A light-client update: one proof posted on a chain. `number` counts from 1 per chain, oldest first. */
 export type ProofRow = {
@@ -49,6 +50,77 @@ export type HistoryRow = {
   readonly status: string | null;
 };
 
+/** Seconds: average, median and 90th percentile (null with no deliveries). */
+export type Spread = { readonly avg: number | null; readonly median: number | null; readonly p90: number | null };
+
+/** One window's timing: sent → delivered, and each step's median and p90 (Sent, Final, Proof ready). */
+export type WindowTiming = { readonly count: number; readonly sentToDelivered: Spread; readonly steps: readonly [Spread, Spread, Spread] };
+
+/** One direction's timing over the last 24 hours and 7 days. */
+export type DirectionTiming = { readonly last24h: WindowTiming; readonly last7d: WindowTiming };
+
+/** One direction's delivered counts, and its timing when the indexer gives it. */
+export type DeliveredCounts = { readonly sourceChainId: number; readonly last24h: number; readonly last7d: number; readonly timing: DirectionTiming | null };
+
+const secondsOrNull = (value: unknown, what: string): number | null => {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`The indexer's ${what} is not a number.`);
+  return value;
+};
+
+const spreadOf = (value: unknown, what: string): Spread => {
+  const row = record(value, what);
+  return { avg: secondsOrNull(row.avg, `${what}.avg`), median: secondsOrNull(row.median, `${what}.median`), p90: secondsOrNull(row.p90, `${what}.p90`) };
+};
+
+const windowOf = (value: unknown, what: string): WindowTiming => {
+  const row = record(value, what);
+  const steps = record(row.steps, `${what}.steps`);
+  return {
+    count: int(row.count, `${what}.count`),
+    sentToDelivered: spreadOf(row.sentToDelivered, `${what}.sentToDelivered`),
+    steps: [spreadOf(steps.sent, `${what}.steps.sent`), spreadOf(steps.final, `${what}.steps.final`), spreadOf(steps.ready, `${what}.steps.ready`)],
+  };
+};
+
+/** Parses `/api/delivered`: counts per direction, with its timing (absent from an older indexer: null). */
+export const parseDelivered = (body: unknown): readonly DeliveredCounts[] => {
+  const answer = record(body, "delivered answer");
+  const timing = new Map<number, DirectionTiming>();
+  if (answer.timing !== undefined) {
+    for (const item of array(answer.timing, "timing")) {
+      const row = record(item, "timing direction");
+      timing.set(int(row.sourceChainId, "timing.sourceChainId"), { last24h: windowOf(row.last24h, "timing.last24h"), last7d: windowOf(row.last7d, "timing.last7d") });
+    }
+  }
+  const rows = array(answer.directions, "delivered directions").map((item) => {
+    const row = record(item, "delivered direction");
+    const sourceChainId = int(row.sourceChainId, "sourceChainId");
+    return { sourceChainId, last24h: int(row.last24h, "last24h"), last7d: int(row.last7d, "last7d"), timing: timing.get(sourceChainId) ?? null };
+  });
+  // A direction with timing but no deliveries listed (none in 7 days) still has its (empty) timing.
+  for (const [sourceChainId, direction] of timing) if (!rows.some((row) => row.sourceChainId === sourceChainId)) rows.push({ sourceChainId, last24h: 0, last7d: 0, timing: direction });
+  return rows;
+};
+
+/** A tracked beacon chain's clock, from a light client's stored head: the time of slot 0. */
+export type BeaconClock = { readonly trackedChainId: number; readonly genesisTime: number; readonly secondsPerSlot: number };
+
+/**
+ * Parses `/api/heads` into the tracked chains' clocks: the stored head's slot and its slot time give the genesis
+ * (slot time − slot × seconds per slot). A head without a slot time gives none.
+ */
+export const parseBeaconClocks = (body: unknown): readonly BeaconClock[] =>
+  array(record(body, "heads answer").heads, "heads").flatMap((item) => {
+    const row = record(item, "head");
+    const slot = intOrNull(row.storedHeadSlot, "storedHeadSlot");
+    const slotTime = intOrNull(row.storedHeadSlotTimestamp, "storedHeadSlotTimestamp");
+    if (slot === null || slotTime === null) return [];
+    const trackedChainId = int(row.trackedChainId, "trackedChainId");
+    const seconds = secondsPerSlot(trackedChainId);
+    return [{ trackedChainId, genesisTime: slotTime - slot * seconds, secondsPerSlot: seconds }];
+  });
+
 /** What Explore reads from the indexer. */
 export interface ExploreSource {
   proofs(): Promise<readonly ProofRow[]>;
@@ -57,6 +129,10 @@ export interface ExploreSource {
   history(limit: number): Promise<readonly HistoryRow[]>;
   /** The count of escrow entries, undelivered messages and release events (Explore's browse counts). */
   counts(): Promise<{ readonly escrowed: number; readonly undelivered: number; readonly releases: number }>;
+  /** Per direction (by source chain), the messages delivered in the last 24 hours and 7 days (`GET /api/delivered`). */
+  delivered(): Promise<readonly DeliveredCounts[]>;
+  /** The tracked beacon chains' clocks, from the light clients' stored heads (`GET /api/heads`). */
+  beaconClocks(): Promise<readonly BeaconClock[]>;
 }
 
 type Json = Record<string, unknown>;
@@ -177,6 +253,8 @@ export const createIndexerExploreSource = (baseUrl: () => string | null, request
     gates: async () => parseGates(await get("/api/gate")),
     lightClientCosts: async () => parseLightClientCosts(await get("/api/light-client-costs")),
     history: async (limit) => parseHistory(await get(`/api/history?limit=${limit}`)),
+    delivered: async () => parseDelivered(await get("/api/delivered")),
+    beaconClocks: async () => parseBeaconClocks(await get("/api/heads")),
     counts: async () => {
       const [escrow, undelivered, releases] = await Promise.all([get("/api/escrow"), get("/api/undelivered"), get("/api/release-events")]);
       return {

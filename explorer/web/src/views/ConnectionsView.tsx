@@ -13,6 +13,8 @@ import { Field, Notice, Panel, TextInput } from "../ui/primitives";
 export type ConnectionTarget =
   | { readonly kind: "indexer"; readonly label: string }
   | { readonly kind: "board"; readonly label: string; readonly chainId: number }
+  /** The beacon API of one chain (set in the Settings sheet). */
+  | { readonly kind: "beacon"; readonly label: string; readonly chainId: number }
   | { readonly kind: "endpoint"; readonly label: string; readonly key: EndpointKey }
   | { readonly kind: "rpc"; readonly label: string; readonly chainId: number };
 
@@ -40,6 +42,7 @@ export const connectionTargets = (pair: PairConfig): readonly ConnectionTarget[]
 export const settingOf = (resolved: ResolvedConnection, target: ConnectionTarget): ResolvedSetting | null => {
   if (target.kind === "endpoint") return resolved[target.key];
   if (target.kind === "board") return boardUrlOf(resolved, target.chainId);
+  if (target.kind === "beacon") return resolved.beaconUrls?.[target.chainId] ?? null;
   return target.kind === "indexer" ? resolved.indexerUrl : (resolved.rpcUrls[target.chainId] ?? null);
 };
 
@@ -47,6 +50,7 @@ export const settingOf = (resolved: ResolvedConnection, target: ConnectionTarget
 export const userUrlOf = (user: ConnectionSettings, target: ConnectionTarget): string | null => {
   if (target.kind === "endpoint") return user[target.key] ?? null;
   if (target.kind === "board") return user.msgboardUrls?.[target.chainId] ?? user.msgboardUrl ?? null;
+  if (target.kind === "beacon") return user.beaconUrls?.[target.chainId] ?? null;
   return target.kind === "indexer" ? user.indexerUrl : (user.rpcUrls[target.chainId] ?? null);
 };
 
@@ -60,6 +64,7 @@ export const userUrlOf = (user: ConnectionSettings, target: ConnectionTarget): s
 export const withUserUrl = (user: ConnectionSettings, target: ConnectionTarget, url: string): ConnectionSettings => {
   if (target.kind === "endpoint") return { ...user, [target.key]: url };
   if (target.kind === "board") return { ...user, msgboardUrls: { ...user.msgboardUrls, [target.chainId]: url } };
+  if (target.kind === "beacon") return { ...user, beaconUrls: { ...user.beaconUrls, [target.chainId]: url } };
   return target.kind === "indexer" ? { ...user, indexerUrl: url } : { ...user, rpcUrls: { ...user.rpcUrls, [target.chainId]: url } };
 };
 
@@ -72,6 +77,7 @@ export const withUserUrl = (user: ConnectionSettings, target: ConnectionTarget, 
 export const withoutUserUrl = (user: ConnectionSettings, target: ConnectionTarget): ConnectionSettings => {
   if (target.kind === "endpoint") return { ...user, [target.key]: null };
   if (target.kind === "board") return { ...user, msgboardUrls: Object.fromEntries(Object.entries(user.msgboardUrls ?? {}).filter(([chainId]) => Number(chainId) !== target.chainId)) };
+  if (target.kind === "beacon") return { ...user, beaconUrls: Object.fromEntries(Object.entries(user.beaconUrls ?? {}).filter(([chainId]) => Number(chainId) !== target.chainId)) };
   return target.kind === "indexer"
     ? { ...user, indexerUrl: null }
     : { ...user, rpcUrls: Object.fromEntries(Object.entries(user.rpcUrls).filter(([chainId]) => Number(chainId) !== target.chainId)) };
