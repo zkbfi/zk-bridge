@@ -8,6 +8,7 @@ import {
   redactConnectionText,
   resolveConnection,
   urlSecrets,
+  REDACTED,
 } from "../src/index.js";
 
 const KEY = "FAKEKEY1234567890";
@@ -131,6 +132,28 @@ describe("urlSecrets and redactConnectionText", () => {
     // A password and the value of a key parameter are marked secret by their place: they count at any length.
     expect(secrets).toEqual(expect.arrayContaining(["pw", "k9"]));
     expect(redactConnectionText("The URL must not hold a user name or a password.", ["https://user:pw@rpc.example.org/eth"])).toBe("The URL must not hold a user name or a password.");
+  });
+
+  it("registers a marked password even when it is a common word, and redacts it (S-6 review)", () => {
+    const url = "https://bob:admin@rpc.example.org/";
+    expect(urlSecrets(url)).toContain("admin");
+    expect(redactConnectionText("login refused for admin", [url])).toBe(`login refused for ${REDACTED}`);
+  });
+
+  it.each(["api_key_id", "pwd", "sig", "X-Signature", "tokenId", "auth_code", "credential", "jwt", "keys", "pass"])(
+    "treats the value of the parameter %s as a secret at any length (S-6 review)",
+    (name) => {
+      const url = `https://rpc.example.org/?${name}=q7z`;
+      expect(urlSecrets(url)).toContain("q7z");
+      expect(redactConnectionText("failed with q7z", [url])).toBe(`failed with ${REDACTED}`);
+    },
+  );
+
+  it("still does not register an unmarked common word or a short plain value", () => {
+    const secrets = urlSecrets("https://admin@rpc.example.org/main?network=test");
+    expect(secrets).not.toContain("admin");
+    expect(secrets).not.toContain("main");
+    expect(secrets).not.toContain("test");
   });
 
   it("registers a user name that looks like a key", () => {

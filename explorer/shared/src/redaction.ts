@@ -77,15 +77,17 @@ export const MINIMUM_CREDENTIAL_LENGTH = 8
  * Whether a value may become a known secret. The decision is made here, when a caller collects its secrets, and not
  * when the text is cleaned: every known secret is then removed wherever it stands as a whole token.
  *
- * - Never: an empty value, white space, a configuration literal or a common word ({@link NOT_SECRETS}).
- * - A value that the configuration marks secret (a password, the value of a key parameter, a secret variable): at any
- *   other length.
- * - Any other value (a user name, a path, a plain query value): only from {@link MINIMUM_CREDENTIAL_LENGTH} characters.
+ * - Never: an empty value or white space.
+ * - A value that the configuration marks secret (a password, the value of a key parameter, a secret variable): always,
+ *   whatever it is. A password "admin" is still a password.
+ * - Any other value (a user name, a path, a plain query value): only when it is no configuration literal or common word
+ *   ({@link NOT_SECRETS}) and has at least {@link MINIMUM_CREDENTIAL_LENGTH} characters.
  */
 export function isRegistrableSecret(value: string, options: { readonly marked?: boolean } = {}): boolean {
   const trimmed = value.trim()
-  if (trimmed === '' || NOT_SECRETS.has(trimmed.toLowerCase())) return false
-  return options.marked === true || trimmed.length >= MINIMUM_CREDENTIAL_LENGTH
+  if (trimmed === '') return false
+  if (options.marked === true) return true
+  return !NOT_SECRETS.has(trimmed.toLowerCase()) && trimmed.length >= MINIMUM_CREDENTIAL_LENGTH
 }
 
 function escapeForPattern(text: string): string {

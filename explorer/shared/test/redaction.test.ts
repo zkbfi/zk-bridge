@@ -110,9 +110,10 @@ describe("isRegistrableSecret: what may become a known secret", () => {
     expect(isRegistrableSecret(value)).toBe(false);
   });
 
-  it("refuses a common word or a configuration literal even when it is marked secret", () => {
-    expect(isRegistrableSecret("password", { marked: true })).toBe(false);
-    expect(isRegistrableSecret("true", { marked: true })).toBe(false);
+  it("takes a marked value whatever it is, a common word too, and refuses only an empty one", () => {
+    for (const value of ["admin", "changeme", "password", "true", "1"]) expect(isRegistrableSecret(value, { marked: true })).toBe(true);
+    expect(isRegistrableSecret("", { marked: true })).toBe(false);
+    expect(isRegistrableSecret("  ", { marked: true })).toBe(false);
   });
 
   it("takes a short value that the configuration marks secret, and a long value that is no common word", () => {
