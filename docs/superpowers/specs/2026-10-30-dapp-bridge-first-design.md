@@ -325,6 +325,11 @@ and the time left while in flight or the age once delivered. A row links to the 
   the caller (a contract reader pinned to a block, the RPC of their choice) and holds no UI. `web` uses it exactly as
   an outside dapp would. Until it is carved out, new rule code goes in `shared` under these rules so the carve-out is
   a move, not a rewrite.
+- **Data package (owner):** a layer between the core rules and React that sources the data: fetching a proof from
+  the msgboard, forming and sending the request to the proof queue, and reading from the indexer API or straight
+  from an RPC (the user's choice, with the same fallback the dapp uses). Endpoints are the caller's, swappable like
+  the dapp's Settings; reads name their block so the core rules stay deterministic. Much of it exists in `shared`
+  today (`msgboard`, `prover`, `backend-client`, `rpc`, `connection`) and moves rather than being rewritten.
 - **React package (owner):** after the core SDK, the useful React code moves into a second package on top of it:
   hooks (fee, verdict, prices at a block, delivery status) and the self-contained components (fee line and drawer,
   review sheet, token and chain icons). It depends on the core SDK, takes its I/O from the host dapp, and `web` uses
@@ -512,3 +517,4 @@ don't call it "tip too high", call it "high tip %""
 71. "yes, but this is only relevant for basefee/gas+ mode. in percent mode, and fixed, the values are known ahead of time. gas based mode can drift"
 72. "build it the best you think it should work. the way that is clearest to the end user"
 73. "ok, when you are done, pull out useful code into a react package as well"
+74. "i guess another layer of the package is simply sourcing the data. going to the msgboard to get the proof, forming the request to the proof queue, getting data from the indexer or the rpc"
