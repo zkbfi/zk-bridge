@@ -25,6 +25,7 @@ import { FeeLine, type FeeSlider } from "./FeeLine";
 import { Chevron, FlipIcon, FloppyIcon, Identicon, SlidersIcon } from "./icons";
 import { iconSubjectOf } from "./image-source";
 import { Num } from "./Num";
+import { dollarsText as dollarsOf } from "./number";
 import { Sheet } from "./Sheet";
 import { TokenIcon } from "./TokenIcon";
 import { TokenPicker } from "./TokenPicker";
@@ -140,7 +141,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const priceOf = (subject: TokenInfo | null): PriceQuote | null => (subject === null ? null : (prices?.get(`${subject.side}:${subject.address}`) ?? null));
   const tokenQuote = priceOf(token);
   const valueOf = (units: bigint | null): bigint | null => (units === null || tokenQuote === null || token === null ? null : usdOf(units, token.decimals, tokenQuote.usdE18));
-  const dollarsText = (value: bigint | null): string => (value === null ? "—" : `$${usdText(Number(value) / 1e18)}`);
+  const dollarsText = (value: bigint | null): string => (value === null ? "—" : dollarsOf(value));
   const usd = (units: bigint | null): string => dollarsText(valueOf(units));
   const costInputAt = (level: GasLevel): CostInput | null =>
     probe.delivery === null || nativeQuote === null

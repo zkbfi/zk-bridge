@@ -20,10 +20,10 @@ const pillAt = async (query: string) => {
 
 describe("the fee warnings on the Bridge pill, at the sample prices", () => {
   it("warns a small transfer may not be delivered in a timely manner when the cost is above the cap's share, with the numbers", async () => {
-    // PulseChain → Ethereum: about $5.07 to deliver and prove on Ethereum, against 1% of $5.
+    // PulseChain → Ethereum: about $5.06 to deliver and prove on Ethereum, against 1% of $5.
     const { label, detail } = await pillAt("dir=second-to-first&bridge.amount=5");
     expect(label).toBe("Small transfer · may not be delivered in a timely manner");
-    expect(detail).toBe("Delivery costs about $5.07, more than the 1% ($0.05) you allow. A bot may wait for cheaper gas: raise the cap in the tip drawer, or deliver it yourself.");
+    expect(detail).toBe("Delivery costs about $5.06, more than the 1% ($0.05) you allow. A bot may wait for cheaper gas: raise the cap in the tip drawer, or deliver it yourself.");
   });
 
   it("moves the line with the cap: $4 to PulseChain (about $0.025 of cost) is not small at 1%; the capped $0.04 only reads as a low fee", async () => {
@@ -39,7 +39,7 @@ describe("the fee warnings on the Bridge pill, at the sample prices", () => {
   it("shows the low fee with its numbers when the cap holds the fee under twice the cost", async () => {
     const { label, detail } = await pillAt("dir=second-to-first&bridge.amount=1000");
     expect(label).toBe("Tip too low · may not be delivered");
-    expect(detail).toMatch(/^The fee \(\$10\.00\) is under twice what delivering and proving it should cost \(\$5\.07 now\)/);
+    expect(detail).toMatch(/^The fee \(\$10\.00\) is under twice what delivering and proving it should cost \(\$5\.06 now\)/);
   });
 
   it("shows High cap % for a chosen tip well above the line, never alongside another fee warning", async () => {

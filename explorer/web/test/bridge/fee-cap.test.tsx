@@ -39,7 +39,7 @@ const openReview = async (query: string) => {
 };
 
 describe("the cap in the review", () => {
-  // PulseChain → Ethereum at the sample prices: $1,000 of zkbUSDC, delivery about $5.07 on Ethereum.
+  // PulseChain → Ethereum at the sample prices: $1,000 of zkbUSDC, delivery about $5.06 on Ethereum.
   const GAS_BASED = "dir=second-to-first&bridge.amount=1000&tip.mode=gas-multiplier&tip.price=3000";
 
   it("warns High cap % for a gas-based fee whose cap would leave too much if gas rises, shows the drift, and lowers the cap in place", async () => {

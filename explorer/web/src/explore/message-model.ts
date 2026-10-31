@@ -3,11 +3,12 @@
  * and the steps from the send to the delivery. Every value comes from the indexer, the deployment or the chain; what none
  * of them records stays null and the page shows "—".
  */
-import { decodeMediatorMessage, usdText, type CostView } from "@zk-bridge/shared";
+import { decodeMediatorMessage, type CostView } from "@zk-bridge/shared";
 import { formatUnits, type Address, type Hex } from "viem";
 import type { PairConfig } from "@terminal/model/types";
 import { formatRoute } from "../app/route";
 import { amountText } from "../bridge/bridge-model";
+import { dollarsText } from "../bridge/number";
 import type { MessageDetail } from "../data/message-detail";
 import { contractNameOf } from "./contract-names";
 import type { ProofRow } from "./explore-source";
@@ -135,9 +136,6 @@ export const messageSteps = (detail: MessageDetail, pair: PairConfig, proofs: re
   ];
 };
 
-/** Dollars (USD × 1e18) as text: "$2.52", "<$0.01" under a cent, "$0" for nothing. */
-const dollarText = (usd: bigint): string => (usd === 0n ? "$0" : usd < 10n ** 16n ? "<$0.01" : `$${usdText(Number(usd) / 1e18)}`);
-
 /**
  * A step's cost for its drawer: "<native> <symbol> · $<usd>" (the dollars at the price block the indexer read), and
  * "shared · … over N transfers" for a proof, whose cost every message it covered shares. "—" for the dollars where
@@ -150,7 +148,7 @@ export const stepCostText = (cost: (CostView & { readonly coveredMessages?: numb
   if (cost === null) return null;
   const symbol = [pair.first, pair.second].find((chain) => chain.chainId === cost.chainId)?.nativeSymbol;
   const coin = `${Number(Number(formatUnits(BigInt(cost.costWei), 18)).toPrecision(3))}${symbol === undefined ? "" : ` ${symbol}`}`;
-  const dollars = cost.costUsd === null ? "—" : dollarText(BigInt(cost.costUsd));
+  const dollars = cost.costUsd === null ? "—" : dollarsText(BigInt(cost.costUsd));
   const text = `${coin} · ${dollars}`;
   return cost.coveredMessages === undefined ? text : `shared · ${text} over ${cost.coveredMessages} transfer${cost.coveredMessages === 1 ? "" : "s"}`;
 };

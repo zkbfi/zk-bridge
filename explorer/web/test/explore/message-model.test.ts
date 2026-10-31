@@ -110,7 +110,7 @@ describe("a step's cost", () => {
     expect(stepCostText(cost(), FIXTURE_PAIR)).toBe("0.00084 ETH · $2.52");
   });
   it("says a proof's cost is shared, with how many transfers it covered", () => {
-    expect(stepCostText({ ...cost({ chainId: 369, costWei: "2000000000000000000", costUsd: "60000000000000" }), coveredMessages: 4 }, FIXTURE_PAIR)).toBe("shared · 2 PLS · <$0.01 over 4 transfers");
+    expect(stepCostText({ ...cost({ chainId: 369, costWei: "2000000000000000000", costUsd: "60000000000000" }), coveredMessages: 4 }, FIXTURE_PAIR)).toBe("shared · 2 PLS · $0.0₄6 over 4 transfers");
     expect(stepCostText({ ...cost(), coveredMessages: 1 }, FIXTURE_PAIR)).toBe("shared · 0.00084 ETH · $2.52 over 1 transfer");
   });
   it("shows — for the dollars on a testnet, and nothing without a cost", () => {

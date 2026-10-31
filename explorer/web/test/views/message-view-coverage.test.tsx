@@ -150,7 +150,7 @@ describe("the message page, a token transfer", () => {
     expect(drawer.getByText("Block").nextSibling).toHaveTextContent("4,242");
     expect(drawer.getByRole("link", { name: "4,242" })).toHaveAttribute("href", `#/explore/block/${FIXTURE_PAIR.second.chainId}/4242`);
     expect(drawer.getByText("Gas").nextSibling).toHaveTextContent("210,000");
-    expect(drawer.getByText("Cost").nextSibling).toHaveTextContent(/^0\.00147 PLS · <\$0\.01$/);
+    expect(drawer.getByText("Cost").nextSibling).toHaveTextContent(/^0\.00147 PLS · \$0\.0₇441$/);
     const payload = screen.getByRole("button", { name: /^Payload \(100 bytes\), decoded: mint 16\.89 USDC to 0x00000000…abc0$/ });
     expect(payload).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(payload);
@@ -218,7 +218,7 @@ describe("the message page, step costs", () => {
     const proof = await stepButton(/posted to PulseChain/);
     await userEvent.click(proof);
     const drawer = within(proof.closest("li")!);
-    expect(drawer.getByText("Cost").nextSibling).toHaveTextContent(/^shared · 0\.0105 PLS · <\$0\.01 over 3 transfers$/);
+    expect(drawer.getByText("Cost").nextSibling).toHaveTextContent(/^shared · 0\.0105 PLS · \$0\.0₆315 over 3 transfers$/);
     expect(drawer.getByText("Transaction").nextSibling).toHaveTextContent(/^0x3333/);
   });
 
