@@ -39,9 +39,9 @@ describe("redaction", () => {
     expect(redactError(new Error(`GET https://x.quiknode.pro/${secret}/ 500`), [secret])).toBe(`GET https://x.quiknode.pro/${REDACTED}/ 500`);
   });
 
-  it("ATTACK a known secret of five characters is removed where it stands as a value (BLOCKED, was S-6)", () => {
-    // A short secret is removed after =, :, /, @ or a quote; as a plain word of prose it stays (see redaction.ts).
-    expect(redactSecrets("token: abcde in the url", ["abcde"])).not.toContain("abcde");
+  it("ATTACK a known secret of five characters is removed wherever it stands as a whole token (BLOCKED, was S-6)", () => {
+    // A short secret is removed wherever it stands as a whole token; which values may become secrets is decided when they are collected.
+    expect(redactSecrets("token abcde in the url", ["abcde"])).not.toContain("abcde");
     expect(redactSecrets("GET https://rpc.example/abcde/eth failed", ["abcde"])).not.toContain("abcde");
   });
 

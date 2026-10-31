@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { maskSecret, redactError, redactSecrets, REDACTED } from "../src/config/index.js";
+import { isRegistrableSecret } from "../src/redaction.js";
 
 describe("maskSecret", () => {
   it("answers an empty string for an empty secret", () => {
@@ -28,17 +29,23 @@ describe("redactSecrets", () => {
     expect(redactSecrets("id=x here", ["x"])).toBe(`id=${REDACTED} here`);
   });
 
-  it("keeps a short known secret where it is an ordinary word of the text, such as the user name of a URL in a message", () => {
-    expect(redactSecrets("The URL must not hold a user name or a password.", ["user"])).toBe("The URL must not hold a user name or a password.");
+  it.each([
+    ["after a space", "token abc12 in the url", `token ${REDACTED} in the url`],
+    ["after Bearer", "Authorization: Bearer abc12", `Authorization: Bearer ${REDACTED}`],
+    ["inside JSON without quotes", "{token: abc12, n: 1}", `{token: ${REDACTED}, n: 1}`],
+    ["after a question mark", "GET /x?abc12", `GET /x?${REDACTED}`],
+    ["in a path segment", "GET https://h/abc12/eth", `GET https://h/${REDACTED}/eth`],
+    ["after a comma", "keys a,abc12", `keys a,${REDACTED}`],
+  ])("removes a short known secret wherever it stands as a whole token: %s (fail closed)", (_name, text, expected) => {
+    expect(redactSecrets(text, ["abc12"])).toBe(expected);
   });
 
   it("removes a short known secret that holds characters a pattern would read as special (S-6)", () => {
-    expect(redactSecrets("pass=a.b* and ab", ["a.b*"])).toBe(`pass=${REDACTED} and ab`);
+    expect(redactSecrets("pass a.b* and ab", ["a.b*"])).toBe(`pass ${REDACTED} and ab`);
   });
 
-  it("never treats an empty value or a configuration literal as a secret (S-6)", () => {
-    const text = "1 of 0 calls ok: true, false, null";
-    expect(redactSecrets(text, ["", "  ", "1", "0", "true", "False", "null", "undefined"])).toBe(text);
+  it("never matches an empty value or white space", () => {
+    expect(redactSecrets("a b", ["", "  "])).toBe("a b");
   });
 
   it("removes the percent-encoded form of a known secret (S-6)", () => {
@@ -95,6 +102,22 @@ describe("redactSecrets", () => {
 
   it("leaves text without a secret unchanged", () => {
     expect(redactSecrets("nothing to hide")).toBe("nothing to hide");
+  });
+});
+
+describe("isRegistrableSecret: what may become a known secret", () => {
+  it.each(["user", "admin", "password", "Password", "eth", "v1", "1", "true", "null", "", "  "])("refuses %j unless it is marked secret", (value) => {
+    expect(isRegistrableSecret(value)).toBe(false);
+  });
+
+  it("refuses a common word or a configuration literal even when it is marked secret", () => {
+    expect(isRegistrableSecret("password", { marked: true })).toBe(false);
+    expect(isRegistrableSecret("true", { marked: true })).toBe(false);
+  });
+
+  it("takes a short value that the configuration marks secret, and a long value that is no common word", () => {
+    expect(isRegistrableSecret("k9x", { marked: true })).toBe(true);
+    expect(isRegistrableSecret("4f1c9a0b2d3e")).toBe(true);
   });
 });
 

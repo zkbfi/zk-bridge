@@ -118,9 +118,23 @@ describe("maskUrl", () => {
 });
 
 describe("urlSecrets and redactConnectionText", () => {
-  it("lists the whole URL, the credentials, the path and the query values", () => {
+  it("lists the whole URL, the password, the path and the query values", () => {
     const secrets = urlSecrets(`https://bob:hunter2hunter2@rpc.example.org/v3/${KEY}?token=${KEY}2`);
-    expect(secrets).toEqual(expect.arrayContaining([`https://bob:hunter2hunter2@rpc.example.org/v3/${KEY}?token=${KEY}2`, "bob", "hunter2hunter2", `v3/${KEY}`, `token=${KEY}2`, `${KEY}2`]));
+    expect(secrets).toEqual(expect.arrayContaining([`https://bob:hunter2hunter2@rpc.example.org/v3/${KEY}?token=${KEY}2`, "hunter2hunter2", `v3/${KEY}`, `token=${KEY}2`, `${KEY}2`]));
+  });
+
+  it("does not register a user name that is a common word or short, a short path, or a short value of a plain parameter (S-6)", () => {
+    const secrets = urlSecrets("https://user:pw@rpc.example.org/eth?network=main&key=k9");
+    expect(secrets).not.toContain("user");
+    expect(secrets).not.toContain("eth");
+    expect(secrets).not.toContain("main");
+    // A password and the value of a key parameter are marked secret by their place: they count at any length.
+    expect(secrets).toEqual(expect.arrayContaining(["pw", "k9"]));
+    expect(redactConnectionText("The URL must not hold a user name or a password.", ["https://user:pw@rpc.example.org/eth"])).toBe("The URL must not hold a user name or a password.");
+  });
+
+  it("registers a user name that looks like a key", () => {
+    expect(urlSecrets(`https://${KEY}@rpc.example.org/`)).toContain(KEY);
   });
 
   it("lists only the text for a text that is not a URL", () => {

@@ -61,10 +61,32 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
 const MINIMUM_LENGTH_ANYWHERE = 6
 
 /**
- * Values that are never treated as known secrets: configuration literals, not secrets. Removing them would wipe every
- * `1`, `0` or `true` from a log line, and a secret with such a value protects nothing.
+ * Values that never become known secrets: configuration literals and common words of URLs and messages. Removing them
+ * would wipe ordinary words from every log line and message, and a secret with such a value protects nothing.
  */
-const NOT_SECRETS: ReadonlySet<string> = new Set(['0', '1', 'true', 'false', 'null', 'undefined', 'none', 'yes', 'no', 'on', 'off'])
+const NOT_SECRETS: ReadonlySet<string> = new Set([
+  '0', '1', 'true', 'false', 'null', 'undefined', 'none', 'yes', 'no', 'on', 'off',
+  'user', 'username', 'admin', 'administrator', 'root', 'guest', 'test', 'demo', 'default', 'name',
+  'pass', 'password', 'secret', 'token', 'key', 'apikey', 'changeme', 'example', 'public', 'anonymous',
+])
+
+/** The shortest value that may become a known secret without a mark: shorter values are path parts, chain names and words. */
+export const MINIMUM_CREDENTIAL_LENGTH = 8
+
+/**
+ * Whether a value may become a known secret. The decision is made here, when a caller collects its secrets, and not
+ * when the text is cleaned: every known secret is then removed wherever it stands as a whole token.
+ *
+ * - Never: an empty value, white space, a configuration literal or a common word ({@link NOT_SECRETS}).
+ * - A value that the configuration marks secret (a password, the value of a key parameter, a secret variable): at any
+ *   other length.
+ * - Any other value (a user name, a path, a plain query value): only from {@link MINIMUM_CREDENTIAL_LENGTH} characters.
+ */
+export function isRegistrableSecret(value: string, options: { readonly marked?: boolean } = {}): boolean {
+  const trimmed = value.trim()
+  if (trimmed === '' || NOT_SECRETS.has(trimmed.toLowerCase())) return false
+  return options.marked === true || trimmed.length >= MINIMUM_CREDENTIAL_LENGTH
+}
 
 function escapeForPattern(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -73,19 +95,18 @@ function escapeForPattern(text: string): string {
 /**
  * Removes every occurrence of one known secret, in its plain and its percent-encoded form.
  *
- * The rule: an empty value, a value of white space only and a configuration literal ({@link NOT_SECRETS}) are no
- * secrets and are left alone. A secret of six characters or more is removed wherever it occurs. A shorter secret is
- * removed only where it stands as a value: right after `=`, `:`, `/`, `@` or a quote (a space may follow `=` or `:`),
- * and not followed by a letter or digit. `abcde` goes from `key=abcde&` and `pin: abcde`, but not from `key=abcdefg`,
- * and the user name `user` of a URL stays in the sentence "a user name". So a short secret never wipes ordinary words or
- * the parts of other words.
+ * The rule fails closed: whatever the caller passes is a secret (only an empty value or white space is skipped). A
+ * secret of six characters or more is removed wherever it occurs. A shorter one is removed wherever it stands as a
+ * whole token, between characters that are not letters or digits: `abcde` goes from `token abcde`, `Bearer abcde`,
+ * `key=abcde&` and `/abcde/`, but not from `abcdefg`, and `1234` not from `12345`. Which values may become known
+ * secrets at all is decided when they are collected, with {@link isRegistrableSecret}.
  */
 function removeKnownSecret(text: string, secret: string): string {
-  if (secret.trim() === '' || NOT_SECRETS.has(secret.toLowerCase())) return text
+  if (secret.trim() === '') return text
   let result = text
   for (const form of new Set([secret, encodeURIComponent(secret)])) {
     if (form.length >= MINIMUM_LENGTH_ANYWHERE) result = result.split(form).join(REDACTED)
-    else result = result.replace(new RegExp(`(?<=(?:[=:] ?|[/@"']))${escapeForPattern(form)}(?![A-Za-z0-9])`, 'g'), REDACTED)
+    else result = result.replace(new RegExp(`(?<![A-Za-z0-9])${escapeForPattern(form)}(?![A-Za-z0-9])`, 'g'), REDACTED)
   }
   return result
 }

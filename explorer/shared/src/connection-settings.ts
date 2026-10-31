@@ -1,4 +1,4 @@
-import { maskSecret, redactSecrets } from "./redaction.js";
+import { isRegistrableSecret, maskSecret, redactSecrets } from "./redaction.js";
 
 /**
  * The connections of the dashboards: the indexer URL and one RPC URL per chain. This module holds the pure rules that
@@ -146,10 +146,21 @@ export const urlSecrets = (url: string): readonly string[] => {
   } catch {
     return [url];
   }
+  // Which pieces may become known secrets is decided here (see isRegistrableSecret): the password and the value of a key
+  // parameter count at any length; the user name, the path and a plain query value only when they look like a key, so
+  // a user name such as "user" or a path such as "eth" never wipes those words from messages.
   const path = parsed.pathname.replace(/^\/+/, "");
-  const queryValues = [...parsed.searchParams.values()];
-  return [url, parsed.username, parsed.password, path, parsed.search.replace(/^\?/, ""), ...queryValues].filter((piece) => piece !== "");
+  const marked = [parsed.password, ...[...parsed.searchParams].filter(([name]) => SECRET_PARAMETER.test(name)).map(([, value]) => value)];
+  const plain = [parsed.username, path, parsed.search.replace(/^\?/, ""), ...[...parsed.searchParams].filter(([name]) => !SECRET_PARAMETER.test(name)).map(([, value]) => value)];
+  return [
+    url,
+    ...marked.filter((piece) => isRegistrableSecret(piece, { marked: true })),
+    ...plain.filter((piece) => isRegistrableSecret(piece)),
+  ];
 };
+
+/** A query parameter whose value is a secret by its name: api_key, apikey, key, dkey, token, access_token, secret, ... */
+const SECRET_PARAMETER = /(?:key|token|secret|password|auth)$/i;
 
 /**
  * Removes every secret part of the given URLs from a text, and the other secret shapes that the redactor knows.
