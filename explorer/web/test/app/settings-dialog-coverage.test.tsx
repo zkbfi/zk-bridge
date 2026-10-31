@@ -34,10 +34,42 @@ const renderSettings = (options: Options = {}) => {
 const field = (name: string) => screen.getByRole("textbox", { name });
 const save = () => userEvent.click(screen.getByRole("button", { name: "Save" }));
 
+describe("the msgboard nodes in Settings (owner, quote 87)", () => {
+  it("shows one node per chain with its icon, and checks a shared URL twice, once per chain, each with its own result", async () => {
+    const calls: string[] = [];
+    const probe: Prober = async (url, kind) => {
+      calls.push(`${url} ${kind.kind} ${"chainId" in kind ? kind.chainId : "-"}`);
+      return kind.kind === "jsonrpc" && "chainId" in kind && kind.chainId === SECOND_CHAIN ? { ok: false, reason: "No answer." } : { ok: true, ms: 4 };
+    };
+    renderSettings({ services: { probe } });
+    expect(screen.getByRole("heading", { name: "Msgboard nodes" })).toBeInTheDocument();
+    for (const name of ["Ethereum msgboard node", "PulseChain msgboard node"]) {
+      await userEvent.clear(field(name));
+      await userEvent.type(field(name), "https://board.example.org");
+    }
+    await waitFor(() => expect(calls.filter((call) => call.startsWith("https://board.example.org jsonrpc"))).toEqual(expect.arrayContaining([`https://board.example.org jsonrpc ${FIRST_CHAIN}`, `https://board.example.org jsonrpc ${SECOND_CHAIN}`])), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByRole("status", { name: /^Ethereum msgboard node: ok/ })).toBeInTheDocument());
+    expect(screen.getByRole("status", { name: "PulseChain msgboard node: down" })).toBeInTheDocument();
+  });
+
+  it("moves a saved single node to both chains, and saves each chain on its own", async () => {
+    const storage = memoryStorage();
+    storage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify({ indexerUrl: null, rpcUrls: {}, msgboardUrl: "https://old.example.org" }));
+    renderSettings({ storage });
+    expect(field("Ethereum msgboard node")).toHaveValue("https://old.example.org");
+    expect(field("PulseChain msgboard node")).toHaveValue("https://old.example.org");
+    await userEvent.clear(field("PulseChain msgboard node"));
+    await userEvent.type(field("PulseChain msgboard node"), "https://pls.example.org");
+    await save();
+    await waitFor(() => expect(stored(storage).msgboardUrls).toEqual({ [FIRST_CHAIN]: "https://old.example.org", [SECOND_CHAIN]: "https://pls.example.org" }));
+    expect(stored(storage).msgboardUrl).toBeNull();
+  });
+});
+
 describe("the settings sheet", () => {
   it("has the sections of the mockup, in its order, and Reset to defaults before Save", () => {
     const { dialog } = renderSettings();
-    expect(within(dialog).getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual(["Theme", "RPC endpoints", "Token and chain images", "Services", "More"]);
+    expect(within(dialog).getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual(["Theme", "RPC endpoints", "Token and chain images", "Services", "Msgboard nodes", "More"]);
     expect(within(dialog).getByText("Used to read balances and send transactions. Yours stay in this browser.")).toBeInTheDocument();
     const buttons = within(dialog).getAllByRole("button").map((button) => button.textContent);
     expect(buttons.slice(-2)).toEqual(["Reset to defaults", "Save"]);

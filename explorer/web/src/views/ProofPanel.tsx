@@ -71,7 +71,8 @@ export const ProofPanel = ({ detail }: { readonly detail: MessageDetail }) => {
 
   const proofReading = useQuery({
     queryKey: ["latest-proof", pair.id, direction, headSlot?.toString() ?? "unknown"],
-    queryFn: () => readLatestProof({ endpoints, pair: pair.id, direction, headSlot, transport: services.transport }),
+    // The destination's msgboard node: the proof updates the light client there.
+    queryFn: () => readLatestProof({ endpoints, pair: pair.id, direction, headSlot, boardChainId: detail.destinationChainId, transport: services.transport }),
     refetchInterval: POLL_MILLISECONDS,
   });
   const evidenceReading = useQuery({

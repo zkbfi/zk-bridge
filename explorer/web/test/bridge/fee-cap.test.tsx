@@ -43,6 +43,16 @@ describe("the stored hard cap (owner, quote 86)", () => {
     window.localStorage.setItem("zk-bridge-explorer.fee-cap", "5");
     expect(loadFeeCap()).toBe(0.8);
   });
+
+  it("reads the 2% default against a storage it cannot read, and keeps the visit's choice when it cannot write", () => {
+    const writeOnly = { setItem: () => undefined, removeItem: () => undefined };
+    expect(saveFeeCap("2.5", writeOnly)).toMatch(/2% hard cap/);
+    expect(saveFeeCap("1.5", null)).toBeNull();
+    const broken = { getItem: () => null, setItem: () => { throw new Error("full"); }, removeItem: () => { throw new Error("full"); } };
+    expect(saveHardCap("3", broken)).toBeNull();
+    const throwing = { getItem: () => { throw new Error("blocked"); } };
+    expect(loadHardCap(throwing)).toBe(2);
+  });
 });
 
 const goPill = (): HTMLButtonElement => screen.getAllByRole("button").find((button) => button.classList.contains("zb-go")) as HTMLButtonElement;

@@ -9,6 +9,7 @@ import type { PairConfig } from "@terminal/model/types";
 import {
   DEFAULT_INDEXER_URL,
   EMPTY_CONNECTION_SETTINGS,
+  migrateBoardUrls,
   normalizeEndpoint,
   parseConnectionUrl,
   resolveConnection,
@@ -29,12 +30,12 @@ export type SettingField = {
   readonly label: string;
   /** The name inside the field, when it differs from the label. */
   readonly short?: string;
-  readonly section: "rpc" | "images" | "services";
+  readonly section: "rpc" | "images" | "services" | "boards";
   /** What the live check asks. */
   readonly probe: ProbeKind;
   /** The connection setting it writes, or null for the image server (stored on its own). */
   readonly target: ConnectionTarget | null;
-  /** The chain whose icon the field shows (an RPC). */
+  /** The chain whose icon the field shows (an RPC, a msgboard node). */
   readonly chainId?: number;
 };
 
@@ -71,7 +72,18 @@ export const settingFields = (pair: PairConfig): readonly SettingField[] => [
   service("backendUrl", "Prover", { kind: "health" }),
   service("archiveUrl", "Archive", { kind: "health" }),
   service("msgboardIndexerUrl", "Msgboard indexer", { kind: "health" }, "Board indexer"),
-  service("msgboardUrl", "Msgboard node", { kind: "jsonrpc" }, "Board node"),
+  // A msgboard node per chain (owner, quote 87). The probe names the chain, so two chains on one URL are checked twice,
+  // each with its own result.
+  ...[pair.first, pair.second].map(
+    (chain): SettingField => ({
+      id: `board:${chain.chainId}`,
+      label: `${chain.name} msgboard node`,
+      section: "boards",
+      probe: { kind: "jsonrpc", chainId: chain.chainId },
+      target: { kind: "board", label: `${chain.name} msgboard node`, chainId: chain.chainId },
+      chainId: chain.chainId,
+    }),
+  ),
 ];
 
 /** The values by field id. An empty text: nothing set. */
@@ -99,7 +111,7 @@ export const textOf = (values: FieldValues, id: string): string => values[id] ??
  * page is named), an RPC or the indexer must be an http(s) URL.
  */
 const checkUrl = (target: ConnectionTarget, text: string, pageProtocol: "https:" | "http:"): { readonly ok: true; readonly url: string; readonly insecure: boolean } | { readonly ok: false; readonly reason: string } => {
-  if (target.kind === "endpoint") {
+  if (target.kind === "endpoint" || target.kind === "board") {
     const normalized = normalizeEndpoint({ text, pageProtocol });
     return normalized.ok ? { ok: true, url: normalized.url, insecure: normalized.warning !== null } : { ok: false, reason: normalized.reason };
   }
@@ -178,7 +190,8 @@ export const settingsFromDrafts = (input: {
   readonly user: ConnectionSettings;
   readonly pageProtocol: "https:" | "http:";
 }): DraftOutcome => {
-  let user = input.user;
+  // A saved single msgboard node moves to every chain first, so a chain set back to its default really returns to it.
+  let user = migrateBoardUrls(input.user, input.fields.flatMap((field) => (field.target?.kind === "board" ? [field.target.chainId] : [])));
   let imageServer: string | null = null;
   const problems: Record<string, string> = {};
   const insecure: string[] = [];

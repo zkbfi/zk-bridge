@@ -57,6 +57,18 @@ const rpcUrlsOf = (value: unknown): Record<number, string> => {
   );
 };
 
+/** The msgboard node of each chain, each checked as an endpoint; a bad entry is dropped. */
+const boardUrlsOf = (value: unknown): Record<number, string> => {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([name, url]): [number, string][] => {
+      const chainId = Number(name);
+      const valid = validEndpoint(url);
+      return !Number.isInteger(chainId) || chainId <= 0 || valid === null ? [] : [[chainId, valid]];
+    }),
+  );
+};
+
 /** Uses the same scan as the build and the start of the page: one rule for what looks like a key. */
 const keyLike = (url: string): boolean => findSecretLikeValues({ url }).length > 0;
 
@@ -66,6 +78,7 @@ const urlsOf = (settings: ConnectionSettings): readonly string[] => [
   ...ENDPOINT_KEYS.flatMap((key) => settings[key] ?? []),
   ...(settings.indexerUrl === null ? [] : [settings.indexerUrl]),
   ...Object.values(settings.rpcUrls),
+  ...Object.values(settings.msgboardUrls ?? {}),
 ];
 
 /** The settings without the URLs that look like they hold a key. */
@@ -74,6 +87,7 @@ const withoutKeyLikeUrls = (settings: ConnectionSettings): ConnectionSettings =>
   ...Object.fromEntries(ENDPOINT_KEYS.filter((key) => settings[key] !== undefined).map((key) => [key, clearIfKeyLike(settings[key])])),
   indexerUrl: clearIfKeyLike(settings.indexerUrl),
   rpcUrls: Object.fromEntries(Object.entries(settings.rpcUrls).filter(([, url]) => !keyLike(url))),
+  ...(settings.msgboardUrls === undefined ? {} : { msgboardUrls: Object.fromEntries(Object.entries(settings.msgboardUrls).filter(([, url]) => !keyLike(url))) }),
 });
 
 /**
@@ -95,7 +109,8 @@ export const loadUserConnections = (storage: ConnectionStorage | null, location:
         return valid === null ? [] : [[key, valid]];
       }),
     );
-    return { ...endpoints, indexerUrl: validUrl(parsed.indexerUrl, "indexer"), rpcUrls: rpcUrlsOf(parsed.rpcUrls) };
+    const boards = boardUrlsOf(parsed.msgboardUrls);
+    return { ...endpoints, indexerUrl: validUrl(parsed.indexerUrl, "indexer"), rpcUrls: rpcUrlsOf(parsed.rpcUrls), ...(Object.keys(boards).length === 0 ? {} : { msgboardUrls: boards }) };
   } catch {
     return EMPTY_CONNECTION_SETTINGS;
   }

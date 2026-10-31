@@ -862,7 +862,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
                 </button>
               </div>
             ) : null}
-            <button type="button" className="zb-go" data-kind="go" disabled={draft.status !== "ready" || hardOver} onClick={() => { if (hardOver) return; setReview(false); setSigning(draft.steps); }}>
+            <button type="button" className="zb-go" data-kind="go" disabled={draft.status !== "ready" || hardOver} onClick={() => { setReview(false); setSigning(draft.steps); }}>
               Confirm in wallet
             </button>
             {draft.status === "ready" ? null : <p className="zb-verdict">{draft.reason}</p>}

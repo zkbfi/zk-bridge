@@ -5,7 +5,7 @@
  * - the indexer, the prover request endpoint, the archive and the msgboard indexer: `GET /health` (the proxy in front of
  *   them answers 404 on the bare base URL by design);
  * - an RPC: `eth_chainId` posted as JSON-RPC, and the chain must be the expected one;
- * - the msgboard node: any JSON-RPC envelope;
+ * - a msgboard node (one per chain): any JSON-RPC envelope;
  * - the image server: one known token icon loads as an image.
  *
  * A probe gives up after {@link PROBE_TIMEOUT_MS}. The latency is the time of the whole check.
@@ -16,7 +16,8 @@ import { fetchClientWithin, testHealthUrl, testJsonRpcUrl, testRpcChainId, type 
 export type ProbeKind =
   | { readonly kind: "health" }
   | { readonly kind: "rpc"; readonly chainId: number }
-  | { readonly kind: "jsonrpc" }
+  /** A msgboard node; the chain makes the check of one URL for two chains two checks, each with its own result. */
+  | { readonly kind: "jsonrpc"; readonly chainId?: number }
   | { readonly kind: "image" };
 
 /** The outcome of one probe. `reason` is one redacted sentence. */

@@ -1,0 +1,118 @@
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it } from "vitest";
+import { FIXTURE_PAIR } from "@terminal/data/fixtures";
+import { Shell } from "../../src/app/Shell";
+import { connectedWallet, renderWithWallet } from "../app/support";
+
+// The owner (quote 90): every fee value is a slider with a recommended tick, an exact input and a reset; the delivery
+// menu and the tip drawer edit the same value.
+
+beforeEach(() => {
+  window.localStorage.clear();
+});
+
+const at = async (query: string) => {
+  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
+  renderWithWallet(<Shell />, { wallet: connectedWallet() });
+  await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.textContent).toMatch(/\d/), { timeout: 3000 });
+};
+const menu = async () => {
+  await userEvent.click(screen.getByRole("button", { name: /^Delivery settings/ }));
+  return screen.getByRole("group", { name: "Delivery settings" });
+};
+const drawer = async () => {
+  await userEvent.click(screen.getAllByRole("button").find((button) => button.getAttribute("data-fee") === "tip")!);
+  return document.querySelector<HTMLElement>(".zb-drawer")!;
+};
+const exact = (scope: HTMLElement, label: string) => within(scope).getByRole("textbox", { name: `${label}, exact` });
+const retype = async (field: HTMLElement, text: string) => {
+  await userEvent.clear(field);
+  await userEvent.type(field, text);
+};
+
+describe("the fee values", () => {
+  it("moves a fixed fee with its slider and resets it to the automatic fee's amount", async () => {
+    await at("bridge.amount=500&tip.mode=fixed&tip.fixed=3");
+    const scope = await menu();
+    fireEvent.change(within(scope).getByRole("slider", { name: "Fixed fee" }), { target: { value: "4" } });
+    await waitFor(() => expect(window.location.hash).toMatch(/tip\.fixed=4(&|$)/));
+    await userEvent.click(within(scope).getAllByRole("button", { name: "Reset to recommended" })[0]!);
+    await waitFor(() => expect(window.location.hash).not.toMatch(/tip\.fixed=4(&|$)/));
+    expect(window.location.hash).toMatch(/tip\.fixed=/);
+  });
+
+  it("refuses a fixed fee above the amount", async () => {
+    await at("bridge.amount=5&tip.mode=fixed&tip.fixed=0.1");
+    const scope = await menu();
+    await retype(exact(scope, "Fixed fee"), "6");
+    expect(within(scope).getByRole("alert")).toHaveTextContent("The fee can't be more than the amount.");
+  });
+
+  it("moves a gas-based factor with its slider, refuses a bad one, and resets it", async () => {
+    await at("dir=second-to-first&bridge.amount=1000&tip.mode=gas-multiplier&tip.price=3000");
+    const scope = await menu();
+    fireEvent.change(within(scope).getByRole("slider", { name: "Fee on gas" }), { target: { value: "3" } });
+    await waitFor(() => expect(window.location.hash).toMatch(/tip\.gas=3(&|$)/));
+    await retype(exact(scope, "Fee on gas"), "0");
+    expect(within(scope).getByRole("alert")).toHaveTextContent("Use a number above 0 and at most 1000.");
+    await retype(exact(scope, "Fee on gas"), "x");
+    expect(within(scope).getByRole("alert")).toHaveTextContent("Enter a number, such as 2.");
+    await userEvent.click(within(scope).getAllByRole("button", { name: "Reset to recommended" })[0]!);
+    await waitFor(() => expect(window.location.hash).not.toMatch(/tip\.gas=3(&|$)/));
+  });
+
+  it("sets the gas price ceiling from its slider or its exact gwei, which moves the level", async () => {
+    await at("bridge.amount=500&tip.mode=percentage&tip.percent=0.5");
+    const scope = await menu();
+    const slider = within(scope).getByRole("slider", { name: "Gas level" });
+    fireEvent.change(slider, { target: { value: slider.getAttribute("max")! } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: Highest. Change" })).toBeInTheDocument());
+    // A share the user set is rebased on the new cost, as the bars do.
+    expect(window.location.hash).not.toMatch(/tip\.percent=0\.5(&|$)/);
+    await retype(exact(scope, "Gas level"), "0");
+    expect(within(scope).getByRole("alert")).toHaveTextContent(/above 0 in gwei/);
+    const normal = within(scope).getAllByRole("button", { name: "Reset to recommended" });
+    await userEvent.click(normal[normal.length - 1]!);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: Normal. Change" })).toBeInTheDocument());
+    const wei = exact(within(scope).getByRole("slider", { name: "Gas level" }).closest(".zb-slider") as HTMLElement, "Gas level");
+    await retype(wei, "100");
+    await waitFor(() => expect(window.location.hash).toMatch(/tip\.ceiling=100(&|$)/));
+  });
+
+  it("moves the gas limit with its slider and refuses a fraction", async () => {
+    await at("bridge.amount=500");
+    const scope = await menu();
+    fireEvent.change(within(scope).getByRole("slider", { name: "Gas limit" }), { target: { value: "300000" } });
+    await waitFor(() => expect(window.location.hash).toMatch(/bridge\.gas=300000/));
+    await retype(exact(scope, "Gas limit"), "1.5");
+    expect(within(scope).getByRole("alert")).toHaveTextContent(/whole number of gas/);
+  });
+
+  it("types the router and opens the receiver from the menu", async () => {
+    await at("bridge.amount=500");
+    const scope = await menu();
+    await userEvent.type(within(scope).getByRole("textbox", { name: /Relay router/ }), "0xab");
+    await waitFor(() => expect(window.location.hash).toMatch(/tip\.router=0xab/));
+    await userEvent.clear(within(scope).getByRole("textbox", { name: /Relay router/ }));
+    await waitFor(() => expect(window.location.hash).not.toMatch(/tip\.router/));
+    await userEvent.click(within(scope).getByRole("button", { name: "Off" }));
+    expect(screen.getByRole("textbox", { name: /Destination address/ })).toBeInTheDocument();
+  });
+
+  it("types both caps exactly and resets them; a link's automatic cap above the hard cap is held under it", async () => {
+    await at("bridge.amount=500&tip.cap=3");
+    const scope = await drawer();
+    expect(within(scope).getByRole("slider", { name: "Automatic fee cap" })).toHaveValue("2");
+    await retype(exact(scope, "Hard fee cap"), "4");
+    await waitFor(() => expect(within(scope).getByRole("slider", { name: "Hard fee cap" })).toHaveValue("4"));
+    await retype(exact(scope, "Automatic fee cap"), "3");
+    await waitFor(() => expect(within(scope).getByRole("slider", { name: "Automatic fee cap" })).toHaveValue("3"));
+    const resets = () => within(scope).getAllByRole("button", { name: "Reset to recommended" });
+    await userEvent.click(resets()[resets().length - 1]!);
+    await waitFor(() => expect(within(scope).getByRole("slider", { name: "Hard fee cap" })).toHaveValue("2"));
+    expect(within(scope).getByRole("slider", { name: "Automatic fee cap" })).toHaveValue("2");
+    await userEvent.click(resets()[resets().length - 1]!);
+    await waitFor(() => expect(within(scope).getByRole("slider", { name: "Automatic fee cap" })).toHaveValue("1"));
+  });
+});

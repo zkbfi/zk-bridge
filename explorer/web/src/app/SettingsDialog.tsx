@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { maskUrl, redactConnectionText, type ConnectionSettings } from "@zk-bridge/shared";
+import { maskUrl, migrateBoardUrls, redactConnectionText, type ConnectionSettings } from "@zk-bridge/shared";
 import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, loadFeeCap, loadHardCap, saveFeeCap, saveHardCap } from "../bridge/fee-cap";
 import { loadImageServer, saveImageServer } from "../bridge/image-server";
 import { Sheet } from "../bridge/Sheet";
@@ -164,7 +164,7 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose, stora
   const fields = useMemo(() => settingFields(pair), [pair]);
   const defaults = useMemo(() => defaultValues({ fields, pair, configuration, sharedPair: connection?.sharedPair }), [fields, pair, configuration, connection]);
   const liveUser = useSyncExternalStore(connection?.subscribe ?? NO_SUBSCRIPTION, () => connection?.user() ?? null);
-  const [storedUser, setStoredUser] = useState<ConnectionSettings>(() => liveUser ?? loadUserConnections(storage));
+  const [storedUser, setStoredUser] = useState<ConnectionSettings>(() => liveUser ?? migrateBoardUrls(loadUserConnections(storage), [pair.first.chainId, pair.second.chainId]));
   const user = liveUser ?? storedUser;
   const [drafts, setDrafts] = useState<FieldValues>(() => currentValues(fields, defaults, user, loadImageServer()));
   const [cap, setCap] = useState(() => String(loadFeeCap()));
@@ -253,6 +253,10 @@ export const SettingsDialog = ({ theme, onTheme, onRecentCleared, onClose, stora
           <span className="zb-fld-k">Prices</span>
           <span>PulseX pools, via your RPC</span>
         </div>
+
+        <h3>Msgboard nodes</h3>
+        <p className="zb-set-help">Where proofs are read, one per chain. Two chains can share a URL; each is checked on its own.</p>
+        {section("boards")}
 
         <h3 className="zb-set-quiet">More</h3>
         <CapField id="cap" label="Automatic fee cap" value={cap} problem={problems.cap} onChange={(value) => { setCap(value); setProblems(({ cap: _dropped, ...rest }) => rest); }} />
