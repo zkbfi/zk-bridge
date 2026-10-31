@@ -349,6 +349,25 @@ and the time left while in flight or the age once delivered. A row links to the 
   page name, search pill with ⌘K), the same themes and tokens (System/Light/Dark/Mono, the ember gradient band in
   dark), the same search sheet (orange band, square close, rows, footer), the page title on the band, rows and
   groups like Explore, the number rules, chain and token icons, and the same column width. No Chakra look.
+- **Destination (owner, 2026-10-31):** the To row says "destination wallet", never "your wallet". Its right end is a
+  lock toggle, not a chevron. Locked (default): the destination is the connected wallet and follows it. Unlocked: the
+  row itself is the editable address field, in place (no menu dropping down), independent of the connected wallet.
+  The lock's tooltip explains both states.
+- **One delivery control (owner, 2026-10-31, supersedes the separate fee line and the sliders pill):** the delivery
+  pill and the fee line merge into one joined button group under the band: [money-hand icon + the tight summary
+  ("A bot delivers it · 0.39%")] [the gas bars, a low-resolution quick control that cycles the level] [the clock +
+  ~16 min]. There is no second row. Every fee and delivery setting lives in the one menu that the group opens (one
+  layer): who delivers, that mode's value, the gas level as an anchor with its range, both caps, the breakdown, and an
+  Advanced fold (gas limit, router, call). The time segment opens the steps. The sliders icon is replaced by the
+  money-hand icon.
+- **Tokens in the URL are addresses (owner, 2026-10-31):** each chain's token is its address; the native coin is the
+  zero address. "native" is accepted as input and immediately rewritten to the zero address. Flipping the direction
+  keeps the asset: it moves to that token's counterpart on the other chain (ETH → its zkb copy on PulseChain, a zkb copy
+  → its origin, native → the wrapped native's counterpart), never to the other chain's own native coin.
+- **Colour (owner, 2026-10-31):** each theme is a small palette; every role is one of its colours. In the Ember themes
+  every palette colour sits on the ember's hue (OKLCH ≈ 41°) with even lightness steps; Mono is neutral; good (150°)
+  and bad (18°) are the only other hues. A new colour joins the palette only when no existing one will do; the UI page
+  fails to build if a token has no role.
 - **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
   of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
   0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
@@ -577,3 +596,12 @@ don't call it "tip too high", call it "high tip %""
 91. "yes, go ahead with docs.zkb.fi. when controling the gas setting, the price multiplier as we understand it should not be explained to the user like that. we should tell them that this is an anchor point, but the price could end up being (left) lower over the course of 15 minutes, or higher (right) over the course of 15 mins"
 92. "and then we can also present their caps as ranges"
 93. "ok, well these docs are very bare boned. we need to use a lot of the same patterns here as we did in the app"
+94. "can you show me the latest docs locally? i have not been impressed with what we have so far"
+95. "i think the ui page is a bit too expansive. it looks like you just jammed everything together. decisions have been made on this. we should reflect what is actually built"
+96. "it looks like the back to automatic button did something, but now i cannot reverse it"
+97. "and the "your wallet" should really just be a "destination wallet". and the chevron on the right should turn into a lock button with the tooltip explaining that locked means just go to the connected wallet, unlocked means the input (which is currently coming down and should just be the content editable input space) floats independently"
+98. "hm. right now we have 2 places where tips are controlled. what can we do to consolidate this" — picked "All in the delivery menu", with: "what if we made the "a bot delivers it" menu in to a menu with button groups. so we put the low resolution gas button next to the menu and then the timing button next to that, all in the same menu button. then we don't have 2 layers and you are foced to have a tighter summary of actions in the "a bot delivers" menu. the sliders icon can also be replaced with the take my money icon."
+99. "much better. i think that you still could use some consolidation. like, why do we have 3 colors that are almost exactly the same? f3c7b0 ffd6c2 ffe3d6 we should consolidate, reduce and make the colors more uniform if we can. if we need to make them simpler that would be fine"
+100. "you have to check your color wheel though. check the theory. make sure that they mesh"
+101. "it looks like the native key is maintaining itself outside of the switch network button. i think i would rather have the hash (defaulting to the zero address for native) on each chain rather than the native shorthand. otherwise you end up with eth switching to pls, when all you asked to do is switch the chain direction"
+102. "native can be recognized as a valid iput to the search params, but it should immediately update to the hash"
