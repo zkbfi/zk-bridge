@@ -34,7 +34,7 @@
 <body>
 <div class="col">
   <h1>Every transfer in flight, at once</h1>
-  <p class="lead">One loop joins the two chains: the top lane runs from the chain on the left to the chain on the right, the bottom lane back. Each lane is the three steps of a transfer: sent, final on its chain, and proof ready (a valid proof is on the board; posting it on chain is part of delivering, which anyone may do). Each planet circling a step is one transfer waiting at it. Each planet is its token's icon; its size is the value it carries. Steps complete in batches, as on chain: a finalized checkpoint moves every transfer sent before it, one proof makes every finalized transfer of its direction ready, and deliveries come several at a time; each batch glides as a wave. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer; hover a step's sun for what waits there, by token, with its fees and what delivering it all would earn; hover a chain for its totals.</p>
+  <p class="lead">One loop joins the two chains: the top lane runs from the chain on the left to the chain on the right, the bottom lane back. Each lane is the three steps of a transfer: sent, final on its chain, and proof ready (a valid proof is on the board; posting it on chain is part of delivering, which anyone may do). Each planet circling a step is one transfer waiting at it. Each planet is its token's icon; its size is the value it carries. New transfers emerge from their source chain. Steps complete in batches, as on chain: a finalized checkpoint moves every transfer sent before it, one proof makes every finalized transfer of its direction ready, and deliveries come several at a time; each batch glides as a wave. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer; hover a step's sun for what waits there, by token, with its fees and what delivering it all would earn; hover a chain for its totals.</p>
   <div id="tracks"></div>
   <div class="bar"><button id="theme">Light / dark</button><button id="burst">Add a burst of transfers</button><button id="motion">Pause all</button></div>
   <ul class="notes">
@@ -65,7 +65,7 @@ let paused = false;
 const W = 780, H = 440, A = 170, B = 610, YT = 130, YB = 310, YM = (YT + YB) / 2, RE = (YB - YT) / 2, R0 = 34, RING = 20, PER = 6;
 const NODES = [{ x: A - RE, y: YM }, { x: B + RE, y: YM }];   // [first chain, second chain]
 const LAST = STEPS.length - 1;
-const lanes = [{ y: YT, x: (i) => A + (i * (B - A)) / LAST, exit: NODES[1] }, { y: YB, x: (i) => B - (i * (B - A)) / LAST, exit: NODES[0] }];
+const lanes = [{ y: YT, x: (i) => A + (i * (B - A)) / LAST, from: NODES[0], exit: NODES[1] }, { y: YB, x: (i) => B - (i * (B - A)) / LAST, from: NODES[1], exit: NODES[0] }];
 let seq = 0;
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = (xs) => xs[Math.floor(Math.random() * xs.length)];
@@ -293,13 +293,14 @@ function advance() {
     if (event === "prove") move(at(1), now, 2);
     if (event === "deliver") move(at(2).slice(0, Math.ceil(rnd(2, 6))), now, 3);
     const arrivals = event === "arrive" ? Math.round(rnd(1, 3)) : Math.random() < 0.4 ? 1 : 0;
-    for (let k = 0; k < arrivals; k++) { const t = transfer(s.dir, 0); t.x = s.lane.x(0) + (s === state[0] ? -30 : 30); t.y = s.lane.y; s.items.push(t); }
+    // A new transfer emerges from its source chain and glides out along the loop to the Sent orbit.
+    for (let k = 0; k < arrivals; k++) { const t = transfer(s.dir, 0); t.x = s.lane.from.x; t.y = s.lane.from.y; t.moving = { start: performance.now(), span: 1300 }; s.items.push(t); }
     for (const t of s.items) t.age += 0.05;
   }
 }
 build(); requestAnimationFrame(frame); setInterval(advance, 1400);
 document.getElementById("theme").onclick = () => document.documentElement.classList.toggle("light");
-document.getElementById("burst").onclick = () => { for (const s of state) for (let i = 0; i < 12; i++) { const t = transfer(s.dir, 0); t.x = s.lane.x(0); t.y = s.lane.y; s.items.push(t); } };
+document.getElementById("burst").onclick = () => { for (const s of state) for (let i = 0; i < 12; i++) setTimeout(() => { const t = transfer(s.dir, 0); t.x = s.lane.from.x; t.y = s.lane.from.y; t.moving = { start: performance.now(), span: 1300 }; s.items.push(t); }, i * 60); };
 document.getElementById("motion").onclick = (e) => { paused = !paused; e.target.textContent = paused ? "Resume" : "Pause all"; };
 if (location.search.includes("light")) document.documentElement.classList.add("light");
 </script>
