@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dark band options</title>
+<style>
+  body { margin: 0; background: #e9e6e1; font: 15px/1.45 system-ui, sans-serif; color: #1b1a19; padding: 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .intro { margin: 0 0 20px; max-width: 70ch; color: #4a4642; }
+  .wrap { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-start; }
+  .opt { flex: none; width: 390px; }
+  .opt h2 { font-size: 15px; margin: 0 0 2px; }
+  .opt p { margin: 0 0 10px; font-size: 13px; color: #4a4642; min-height: 3.6em; }
+  .ph { width: 390px; background: #121110; color: #f0ede8; overflow: hidden; border: 1px solid #c9c4bd; }
+  .hdr { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 10px 16px 4px; }
+  .mk { width: 40px; height: 40px; border-radius: 50%; border: 3px solid var(--mark); position: relative; }
+  .mk::after { content: "zkb"; position: absolute; inset: 0; display: grid; place-items: center; font-weight: 800; font-size: 13px; color: var(--mark); }
+  .title { font-weight: 700; font-size: 18px; display: flex; gap: 14px; align-items: center; }
+  .title i { font-style: normal; color: #9a948b; font-size: 22px; }
+  .srch { justify-self: end; width: 44px; height: 44px; border-radius: 999px; border: 1.5px solid #3a3632; display: grid; place-items: center; }
+  .pages { display: flex; justify-content: center; gap: 4px; padding: 4px 0 10px; }
+  .pages span { width: 14px; height: 4px; border-radius: 999px; background: #2a2724; } .pages .on { width: 26px; background: #f0ede8; }
+  .from { margin: 0 16px 12px; display: flex; border: 1.5px solid #3a3632; border-radius: 999px; min-height: 48px; align-items: center; font-weight: 600; font-size: 14px; }
+  .from span { padding: 0 16px; } .from span + span { margin-left: auto; font-family: ui-monospace, monospace; font-weight: 500; }
+  .band { background: var(--band); color: var(--band-ink); padding: 16px 16px 30px; position: relative; }
+  .band .row { display: flex; align-items: center; }
+  .band .amt { font-size: 44px; font-weight: 700; line-height: 1.1; color: var(--amt, var(--band-ink)); }
+  .band .tok { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; background: var(--pill); color: #f0ede8; border-radius: 999px; padding: 5px 16px 5px 5px; font-weight: 700; border: var(--pill-edge, 0); }
+  .ico { width: 34px; height: 34px; border-radius: 50%; background: #2775ca; display: grid; place-items: center; color: #fff; font-size: 10px; font-weight: 800; border: 2px solid #121110; }
+  .band .sub { display: flex; margin-top: 6px; font-size: 14px; color: var(--band-muted); }
+  .band .sub b { margin-left: auto; background: var(--max-bg, #121110); color: var(--max-ink, #f0ede8); border-radius: 999px; padding: 0 10px; font-size: 12px; }
+  .seam { display: flex; gap: 10px; margin: -24px 16px 0; position: relative; }
+  .seam .sw { width: 48px; height: 48px; border-radius: 999px; background: #121110; border: 1.5px solid #3a3632; display: grid; place-items: center; }
+  .seam .dl { flex: 1; height: 48px; border-radius: 999px; background: #121110; border: 1.5px solid #3a3632; display: flex; align-items: center; padding: 0 18px; font-weight: 600; font-size: 14px; }
+  .to { background: #1c1a18; padding: 14px 16px 16px; margin-top: -24px; padding-top: 38px; }
+  .fees { display: flex; gap: 22px; color: #9a948b; font-size: 14px; }
+  .drawer-line { height: 3px; background: var(--accent); margin: 12px 0 10px; }
+  .out { display: flex; align-items: center; } .out .amt { font-size: 40px; font-weight: 700; }
+  .out .tok { margin-left: auto; display: inline-flex; gap: 10px; align-items: center; background: #2a2724; border-radius: 999px; padding: 5px 16px 5px 5px; font-weight: 700; }
+  .arr { display: flex; color: #9a948b; font-size: 14px; } .arr span:last-child { margin-left: auto; }
+  .go { margin: 14px 16px 16px; height: 56px; border-radius: 999px; border: 2px solid var(--accent-text); color: var(--accent-text); display: grid; place-items: center; font-weight: 700; font-size: 17px; }
+  .search { display: flex; height: 52px; background: var(--band); color: var(--band-ink); align-items: center; margin-top: 10px; }
+  .search span { flex: 1; padding-left: 16px; color: var(--band-muted); }
+  .search i { font-style: normal; width: 52px; height: 52px; display: grid; place-items: center; border-left: 3px solid #121110; }
+  .swatch { display: flex; gap: 6px; margin-top: 8px; font: 12px ui-monospace, monospace; color: #4a4642; flex-wrap: wrap; }
+  .swatch span { display: inline-flex; align-items: center; gap: 4px; }
+  .swatch span::before { content: ""; width: 12px; height: 12px; background: var(--c); border: 1px solid #0003; }
+</style>
+</head>
+<body>
+<h2>Dark mode: softer options for the orange band</h2>
+<p class="intro">The same Bridge screen in each option, with the search band under it. A is today's band for reference. Light mode keeps its orange in every option; only "Ember on black" (dark) changes.</p>
+<div class="wrap" id="v"></div>
+<script>
+const options = [
+  { id: "A", name: "Today (reference)", note: "Full #eb6834 band. Bright against black; the one you don't like.",
+    v: { band: "#eb6834", "band-ink": "#ffffff", "band-muted": "#ffe0d0", pill: "#121110", mark: "#eb6834", accent: "#eb6834", "accent-text": "#ff9a6e" } },
+  { id: "B", name: "Muted ember", note: "Same hue, darker and less saturated. Still reads as the brand band, without the glare.",
+    v: { band: "#a8492a", "band-ink": "#fff3ec", "band-muted": "#f0c3ad", pill: "#121110", mark: "#d9622f", accent: "#d9622f", "accent-text": "#f08a5d" } },
+  { id: "C", name: "Burnt clay", note: "Deep, quiet terracotta. The band becomes a warm surface; text stays bright on it.",
+    v: { band: "#6e3420", "band-ink": "#f6e6dc", "band-muted": "#d7a68e", pill: "#1a1412", mark: "#d9622f", accent: "#c95a2c", "accent-text": "#e9875b" } },
+  { id: "D", name: "Ember glow", note: "A dark band lit from the left by an ember gradient. The amount stays white; the orange is a glow, not a slab.",
+    v: { band: "linear-gradient(100deg, #8a3a1c 0%, #4a2214 45%, #231a16 100%)", "band-ink": "#fbefe7", "band-muted": "#d6a58c", pill: "#121110", mark: "#eb6834", accent: "#eb6834", "accent-text": "#ff9a6e" } },
+  { id: "E", name: "Charcoal + ember edge", note: "The band is warm charcoal; orange only on a 3-unit top edge, the amount and the accents. Calmest option.",
+    v: { band: "#241d19", "band-ink": "#f0ede8", "band-muted": "#a89d93", amt: "#ff8a57", pill: "#121110", "pill-edge": "1.5px solid #3a3632", mark: "#eb6834", accent: "#eb6834", "accent-text": "#ff9a6e", edge: "#eb6834" } },
+  { id: "F", name: "Dusty coral", note: "Lighter but desaturated, closer to the light theme's warmth. Softer than A, brighter than B and C.",
+    v: { band: "#b8664a", "band-ink": "#ffffff", "band-muted": "#f6d3c4", pill: "#121110", mark: "#d9622f", accent: "#d9622f", "accent-text": "#f0906a" } },
+];
+const ph = (o) => {
+  const style = Object.entries(o.v).map(([k, val]) => `--${k}:${val}`).join(";");
+  const edge = o.v.edge ? `box-shadow: inset 0 3px 0 ${o.v.edge};` : "";
+  return `<div class="opt"><h2>${o.id}. ${o.name}</h2><p>${o.note}</p>
+  <div class="ph" style="${style}">
+    <div class="hdr"><div class="mk"></div><div class="title"><i>‹</i>Bridge<i>›</i></div><div class="srch">⌕</div></div>
+    <div class="pages"><span></span><span class="on"></span><span></span></div>
+    <div class="from"><span>From ◆ ⌄</span><span>0x52…9EE7</span></div>
+    <div class="band" style="${edge}"><div class="row"><div class="amt">250</div><div class="tok"><span class="ico">USDC</span>USDC ⌄</div></div>
+      <div class="sub"><span>$250.00</span><b>MAX</b></div></div>
+    <div class="seam"><div class="sw">⇅</div><div class="dl">Standard delivery</div></div>
+    <div class="to"><div class="fees"><span>✋ 0.32</span><span>⛽ ▂▄</span><span>◷ ~16 min</span></div>
+      <div class="drawer-line"></div>
+      <div class="out"><div class="amt">249.68</div><div class="tok"><span class="ico">USDC</span>USDC</div></div>
+      <div class="arr"><span>$249.68</span><span>arrives as zkbUSDC on PulseChain</span></div></div>
+    <div class="go">First time this token is bridged</div>
+    <div class="search"><span>Search anything</span><i>✕</i></div>
+  </div>
+  <div class="swatch">${["band", "mark", "accent"].map((k) => `<span style="--c:${o.v[k].startsWith("linear") ? "#8a3a1c" : o.v[k]}">${k} ${o.v[k].startsWith("linear") ? "gradient" : o.v[k]}</span>`).join("")}</div></div>`;
+};
+document.getElementById("v").innerHTML = options.map(ph).join("");
+</script>
+</body>
+</html>
