@@ -47,6 +47,26 @@ describe("the light client heads", () => {
     expect(heads[0]).toMatchObject({ storedHeadSlot: null, updateCount: 0, lagSlots: null, lastUpdateTimestamp: null });
   });
 
+  it("shows the checkpoint of the deployment as the head, with no execution block, when no update stored one", async () => {
+    const zero = `0x${"00".repeat(32)}`;
+    const harness = createRpcHarness({
+      // No update event in the scanned history.
+      api: { blockSpan: 40, maxWindowsPerRequest: 1 },
+      first: {
+        viewOverride: (call) =>
+          call.functionName === "executionBlockHashes" ? zero : call.functionName === "executionBlockNumber" && call.args?.[0] === zero ? 0n : undefined,
+      },
+    });
+    const { heads } = await harness.body("/api/heads");
+    expect(heads[0]).toMatchObject({
+      storedHeadSlot: 340,
+      storedHeadSource: "deployment",
+      storedHeadExecutionBlock: null,
+      storedHeadExecutionTimestamp: null,
+      initialized: true,
+    });
+  });
+
   it("shows no update time when no update event is in the scanned history, and still shows the head", async () => {
     const harness = createRpcHarness({ api: { blockSpan: 40, maxWindowsPerRequest: 1 } });
     const { heads } = await harness.body("/api/heads");

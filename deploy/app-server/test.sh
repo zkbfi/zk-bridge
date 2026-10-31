@@ -151,5 +151,10 @@ else
   pass "deploy.sh leaves the state directories to their users"
 fi
 
+# The light client lines of the indexer's live page (indexer-home/heads.test.mjs).
+if command -v node >/dev/null; then
+  if node --test "$DIR/indexer-home/heads.test.mjs" >/dev/null 2>&1; then pass "indexer-home: light client lines"; else fail "indexer-home: light client lines (node --test $DIR/indexer-home/heads.test.mjs)"; fi
+fi
+
 printf '%d failure(s)\n' "$FAILURES"
 [ "$FAILURES" -eq 0 ]

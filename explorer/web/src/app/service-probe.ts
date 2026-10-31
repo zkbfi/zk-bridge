@@ -5,17 +5,22 @@
  * - the indexer, the prover request endpoint, the archive and the msgboard indexer: `GET /health` (the proxy in front of
  *   them answers 404 on the bare base URL by design);
  * - an RPC: `eth_chainId` posted as JSON-RPC, and the chain must be the expected one;
+ * - a beacon API (one per chain): `GET /eth/v1/beacon/genesis`, and its genesis validators root must be the chain's
+ *   when the page knows it;
  * - a msgboard node (one per chain): any JSON-RPC envelope;
  * - the image server: one known token icon loads as an image.
  *
  * A probe gives up after {@link PROBE_TIMEOUT_MS}. The latency is the time of the whole check.
  */
-import { fetchClientWithin, testHealthUrl, testJsonRpcUrl, testRpcChainId, type HttpClient, type TestOutcome } from "@zk-bridge/shared";
+import { GENESIS_VALIDATORS_ROOTS } from "@terminal/config/default-beacon";
+import { fetchClientWithin, testBeaconGenesis, testHealthUrl, testJsonRpcUrl, testRpcChainId, type HttpClient, type TestOutcome } from "@zk-bridge/shared";
 
 /** What to ask a service. */
 export type ProbeKind =
   | { readonly kind: "health" }
   | { readonly kind: "rpc"; readonly chainId: number }
+  /** A beacon API; the chain names the genesis it must serve. */
+  | { readonly kind: "beacon"; readonly chainId: number }
   /** A msgboard node; the chain makes the check of one URL for two chains two checks, each with its own result. */
   | { readonly kind: "jsonrpc"; readonly chainId?: number }
   | { readonly kind: "image" };
@@ -65,6 +70,7 @@ export const createProber = (options: ProberOptions = {}): Prober => {
     if (kind.kind === "health") return testHealthUrl(http, { baseUrl: url });
     if (kind.kind === "rpc") return testRpcChainId(http, { rpcUrl: url, expectedChainId: kind.chainId });
     if (kind.kind === "jsonrpc") return testJsonRpcUrl(http, { url });
+    if (kind.kind === "beacon") return testBeaconGenesis(http, { beaconUrl: url, expectedGenesisValidatorsRoot: GENESIS_VALIDATORS_ROOTS[kind.chainId] ?? null });
     return (await loadImage(probeIconUrl(url))) ? { ok: "pass", message: "The icon loads." } : { ok: "fail", message: "The image server did not return an icon." };
   };
   return async (url, kind) => {

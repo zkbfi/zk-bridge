@@ -124,6 +124,7 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
       archiveUrl: configuration.archiveUrl,
       msgboardUrl: configuration.msgboardUrl,
       rpcUrls: configuration.rpcUrls,
+      beaconUrls: configuration.beaconUrls,
     },
     // A saved single msgboard node becomes each chain's (owner, quote 87).
     user: migrateBoardUrls(loadUserConnections(live.storage ?? null), [pair.first.chainId, pair.second.chainId]),

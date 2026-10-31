@@ -28,6 +28,8 @@ export type WebConfiguration = {
   readonly deployments: Readonly<Record<string, string>> | null;
   /** Public RPC endpoint by chain identifier. */
   readonly rpcUrls: Readonly<Record<number, string>>;
+  /** Beacon API by chain identifier, without a trailing slash (`VITE_EXPLORER_BEACON_URL_<chainId>`). */
+  readonly beaconUrls: Readonly<Record<number, string>>;
   /** Inline deployment JSON, or null. */
   readonly deploymentJson: string | null;
   /** The URL of a deployment file, or null. */
@@ -46,6 +48,7 @@ export const VARIABLES = {
   msgboardUrl: "VITE_EXPLORER_MSGBOARD_URL",
   pair: "VITE_EXPLORER_PAIR",
   rpcPrefix: "VITE_EXPLORER_RPC_URL_",
+  beaconPrefix: "VITE_EXPLORER_BEACON_URL_",
   deploymentUrl: "VITE_EXPLORER_DEPLOYMENT_URL",
   deploymentJson: "VITE_EXPLORER_DEPLOYMENT_JSON",
   deploymentsJson: "VITE_EXPLORER_DEPLOYMENTS_JSON",
@@ -56,12 +59,13 @@ const present = (value: string | undefined): string | null => (value === undefin
 
 const baseUrlOf = (value: string | undefined): string | null => present(value)?.replace(/\/$/, "") ?? null;
 
-const rpcUrlsOf = (environment: Readonly<Record<string, string | undefined>>): Record<number, string> =>
+/** The URL of each chain from the variables `<prefix><chainId>` (an RPC by default), each read by `read`. */
+const urlsByChainOf = (environment: Readonly<Record<string, string | undefined>>, prefix: string = VARIABLES.rpcPrefix, read: (value: string | undefined) => string | null = present): Record<number, string> =>
   Object.fromEntries(
     Object.entries(environment).flatMap(([name, value]): [number, string][] => {
-      if (!name.startsWith(VARIABLES.rpcPrefix)) return [];
-      const chainId = Number(name.slice(VARIABLES.rpcPrefix.length));
-      const url = present(value);
+      if (!name.startsWith(prefix)) return [];
+      const chainId = Number(name.slice(prefix.length));
+      const url = read(value);
       if (!Number.isInteger(chainId) || chainId <= 0 || url === null) return [];
       return [[chainId, url]];
     }),
@@ -137,7 +141,8 @@ export const readConfiguration = (environment: Readonly<Record<string, string | 
     pairName,
     availablePairs: available ?? [pairName],
     deployments,
-    rpcUrls: rpcUrlsOf(environment),
+    rpcUrls: urlsByChainOf(environment),
+    beaconUrls: urlsByChainOf(environment, VARIABLES.beaconPrefix, baseUrlOf),
     deploymentJson: deployments?.[pairName] ?? present(environment[VARIABLES.deploymentJson]),
     deploymentUrl: present(environment[VARIABLES.deploymentUrl]),
     walletConnectProjectId: present(environment[VARIABLES.walletConnect]),

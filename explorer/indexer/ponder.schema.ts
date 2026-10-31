@@ -184,14 +184,27 @@ export const headUpdates = onchainTable(
   }),
 );
 
-/** The newest stored head of the light client on each chain. */
+/**
+ * The stored head of the light client on each chain: the newest update, or, before any update, the checkpoint the
+ * light client was deployed with. That checkpoint is read with `head()` at a named block (the first chain tip where
+ * the contract answers, or the block before the first update), and has no execution block: the contract keeps none.
+ */
 export const lightClientHeads = onchainTable("light_client_heads", (t) => ({
   chainId: t.integer().primaryKey(),
   slot: t.bigint().notNull(),
   headerRoot: t.hex().notNull(),
-  executionBlockNumber: t.bigint().notNull(),
-  updatedTimestamp: t.bigint().notNull(),
+  /** Null while the head is the checkpoint of the deployment. */
+  executionBlockNumber: t.bigint(),
+  /** When the newest update was stored. Null while no update came. */
+  updatedTimestamp: t.bigint(),
   updateCount: t.integer().notNull(),
+  /** The head the light client was deployed with, or null when the indexer could not read it. */
+  initialSlot: t.bigint(),
+  /** The block of this chain at which that first head was read. */
+  initialHeadBlockNumber: t.bigint(),
+  /** `genesisTime()` and `secondsPerSlot()` of the light client: they give the start time of any slot. */
+  genesisTime: t.bigint(),
+  secondsPerSlot: t.bigint(),
 }));
 
 /** The newest block that the indexer processed on each chain (every few blocks). */
