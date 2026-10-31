@@ -10,6 +10,12 @@ import { maskSecret, redactSecrets } from "./redaction.js";
 export type ConnectionSettings = {
   readonly indexerUrl: string | null;
   readonly rpcUrls: Readonly<Record<number, string>>;
+  /**
+   * The msgboard node of each chain (owner, quote 87: "the board node is actually supposed to be assigned per chain. it
+   * can be the same url, but the ui should grab the info twice in that case"). A chain with no entry falls back to the
+   * single `msgboardUrl` of the same source, which older settings and the terminal still use.
+   */
+  readonly msgboardUrls?: Readonly<Record<number, string>>;
 } & Partial<Readonly<Record<EndpointKey, string | null>>>;
 
 /**
@@ -40,12 +46,18 @@ export type ResolvedSetting = { readonly value: string; readonly source: Setting
 export type ConnectionLayer = {
   readonly indexerUrl?: string | null | undefined;
   readonly rpcUrls?: Readonly<Record<number, string | null | undefined>> | undefined;
+  readonly msgboardUrls?: Readonly<Record<number, string | null | undefined>> | undefined;
 } & Partial<Readonly<Record<EndpointKey, string | null | undefined>>>;
 
 /** The settings in force. */
 export type ResolvedConnection = {
   readonly indexerUrl: ResolvedSetting | null;
   readonly rpcUrls: Readonly<Record<number, ResolvedSetting | null>>;
+  /**
+   * The msgboard node of each chain: in each source, the chain's own entry, else that source's single `msgboardUrl`.
+   * Absent on a connection built before boards were per chain; read it with {@link boardUrlOf}.
+   */
+  readonly msgboardUrls?: Readonly<Record<number, ResolvedSetting | null>>;
 } & Readonly<Record<EndpointKey, ResolvedSetting | null>>;
 
 /** The inputs of {@link resolveConnection}. */
@@ -93,7 +105,34 @@ export const resolveConnection = (input: ResolveConnectionInput): ResolvedConnec
     rpcUrls: Object.fromEntries(
       input.chainIds.map((chainId) => [chainId, firstSetting(layers.map(([source, layer]) => [source, layer.rpcUrls?.[chainId]] as const))]),
     ),
+    msgboardUrls: Object.fromEntries(
+      input.chainIds.map((chainId) => [chainId, firstSetting(layers.map(([source, layer]) => [source, present(layer.msgboardUrls?.[chainId]) ?? layer.msgboardUrl] as const))]),
+    ),
   };
+};
+
+/**
+ * The msgboard node in force for a chain: its own entry, else the single one.
+ *
+ * @param resolved The settings in force.
+ * @param chainId The chain.
+ */
+export const boardUrlOf = (resolved: Pick<ResolvedConnection, "msgboardUrl" | "msgboardUrls">, chainId: number): ResolvedSetting | null =>
+  resolved.msgboardUrls?.[chainId] ?? resolved.msgboardUrl;
+
+/**
+ * Moves a single stored msgboard node to every chain of the pair (owner, quote 87: the node is set per chain), and
+ * clears the single value, so a chain reset later falls back to the default and not to the old shared node. A chain
+ * that already has its own node keeps it.
+ *
+ * @param settings The user's settings.
+ * @param chainIds The chains of the pair.
+ */
+export const migrateBoardUrls = (settings: ConnectionSettings, chainIds: readonly number[]): ConnectionSettings => {
+  const single = present(settings.msgboardUrl);
+  if (single === null) return settings;
+  const own = settings.msgboardUrls ?? {};
+  return { ...settings, msgboardUrl: null, msgboardUrls: { ...Object.fromEntries(chainIds.map((chainId) => [chainId, single])), ...own } };
 };
 
 /** The words for a source, for the settings screens. */

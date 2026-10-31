@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  boardUrlOf,
+  migrateBoardUrls,
   DEFAULT_INDEXER_URL,
   describeSource,
   maskUrl,
@@ -53,7 +55,7 @@ describe("resolveConnection", () => {
 
   it("gives null for a setting that no source has", () => {
     const resolved = resolveConnection({ chainIds: [1], user: {}, environment: {}, registry: {} });
-    expect(resolved).toEqual({ indexerUrl: null, rpcUrls: { 1: null }, backendUrl: null, msgboardIndexerUrl: null, archiveUrl: null, msgboardUrl: null });
+    expect(resolved).toEqual({ indexerUrl: null, rpcUrls: { 1: null }, msgboardUrls: { 1: null }, backendUrl: null, msgboardIndexerUrl: null, archiveUrl: null, msgboardUrl: null });
   });
 });
 
@@ -188,5 +190,34 @@ describe("normalizeEndpoint", () => {
     expect(normalize("https://x.example/a b")).toMatchObject({ ok: false, reason: expect.stringMatching(/space/) });
     expect(normalize("https://x.example/?key=1")).toMatchObject({ ok: false, reason: expect.stringMatching(/query/) });
     expect(normalize("https://x.example/#top")).toMatchObject({ ok: false, reason: expect.stringMatching(/fragment/) });
+  });
+});
+
+describe("the msgboard node per chain (owner, quote 87)", () => {
+  const chainIds = [1, 369];
+  it("resolves each chain on its own, a chain without its own node falling back to the single one of the same source", () => {
+    const resolved = resolveConnection({
+      chainIds,
+      user: { msgboardUrls: { 369: "https://board-pls.example" } },
+      environment: { msgboardUrl: "https://board.example" },
+      registry: {},
+    });
+    expect(resolved.msgboardUrls?.[369]).toEqual({ value: "https://board-pls.example", source: "user" });
+    expect(resolved.msgboardUrls?.[1]).toEqual({ value: "https://board.example", source: "environment" });
+    expect(boardUrlOf(resolved, 1)?.value).toBe("https://board.example");
+    expect(boardUrlOf({ msgboardUrl: { value: "https://only.example", source: "user" } }, 369)?.value).toBe("https://only.example");
+  });
+
+  it("lets two chains share one URL, each its own entry", () => {
+    const resolved = resolveConnection({ chainIds, user: { msgboardUrls: { 1: "https://same.example", 369: "https://same.example" } }, environment: {}, registry: {} });
+    expect(resolved.msgboardUrls).toEqual({ 1: { value: "https://same.example", source: "user" }, 369: { value: "https://same.example", source: "user" } });
+  });
+
+  it("moves a saved single node to every chain and clears it; a chain's own node stays", () => {
+    const old = { indexerUrl: null, rpcUrls: {}, msgboardUrl: "https://old.example" };
+    expect(migrateBoardUrls(old, chainIds)).toEqual({ indexerUrl: null, rpcUrls: {}, msgboardUrl: null, msgboardUrls: { 1: "https://old.example", 369: "https://old.example" } });
+    expect(migrateBoardUrls({ ...old, msgboardUrls: { 369: "https://mine.example" } }, chainIds).msgboardUrls).toEqual({ 1: "https://old.example", 369: "https://mine.example" });
+    const none = { indexerUrl: null, rpcUrls: {} };
+    expect(migrateBoardUrls(none, chainIds)).toBe(none);
   });
 });
