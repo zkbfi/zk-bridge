@@ -110,8 +110,14 @@ In flight means `sent`, `waiting_for_finality` or `covered`.
 ```json
 { "now": 1790000000,
   "directions": [{ "sourceChainId": 1, "destinationChainId": 369, "last24h": 12, "last7d": 80,
-                   "byToken": [{ "token": { "...": "token object" }, "value24h": "1150000", "value7d": "9000000" }] }] }
+                   "byToken": [{ "token": { "...": "token object" }, "value24h": "1150000", "value7d": "9000000" }] }],
+  "timing": [{ "sourceChainId": 1,
+               "last24h": { "count": 12, "sentToDelivered": { "avg": 1010.5, "median": 980, "p90": 1400 },
+                            "steps": { "sent": { "median": 768, "p90": 768 }, "final": { "median": 150, "p90": 500 }, "ready": { "median": 40, "p90": 120 } } },
+               "last7d": { "...": "the same for 7 days" } }] }
 ```
+
+`timing` gives, per source chain, seconds over the messages delivered in each window (null with none): sent → delivered (average, median, 90th percentile, `percentile_cont`) and each in-flight step's median and p90. The steps follow `explorer/shared/src/transfer-timing.ts`: final = sent + the source's finality window; ready = the time a stored head covered the message, or the delivery when none did first (the indexer does not keep when a proof first appeared on the board); Sent = min(final, ready) − sent, Final = max(0, ready − final), Proof ready = delivered − ready.
 
 `GET /api/heads` returns `{ heads: [...] }`, one per side. The light client on a side tracks the other chain: `trackedChainId`. Fields:
 

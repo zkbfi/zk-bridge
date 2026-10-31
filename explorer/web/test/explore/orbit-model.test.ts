@@ -4,6 +4,7 @@ import { FIXTURE_NOW, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtur
 import { FEED_STATUSES, type FeedItem } from "@terminal/model/types";
 import { estimatedFeeUsd, orbitLeftSeconds, orbitStepOf, orbitTracks, planetRadius, planetTone, PLANET_CAP, PROOF_USD, proofCoversWith, stepSummary, toneKey } from "../../src/explore/orbit-model";
 import { OrbitSampleStream, SAMPLE_TICK } from "../../src/explore/orbit-sample";
+import { defaultFinalitySeconds } from "@zk-bridge/shared";
 
 const usdc = FIXTURE_TOKENS[0]!; // USDC, 6 decimals, first side
 const weth = FIXTURE_TOKENS[2]!; // WETH, 18 decimals, first side
@@ -118,7 +119,7 @@ describe("tracks", () => {
     // The 32 that arrived first, so a later arrival never pushes a drawn one out.
     expect(out!.drawn.map((planet) => planet.sentAt)).toEqual(many.slice(0, 32).map((row) => row.sentAt));
     // Stats cover every transfer, drawn or not.
-    expect(stepSummary(out!, 2).count).toBe(40);
+    expect(stepSummary(out!, 2, FIXTURE_NOW).count).toBe(40);
   });
 
   it("has no price → no dollar value and the smallest planet; no icon source → no icon", () => {
@@ -197,7 +198,7 @@ describe("a step's summary", () => {
     ];
     const [out] = orbitTracks({ ...base, inFlight: rows, costOf: () => cost });
     expect(out!.deliveryGasUsd).toBeCloseTo(0.6);
-    const summary = stepSummary(out!, 2);
+    const summary = stepSummary(out!, 2, FIXTURE_NOW);
     expect(summary.count).toBe(3);
     expect(summary.usd).toBeCloseTo(3150);
     expect(summary.tokens.map((line) => [line.token?.symbol, line.count, line.amount, Math.round(line.usd!)])).toEqual([
@@ -208,25 +209,14 @@ describe("a step's summary", () => {
     expect(summary.feesUsd).toBeCloseTo(fees.reduce((a, b) => a + b, 0));
     expect(summary.feesEstimated).toBe(true);
     expect(summary.costUsd).toBeCloseTo(3 * 0.6 + PROOF_USD);
-    expect(summary.profitUsd).toBeCloseTo(summary.feesUsd! - summary.costUsd!);
-    expect(summary.profitUsd!).toBeGreaterThan(0);
-    expect(summary.profitShare).toBeCloseTo(summary.profitUsd! / summary.feesUsd!);
+    expect(summary).not.toHaveProperty("profitUsd");
   });
 
-  it("reads a loss when the fees do not cover the gas", () => {
-    const dear = { ...cost, baseFeeWei: 10n ** 12n }; // $600 a delivery
-    const [out] = orbitTracks({ ...base, inFlight: [item({ status: "covered", amount: 5_000_000n })], costOf: () => dear });
-    // The default fee is capped at 1% of $5, far under $600.
-    const summary = stepSummary(out!, 2);
-    expect(summary.profitUsd!).toBeLessThan(0);
-    expect(summary.profitShare!).toBeLessThan(0);
-  });
-
-  it("has no fees, cost or profit without prices or a delivery cost", () => {
+  it("has no fees or cost without prices or a delivery cost", () => {
     const [out] = orbitTracks({ ...base, inFlight: [item({ status: "covered" })], priceOf: () => null });
-    const summary = stepSummary(out!, 2);
-    expect([summary.usd, summary.feesUsd, summary.costUsd, summary.profitUsd]).toEqual([null, null, null, null]);
-    expect(stepSummary(out!, 1)).toMatchObject({ count: 0, tokens: [], costUsd: null });
+    const summary = stepSummary(out!, 2, FIXTURE_NOW);
+    expect([summary.usd, summary.feesUsd, summary.costUsd]).toEqual([null, null, null]);
+    expect(stepSummary(out!, 1, FIXTURE_NOW)).toMatchObject({ count: 0, tokens: [], costUsd: null });
   });
 
   it("estimates a fee with the default fee rule: the curve's share, at least twice the cost, at most 1%", () => {
@@ -234,5 +224,39 @@ describe("a step's summary", () => {
     expect(estimatedFeeUsd(1000, 10n ** 17n)).toBeCloseTo(1);
     // $5 with a $10 cost: capped at 1% = $0.05.
     expect(estimatedFeeUsd(5, 10n * 10n ** 18n)).toBeCloseTo(0.05);
+  });
+});
+
+describe("time at a step", () => {
+  const finality = defaultFinalitySeconds(FIXTURE_PAIR.first.chainId);
+  const spread = (median: number, p90: number) => ({ avg: null, median, p90 });
+  const window = (finalMedian: number, finalP90: number) => ({ count: 10, sentToDelivered: spread(1000, 1500), steps: [spread(finality, finality), spread(finalMedian, finalP90), spread(30, 90)] as const });
+
+  it("measures the wait of the transfers at a step from when they reached it, against the usual time there", () => {
+    // At Final (reached at sent + finality): waiting 100, 200 and 600 s.
+    const rows = [100, 200, 600].map((wait) => item({ status: "waiting_for_finality", sentAt: FIXTURE_NOW - finality - wait }));
+    const timing = { last24h: window(150, 400), last7d: window(170, 500) };
+    const [out] = orbitTracks({ ...base, inFlight: rows, deliveredCounts: new Map([["first-to-second" as const, { last24h: 10, last7d: 10, timing }]]) });
+    const summary = stepSummary(out!, 1, FIXTURE_NOW);
+    expect(summary.waiting).toEqual({ avg: 300, median: 200, longest: 600 });
+    expect(summary.usual).toEqual({ median24h: 150, p9024h: 400, median7d: 170 });
+    // The median wait (200 s) is within the usual p90 (400 s).
+    expect(summary.slower).toBe(false);
+    const [late] = orbitTracks({ ...base, inFlight: rows, deliveredCounts: new Map([["first-to-second" as const, { last24h: 10, last7d: 10, timing: { last24h: window(60, 120), last7d: window(60, 120) } }]]) });
+    expect(stepSummary(late!, 1, FIXTURE_NOW).slower).toBe(true);
+  });
+
+  it("falls back to the delivered transfers for the timing when the indexer gives none", () => {
+    const delivered = [
+      item({ status: "delivered", sentAt: FIXTURE_NOW - 2_000, deliveredAt: FIXTURE_NOW - 800 }),
+      item({ status: "delivered", sentAt: FIXTURE_NOW - 3_000, deliveredAt: FIXTURE_NOW - 1_000 }),
+    ];
+    const [out, back] = orbitTracks({ ...base, inFlight: [], delivered });
+    expect(out!.timing!.last24h.count).toBe(2);
+    expect(out!.timing!.last24h.sentToDelivered).toEqual({ avg: 1_600, median: 1_600, p90: 1_920 });
+    // No covering time in the feed: the Sent step is the finality window, the rest is Final.
+    expect(out!.timing!.last24h.steps[0].median).toBe(finality);
+    expect(out!.timing!.last24h.steps[2].median).toBe(0);
+    expect(back!.timing).toBeNull();
   });
 });

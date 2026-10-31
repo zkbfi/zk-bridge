@@ -17,6 +17,7 @@ import { usdText } from "../bridge/price-oracle";
 import { TokenIcon } from "../bridge/TokenIcon";
 import { durationText } from "./explore-model";
 import { geometryFor, loopPath, NODE_RADIUS, OrbitEngine, stepX, type OrbitGeometry } from "./orbit-engine";
+import type { DirectionTiming } from "./explore-source";
 import { ORBIT_STEPS, ORBIT_STEP_WORDS, stepSummary, type OrbitStep, type OrbitTrack, type Planet } from "./orbit-model";
 import { XGroup } from "./parts";
 import { shortChain } from "./tx-model";
@@ -347,6 +348,7 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false }: 
                   <div className="zb-orb-tip-steps">
                     Delivered: {totals.delivered24h} in the last 24 h · {totals.delivered7d} in the last 7 days
                   </div>
+                  <ChainTiming out={tracks[chainTip.index]?.timing ?? null} back={tracks[1 - chainTip.index]?.timing ?? null} />
                 </div>
               );
             })(),
@@ -354,7 +356,7 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false }: 
           )}
       {sunTip === null || tracks[sunTip.lane] === undefined
         ? null
-        : createPortal(<SunTip ref={sunTipNode} track={tracks[sunTip.lane]!} step={sunTip.step as OrbitStep} />, document.body)}
+        : createPortal(<SunTip ref={sunTipNode} track={tracks[sunTip.lane]!} step={sunTip.step as OrbitStep} now={now} />, document.body)}
       {shown === null || tip === null
         ? null
         : createPortal(
@@ -382,11 +384,11 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false }: 
 };
 
 /**
- * A step's summary, on its sun (owner: "hovering over the central planet of each should show the profitability and
- * aggregate stats. how many of each token and how much in fees each one is estimated to pay").
+ * A step's summary, on its sun (owner: "how many of each token and how much in fees each one is estimated to pay"; no
+ * profit line: "realistically it only goes to the fee address. the runner is not compensated").
  */
-export const SunTip = forwardRef<HTMLDivElement, { readonly track: OrbitTrack; readonly step: OrbitStep }>(({ track, step }, ref) => {
-  const summary = stepSummary(track, step);
+export const SunTip = forwardRef<HTMLDivElement, { readonly track: OrbitTrack; readonly step: OrbitStep; readonly now: number }>(({ track, step, now }, ref) => {
+  const summary = stepSummary(track, step, now);
   const est = summary.feesEstimated ? " est." : "";
   return (
     <div ref={ref} className="zb-orb-tip zb-orb-sun-tip" role="tooltip">
@@ -426,20 +428,59 @@ export const SunTip = forwardRef<HTMLDivElement, { readonly track: OrbitTrack; r
           </tbody>
         </table>
       )}
-      <div>
-        Fees{est}: {money(summary.feesUsd)}
-      </div>
-      <div>
-        Cost to deliver all: {money(summary.costUsd)}
-        {summary.costUsd === null ? null : <span className="zb-orb-tip-muted"> ({summary.count} × gas + one $0.025 proof)</span>}
-      </div>
-      {summary.profitUsd === null ? null : (
-        <div className={summary.profitUsd >= 0 ? "zb-orb-tip-good" : "zb-orb-tip-eta"}>
-          {summary.profitUsd >= 0 ? "Profit" : "Loss"} for a deliverer: {money(Math.abs(summary.profitUsd))}
-          {summary.profitShare === null ? "" : ` (${Math.round(summary.profitShare * 100)} % of fees)`}
+      {summary.waiting === null ? null : (
+        <div className="zb-orb-tip-wait">
+          Waiting here now: {durationText(summary.waiting.avg)} avg · {durationText(summary.waiting.median)} median · {durationText(summary.waiting.longest)} longest
+          {summary.slower ? <span className="zb-orb-tip-eta"> · slower than usual</span> : null}
         </div>
       )}
+      {summary.usual === null || summary.usual.median24h === null ? null : (
+        <div className="zb-orb-tip-usual">
+          Usual time at this step: {durationText(summary.usual.median24h)} median · {summary.usual.p9024h === null ? "—" : durationText(summary.usual.p9024h)} p90 (24 h)
+          {summary.usual.median7d === null ? null : `; ${durationText(summary.usual.median7d)} median (7 d)`}
+        </div>
+      )}
+      {/* The fees go to the fee address, not to whoever delivers (owner: "the runner is not compensated"). */}
+      <div className="zb-orb-tip-fees">
+        Fees{est} (paid to the fee address): {money(summary.feesUsd)} · cost to deliver all: {money(summary.costUsd)}
+        {summary.costUsd === null ? null : <span className="zb-orb-tip-muted"> ({summary.count} × gas + one $0.025 proof)</span>}
+      </div>
     </div>
   );
 });
 SunTip.displayName = "SunTip";
+
+const seconds = (value: number | null): string => (value === null ? "—" : durationText(value));
+
+/** A chain's "Sent → delivered" table (owner: "aggregate timing stats, time from sent transaction to delivered avg, median, etc"). */
+export const ChainTiming = ({ out, back }: { readonly out: DirectionTiming | null; readonly back: DirectionTiming | null }) => {
+  if (out === null && back === null) return null;
+  const rows = [
+    ["Out 24 h", out?.last24h],
+    ["Out 7 d", out?.last7d],
+    ["In 24 h", back?.last24h],
+    ["In 7 d", back?.last7d],
+  ] as const;
+  return (
+    <table className="zb-orb-tip-table" aria-label="Sent → delivered">
+      <thead>
+        <tr>
+          <th scope="col">Sent → delivered</th>
+          <th scope="col">avg</th>
+          <th scope="col">median</th>
+          <th scope="col">p90</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(([name, window]) => (
+          <tr key={name}>
+            <th scope="row">{name}</th>
+            <td>{seconds(window?.sentToDelivered.avg ?? null)}</td>
+            <td>{seconds(window?.sentToDelivered.median ?? null)}</td>
+            <td>{seconds(window?.sentToDelivered.p90 ?? null)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+};

@@ -22,7 +22,8 @@
  * tells it apart from "proof ready" until it lands.
  */
 import type { ChainConfig, Direction, FeedItem, PairConfig, TokenInfo } from "@terminal/model/types";
-import { DEFAULT_CAP_WAD, defaultFee, deliveryGasUsd, PROOF_COST_USD, totalCostUsd, type CostInput } from "@zk-bridge/shared";
+import { DEFAULT_CAP_WAD, defaultFee, defaultFinalitySeconds, deliveryGasUsd, PROOF_COST_USD, stepDurations, timingStats, totalCostUsd, type CostInput } from "@zk-bridge/shared";
+import type { DirectionTiming, Spread, WindowTiming } from "./explore-source";
 import { chainsFor, transferSteps } from "../bridge/bridge-model";
 
 /** The three steps of a lane, in order. */
@@ -121,6 +122,11 @@ export type Planet = {
    */
   readonly feeUsd: number | null;
   readonly feeEstimated: boolean;
+  /**
+   * When it reached its step, as far as the feed tells: Sent from the send; Final and Proof ready from the end of the
+   * source's finality window (the feed has no time a proof covered it, so time at Proof ready reads high).
+   */
+  readonly reachedAt: number;
 };
 
 /** One direction's track. */
@@ -139,6 +145,8 @@ export type OrbitTrack = {
   readonly delivered7d: number;
   /** What one delivery on the destination costs in gas today, in USD, or null when unknown. */
   readonly deliveryGasUsd: number | null;
+  /** How long deliveries took (the indexer's aggregate, else from the delivered transfers given), or null. */
+  readonly timing: DirectionTiming | null;
 };
 
 /**
@@ -175,7 +183,7 @@ export type OrbitInput = {
   /** Delivered transfers; the 24 hour and 7 day counts come from them when `deliveredCounts` does not say. */
   readonly delivered: readonly FeedItem[];
   /** The indexer's delivered counts per direction (GET /api/delivered), or null when it has none. */
-  readonly deliveredCounts?: ReadonlyMap<Direction, { readonly last24h: number; readonly last7d: number }> | null;
+  readonly deliveredCounts?: ReadonlyMap<Direction, { readonly last24h: number; readonly last7d: number; readonly timing?: DirectionTiming | null }> | null;
   /** The delivery cost inputs of a destination chain (gas, base fee, priority fee, native price), or null. */
   readonly costOf?: (destinationChainId: number) => CostInput | null;
   /** Whether the latest valid proof of a transfer's direction covers it (see {@link proofCoversWith}). */
@@ -231,6 +239,7 @@ export const orbitTracks = (input: OrbitInput): readonly OrbitTrack[] => {
         leftSeconds: orbitLeftSeconds(step, source, destination, input.now - item.sentAt),
         feeUsd: usd === null || totalCost === null ? null : estimatedFeeUsd(usd, totalCost),
         feeEstimated: true,
+        reachedAt: step === 0 ? item.sentAt : item.sentAt + defaultFinalitySeconds(source.chainId),
       });
     }
     planets.sort((a, b) => a.step - b.step || a.sentAt - b.sentAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
@@ -254,8 +263,31 @@ export const orbitTracks = (input: OrbitInput): readonly OrbitTrack[] => {
       delivered24h: aggregate?.last24h ?? within(86_400),
       delivered7d: aggregate?.last7d ?? within(7 * 86_400),
       deliveryGasUsd: cost === null ? null : fromE18(deliveryGasUsd(cost)),
+      timing: aggregate?.timing ?? timingFrom(input.delivered.filter((item) => item.direction === direction), source.chainId, input.now),
     };
   });
+};
+
+/**
+ * Timing from delivered transfers, when the indexer's aggregate is missing: the same definitions (shared
+ * transfer-timing), with no covering time (the feed has none), so Proof ready reads 0 and Final takes its time.
+ */
+const timingFrom = (delivered: readonly FeedItem[], sourceChainId: number, now: number): DirectionTiming | null => {
+  const done = delivered.filter((item) => item.deliveredAt !== null);
+  if (done.length === 0) return null;
+  const window = (seconds: number): WindowTiming => {
+    const rows = done.filter((item) => item.deliveredAt! >= now - seconds).map((item) => stepDurations({ sentAt: item.sentAt, coveredAt: null, deliveredAt: item.deliveredAt!, finalitySeconds: defaultFinalitySeconds(sourceChainId) }));
+    const spread = (values: readonly number[]): Spread => {
+      const stats = timingStats(values);
+      return { avg: stats.avg, median: stats.median, p90: stats.p90 };
+    };
+    return {
+      count: rows.length,
+      sentToDelivered: spread(rows.map((row) => row.total)),
+      steps: [spread(rows.map((row) => row.sent)), spread(rows.map((row) => row.final)), spread(rows.map((row) => row.ready))],
+    };
+  };
+  return { last24h: window(86_400), last7d: window(7 * 86_400) };
 };
 
 const fromE18 = (value: bigint): number => Number(value) / 1e18;
@@ -288,7 +320,7 @@ export type StepTokenLine = {
   readonly feesUsd: number | null;
 };
 
-/** What a step's sun shows: its transfers by token, their fees, and what delivering them all would earn a deliverer. */
+/** What a step's sun shows: its transfers by token, their fees (paid to the fee address) and what delivering them all costs. */
 export type StepSummary = {
   readonly step: OrbitStep;
   readonly direction: Direction;
@@ -301,9 +333,12 @@ export type StepSummary = {
   readonly feesEstimated: boolean;
   /** Delivering them all: N × one delivery's gas + one shared $0.025 proof; null without the gas. */
   readonly costUsd: number | null;
-  /** Fees less the cost (positive is a profit), and its share of the fees; null without both. */
-  readonly profitUsd: number | null;
-  readonly profitShare: number | null;
+  /** How long the transfers here now have waited at this step (now − when they reached it), in seconds; null with none. */
+  readonly waiting: { readonly avg: number; readonly median: number; readonly longest: number } | null;
+  /** How long deliveries usually spent at this step: median and p90 of the last 24 hours, median of the last 7 days. */
+  readonly usual: { readonly median24h: number | null; readonly p9024h: number | null; readonly median7d: number | null } | null;
+  /** The wait now is longer than usual: its median is over the last 24 hours' p90. */
+  readonly slower: boolean;
 };
 
 const add = (a: number | null, b: number | null): number | null => (b === null ? a : (a ?? 0) + b);
@@ -314,7 +349,7 @@ const add = (a: number | null, b: number | null): number | null => (b === null ?
  * @param track The direction's track.
  * @param step The step.
  */
-export const stepSummary = (track: OrbitTrack, step: OrbitStep): StepSummary => {
+export const stepSummary = (track: OrbitTrack, step: OrbitStep, now: number): StepSummary => {
   const planets = track.planets.filter((planet) => planet.step === step);
   const lines = new Map<string, { token: TokenInfo | null; count: number; amount: bigint | null; usd: number | null; feesUsd: number | null }>();
   for (const planet of planets) {
@@ -330,7 +365,10 @@ export const stepSummary = (track: OrbitTrack, step: OrbitStep): StepSummary => 
   const usd = tokens.reduce<number | null>((sum, line) => add(sum, line.usd), null);
   const feesUsd = tokens.reduce<number | null>((sum, line) => add(sum, line.feesUsd), null);
   const costUsd = track.deliveryGasUsd === null || planets.length === 0 ? null : planets.length * track.deliveryGasUsd + PROOF_USD;
-  const profitUsd = feesUsd === null || costUsd === null ? null : feesUsd - costUsd;
+  const waits = planets.map((planet) => Math.max(0, now - planet.reachedAt));
+  const stats = timingStats(waits);
+  const waiting = stats.avg === null ? null : { avg: stats.avg, median: stats.median!, longest: Math.max(...waits) };
+  const usual = track.timing === null ? null : { median24h: track.timing.last24h.steps[step].median, p9024h: track.timing.last24h.steps[step].p90, median7d: track.timing.last7d.steps[step].median };
   return {
     step,
     direction: track.direction,
@@ -340,8 +378,9 @@ export const stepSummary = (track: OrbitTrack, step: OrbitStep): StepSummary => 
     feesUsd,
     feesEstimated: planets.some((planet) => planet.feeUsd !== null && planet.feeEstimated),
     costUsd,
-    profitUsd,
-    profitShare: profitUsd === null || feesUsd === null || feesUsd === 0 ? null : profitUsd / feesUsd,
+    waiting,
+    usual,
+    slower: waiting !== null && usual?.p9024h != null && waiting.median > usual.p9024h,
   };
 };
 

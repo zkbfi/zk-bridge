@@ -50,15 +50,58 @@ export type HistoryRow = {
   readonly status: string | null;
 };
 
-/** One direction's delivered counts. */
-export type DeliveredCounts = { readonly sourceChainId: number; readonly last24h: number; readonly last7d: number };
+/** Seconds: average, median and 90th percentile (null with no deliveries). */
+export type Spread = { readonly avg: number | null; readonly median: number | null; readonly p90: number | null };
 
-/** Parses `/api/delivered`. */
-export const parseDelivered = (body: unknown): readonly DeliveredCounts[] =>
-  array(record(body, "delivered answer").directions, "delivered directions").map((item) => {
+/** One window's timing: sent → delivered, and each step's median and p90 (Sent, Final, Proof ready). */
+export type WindowTiming = { readonly count: number; readonly sentToDelivered: Spread; readonly steps: readonly [Spread, Spread, Spread] };
+
+/** One direction's timing over the last 24 hours and 7 days. */
+export type DirectionTiming = { readonly last24h: WindowTiming; readonly last7d: WindowTiming };
+
+/** One direction's delivered counts, and its timing when the indexer gives it. */
+export type DeliveredCounts = { readonly sourceChainId: number; readonly last24h: number; readonly last7d: number; readonly timing: DirectionTiming | null };
+
+const secondsOrNull = (value: unknown, what: string): number | null => {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`The indexer's ${what} is not a number.`);
+  return value;
+};
+
+const spreadOf = (value: unknown, what: string): Spread => {
+  const row = record(value, what);
+  return { avg: secondsOrNull(row.avg, `${what}.avg`), median: secondsOrNull(row.median, `${what}.median`), p90: secondsOrNull(row.p90, `${what}.p90`) };
+};
+
+const windowOf = (value: unknown, what: string): WindowTiming => {
+  const row = record(value, what);
+  const steps = record(row.steps, `${what}.steps`);
+  return {
+    count: int(row.count, `${what}.count`),
+    sentToDelivered: spreadOf(row.sentToDelivered, `${what}.sentToDelivered`),
+    steps: [spreadOf(steps.sent, `${what}.steps.sent`), spreadOf(steps.final, `${what}.steps.final`), spreadOf(steps.ready, `${what}.steps.ready`)],
+  };
+};
+
+/** Parses `/api/delivered`: counts per direction, with its timing (absent from an older indexer: null). */
+export const parseDelivered = (body: unknown): readonly DeliveredCounts[] => {
+  const answer = record(body, "delivered answer");
+  const timing = new Map<number, DirectionTiming>();
+  if (answer.timing !== undefined) {
+    for (const item of array(answer.timing, "timing")) {
+      const row = record(item, "timing direction");
+      timing.set(int(row.sourceChainId, "timing.sourceChainId"), { last24h: windowOf(row.last24h, "timing.last24h"), last7d: windowOf(row.last7d, "timing.last7d") });
+    }
+  }
+  const rows = array(answer.directions, "delivered directions").map((item) => {
     const row = record(item, "delivered direction");
-    return { sourceChainId: int(row.sourceChainId, "sourceChainId"), last24h: int(row.last24h, "last24h"), last7d: int(row.last7d, "last7d") };
+    const sourceChainId = int(row.sourceChainId, "sourceChainId");
+    return { sourceChainId, last24h: int(row.last24h, "last24h"), last7d: int(row.last7d, "last7d"), timing: timing.get(sourceChainId) ?? null };
   });
+  // A direction with timing but no deliveries listed (none in 7 days) still has its (empty) timing.
+  for (const [sourceChainId, direction] of timing) if (!rows.some((row) => row.sourceChainId === sourceChainId)) rows.push({ sourceChainId, last24h: 0, last7d: 0, timing: direction });
+  return rows;
+};
 
 /** A tracked beacon chain's clock, from a light client's stored head: the time of slot 0. */
 export type BeaconClock = { readonly trackedChainId: number; readonly genesisTime: number; readonly secondsPerSlot: number };

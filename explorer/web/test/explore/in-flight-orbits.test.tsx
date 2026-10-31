@@ -63,18 +63,27 @@ describe("in-flight orbits", () => {
     act(() => firstNode.focus());
     const tip = screen.getByRole("tooltip");
     expect(tip).toHaveTextContent(FIXTURE_PAIR.first.nativeSymbol);
-    expect(within(tip).getAllByRole("row").map((tr) => tr.textContent)).toEqual(["In flightValue24 h7 d", "Out2$3,000.0011", "In1$1,500.0001"]);
+    const [counts, timing] = within(tip).getAllByRole("table");
+    expect(within(counts!).getAllByRole("row").map((tr) => tr.textContent)).toEqual(["In flightValue24 h7 d", "Out2$3,000.0011", "In1$1,500.0001"]);
+    // Sent → delivered, from the delivered transfers given: the out one took 150 s; the in one, delivered 3 days ago, counts in 7 d only.
+    expect(within(timing!).getAllByRole("row").map((tr) => tr.textContent)).toEqual([
+      "Sent → deliveredavgmedianp90",
+      "Out 24 h3 min3 min3 min",
+      "Out 7 d3 min3 min3 min",
+      "In 24 h———",
+      "In 7 d0 s0 s0 s",
+    ]);
     expect(tip).toHaveTextContent("Delivered: 1 in the last 24 h · 2 in the last 7 days");
     act(() => firstNode.blur());
     expect(screen.queryByRole("tooltip")).toBeNull();
     const secondNode = screen.getByRole("button", { name: new RegExp(`^${second} \\(`) });
     fireEvent.pointerEnter(secondNode);
-    expect(within(screen.getByRole("tooltip")).getAllByRole("row")[1]).toHaveTextContent("Out1$1,500.0001");
+    expect(within(within(screen.getByRole("tooltip")).getAllByRole("table")[0]!).getAllByRole("row")[1]).toHaveTextContent("Out1$1,500.0001");
     fireEvent.pointerLeave(secondNode);
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
-  it("shows a step's summary on its sun: transfers by token, fees, the cost to deliver all and the deliverer's profit", () => {
+  it("shows a step's summary on its sun: transfers by token, the fees paid to the fee address and the cost to deliver all", () => {
     const weth = FIXTURE_TOKENS[2]!;
     const big: FeedItem = { ...row(5, "covered"), token: weth, amount: 2n * 10n ** 18n };
     const tracks = orbitTracks({
@@ -90,15 +99,15 @@ describe("in-flight orbits", () => {
     act(() => sun.focus());
     const tip = screen.getByRole("tooltip");
     expect(tip).toHaveTextContent("Proof ready");
+    expect(tip.querySelector(".zb-orb-tip-wait")).toHaveTextContent(/^Waiting here now: \S+ s avg · \S+ s median · \S+ s longest$/);
     expect(tip).toHaveTextContent("3 transfers · $9,000.00");
     const rows = within(tip).getAllByRole("row");
     // Most value first: 1 × WETH ($6,000), then 2 × USDC ($3,000).
     expect(rows[1]).toHaveTextContent(/^1× WETH2\$6,000\.00\$/);
     expect(rows[2]).toHaveTextContent(/^2× USDC3,000\$3,000\.00\$/);
-    expect(tip).toHaveTextContent("Fees est.:");
     // 3 deliveries × 200,000 gas × 1 gwei × $3,000 = 3 × $0.60, plus one $0.025 proof.
-    expect(tip).toHaveTextContent("Cost to deliver all: $1.82");
-    expect(tip.querySelector(".zb-orb-tip-good")).toHaveTextContent(/^Profit for a deliverer: \$[\d.,]+ \(\d+ % of fees\)$/);
+    expect(tip.querySelector(".zb-orb-tip-fees")).toHaveTextContent(/^Fees est\. \(paid to the fee address\): \$[\d.,]+ · cost to deliver all: \$1\.82 \(3 × gas \+ one \$0\.025 proof\)$/);
+    expect(tip).not.toHaveTextContent(/profit|loss/i);
     act(() => sun.blur());
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
