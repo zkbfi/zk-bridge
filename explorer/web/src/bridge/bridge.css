@@ -13,7 +13,9 @@
   --zb-step-1: clamp(17px, 0.95rem + 0.5vw, 22px);
   --zb-step-2: clamp(24px, 1.3rem + 0.8vw, 32px);
   --zb-step-amount: clamp(40px, 6vw, 64px);
-  --zb-col-width: clamp(480px, 30vw + 150px, 600px);
+  /* The column fills the viewport (less the gutters) until it reaches this width, which grows on large screens
+     (owner: "don't compress the ui so quickly. let it get to the edge of the viewport"). */
+  --zb-col-width: clamp(640px, 40vw + 128px, 760px);
   --zb-touch: 44px;
   --zb-joined-h: 48px;
   --zb-go-h: 56px;
@@ -63,9 +65,12 @@
   --zb-soft: #8d877e;
   --zb-accent: #eb6834;
   --zb-accent-text: #ff9a6e;
-  --zb-from: #eb6834;
-  --zb-from-ink: #ffffff;
-  --zb-from-muted: #ffe0d0;
+  /* The band is a dark surface lit from the left by an ember gradient (owner picked option D, 2026-10-30), not a slab of orange. */
+  --zb-from: #4a2214;
+  --zb-from-bg: linear-gradient(100deg, #8a3a1c 0%, #4a2214 45%, #231a16 100%);
+  --zb-from-end: #231a16;
+  --zb-from-ink: #fbefe7;
+  --zb-from-muted: #d6a58c;
   --zb-to: #1c1a18;
   --zb-to-ink: #f0ede8;
   --zb-pill: #121110;
@@ -148,15 +153,26 @@
 .zb-kbd { display: none; font: inherit; font-size: var(--zb-step--1); font-weight: 600; color: var(--zb-muted); }
 @media (min-width: 720px) and (hover: hover) { .zb-kbd { display: inline; } }
 /* Search: drawn like the token picker, results as plain rows with the selected one marked by the accent edge. */
-@media (min-width: 720px) { .zb-sheet-top { top: 12vh; bottom: auto; } }
-.zb-palette-list { margin: 0 -16px; max-height: min(60vh, 560px); overflow: auto; }
-@media (max-width: 719px) { .zb-palette-list { max-height: none; } }
+.zb-palette-list { margin: 0 -16px; }
 .zb-palette-group { padding: 14px 16px 6px; font-size: var(--zb-step--1); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--zb-muted); }
 .zb-palette-row { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 10px 16px; cursor: pointer; }
 .zb-palette-row[aria-selected="true"] { background: var(--zb-raised); }
 .zb-palette-row[aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--zb-accent); }
 .zb-palette-title { font-weight: 600; overflow-wrap: anywhere; }
 .zb-palette-sub { font-size: var(--zb-step--1); color: var(--zb-muted); overflow-wrap: anywhere; }
+/* The palette is a column: band, list, footer. On desktop it hangs from 12vh and is as tall as its list (up to 78vh), so
+   no empty space sits under the rows; on phones it fills the screen and the footer sits on the bottom edge. */
+.zb-sheet.zb-sheet-top { display: flex; flex-direction: column; }
+@media (min-width: 720px) { .zb-sheet.zb-sheet-top { top: 12vh; bottom: auto; max-height: 78vh; overflow: hidden; } }
+.zb-sheet-top .zb-palette { flex: 1; min-height: 0; overflow: auto; padding-bottom: 6px; }
+.zb-palette-foot { flex: none; display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 8px 0 16px; border-top: 1px solid var(--zb-line); font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-palette-keys { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.zb-palette-keys kbd { display: inline-grid; place-items: center; min-width: 22px; height: 20px; padding: 0 5px; border: 1.5px solid var(--zb-pill-edge); border-radius: 5px; font: inherit; font-size: var(--zb-step-micro); font-weight: 600; color: var(--zb-ink); }
+.zb-palette-keys kbd + kbd { margin-left: -2px; }
+@media (hover: none), (pointer: coarse) { .zb-palette-keys { display: none; } }
+.zb-palette-links { margin-left: auto; display: inline-flex; }
+.zb .zb-palette-links button { min-height: 44px; padding: 0 10px; font-weight: 600; color: var(--zb-ink); }
+.zb .zb-palette-links button:hover { color: var(--zb-accent-text); }
 .zb-palette-note { margin: 12px 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-search { justify-self: end; }
 .zb-pages { display: flex; justify-content: center; gap: 4px; padding-bottom: 10px; }
@@ -173,7 +189,7 @@
 .zb-row-pad { padding-block: 10px; }
 
 /* Bands */
-.zb-band-from { background: var(--zb-from); color: var(--zb-from-ink); }
+.zb-band-from { background: var(--zb-from-bg, var(--zb-from)); color: var(--zb-from-ink); }
 .zb-band-to { background: var(--zb-to); color: var(--zb-to-ink); }
 .zb-band-from .zb-col { padding-block: 14px 26px; }
 .zb-band-to .zb-col { padding-block: 26px 14px; }
@@ -185,7 +201,7 @@
 .zb-notice { margin: 0; padding: 8px 16px; font-size: var(--zb-step--1); color: var(--zb-muted); text-align: center; }
 .zb-amount { flex: 1; min-width: 0; font-size: var(--zb-step-amount); font-weight: 600; background: none; border: 0; color: inherit; padding: 0; outline: none; }
 .zb-amount::placeholder { color: var(--zb-from-muted); }
-.zb-amount-out { flex: 1; min-width: 0; font-size: var(--zb-step-amount); font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.zb-amount-out { flex: 1; min-width: 0; font-size: var(--zb-step-amount); font-weight: 600; overflow-x: clip; overflow-y: visible; text-overflow: ellipsis; }
 .zb-token { display: inline-flex; align-items: center; gap: 10px; border-radius: 999px; min-height: var(--zb-touch); padding: 5px 16px 5px 5px; font-weight: 700; background: var(--zb-from-pill); color: var(--zb-from-pill-ink); flex: none; }
 .zb-band-to .zb-token { background: var(--zb-raised); color: var(--zb-raised-ink); }
 .zb-balance { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: var(--zb-step--1); }
@@ -205,6 +221,14 @@
 .zb-fees { display: flex; gap: 18px; flex-wrap: wrap; font-size: var(--zb-step-fee); color: var(--zb-soft); margin-bottom: 6px; }
 .zb-fee { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 9px 2px 5px; position: relative; transition: background-color 160ms cubic-bezier(.2,.7,.2,1), color 160ms cubic-bezier(.2,.7,.2,1); }
 .zb-fee[aria-expanded="true"] { background: var(--zb-raised); color: var(--zb-raised-ink); }
+/* The gas can and its bars are the gas level control: a tap moves up a level. */
+/* The fee line's tooltips hang from the row, not the item, so one opened from the gas can or the clock stays on screen. */
+.zb-fees { position: relative; }
+.zb-fees .zb-fee { position: static; }
+.zb-fees .zb-tooltip { width: min(280px, 100%); }
+.zb-gas { padding-right: 8px; }
+.zb-gas:hover { color: var(--zb-ink); }
+.zb-gas svg[data-level] { width: 14px; height: 17px; }
 .zb-tooltip { position: absolute; z-index: 20; left: 0; top: calc(100% + 8px); width: 280px; padding: 9px 11px; font-size: var(--zb-step--1); line-height: 1.45; font-weight: 400; text-align: left; background: var(--zb-raised); color: var(--zb-raised-ink); border: 1.5px solid var(--zb-raised-edge); white-space: normal; }
 /* The fee drawer (owner: "the drawer animation is fine"; mockup accordion-motion.html). The height follows the content
    through grid rows 0fr → 1fr, so nothing is measured. Open 200 ms, close 120 ms; no overshoot, no bounce. */
@@ -217,10 +241,21 @@
 .zb-drawer-body::before { content: ""; position: absolute; left: 0; top: 0; width: 100%; height: 3px; background: var(--zb-accent); transform: scaleX(0); transform-origin: var(--zb-from, 0) 50%; transition: transform 120ms ease-in; }
 .zb-drawer.zb-open .zb-drawer-body::before { transform: scaleX(1); transition: transform 220ms ease-out; }
 @media (prefers-reduced-motion: reduce) { .zb-drawer, .zb-drawer-body, .zb-drawer-body::before, .zb-fee { transition: none !important; } }
+/* Once open, the drawer stops clipping so a help tooltip near its bottom shows whole; closing clips again at once. */
+.zb-drawer.zb-open .zb-drawer-inner { animation: zb-unclip 0s linear 220ms forwards; }
+@keyframes zb-unclip { to { overflow: visible; } }
 .zb-drawer-head { display: flex; align-items: baseline; gap: 6px; }
 .zb-slider { margin-top: 12px; }
-.zb-slider-top { display: flex; font-size: var(--zb-step--1); color: var(--zb-muted); }
-.zb-slider-top b { margin-left: auto; color: var(--zb-ink); font-weight: 600; }
+/* A slider's label row: the label and its ? on the left, the value (and a save button) on the right, all centred on
+   one line. The row places the help tooltip, so it opens under the whole row. */
+.zb-slider-top { position: relative; display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-slider-top .zb-tooltip { width: min(280px, 100%); top: calc(100% + 4px); }
+.zb-label { display: inline-flex; align-items: center; gap: 3px; }
+.zb-slider-value { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; text-align: right; }
+.zb-slider-value b { color: var(--zb-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.zb-slider-mode { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 2px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
+.zb-slider-mode .zb-link { font-size: inherit; }
+.zb-slider-note { margin: 10px 0 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-range { position: relative; height: 24px; margin-top: 4px; }
 .zb-range input { position: absolute; inset: 0; width: 100%; opacity: 0; margin: 0; cursor: pointer; }
 .zb-range-bar { position: absolute; left: 0; right: 0; top: 10px; height: 4px; border-radius: 999px; background: var(--zb-track-ahead); }
@@ -229,8 +264,12 @@
 .zb-range-tick { position: absolute; top: 5px; width: 2px; height: 14px; background: var(--zb-ink); pointer-events: none; }
 .zb-ticks { position: relative; min-height: 30px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
 .zb-ticks span { position: absolute; transform: translateX(-50%); text-align: center; line-height: 1.2; white-space: nowrap; }
-.zb-q { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--zb-muted); font-size: var(--zb-step-micro); color: var(--zb-muted); position: relative; }
-.zb-save { width: 24px; height: 24px; border-radius: 4px; color: var(--zb-ink); cursor: pointer; }
+/* The ? help button, one size everywhere: an 18 px ring drawn inside a 24 px hit area, pulled into the line by negative
+   block margins so it never makes its row taller, centred with its label. */
+.zb .zb-q { position: relative; flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; margin-block: -4px; vertical-align: middle; color: var(--zb-muted); font-size: var(--zb-step-micro); font-weight: 700; line-height: 1; cursor: help; }
+.zb .zb-q::before { content: ""; position: absolute; inset: 3px; border: 1.5px solid currentColor; border-radius: 50%; }
+.zb .zb-q:hover, .zb .zb-q[aria-expanded="true"] { color: var(--zb-ink); }
+.zb .zb-save { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; border: 1px solid var(--zb-pill-edge); border-radius: 4px; color: var(--zb-ink); cursor: pointer; }
 .zb-save .zb-icon { width: 14px; height: 14px; }
 .zb-save:disabled { opacity: 0.45; cursor: default; }
 
@@ -263,7 +302,7 @@
 .zb-pop-group { font-size: var(--zb-step-micro); letter-spacing: .08em; text-transform: uppercase; color: var(--zb-muted); padding: 8px 14px 4px; }
 .zb-scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, 0.55); }
 .zb-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 41; max-height: 86vh; overflow: auto; background: var(--zb-to); color: var(--zb-to-ink); border-top: 3px solid var(--zb-accent); }
-@media (min-width: 720px) { .zb-sheet { left: 50%; right: auto; width: var(--zb-col-width); transform: translateX(-50%); bottom: 10vh; border: 3px solid var(--zb-accent); } }
+@media (min-width: 720px) { .zb-sheet { left: 50%; right: auto; width: min(var(--zb-col-width), calc(100vw - 32px)); transform: translateX(-50%); bottom: 10vh; border: 3px solid var(--zb-accent); } }
 .zb-sheet-head { display: flex; align-items: center; padding-block: 14px 8px; }
 .zb-sheet-head h2 { font-size: var(--zb-step-1); margin: 0; }
 .zb-search-field { display: flex; align-items: center; gap: 8px; border: 1.5px solid var(--zb-ink); border-radius: 999px; padding: 8px 14px; }
@@ -273,7 +312,8 @@
 .zb-kv .zb-k { color: var(--zb-muted); }
 .zb-kv-sub { padding: 2px 0 2px 14px; border-top: 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-breakdown { list-style: none; margin: 0 0 10px; padding: 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
-.zb-breakdown li { display: flex; justify-content: space-between; padding: 2px 0; font-variant-numeric: tabular-nums; }
+.zb-breakdown li { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; font-variant-numeric: tabular-nums; }
+.zb-breakdown li[data-total] { margin-top: 3px; padding-top: 5px; border-top: 1px solid var(--zb-line); color: var(--zb-ink); font-weight: 600; }
 .zb-warnbox { border: 1.5px solid var(--zb-accent); color: var(--zb-warn); padding: 8px 12px; font-size: var(--zb-step--1); margin: 10px 0; }
 
 /* Pulse and steps */
@@ -317,10 +357,10 @@
    orange, 52 x 52, set off by a full-height dark rule; tabs are icons only. */
 .zb-sheet-bare { border-top: 0 !important; }
 @media (min-width: 720px) { .zb-sheet-bare { border: 3px solid var(--zb-from) !important; } }
-.zb-picker-search { display: flex; align-items: center; gap: 10px; height: 56px; padding-left: 16px; background: var(--zb-from); color: var(--zb-from-ink); }
+.zb-picker-search { display: flex; align-items: center; gap: 10px; height: 56px; padding-left: 16px; background: var(--zb-from-bg, var(--zb-from)); color: var(--zb-from-ink); }
 .zb-picker-search input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none; color: inherit; font: inherit; font-size: var(--zb-step-0); }
 .zb-picker-search input::placeholder { color: var(--zb-from-muted); }
-.zb .zb-picker-close { width: 56px; height: 56px; flex: none; display: grid; place-items: center; background: var(--zb-from); color: #ffffff; border-left: 3px solid #121110; }
+.zb .zb-picker-close { width: 56px; height: 56px; flex: none; display: grid; place-items: center; background: var(--zb-from-end, var(--zb-from)); color: #ffffff; border-left: 3px solid #121110; }
 .zb-tabs [role="tab"] svg, .zb-tabs [role="tab"] .zb-tok-icon { flex: none; }
 .zb-omni { position: relative; display: inline-flex; color: var(--zb-accent-text); cursor: pointer; }
 .zb .zb-link { display: inline-flex; align-items: center; gap: 4px; color: var(--zb-accent-text); font-weight: 600; text-decoration: underline; }
@@ -396,3 +436,39 @@ a.zb-go[aria-disabled="true"] { cursor: not-allowed; }
 .zb-near[data-hidden="true"] { visibility: hidden; }
 .zb-pages span { flex: none; }
 .zb-fees .zb-icon { width: 20px; height: 20px; }
+
+/* Settings (mockup pulse-v5.html, the "settings" panel): sections with a heading and one help line, endpoint fields as
+   pills with the chain icon or the service name, the URL, a live check dot and a reset; Reset to defaults and Save at
+   the foot, right-aligned. */
+.zb-set { padding-bottom: 18px; }
+.zb-set h3 { margin: 20px 0 6px; font-size: var(--zb-step-0); font-weight: 700; }
+.zb-set h3:first-child { margin-top: 6px; }
+.zb-set .zb-set-quiet { color: var(--zb-muted); font-size: var(--zb-step--1); font-weight: 600; letter-spacing: .06em; text-transform: uppercase; margin-top: 26px; }
+.zb-set-help { margin: 0 0 4px; font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-fld { display: flex; align-items: center; gap: 8px; min-height: var(--zb-touch); margin-top: 8px; padding: 0 4px 0 14px; border: 1.5px solid var(--zb-pill-edge); border-radius: 999px; background: var(--zb-pill); color: var(--zb-pill-ink); }
+.zb-fld[data-problem="true"] { border-color: var(--zb-bad, #c8102e); }
+.zb-fld input { flex: 1; min-width: 0; height: 40px; background: none; border: 0; outline: none; color: inherit; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: var(--zb-step--1); }
+.zb-fld input::placeholder { color: var(--zb-muted); }
+.zb-fld:focus-within { border-color: var(--zb-accent); }
+.zb-fld-k { flex: none; width: 7.5em; font-size: var(--zb-step--1); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zb-fld-k-wide { width: auto; }
+.zb-fld-static { padding-right: 14px; font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-fld-static > span:last-child { min-width: 0; }
+.zb-ok { flex: none; display: inline-flex; align-items: center; gap: 5px; padding-right: 8px; font-size: var(--zb-step-micro); color: var(--zb-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.zb-ok i { width: 8px; height: 8px; border-radius: 50%; background: var(--zb-track-ahead); }
+.zb-ok[data-ok="true"] { color: #2f8f58; }
+.zb-ok[data-ok="true"] i { background: #3fa66b; }
+.zb-ok[data-ok="false"] { color: var(--zb-bad, #c8102e); }
+.zb-ok[data-ok="false"] i { background: var(--zb-bad, #c8102e); }
+.zb .zb-fld-reset { flex: none; width: 34px; height: 34px; margin-left: -6px; border-radius: 50%; display: grid; place-items: center; color: var(--zb-muted); }
+.zb .zb-fld-reset:hover { color: var(--zb-accent-text); }
+.zb-fld-reset .zb-icon { width: 15px; height: 15px; }
+.zb-fld-err { margin: 4px 14px 0; font-size: var(--zb-step--1); color: var(--zb-bad, #c8102e); }
+.zb-set-row { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 10px; }
+.zb .zb-set-link { min-height: var(--zb-touch); display: inline-flex; align-items: center; font-size: var(--zb-step--1); font-weight: 600; color: var(--zb-ink); text-decoration: underline; text-decoration-color: var(--zb-pill-edge); text-underline-offset: 3px; }
+.zb-set-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 22px; }
+.zb-set-status { flex: 1 1 100%; text-align: right; font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-set-status:empty { display: none; }
+.zb .zb-pill-outline { background: transparent; color: inherit; }
+.zb .zb-pill-solid { background: var(--zb-ink); color: var(--zb-page); border-color: var(--zb-ink); }
+.zb .zb-pill-solid:disabled { opacity: .5; }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { describeStatus, failOutcome, fetchClient, passOutcome, testIndexerUrl, testRpcChainId, type HttpClient } from "../src/index.js";
+import { describeStatus, failOutcome, fetchClient, fetchClientWithin, passOutcome, testHealthUrl, testIndexerUrl, testJsonRpcUrl, testRpcChainId, type HttpClient } from "../src/index.js";
 
 const KEY = "FAKEKEY1234567890";
 const rpcUrl = `https://rpc.example.org/v3/${KEY}`;
@@ -107,5 +107,57 @@ describe("testIndexerUrl", () => {
     const failed = await testIndexerUrl(broken, input);
     expect(failed.ok).toBe("fail");
     expect(failed.message).not.toContain(KEY);
+  });
+});
+
+describe("fetchClientWithin", () => {
+  it("gives up after its own time limit", async () => {
+    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchClientWithin(1234)({ url: "http://x.test/c", method: "GET" });
+    expect(fetchMock).toHaveBeenCalledWith("http://x.test/c", expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+});
+
+describe("testHealthUrl", () => {
+  it("asks /health of the base URL and passes on any 2xx", async () => {
+    const seen: string[] = [];
+    const http: HttpClient = async (request) => {
+      seen.push(request.url);
+      return { status: 200, text: "{}" };
+    };
+    expect((await testHealthUrl(http, { baseUrl: "https://indexer.zkb.fi/" })).ok).toBe("pass");
+    expect(seen).toEqual(["https://indexer.zkb.fi/health"]);
+    expect((await testHealthUrl(answering(204, ""), { baseUrl: "https://a.test" })).ok).toBe("pass");
+  });
+
+  it("fails on 404 and on an error, without the URL in the message", async () => {
+    const notFound = await testHealthUrl(answering(404, ""), { baseUrl: rpcUrl });
+    expect(notFound).toMatchObject({ ok: "fail" });
+    expect(notFound.message).toContain("404");
+    const down = await testHealthUrl(async () => {
+      throw new Error(`fetch failed for ${rpcUrl}`);
+    }, { baseUrl: rpcUrl });
+    expect(down.ok).toBe("fail");
+    expect(down.message).not.toContain(KEY);
+  });
+});
+
+describe("testJsonRpcUrl", () => {
+  it("passes on a result or an error envelope, and turns a websocket URL into http", async () => {
+    const seen: string[] = [];
+    const http: HttpClient = async (request) => {
+      seen.push(request.url);
+      return { status: 200, text: '{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"no method"}}' };
+    };
+    expect((await testJsonRpcUrl(http, { url: "wss://board.test/rpc" })).ok).toBe("pass");
+    expect(seen).toEqual(["https://board.test/rpc"]);
+    expect((await testJsonRpcUrl(answering(200, '{"jsonrpc":"2.0","id":1,"result":"0x1"}'), { url: "ws://b.test" })).ok).toBe("pass");
+  });
+
+  it("fails on a status, on an answer that is not JSON-RPC, and on an error", async () => {
+    expect((await testJsonRpcUrl(answering(404, ""), { url: "https://b.test" })).ok).toBe("fail");
+    expect((await testJsonRpcUrl(answering(200, "{}"), { url: "https://b.test" })).ok).toBe("fail");
+    expect((await testJsonRpcUrl(answering(200, "<html>"), { url: "https://b.test" })).ok).toBe("fail");
   });
 });

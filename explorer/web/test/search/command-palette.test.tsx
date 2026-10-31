@@ -26,6 +26,17 @@ describe("the command palette", () => {
     expect(groupTitles()).toEqual(["Views", "Actions"]);
   });
 
+  it("has a footer with the keys and quick links that open the same Settings and Docs as their result rows", async () => {
+    const { onSelect } = open();
+    const footer = document.querySelector(".zb-palette-foot") as HTMLElement;
+    expect(footer.querySelector(".zb-palette-keys")?.getAttribute("aria-hidden")).toBe("true");
+    expect([...footer.querySelectorAll("kbd")].map((key) => key.textContent)).toEqual(["↑", "↓", "↵", "esc"]);
+    await userEvent.click(within(footer).getByRole("button", { name: "Settings" }));
+    expect(onSelect).toHaveBeenLastCalledWith(expect.objectContaining({ id: "action:settings", jump: { type: "action", action: { name: "settings" } } }));
+    await userEvent.click(within(footer).getByRole("button", { name: "Docs" }));
+    expect(onSelect).toHaveBeenLastCalledWith(expect.objectContaining({ id: "view:docs" }));
+  });
+
   it("shows recent results first when the field is empty", () => {
     open({ recent: [viewResults("eth-pls").find((result) => result.id === "view:audit")!] });
     expect(groupTitles()[0]).toBe("Recent");

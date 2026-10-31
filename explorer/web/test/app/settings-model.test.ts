@@ -1,0 +1,106 @@
+import { describe, expect, it } from "vitest";
+import { FIXTURE_PAIR } from "@terminal/data/fixtures";
+import { EMPTY_CONNECTION_SETTINGS } from "@zk-bridge/shared";
+import { currentValues, defaultValues, fieldProblem, pageProtocolOf, settingFields, settingsFromDrafts, textOf } from "../../src/app/settings-model";
+import { readConfiguration } from "../../src/config/environment";
+import { FIRST_CHAIN, SECOND_CHAIN, liveConfiguration, sharedPairForTests } from "../support/live";
+
+const fields = settingFields(FIXTURE_PAIR);
+const fixture = readConfiguration({ VITE_EXPLORER_DATA: "fixture" });
+const field = (id: string) => fields.find((candidate) => candidate.id === id)!;
+const GIB = "https://gib.show/image/{chainId}/{address}";
+
+describe("the fields of the settings", () => {
+  it("lists an RPC per chain, the image server, then every other service, each with its own check", () => {
+    expect(fields.map((candidate) => candidate.id)).toEqual([`rpc:${FIRST_CHAIN}`, `rpc:${SECOND_CHAIN}`, "images", "indexer", "backendUrl", "archiveUrl", "msgboardIndexerUrl", "msgboardUrl"]);
+    expect(fields.map((candidate) => candidate.probe.kind)).toEqual(["rpc", "rpc", "image", "health", "health", "health", "health", "jsonrpc"]);
+    expect(field("msgboardUrl").short).toBe("Board node");
+  });
+});
+
+describe("the defaults", () => {
+  it("are the valve.city demo RPC, the standard indexer, gib.show and nothing for an unset service on the sample page", () => {
+    const defaults = defaultValues({ fields, pair: FIXTURE_PAIR, configuration: fixture });
+    expect(defaults[`rpc:${FIRST_CHAIN}`]).toBe(`https://one.valve.city/rpc/vk_demo/evm/${FIRST_CHAIN}`);
+    expect(defaults.indexer).toBe("http://localhost:42069");
+    expect(defaults.images).toBe(GIB);
+    expect(defaults.backendUrl).toBe("");
+  });
+
+  it("take the build's values first, then the deployment's", () => {
+    const configuration = liveConfiguration({ VITE_EXPLORER_INDEXER_URL: "https://indexer.zkb.fi", VITE_EXPLORER_BACKEND_URL: "https://prove.zkb.fi" });
+    const defaults = defaultValues({ fields, pair: FIXTURE_PAIR, configuration, sharedPair: sharedPairForTests() });
+    expect(defaults.indexer).toBe("https://indexer.zkb.fi");
+    expect(defaults.backendUrl).toBe("https://prove.zkb.fi");
+    expect(defaults[`rpc:${SECOND_CHAIN}`]).toBe("https://registry.example.org/pls");
+  });
+
+  it("give way to the user's settings in what the fields show", () => {
+    const defaults = defaultValues({ fields, pair: FIXTURE_PAIR, configuration: fixture });
+    const shown = currentValues(fields, defaults, { indexerUrl: "https://mine.example.org", rpcUrls: { [SECOND_CHAIN]: "https://rpc.example.org" }, archiveUrl: "https://a.example.org" }, "https://img.example.org/{chainId}/{address}");
+    expect(shown.indexer).toBe("https://mine.example.org");
+    expect(shown[`rpc:${SECOND_CHAIN}`]).toBe("https://rpc.example.org");
+    expect(shown[`rpc:${FIRST_CHAIN}`]).toBe(defaults[`rpc:${FIRST_CHAIN}`]);
+    expect(shown.archiveUrl).toBe("https://a.example.org");
+    expect(shown.images).toBe("https://img.example.org/{chainId}/{address}");
+  });
+});
+
+describe("a typed value", () => {
+  it("is checked by the rule of its kind", () => {
+    expect(fieldProblem(field("images"), "http://img.example.org/{chainId}/{address}", GIB)).toBe("Use an https:// address.");
+    expect(fieldProblem(field(`rpc:${FIRST_CHAIN}`), "ftp://x", "https://d")).toMatch(/must start with http/);
+    expect(fieldProblem(field("indexer"), "", "http://localhost:42069")).toBe("Enter a URL, or reset to the default.");
+    expect(fieldProblem(field("archiveUrl"), "", "")).toBeNull();
+    expect(fieldProblem(field("archiveUrl"), "https://a.example.org/?x=1", "")).toMatch(/query/);
+    expect(fieldProblem(field("archiveUrl"), "https://a.example.org/", "")).toBeNull();
+  });
+});
+
+describe("the settings that the typed values make", () => {
+  const defaults = defaultValues({ fields, pair: FIXTURE_PAIR, configuration: fixture });
+
+  it("keeps a changed value, drops a value equal to its default, and keeps a changed image server", () => {
+    const drafts = { ...defaults, indexer: "https://mine.example.org/", [`rpc:${FIRST_CHAIN}`]: defaults[`rpc:${FIRST_CHAIN}`]!, archiveUrl: "https://a.example.org/", images: "https://img.example.org/{chainId}/{address}" };
+    const user = { ...EMPTY_CONNECTION_SETTINGS, rpcUrls: { [FIRST_CHAIN]: "https://old.example.org" } };
+    const outcome = settingsFromDrafts({ fields, drafts, defaults, user, pageProtocol: "https:" });
+    expect(outcome.problems).toEqual({});
+    expect(outcome.user.indexerUrl).toBe("https://mine.example.org");
+    expect(outcome.user.rpcUrls).toEqual({});
+    expect(outcome.user.archiveUrl).toBe("https://a.example.org");
+    expect(outcome.imageServer).toBe("https://img.example.org/{chainId}/{address}");
+    expect(outcome.insecure).toEqual([]);
+  });
+
+  it("clears a service that was emptied, names plain http on an https page, and gives null for the default image server", () => {
+    const drafts = { ...defaults, archiveUrl: "", backendUrl: "http://prove.example.org" };
+    const outcome = settingsFromDrafts({ fields, drafts, defaults, user: { ...EMPTY_CONNECTION_SETTINGS, archiveUrl: "https://a.example.org" }, pageProtocol: "https:" });
+    expect(outcome.user.archiveUrl).toBeNull();
+    expect(outcome.user.backendUrl).toBe("http://prove.example.org");
+    expect(outcome.insecure).toEqual(["Prover"]);
+    expect(outcome.imageServer).toBeNull();
+  });
+
+  it("reports each field that is not usable and leaves the stored value as it was", () => {
+    const user = { ...EMPTY_CONNECTION_SETTINGS, indexerUrl: "https://kept.example.org" };
+    const outcome = settingsFromDrafts({ fields, drafts: { ...defaults, indexer: "not a url", images: "nope" }, defaults, user, pageProtocol: "http:" });
+    expect(Object.keys(outcome.problems)).toEqual(["images", "indexer"]);
+    expect(outcome.user.indexerUrl).toBe("https://kept.example.org");
+  });
+});
+
+describe("small helpers", () => {
+  it("reads a missing field as empty text, and the page protocol as http unless it is https", () => {
+    expect(textOf({}, "indexer")).toBe("");
+    expect(textOf({ indexer: "x" }, "indexer")).toBe("x");
+    expect(pageProtocolOf("https:")).toBe("https:");
+    expect(pageProtocolOf("file:")).toBe("http:");
+  });
+
+  it("treats a field the drafts leave out as empty", () => {
+    const defaults = defaultValues({ fields, pair: FIXTURE_PAIR, configuration: fixture });
+    const outcome = settingsFromDrafts({ fields, drafts: {}, defaults: {}, user: EMPTY_CONNECTION_SETTINGS, pageProtocol: "http:" });
+    expect(outcome.problems).toEqual({ images: "This is not a URL." });
+    expect(Object.keys(settingsFromDrafts({ fields, drafts: {}, defaults, user: EMPTY_CONNECTION_SETTINGS, pageProtocol: "http:" }).problems)).toContain("indexer");
+  });
+});

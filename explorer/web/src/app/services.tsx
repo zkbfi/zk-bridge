@@ -19,6 +19,7 @@ import { createFixtureIndexerClient } from "../data/fixture-indexer-client";
 import { createFallbackIndexerClient, type IndexerClient } from "../data/indexer-client";
 import { NO_ENDPOINTS, realPanelTransport, type PanelEndpoints, type PanelTransport } from "../views/proof-panel-model";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
+import { createProber, fixtureProber, type Prober } from "./service-probe";
 
 /** Everything that a component reads from outside React. */
 export type Services = {
@@ -40,6 +41,8 @@ export type Services = {
   readonly transport: PanelTransport;
   /** Reads the slot of the head that the light client on a chain stores now. It reads the chain, never the indexer. */
   readonly readLightClientHead: (chainId: number) => Promise<bigint>;
+  /** The live check of an outside service, shared by Explore's Services rows and Settings. The sample page answers without a network. */
+  readonly probe: Prober;
   /** The clock in unix seconds. The fixture page pins it so that the sample data stays the same. */
   readonly now: () => number;
 };
@@ -105,6 +108,7 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
       readLightClientHead: async () => {
         throw new Error("The sample page reads no chain.");
       },
+      probe: fixtureProber,
       now: () => FIXTURE_NOW,
     };
   }
@@ -135,6 +139,7 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
     endpoints: () => connection.resolved(),
     transport: realPanelTransport,
     readLightClientHead: (chainId) => readHeadSlot(connection, pair, chainId),
+    probe: createProber(),
     now: () => Math.floor(Date.now() / 1000),
   };
 };

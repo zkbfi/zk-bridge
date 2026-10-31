@@ -1,6 +1,6 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { collapseZeros, dollarsText } from "../../src/bridge/number";
+import { collapseZeros, dollarsText, shortAmountText } from "../../src/bridge/number";
 import { Num } from "../../src/bridge/Num";
 
 describe("collapseZeros", () => {
@@ -43,5 +43,20 @@ describe("dollars as text", () => {
     expect(dollarsText(50_400_000_000n)).toBe("$0.0₇504");
     expect(dollarsText(56_200_000_000_000n)).toBe("$0.0₄562");
     expect(dollarsText(0n)).toBe("$0");
+  });
+});
+
+describe("a short amount as text", () => {
+  it("collapses three or more leading zeros with subscript digits, cut to three significant digits", () => {
+    expect(shortAmountText(315_000_000_000n, 18)).toBe("0.0₆315");
+    expect(shortAmountText(840_000_000_000_000n, 18)).toBe("0.0₃84");
+    expect(shortAmountText(12_000_000_000_000_000n, 18)).toBe("0.012");
+    expect(shortAmountText(0n, 18)).toBe("0");
+  });
+  it("keeps three significant digits from one, and whole units from a thousand", () => {
+    expect(shortAmountText(1_234_500_000_000_000_000n, 18)).toBe("1.23");
+    expect(shortAmountText(2_000_000_000_000_000_000n, 18)).toBe("2");
+    expect(shortAmountText(45_678n, 3)).toBe("45.6");
+    expect(shortAmountText(1_234_567n, 3)).toBe("1,234");
   });
 });

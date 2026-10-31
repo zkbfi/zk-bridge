@@ -21,7 +21,7 @@ import { ceilingCostUsd, ceilingWeiOf, DEFAULT_CAP_WAD, defaultFee, feeWarnings,
 import { formatUnits } from "viem";
 import { loadFeeCap, saveFeeCap } from "./fee-cap";
 import { DirectionMenu } from "./DirectionMenu";
-import { FeeLine, type FeeSlider } from "./FeeLine";
+import { FeeLine, GAS_LEVEL_NAMES, nextGasLevel, type FeeSlider } from "./FeeLine";
 import { Chevron, FlipIcon, FloppyIcon, Identicon, SlidersIcon } from "./icons";
 import { iconSubjectOf } from "./image-source";
 import { Num } from "./Num";
@@ -56,6 +56,15 @@ const short = (address: string): string => `${address.slice(0, 6)}…${address.s
 
 /** The tip defaults to a share of the amount (owner: "default is a percent anyway"); the address can change it. */
 const optionsOf = (tip: TipQuery | undefined): DeliveryOptions => ({ ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage", ...tip });
+
+/** A share of the amount (1e18 = 100%) as the percentage text the tip settings keep, exactly. */
+const percentTextOfWad = (wad: bigint): string => formatUnits(wad, 16);
+/** A share rounded to the nearest multiple of a grain. */
+const nearest = (wad: bigint, grain: bigint): bigint => ((wad + grain / 2n) / grain) * grain;
+/** The grain of a tip the drawer shows and keeps: 0.0001% of the amount. */
+const TIP_GRAIN = 10n ** 12n;
+/** The grain of a share the tip slider and the gas bars sign: 0.000001% of the amount. */
+const SIGNED_GRAIN = 10n ** 10n;
 
 const safeParse = (text: string, decimals: number): bigint | null => {
   try {
@@ -151,14 +160,20 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     const input = costInputAt(level);
     return input === null ? null : totalCostUsd(input);
   };
-  const baseFeeWei = probe.delivery?.suggestions.dataSource.baseFeeWei ?? null;
+  // Today's base fee on the destination, from the draft or, before an amount is typed, from the indexer's report, so the
+  // gas bars work at once. A base fee of 0 (or a few wei, as on the testnets) still needs a ceiling that says the level,
+  // so the level is read and written against at least 1 wei.
+  const reportBaseFee = report.data?.baseFee.wei;
+  const baseFeeWei = probe.delivery?.suggestions.dataSource.baseFeeWei ?? (reportBaseFee == null ? null : BigInt(reportBaseFee));
+  const levelBaseWei = baseFeeWei === null ? null : baseFeeWei > 0n ? baseFeeWei : 1n;
   const ceilingWeiText = form.tip?.ceilingGweiText === undefined ? null : safeParse(form.tip.ceilingGweiText, 9);
-  const gasLevel = gasLevelOfCeiling(ceilingWeiText, baseFeeWei);
+  const gasLevel = gasLevelOfCeiling(ceilingWeiText, levelBaseWei);
   const costUsd = costAt(gasLevel);
   const costNormalUsd = costAt(1);
   const amountUsd = valueOf(amount);
   const capWad = shareWadOfPercentText(String(capPercent)) ?? DEFAULT_CAP_WAD;
-  const auto = defaultFee({ amountUsd: amountUsd, costUsd: costUsd, capWad });
+  // A higher gas level adds its extra expected cost on top of the curve, so the automatic fee rises with the bars too.
+  const auto = defaultFee({ amountUsd: amountUsd, costUsd: costUsd, capWad, ...(costUsd === null || costNormalUsd === null ? {} : { levelExtraUsd: costUsd - costNormalUsd }) });
   // The automatic fee signs the default share; a gas-based fee signs a limit no higher than the cap's share (owner,
   // quotes 70–71: "limited by the cap").
   const options = useMemo(
@@ -212,11 +227,31 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const line = highCapLine(amountUsd);
   const linePercent = Number((line.numerator * 10n ** 8n) / line.denominator) / 10 ** 6;
   const thresholdText = `${Number(linePercent.toPrecision(2))}%`;
-  const levelName = (level: GasLevel): string => (level === 1 ? "Normal" : level === 2 ? "High" : "Highest");
+  const levelName = (level: GasLevel): string => GAS_LEVEL_NAMES[level];
+  // The share to sign for a tip (a share of the amount) on top of a cost, to the nearest 0.000001%: short text in the
+  // address, and the dust of a near-free delivery gas never shows as a last-digit unit. Null without a price.
+  const signedShareFor = (tipWad: bigint, cost: bigint): bigint | null => (amountUsd === null || amountUsd <= 0n ? null : nearest(tipWad + (cost * WAD) / amountUsd, SIGNED_GRAIN));
+  // The tip before gas of the fee now, as a share to the nearest 0.0001%: what the drawer shows and what a new gas level
+  // keeps, so moving the bars back and forth lands on the same fee instead of drifting.
+  const tipWadNow = (cost: bigint | null): bigint | null => {
+    if (feeUsd === null || cost === null || amountUsd === null || amountUsd <= 0n) return null;
+    return nearest(feeUsd > cost ? ((feeUsd - cost) * WAD) / amountUsd : 0n, TIP_GRAIN);
+  };
+  // A share the user set, rebased on a new cost: the tip before gas stays, the fee moves by the cost's change.
+  const rebasedPercentText = (from: bigint | null, to: bigint | null): string | undefined => {
+    if (automatic || options.mode !== "percentage" || to === null) return undefined;
+    const tipWad = tipWadNow(from);
+    const next = tipWad === null ? null : signedShareFor(tipWad, to);
+    return next === null ? undefined : percentTextOfWad(next);
+  };
+  // The bars beside the gas can (owner, quote 81): a new level writes its ceiling (none at Normal) and, for a share the
+  // user set, adds the level's extra expected cost to it. The automatic fee follows by itself (its floor is twice the
+  // cost at the level). Either way every number moves: "a new level of fee spend has been consented to".
   const setGasLevel = (level: GasLevel): void => {
     const { ceilingGweiText: _drop, ...rest } = form.tip ?? {};
-    const ceiling = baseFeeWei === null || level === 1 ? undefined : formatUnits(ceilingWeiOf(baseFeeWei, level), 9);
-    write({ ...form, tip: { ...rest, ...(ceiling === undefined ? {} : { ceilingGweiText: ceiling }) } });
+    const ceiling = levelBaseWei === null || level === 1 ? undefined : formatUnits(ceilingWeiOf(levelBaseWei, level), 9);
+    const percentText = rebasedPercentText(costAt(gasLevel), costAt(level));
+    write({ ...form, tip: { ...rest, ...(percentText === undefined ? {} : { percentText }), ...(ceiling === undefined ? {} : { ceilingGweiText: ceiling }) } });
   };
   const capText = `${Number(capPercent.toPrecision(3))}%`;
   const setCap = (value: number): void => {
@@ -231,13 +266,21 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     write({ ...form, tip: rest });
   };
   const capSave = { saved: capPercent === storedCap, onSave: saveCap, label: capPercent === storedCap ? `${capText} is your default cap` : `Save ${capText} as your default cap` };
+  // One fee pays for everything (owner: "we need to couple them in the ui"); the drawer breaks it down. The tip is what
+  // is left of the fee once the cost at the chosen gas level is paid: the same tip the slider moves and "High cap %"
+  // reads.
+  const expectedText = (level: GasLevel): string => `${Number(GAS_LEVELS[level].expectedHalves) / 2}×`;
+  const tipShareWad = tipWadNow(costUsd);
+  const tipUsd = tipShareWad === null || amountUsd === null ? (feeUsd === null || costUsd === null ? null : feeUsd > costUsd ? feeUsd - costUsd : 0n) : (tipShareWad * amountUsd) / WAD;
   const breakdown =
-    feeUsd === null || costUsd === null
+    feeUsd === null || costUsd === null || costNormalUsd === null || tipUsd === null
       ? []
       : [
-          { label: "Delivery gas", value: dollarsText(costUsd - PROOF_COST_USD) },
+          { label: "Delivery gas", value: dollarsText(costNormalUsd - PROOF_COST_USD) },
           { label: "Proof", value: dollarsText(PROOF_COST_USD) },
-          { label: "Tip", value: feeUsd > costUsd ? dollarsText(feeUsd - costUsd) : "$0" },
+          ...(gasLevel === 1 ? [] : [{ label: `${levelName(gasLevel)} gas level, ${expectedText(gasLevel)} the cost`, value: `+${dollarsText(costUsd - costNormalUsd)}` }]),
+          { label: "Tip", value: dollarsText(tipUsd) },
+          { label: "Fee", value: dollarsText(feeUsd), total: true },
         ];
   // In gas-based mode the fee can drift after signing, up to the signed limit (the tip at the ceiling).
   const drift = gasBased && delivery !== null && tipUnits !== null ? { now: usd(tipUnits), most: usd(delivery.maximumTip), level: levelName(gasLevel) } : null;
@@ -251,7 +294,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     paused: gate === "stop" || gate === "sealed" ? { route: `${source.name} → ${destination.name}` } : null,
     tipBelowBreakEven: warnings.lowFee,
     lowFee: feeUsd === null || costUsd === null ? null : { feeText: dollarsText(feeUsd), costText: dollarsText(costUsd) },
-    highTip: warnings.highCap ? { thresholdText, tipText: feeUsd === null || costNormalUsd === null ? "—" : dollarsText(feeUsd > costNormalUsd ? feeUsd - costNormalUsd : 0n) } : null,
+    highTip: warnings.highCap ? { thresholdText, tipText: dollarsText(tipUsd) } : null,
     smallTransfer: warnings.smallTransfer && amountUsd !== null ? { costText: dollarsText(costUsd), capText, capAmountText: dollarsText((amountUsd * capWad) / WAD) } : null,
     firstBridge: token !== null && !isNativeToken(token) && isFirstBridge(token, known, false),
   });
@@ -266,28 +309,73 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   );
 
   const percent = Number(options.percentText) || 0;
-  // The default ceiling is twice today's base fee, so half of it marks today's price.
-  const ceilingNow = delivery?.baseFeeCeilingWei == null ? null : Number(delivery.baseFeeCeilingWei / 10_000_000n) / 100;
-  const ceilingValue = form.tip?.ceilingGweiText === undefined ? (ceilingNow ?? 0) : Number(form.tip.ceilingGweiText);
+  const percentText = (value: number): string => `${Number(value.toPrecision(3))}%`;
   const share = (units: bigint | null): number | null => (units === null || amount === null || amount === 0n ? null : Number((units * 1_000_000n) / amount) / 10_000);
-  const breakEvenPercent = share(breakEven);
-  const typicalPercent = share(typical);
-  const sliderMax = Math.max(1, (typicalPercent ?? 0.1) * 3, percent * 1.5);
+  // Shares of the amount in percent, from USD (priced) or token units (unpriced).
+  const pricedAmount = amountUsd !== null && amountUsd > 0n ? amountUsd : null;
+  const usdPercent = (value: bigint | null): number | null => (value === null || pricedAmount === null ? null : Number((value * WAD) / pricedAmount / 10n ** 10n) / 1e6);
+  const tipPercent = usdPercent(tipUsd);
+  const autoTipPercent = auto.feeUsd === null || costUsd === null ? null : usdPercent(auto.feeUsd > costUsd ? auto.feeUsd - costUsd : 0n);
+  const costPercent = usdPercent(costUsd);
+  // Moving the tip leaves the automatic fee: the share signed is the tip plus the cost at the gas level (priced), or the
+  // whole fee's share (unpriced).
+  const setTip = (value: number, withCost: boolean): void => {
+    const tipWad = shareWadOfPercentText(value.toFixed(4)) ?? 0n;
+    const signed = withCost && costUsd !== null ? signedShareFor(tipWad, costUsd) : null;
+    write({ ...form, tip: { ...form.tip, mode: "percentage", percentText: percentTextOfWad(signed ?? tipWad) } });
+  };
+  const backToAutomatic = (): void => {
+    const { percentText: _percent, mode: _mode, ...rest } = form.tip ?? {};
+    write({ ...form, tip: rest });
+  };
+  const tipStatus: FeeSlider["status"] = automatic
+    ? { text: auto.binding === "cap" ? "Automatic · held at your cap" : "Automatic · follows the amount and the gas level" }
+    : {
+        text: options.mode === "percentage" ? "Set by you · the automatic fee is off" : options.mode === "fixed" ? "A fixed tip from the delivery settings" : options.mode === "gas-multiplier" ? "A gas-based tip from the delivery settings" : "No tip",
+        action: { label: "Back to automatic", onClick: backToAutomatic },
+      };
+  const tipSlider: FeeSlider =
+    tipPercent !== null && costPercent !== null
+      ? (() => {
+          const max = Math.min(100, Math.max(1, costPercent * 1.5, linePercent * 1.5, (autoTipPercent ?? 0) * 1.5, tipPercent * 1.25));
+          return {
+            label: "Tip",
+            help: "What the deliverer keeps once the delivery gas and the proof are paid, as a share of the amount. Your fee is the cost at your gas level plus this tip. Left of the 2× cost tick bots may skip it; right of the high cap line it reads as a High cap %.",
+            value: tipPercent,
+            min: 0,
+            max: Number(max.toFixed(2)),
+            step: 0.01,
+            valueText: `${percentText(tipPercent)} · ${dollarsText(tipUsd)}`,
+            ticks: [
+              { at: costPercent, label: "2× cost" },
+              { at: linePercent, label: "high cap line" },
+              ...(automatic || autoTipPercent === null ? [] : [{ at: autoTipPercent, label: "automatic" }]),
+            ],
+            onChange: (value) => setTip(value, true),
+            status: tipStatus,
+          };
+        })()
+      : (() => {
+          const breakEvenPercent = share(breakEven);
+          const typicalPercent = share(typical);
+          return {
+            label: "Fee",
+            help: "The share of the amount that pays whoever delivers your transfer, their gas and the proof included. Without a price the tip can't be told apart from the cost. Left of the break-even tick a delivery bot loses money at today's gas price.",
+            value: percent,
+            min: 0,
+            max: Number(Math.max(1, (typicalPercent ?? 0.1) * 3, percent * 1.5).toFixed(2)),
+            step: 0.01,
+            valueText: percentText(percent),
+            ticks: [
+              ...(breakEvenPercent === null ? [] : [{ at: breakEvenPercent, label: "break-even for bots" }]),
+              ...(typicalPercent === null ? [] : [{ at: typicalPercent, label: "typical" }]),
+            ],
+            onChange: (value) => setTip(value, false),
+            status: tipStatus,
+          };
+        })();
   const sliders: FeeSlider[] = [
-    {
-      label: "Tip",
-      help: "The share of the amount that pays whoever delivers your transfer. Left of the break-even tick a delivery bot loses money at today's gas price.",
-      value: percent,
-      min: 0,
-      max: Number(sliderMax.toFixed(2)),
-      step: 0.01,
-      valueText: `${Number(percent.toPrecision(3))}%`,
-      ticks: [
-        ...(breakEvenPercent === null ? [] : [{ at: breakEvenPercent, label: "break-even for bots" }]),
-        ...(typicalPercent === null ? [] : [{ at: typicalPercent, label: "typical" }]),
-      ],
-      onChange: (value) => write({ ...form, tip: { ...form.tip, mode: "percentage", percentText: String(value) } }),
-    },
+    tipSlider,
     {
       label: "Automatic fee cap",
       help: "The most the automatic fee may take, as a share of the amount. Changing it here applies to this bridge; the save button makes it your default.",
@@ -299,23 +387,11 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
       ticks: [{ at: Number(linePercent.toFixed(3)), label: "high cap line" }],
       onChange: setCap,
       save: capSave,
+      ...(automatic ? {} : { status: { text: "Applies to the automatic fee only" } }),
     },
-    ...(ceilingNow === null
-      ? []
-      : [
-          {
-            label: "Gas price ceiling",
-            help: "The highest base fee at which the tip still pays the deliverer. Higher lets your transfer through a gas spike; it never raises what you pay below it.",
-            value: ceilingValue,
-            min: 0,
-            max: Math.max(1, Math.round(ceilingNow * 3)),
-            step: 0.1,
-            valueText: `${ceilingValue} gwei`,
-            ticks: [{ at: Math.round((ceilingNow / 2) * 10) / 10, label: "today's price" }],
-            onChange: (value: number) => write({ ...form, tip: { ...form.tip, ceilingGweiText: String(value) } }),
-          },
-        ]),
   ];
+  const nextLevel = nextGasLevel(gasLevel);
+  const gasHelp = `${levelName(gasLevel)} gas: up to ${GAS_LEVELS[gasLevel].ceilingFactor}× today's base fee, cost ${expectedText(gasLevel)}${costUsd === null ? "" : ` (${dollarsText(costUsd)})`}. Tap for ${levelName(nextLevel)}.`;
 
   const flip = (): void => {
     const next = token === null ? null : counterpartOf(token, tokens);
@@ -417,10 +493,10 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         <div className="zb-col">
           {token === null ? null : (
             <FeeLine
-              tip={tipUnits === null ? (feeState === "none" ? "none" : "—") : inline(tokenIcon(token, null, 18), amountText(tipUnits, token.decimals), token.symbol)}
-              tipHelp={`One fee pays whoever delivers your transfer on ${destination.name}: their gas, the proof, and a tip on top. It is ${Number(Number(options.percentText).toPrecision(3))}% of the amount${usd(tipUnits) === "—" ? "" : ` (about ${usd(tipUnits)})`}. Tap for the breakdown.`}
+              tip={tipUnits === null ? (feeState === "none" && amount !== null ? "none" : "—") : inline(tokenIcon(token, null, 18), amountText(tipUnits, token.decimals), token.symbol)}
+              tipHelp={`One fee pays whoever delivers your transfer on ${destination.name}: their gas at your gas level, the proof, and a tip on top. It is ${Number(Number(options.percentText).toPrecision(3))}% of the amount${usd(tipUnits) === "—" ? "" : ` (about ${usd(tipUnits)})`}, ${automatic ? "set automatically" : "with the tip set by you"}. Tap for the breakdown.`}
               breakdown={breakdown}
-              gasHelp={`Gas level: the highest gas price on ${destination.name} at which your transfer still gets delivered. Normal: up to ${GAS_LEVELS[1].ceilingFactor}× today's base fee; High: ${GAS_LEVELS[2].ceilingFactor}×; Highest: ${GAS_LEVELS[3].ceilingFactor}×. A higher level raises the cost the fee must cover.`}
+              gasHelp={gasHelp}
               gasLevel={gasLevel}
               onGasLevel={setGasLevel}
               time={(() => {
@@ -429,7 +505,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
               })()}
               steps={transferSteps(source, destination)}
               sliders={sliders}
-              sliderNote={breakEvenPercent === null ? null : "Left of break-even a delivery bot loses money at today's gas price, so expect to deliver it yourself."}
+              sliderNote={tipSlider.label === "Tip" ? null : share(breakEven) === null ? null : "Left of break-even a delivery bot loses money at today's gas price, so expect to deliver it yourself."}
             />
           )}
           <div className="zb-amount-row" style={{ marginTop: 6 }}>
@@ -516,7 +592,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
                     </button>
                   ))}
                 </span>
-                <button type="button" className="zb-q zb-save" style={{ marginLeft: 8, verticalAlign: "middle" }} aria-label={capSave.label} title={capSave.label} disabled={capSave.saved} onClick={capSave.onSave}>
+                <button type="button" className="zb-save" style={{ marginLeft: 8, verticalAlign: "middle" }} aria-label={capSave.label} title={capSave.label} disabled={capSave.saved} onClick={capSave.onSave}>
                   <FloppyIcon />
                 </button>
               </div>

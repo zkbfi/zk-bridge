@@ -32,16 +32,25 @@ export interface TestOutcome {
 /** The longest that a test waits, in milliseconds. */
 const TIMEOUT_MILLISECONDS = 15_000;
 
+/**
+ * An HTTP client that uses `fetch` and gives up after a time limit.
+ *
+ * @param milliseconds The time limit.
+ */
+export const fetchClientWithin =
+  (milliseconds: number): HttpClient =>
+  async (request) => {
+    const response = await fetch(request.url, {
+      method: request.method,
+      ...(request.headers === undefined ? {} : { headers: { ...request.headers } }),
+      ...(request.body === undefined ? {} : { body: request.body }),
+      signal: AbortSignal.timeout(milliseconds),
+    });
+    return { status: response.status, text: (await response.text()).slice(0, 2_000) };
+  };
+
 /** The HTTP client that uses `fetch`, with a time limit. */
-export const fetchClient: HttpClient = async (request) => {
-  const response = await fetch(request.url, {
-    method: request.method,
-    ...(request.headers === undefined ? {} : { headers: { ...request.headers } }),
-    ...(request.body === undefined ? {} : { body: request.body }),
-    signal: AbortSignal.timeout(TIMEOUT_MILLISECONDS),
-  });
-  return { status: response.status, text: (await response.text()).slice(0, 2_000) };
-};
+export const fetchClient: HttpClient = fetchClientWithin(TIMEOUT_MILLISECONDS);
 
 /**
  * A passing outcome.
@@ -117,5 +126,49 @@ export const testIndexerUrl = async (http: HttpClient, input: { indexerUrl: stri
     return passOutcome("The indexer answers /api/heads.");
   } catch (error) {
     return failOutcome(`The indexer did not answer: ${redactError(error, secrets)}`, secrets);
+  }
+};
+
+/**
+ * `GET /health` on a service base URL (the indexer, the prover request endpoint, the archive, the msgboard indexer).
+ * The proxy in front of them passes only their routes and `/health`, so the bare base URL answers 404 by design; the
+ * health route is the one address every one of them answers. Any 2xx passes.
+ *
+ * @param http Sends the request.
+ * @param input The base URL of the service.
+ */
+export const testHealthUrl = async (http: HttpClient, input: { baseUrl: string }): Promise<TestOutcome> => {
+  const secrets = [input.baseUrl];
+  try {
+    const response = await http({ url: `${input.baseUrl.replace(/\/+$/, "")}/health`, method: "GET" });
+    if (response.status < 200 || response.status > 299) return failOutcome(describeStatus(response, "/health"), secrets);
+    return passOutcome("The service answers /health.");
+  } catch (error) {
+    return failOutcome(`The service did not answer: ${redactError(error, secrets)}`, secrets);
+  }
+};
+
+/**
+ * A JSON-RPC node that need not be a chain node (the msgboard node): `eth_chainId` posted to it passes when the answer
+ * is a JSON-RPC envelope at all, with a result or an error, since a node without that method still answers.
+ *
+ * @param http Sends the request.
+ * @param input The node URL.
+ */
+export const testJsonRpcUrl = async (http: HttpClient, input: { url: string }): Promise<TestOutcome> => {
+  const secrets = [input.url];
+  try {
+    const response = await http({
+      url: input.url.replace(/^wss:/, "https:").replace(/^ws:/, "http:"),
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] }),
+    });
+    if (response.status !== 200) return failOutcome(describeStatus(response, "a JSON-RPC call"), secrets);
+    const answer = JSON.parse(response.text) as { jsonrpc?: unknown; result?: unknown; error?: unknown };
+    if (answer.jsonrpc !== "2.0" || (answer.result === undefined && answer.error === undefined)) return failOutcome("The server answered, but not as a JSON-RPC node.", secrets);
+    return passOutcome("The node answers JSON-RPC.");
+  } catch (error) {
+    return failOutcome(`The node did not answer: ${redactError(error, secrets)}`, secrets);
   }
 };

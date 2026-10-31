@@ -92,17 +92,20 @@ export type CostInput = {
 };
 
 /**
- * The delivery gas at the level's expected price (USD × 1e18): gasUsed × (base fee × level + priority fee) × price,
- * rounded down once.
+ * The delivery gas at today's prices (USD × 1e18): gasUsed × (base fee + priority fee) × price, rounded down once.
+ * The gas level does not enter here: it multiplies the whole cost ({@link totalCostUsd}).
  */
-export const deliveryGasUsd = (input: CostInput): bigint =>
-  (input.gasUsed * (input.baseFeeWei * GAS_LEVELS[input.level].expectedHalves + 2n * input.priorityFeeWei) * input.nativePriceE18) / (2n * 10n ** 18n);
+export const deliveryGasUsd = (input: CostInput): bigint => (input.gasUsed * (input.baseFeeWei + input.priorityFeeWei) * input.nativePriceE18) / 10n ** 18n;
 
 /**
- * The total cost of releasing this bridge as if it were the only one, in USD × 1e18: the $0.025 proof plus the
- * delivery gas at the level. Every percentage is set against it.
+ * The total cost of releasing this bridge as if it were the only one, in USD × 1e18, at the gas level: the full cost
+ * at today's prices (the $0.025 proof plus the delivery gas) times the level's expected multiple, 1×, 1.5× or 2.5×
+ * (owner: "we are calculating the full fee of releaseing as if this bridge is the only bridge: so 0.025+any base fee
+ * costs - yeah, those multipliers are fine"), rounded down. Every percentage is set against it, so a higher level is a
+ * higher cost, a higher floor under the default fee and a fee that rises with it ("a new level of fee spend has been
+ * consented to").
  */
-export const totalCostUsd = (input: CostInput): bigint => PROOF_COST_USD + deliveryGasUsd(input);
+export const totalCostUsd = (input: CostInput): bigint => ((PROOF_COST_USD + deliveryGasUsd(input)) * GAS_LEVELS[input.level].expectedHalves) / 2n;
 
 /** The default curve's ends: 1% at $10 and below, 0.1% at $500 and above. */
 const CURVE_LOW_USD = 10n * USD;
@@ -142,16 +145,26 @@ export type DefaultFee = {
  * tie between curve and cost reads as the curve; the cap binds only when it is strictly lower. Without an amount, a
  * price or a cost, it is 0.1% (or the cap, if lower).
  *
- * @param input The amount and the total cost in USD × 1e18 (null when unpriced), and the cap as a share.
+ * A higher gas level adds what it is expected to cost over Normal (`levelExtraUsd`) on top of the curve, so the tip
+ * before gas stays where the curve put it and the fee rises with the level (owner, quote 81: "numbers then adjust when
+ * that happens because a new level of fee spend has been consented to"), the way a share the user set is rebased. At
+ * Normal the extra is zero and this is the curve rule as specified.
+ *
+ * @param input The amount and the total cost at the gas level in USD × 1e18 (null when unpriced), the cap as a share,
+ *   and the level's extra cost over Normal (0 when absent).
  */
-export const defaultFee = (input: { readonly amountUsd: bigint | null; readonly costUsd: bigint | null; readonly capWad: bigint }): DefaultFee => {
+export const defaultFee = (input: { readonly amountUsd: bigint | null; readonly costUsd: bigint | null; readonly capWad: bigint; readonly levelExtraUsd?: bigint }): DefaultFee => {
   const { amountUsd: amount, costUsd: cost, capWad } = input;
   if (amount === null || cost === null || amount <= 0n) return { binding: "no-price", shareWad: capWad < NO_PRICE_SHARE_WAD ? capWad : NO_PRICE_SHARE_WAD, feeUsd: null };
+  const extra = input.levelExtraUsd !== undefined && input.levelExtraUsd > 0n ? input.levelExtraUsd : 0n;
   const curveShare = defaultCurveShareWad(amount);
-  const curveFee = (amount * curveShare) / WAD;
+  const curveFee = (amount * curveShare) / WAD + extra;
   const costFee = COST_MARGIN * cost;
   const capFee = (amount * capWad) / WAD;
-  const wanted = curveFee >= costFee ? { binding: "curve" as const, fee: curveFee, share: curveShare } : { binding: "cost" as const, fee: costFee, share: (costFee * WAD) / amount };
+  const wanted =
+    curveFee >= costFee
+      ? { binding: "curve" as const, fee: curveFee, share: extra === 0n ? curveShare : (curveFee * WAD) / amount }
+      : { binding: "cost" as const, fee: costFee, share: (costFee * WAD) / amount };
   if (capFee < wanted.fee) return { binding: "cap", shareWad: capWad, feeUsd: capFee };
   return { binding: wanted.binding, shareWad: wanted.share, feeUsd: wanted.fee };
 };
@@ -172,8 +185,9 @@ export const highCapLine = (amountUsd: bigint | null): Fraction => {
 };
 
 /**
- * Whether the tip is a "High cap %": the tip before gas (the fee less the total cost at Normal, so the gas level never
- * moves it) over the amount is above {@link highCapLine}. Without prices, the fee's share against 1%.
+ * Whether the tip is a "High cap %": the tip before gas (the fee less the total cost) over the amount is above
+ * {@link highCapLine}. Without prices, the fee's share against 1%. {@link feeWarnings} passes the cost at the chosen
+ * gas level, so what the level adds is never read as tip; {@link capWarns} passes the cost at Normal.
  */
 export const highCap = (input: { readonly feeUsd: bigint | null; readonly costNormalUsd: bigint | null; readonly amountUsd: bigint | null; readonly shareWithoutPriceWad: bigint | null }): boolean => {
   const { feeUsd: fee, costNormalUsd: cost, amountUsd: amount } = input;
@@ -223,7 +237,7 @@ export type FeeWarningsInput = {
   readonly feeUsd: bigint | null;
   /** The total cost at the chosen gas level. */
   readonly costUsd: bigint | null;
-  /** The total cost at Normal, for the tip before gas. */
+  /** The total cost at Normal, for the cap warning's tip before gas. */
   readonly costNormalUsd: bigint | null;
   readonly shareWithoutPriceWad: bigint | null;
   readonly belowBreakEven: boolean;
@@ -237,7 +251,8 @@ export type FeeWarningsInput = {
 export type FeeWarnings = { readonly smallTransfer: boolean; readonly lowFee: boolean; readonly highCap: boolean; readonly capWarning: boolean };
 
 /**
- * The fee's warnings together. In the small-transfer zone "High cap %" and the cap warning do not show: any fee that
+ * The fee's warnings together. "High cap %" reads the tip before gas against the cost at the chosen level, the same
+ * tip the drawer shows. In the small-transfer zone "High cap %" and the cap warning do not show: any fee that
  * covers the cost reads as a high share there.
  */
 export const feeWarnings = (input: FeeWarningsInput): FeeWarnings => {
@@ -245,7 +260,7 @@ export const feeWarnings = (input: FeeWarningsInput): FeeWarnings => {
   return {
     smallTransfer: small,
     lowFee: lowFee({ feeUsd: input.feeUsd, costUsd: input.costUsd, belowBreakEven: input.belowBreakEven }),
-    highCap: !small && highCap({ feeUsd: input.feeUsd, costNormalUsd: input.costNormalUsd, amountUsd: input.amountUsd, shareWithoutPriceWad: input.shareWithoutPriceWad }),
+    highCap: !small && highCap({ feeUsd: input.feeUsd, costNormalUsd: input.costUsd, amountUsd: input.amountUsd, shareWithoutPriceWad: input.shareWithoutPriceWad }),
     capWarning: !small && capWarns({ gasBased: input.gasBased, amountUsd: input.amountUsd, capWad: input.capWad, expandedCostUsd: input.expandedCostUsd, costNormalUsd: input.costNormalUsd }),
   };
 };
