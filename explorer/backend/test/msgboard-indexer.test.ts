@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeAbiParameters, type Hex } from "viem";
 import { encodeProofMessage, proofCategory, type ProofDirection, type ProofMessage } from "@zk-bridge/shared";
 import type { BoardFeed, BoardMessage } from "@zk-bridge/shared/msgboard";
-import { createLightClientReader, type LightClientHead } from "@zk-bridge/shared/prover";
+import { DEFAULT_VERIFY_LIMITS, createLightClientReader, createVerifyGuard, type LightClientHead, type VerifyLimits } from "@zk-bridge/shared/prover";
 import { createApp } from "../src/app.ts";
 import { BackendConfigError } from "../src/config.ts";
 import type { BackendModuleContext } from "../src/module.ts";
@@ -114,7 +114,7 @@ function fakeBoard() {
 
 type Rig = ReturnType<typeof makeRig>;
 
-function makeRig(options: { storage?: Storage; verify?: () => Promise<void>; headSlot?: bigint; acceptOracleProof?: boolean } = {}) {
+function makeRig(options: { storage?: Storage; verify?: () => Promise<void>; headSlot?: bigint; acceptOracleProof?: boolean; limits?: VerifyLimits } = {}) {
   const storage = options.storage ?? openStorage(":memory:");
   const clock = makeClock();
   const log = memoryLogger();
@@ -129,7 +129,9 @@ function makeRig(options: { storage?: Storage; verify?: () => Promise<void>; hea
   const app = createApp({ context, modules: MODULES, enabled: ["msgboard-indexer"] });
   const heads = { "first-to-second": movableHead(options.headSlot ?? 100n, clock.now), "second-to-first": movableHead(options.headSlot ?? 100n, clock.now) };
   const board = fakeBoard();
-  const dependencies: IndexerDependencies = { pair: PAIR, feed: board.feed, lightClients: heads, pollMilliseconds: 1_000, acceptOracleProof: options.acceptOracleProof ?? false };
+  // A guard with room for every test that does not test the guard itself.
+  const verifyGuard = createVerifyGuard({ now: clock.now, logger: log.logger, limits: options.limits ?? { perMinute: 10_000, perSourcePerMinute: 10_000, refusalsRemembered: 10_000 } });
+  const dependencies: IndexerDependencies = { pair: PAIR, feed: board.feed, lightClients: heads, pollMilliseconds: 1_000, acceptOracleProof: options.acceptOracleProof ?? false, verifyGuard };
   return { storage, clock, log, context, app, heads, board, dependencies, verifyCalls };
 }
 
@@ -350,6 +352,24 @@ describe("the msgboard indexer", () => {
     expect(loadStoredProof(rig.storage, "first-to-second")).toBeNull();
   });
 
+  it("caps the checks of junk proofs per minute and direction, logs the drops, and looks at the dropped ones again later (K-5)", async () => {
+    vi.useFakeTimers();
+    const rig = makeRig({ verify: async () => Promise.reject(new Error("does not verify")), limits: { perMinute: 10, perSourcePerMinute: 3, refusalsRemembered: 100 } });
+    rig.board.board.recentMessages = Array.from({ length: 10 }, (_, index) => rig.board.message("first-to-second", payloadOf(100n, 101n + BigInt(index))));
+    rig.board.board.recentMessages.push(rig.board.message("second-to-first", payloadOf(100n, 130n, { direction: "second-to-first" })));
+    await run(rig);
+    // Three junk checks for the first direction; the other direction keeps its own share of the budget.
+    expect(rig.verifyCalls.length).toBe(4);
+    expect(rig.log.lines.filter((line) => line.includes("proof_verify_dropped"))).toHaveLength(1);
+    // A poll in the same minute checks nothing more: the refused ones are remembered, the dropped ones still have no room.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(rig.verifyCalls.length).toBe(4);
+    // In the next minute the dropped ones get another look, three more of them.
+    rig.clock.advance(60_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(rig.verifyCalls.length).toBe(7);
+  });
+
   it("looks at a republished message once", async () => {
     const rig = makeRig();
     rig.board.board.recentMessages = [rig.board.message("first-to-second", payloadOf(100n, 130n))];
@@ -540,6 +560,14 @@ describe("the real parts", () => {
     expect(dependencies.pair).toBe(PAIR);
     expect(Object.keys(dependencies.lightClients)).toEqual(["first-to-second", "second-to-first"]);
     expect(created.boardUrls).toEqual(["https://board.invalid"]);
+  });
+
+  it("builds a guard for the local checks with the default limits (K-5)", () => {
+    const { verifyGuard } = buildDependencies(contextWith());
+    const head = { headSlot: 100n, headRoot: word("aa") };
+    const answers = Array.from({ length: DEFAULT_VERIFY_LIMITS.perSourcePerMinute + 1 }, (_, index) => verifyGuard.admit({ key: word((index + 16).toString(16)), head, source: "first-to-second" }).kind);
+    expect(answers.filter((kind) => kind === "check")).toHaveLength(DEFAULT_VERIFY_LIMITS.perSourcePerMinute);
+    expect(answers.at(-1)).toBe("dropped");
   });
 
   it.each([

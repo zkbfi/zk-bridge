@@ -1,6 +1,7 @@
 import { keccak256, type Hex } from "viem";
 import { ORACLE_PROOF_MESSAGE_VERSION, tryDecodeProofMessage, type ProofDirection, type ProofMessage } from "../proof-message.js";
 import type { ProverBinary } from "./prover-binary.js";
+import type { VerifyGuard } from "./verify-guard.js";
 
 /** What the proof check needs to know about the light client on the destination chain. */
 export interface LightClientHead {
@@ -25,6 +26,7 @@ export type ProofRefusal =
   | "already-stored"
   | "start-slot-differs-from-head"
   | "start-root-differs-from-head"
+  | "verify-budget-exhausted"
   | "proof-does-not-verify";
 
 /** The verdict on one message. */
@@ -45,6 +47,14 @@ export interface AssessInput {
    * so it is skipped for that form and the chain stays the check.
    */
   readonly acceptOracleProof?: boolean;
+  /**
+   * The guard in front of the local check: it refuses a payload that already failed at this head, and caps the checks
+   * per minute. Without a guard every payload that passes the cheap checks is checked. Pass one wherever the payloads
+   * come from the public board.
+   */
+  readonly verifyGuard?: VerifyGuard;
+  /** The source that the guard counts the check under, such as the board category of a direction. Default `unnamed`. */
+  readonly verifySource?: string;
 }
 
 /** True when the first byte of the payload is the version of the oracle form. */
@@ -92,9 +102,20 @@ export async function assessProofPayload(input: AssessInput): Promise<ProofAsses
   if (message.startSlot !== state.headSlot) return { accept: false, reason: "start-slot-differs-from-head" };
   if (message.startRoot.toLowerCase() !== state.headRoot.toLowerCase()) return { accept: false, reason: "start-root-differs-from-head" };
   if (message.version === ORACLE_PROOF_MESSAGE_VERSION) return { accept: true, message };
+  const guard = input.verifyGuard;
+  const key = payloadKey(input.payload);
+  if (guard !== undefined) {
+    const admission = guard.admit({ key, head: state, source: input.verifySource ?? "unnamed" });
+    if (admission.kind === "refused-before") return { accept: false, reason: "proof-does-not-verify", detail: "refused before at this head" };
+    if (admission.kind === "dropped") {
+      const whose = admission.scope === "all" ? "all sources" : "this source";
+      return { accept: false, reason: "verify-budget-exhausted", detail: `the local proof checks of this minute are used up (${whose})` };
+    }
+  }
   try {
     await input.prover.verify({ programKey: message.programKey, publicValues: message.publicValues, proof: message.proof });
   } catch (error) {
+    guard?.refused({ key, head: state });
     return { accept: false, reason: "proof-does-not-verify", detail: error instanceof Error ? error.message : String(error) };
   }
   return { accept: true, message };
