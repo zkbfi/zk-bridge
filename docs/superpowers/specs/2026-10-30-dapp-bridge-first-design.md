@@ -384,6 +384,9 @@ and the time left while in flight or the age once delivered. A row links to the 
   the caller (a contract reader pinned to a block, the RPC of their choice) and holds no UI. `web` uses it exactly as
   an outside dapp would. Until it is carved out, new rule code goes in `shared` under these rules so the carve-out is
   a move, not a rewrite.
+- **Package names (owner, 2026-10-31):** the npm scope is `zkb`: `@zkb/core` (rules), `@zkb/data` (fetching),
+  `@zkb/react` (hooks and components). Private until the npm organisation exists under the zkb.fi account and a
+  licence is chosen.
 - **Data package (owner):** a layer between the core rules and React that sources the data: fetching a proof from
   the msgboard, forming and sending the request to the proof queue, and reading from the indexer API or straight
   from an RPC (the user's choice, with the same fallback the dapp uses). Endpoints are the caller's, swappable like
@@ -605,3 +608,4 @@ don't call it "tip too high", call it "high tip %""
 100. "you have to check your color wheel though. check the theory. make sure that they mesh"
 101. "it looks like the native key is maintaining itself outside of the switch network button. i think i would rather have the hash (defaulting to the zero address for native) on each chain rather than the native shorthand. otherwise you end up with eth switching to pls, when all you asked to do is switch the chain direction"
 102. "native can be recognized as a valid iput to the search params, but it should immediately update to the hash"
+103. "how about just zkb for the org name"
