@@ -78,7 +78,7 @@ function transfer(dir, step) {
     age: rnd(0.2, 1) * dir.minutes.slice(0, step + 1).reduce((a, b) => a + b, 0),
     addr: "0x" + Math.random().toString(16).slice(2, 6) + "…" + Math.random().toString(16).slice(2, 6) };
 }
-const state = DIRS.map((dir) => ({ dir, items: [], delivered: Math.floor(rnd(40, 120)), frozen: -1, hover: -1, open: [0, 0, 0, 0], dots: new Map(), phase: {} }));
+const state = DIRS.map((dir) => ({ dir, items: [], delivered: Math.floor(rnd(40, 120)), week: Math.floor(rnd(500, 900)), frozen: -1, hover: -1, open: [0, 0, 0, 0], dots: new Map(), phase: {} }));
 state.forEach((s, n) => { s.lane = lanes[n]; for (let i = 0; i < 26; i++) { const t = transfer(s.dir, Math.min(3, Math.floor(Math.random() * 4))); t.alpha = 1; t.x = s.lane.x(t.step); t.y = s.lane.y; s.items.push(t); } });
 for (const s of state) for (const t of s.items) if (!t.x) { t.x = s.lane.x(0) - 30; t.y = s.lane.y; }
 const fmt = (n) => n >= 1000 ? Math.round(n).toLocaleString("en-US") : n >= 1 ? n.toFixed(2) : n.toPrecision(3);
@@ -120,10 +120,10 @@ function build() {
       const sum = (xs) => xs.reduce((a, t) => a + t.usd, 0);
       tip.innerHTML = `<img src="${IMG(chain)}" alt="" width="18" height="18" style="vertical-align:-4px;border-radius:50%;margin-right:6px"><b>${name}</b> <span class="r">${ticker}</span>
         <table style="border-collapse:collapse;margin-top:6px;font-size:13px;width:100%">
-          <tr class="r"><td></td><td style="text-align:right">in flight</td><td style="text-align:right">value</td><td style="text-align:right">delivered 24 h</td></tr>
-          <tr><td>Out</td><td style="text-align:right">${liveOut.length}</td><td style="text-align:right">$${fmt(sum(liveOut))}</td><td style="text-align:right">${out.delivered}</td></tr>
-          <tr><td>In</td><td style="text-align:right">${liveIn.length}</td><td style="text-align:right">$${fmt(sum(liveIn))}</td><td style="text-align:right">${into.delivered}</td></tr>
-        </table><span class="r">Delivered in the last 24 h: ${out.delivered + into.delivered}</span>`;
+          <tr class="r"><td></td><td style="text-align:right">in flight</td><td style="text-align:right">value</td><td style="text-align:right">24 h</td><td style="text-align:right">7 d</td></tr>
+          <tr><td>Out</td><td style="text-align:right">${liveOut.length}</td><td style="text-align:right">$${fmt(sum(liveOut))}</td><td style="text-align:right">${out.delivered}</td><td style="text-align:right">${out.week}</td></tr>
+          <tr><td>In</td><td style="text-align:right">${liveIn.length}</td><td style="text-align:right">$${fmt(sum(liveIn))}</td><td style="text-align:right">${into.delivered}</td><td style="text-align:right">${into.week}</td></tr>
+        </table><span class="r">Delivered: ${out.delivered + into.delivered} in the last 24 h · ${out.week + into.week} in the last 7 days</span>`;
       tip.style.left = Math.min(innerWidth - 300, x + 14) + "px"; tip.style.top = (y + 14) + "px"; tip.classList.add("on");
     };
     hit.addEventListener("pointerenter", (e) => show(e.clientX, e.clientY)); hit.addEventListener("pointermove", (e) => show(e.clientX, e.clientY));
@@ -232,7 +232,7 @@ function frame(now) {
       let lift = 0;
       if (t.moving) { const p = Math.min(1, (now - t.moving.start) / t.moving.span); lift = (s.lane.y < YM ? -1 : 1) * Math.sin(p * Math.PI) * 26; if (p >= 1) t.moving = null; }
       t.alpha += ((t.leaving ? 0 : 1) - t.alpha) * (1 - Math.exp(-dt / (t.leaving ? 500 : 250)));
-      if (t.leaving && Math.hypot(t.x - s.lane.exit.x, t.y - s.lane.exit.y) < 3 && t.alpha < 0.05) { t.gone = true; s.delivered++; continue; }
+      if (t.leaving && Math.hypot(t.x - s.lane.exit.x, t.y - s.lane.exit.y) < 3 && t.alpha < 0.05) { t.gone = true; s.delivered++; s.week++; continue; }
       t.z = (t.z ?? 0) + ((t.moving || t.leaving ? 0 : (t.tz ?? 0)) - (t.z ?? 0)) * (1 - Math.exp(-dt / 120));
       draw(s, t, t.x, t.y + lift, seen);
     }
