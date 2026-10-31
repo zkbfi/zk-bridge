@@ -40,6 +40,12 @@ export type ProofRequest = {
    * finality it acts on, and `job_started` logs the latency from it. Not stored.
    */
   readonly since?: number;
+  /**
+   * The watcher's planner found a keep-alive due: it read the light client and the beacon chain, and the committee
+   * deadline is inside the margin. The indexer's own rule only knows the head's age, which can still look young then.
+   * Taken only with reason `finality`, which no HTTP request can carry; every other check still applies.
+   */
+  readonly plannedKeepAlive?: boolean;
 };
 
 /** The answer of {@link RequestService.submit}. */
@@ -209,6 +215,7 @@ export function createRequestService(input: RequestServiceInput): RequestService
         logger.warn("proof_need_unknown", { direction: request.direction, error });
         return { refused: "cannot-check", retryAfterSeconds: CANNOT_CHECK_RETRY_SECONDS };
       }
+      if (!need.needed && request.reason === "finality" && request.plannedKeepAlive === true) need = { needed: true, why: "keep-alive" };
       if (!need.needed) return { refused: "nothing-to-prove" };
       // Another request may have made a job while the indexer answered, so every check runs again with the insert.
       const current = now();

@@ -156,7 +156,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       direction,
       reason: "finality",
       caller: WATCH_CALLER,
-      ...(decision.why === "message" ? { messageId: decision.messageIds[0] as Hex } : {}),
+      ...(decision.why === "message" ? { messageId: decision.messageIds[0] as Hex } : { plannedKeepAlive: true }),
       since: observation.receivedAt,
     });
     if (!("refused" in result)) {

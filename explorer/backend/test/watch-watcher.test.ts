@@ -178,7 +178,7 @@ describe("the direction watcher, on finality", () => {
     run.watcher.observe(reading);
     await run.watcher.settled();
     expect(run.reads.history).toBe(1);
-    expect(run.submitted).toMatchObject([{ reason: "finality" }]);
+    expect(run.submitted).toMatchObject([{ reason: "finality", plannedKeepAlive: true }]);
     expect(run.submitted[0]).not.toHaveProperty("messageId");
     expect(run.named("proof_due")).toMatchObject([{ why: "keep-alive" }]);
   });
