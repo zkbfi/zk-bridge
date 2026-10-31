@@ -98,11 +98,10 @@ describe("the real pages", () => {
     }
   });
 
-  it("publishes the help pages and the operator documents, and nothing from docs/superpowers", () => {
+  it("publishes the help pages and no repository document", () => {
     const ids = SITE_PAGES.map((page) => page.id);
     expect(ids).toContain("help/getting-started");
-    expect(ids).toContain("audit/known-issues");
-    expect(ids.filter((id) => id.startsWith("superpowers"))).toEqual([]);
-    expect(Object.keys(SITE_INPUT.operatorPages).filter((key) => key.includes("superpowers"))).toEqual([]);
+    expect(ids.filter((id) => !id.startsWith("help/"))).toEqual([]);
+    expect(Object.keys(SITE_INPUT.operatorPages)).toEqual([]);
   });
 });
