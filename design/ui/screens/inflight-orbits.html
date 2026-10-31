@@ -7,9 +7,12 @@
 <style>
   /* The app's palette (Ember on black by default; ?light for Ember light). */
   :root { --page:#141110; --ink:#f4edea; --muted:#a29591; --line:#2b2523; --raised:#2b2523; --edge:#3c3532; --accent:#eb6834;
-    --accent-text:#ff9b77; --track:#4a2214; --passed:#fed5c7; --ahead:#8c3a1a; --good:#62c37a; }
+    --accent-text:#ff9b77; --track:#4a2214; --passed:#fed5c7; --ahead:#8c3a1a; --good:#62c37a;
+    /* Planets: four intensities of the ember hue, a core and a ring, all readable on the page. */
+    --p1:#fed5c7; --p2:#eaa48b; --p3:#d9a795; --p4:#ff9b77; --core:#141110; --ringc:#f4edea; }
   :root.light { --page:#fff7f4; --ink:#1d1817; --muted:#875745; --line:#f7c6b4; --raised:#ffffff; --edge:#f7c6b4; --accent:#eb6834;
-    --accent-text:#c24a14; --track:#f7c6b4; --passed:#ffffff; --ahead:#eaa48b; --good:#21763c; }
+    --accent-text:#c24a14; --track:#f7c6b4; --passed:#ffffff; --ahead:#eaa48b; --good:#21763c;
+    --p1:#875745; --p2:#c24a14; --p3:#eaa48b; --p4:#4a2214; --core:#fff7f4; --ringc:#1d1817; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, sans-serif; }
   .col { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
@@ -31,11 +34,11 @@
 <body>
 <div class="col">
   <h1>Every transfer in flight, at once</h1>
-  <p class="lead">The track is the four steps of a transfer. Each dot circling a step is one transfer waiting at it; bigger dots carry more value. When a step completes, its dot travels to the next. Hover a dot (tap on a phone) to stop that step's orbit and read the transfer.</p>
+  <p class="lead">The track is the four steps of a transfer. Each planet circling a step is one transfer waiting at it. Its colour is its token; a core marks $1,000 or more and a ring $10,000 or more. When a step completes, its dot travels to the next. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer.</p>
   <div id="tracks"></div>
   <div class="bar"><button id="theme">Light / dark</button><button id="burst">Add a burst of transfers</button><button id="motion">Pause all</button></div>
   <ul class="notes">
-    <li>Rings use the design language's one ring radius, multiplied: the first ring holds 6 dots, each further ring 6 more.</li>
+    <li>Orbits use the design language's one ring radius, multiplied: the first orbit holds 6 planets, each further orbit 6 more. Every planet eases toward its place, so moves, arrivals and re-spacing glide.</li>
     <li>Delivered transfers leave through the right end and the count above ticks up.</li>
     <li>With reduced motion, dots sit still on their rings; hover and tap work the same.</li>
   </ul>
@@ -47,23 +50,24 @@ const DIRS = [
   { key: "e2p", from: "Ethereum", to: "PulseChain", minutes: [13, 2, 1.5, 0.5] },
   { key: "p2e", from: "PulseChain", to: "Ethereum", minutes: [2, 2, 12, 0.5] },
 ];
-const TOKENS = [["USDC", 1], ["ETH", 3000], ["DAI", 1], ["PLS", 0.00003], ["HEX", 0.004]];
+// Each token has its own planet colour (one of four intensities of the ember hue).
+const TOKENS = [["USDC", 1, "--p1"], ["ETH", 3000, "--p4"], ["DAI", 1, "--p3"], ["PLS", 0.00003, "--p2"], ["HEX", 0.004, "--p3"]];
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 let paused = false;
-const W = 700, H = 170, X0 = 60, X1 = 640, Y = 85, R0 = 18, RING = 13, PER = 6;
+const W = 700, H = 190, X0 = 60, X1 = 640, Y = 95, R0 = 30, RING = 20, PER = 6, EXIT = X1 + 46;
 const stepX = (i) => X0 + (i * (X1 - X0)) / 3;
 let seq = 0;
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = (xs) => xs[Math.floor(Math.random() * xs.length)];
 function transfer(dir, step) {
-  const [sym, price] = pick(TOKENS);
+  const [sym, price, colour] = pick(TOKENS);
   const usd = Math.exp(rnd(Math.log(5), Math.log(20000)));
-  const amount = usd / price;
-  return { id: ++seq, dir, step, sym, amount, usd, age: rnd(0.2, 1) * dir.minutes.slice(0, step + 1).reduce((a, b) => a + b, 0),
-    phase: Math.random() * Math.PI * 2, travel: null, done: false, addr: "0x" + Math.random().toString(16).slice(2, 6) + "…" + Math.random().toString(16).slice(2, 6) };
+  return { id: ++seq, dir, step, sym, colour, amount: usd / price, usd, x: stepX(0) - 30, y: Y, alpha: 0, moving: null, leaving: false,
+    age: rnd(0.2, 1) * dir.minutes.slice(0, step + 1).reduce((a, b) => a + b, 0),
+    addr: "0x" + Math.random().toString(16).slice(2, 6) + "…" + Math.random().toString(16).slice(2, 6) };
 }
-const state = DIRS.map((dir) => ({ dir, items: [], delivered: Math.floor(rnd(40, 120)), frozen: -1, svg: null, dots: new Map(), phase: {} }));
-for (const s of state) for (let i = 0; i < 26; i++) s.items.push(transfer(s.dir, Math.min(3, Math.floor(Math.random() * 4))));
+const state = DIRS.map((dir) => ({ dir, items: [], delivered: Math.floor(rnd(40, 120)), frozen: -1, hover: -1, open: [0, 0, 0, 0], dots: new Map(), phase: {} }));
+for (const s of state) for (let i = 0; i < 26; i++) { const t = transfer(s.dir, Math.min(3, Math.floor(Math.random() * 4))); t.alpha = 1; t.x = stepX(t.step); s.items.push(t); }
 const fmt = (n) => n >= 1000 ? Math.round(n).toLocaleString("en-US") : n >= 1 ? n.toFixed(2) : n.toPrecision(3);
 const ns = "http://www.w3.org/2000/svg";
 const el = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
@@ -75,15 +79,18 @@ function build() {
     root.append(head); s.head = head;
     const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, class: "track", role: "img", "aria-label": `${s.dir.from} to ${s.dir.to}: transfers in flight` });
     svg.append(el("line", { x1: X0, y1: Y, x2: X1, y2: Y, stroke: "var(--track)", "stroke-width": 3 }));
-    for (let i = 0; i < 4; i++) {
-      svg.append(el("circle", { cx: stepX(i), cy: Y, r: R0 - 6, fill: "none", stroke: "var(--line)", "stroke-width": 1.5 }));
-      svg.append(el("circle", { cx: stepX(i), cy: Y, r: 6, fill: i === 0 ? "var(--accent)" : "var(--ahead)" }));
-    }
-    svg.append(el("circle", { cx: X1 + 40, cy: Y, r: 6, fill: "var(--accent)", opacity: 0.35 }));
-    s.layer = el("g", {}); svg.append(s.layer); s.svg = svg; root.append(svg);
+    for (let i = 0; i < 4; i++) svg.append(el("circle", { cx: stepX(i), cy: Y, r: 7, fill: i === 0 ? "var(--accent)" : "var(--ahead)" }));
+    svg.append(el("circle", { cx: EXIT, cy: Y, r: 7, fill: "var(--accent)", opacity: 0.35 }));
+    s.layer = el("g", {}); svg.append(s.layer); root.append(svg);
     const labels = document.createElement("div"); labels.className = "labels";
     labels.innerHTML = STEPS.map((t, i) => `<div><b data-step="${i}">0</b>${t}</div>`).join(""); root.append(labels); s.labels = labels;
-    svg.addEventListener("pointerleave", () => { s.frozen = -1; hideTip(); });
+    svg.addEventListener("pointerleave", () => { s.frozen = -1; s.hover = -1; hideTip(); });
+    // Hovering near a step opens its orbit so its planets separate; leaving lets them close back into a tilted, overlapping cluster.
+    svg.addEventListener("pointermove", (e) => {
+      const b = svg.getBoundingClientRect(), x = ((e.clientX - b.left) / b.width) * W;
+      let best = -1, d = 70; for (let i = 0; i < 4; i++) { const dd = Math.abs(x - stepX(i)); if (dd < d) { d = dd; best = i; } }
+      s.hover = best;
+    });
   }
 }
 const tip = document.getElementById("tip");
@@ -93,64 +100,94 @@ function showTip(t, x, y) {
   tip.style.left = Math.min(innerWidth - 240, x + 14) + "px"; tip.style.top = (y + 14) + "px"; tip.classList.add("on");
 }
 const hideTip = () => tip.classList.remove("on");
-function place(s, now) {
+// Where each planet should be now: its slot on its step's rings (or the exit). Planets then ease toward it every frame,
+// so a step change, a ring re-spacing or a departure is always a glide, never a jump.
+function targets(s) {
   const byStep = [[], [], [], []];
-  for (const t of s.items) if (!t.done && !t.travel) byStep[t.step].push(t);
-  const seen = new Set();
+  for (const t of s.items) if (!t.leaving) byStep[t.step].push(t);
   for (let i = 0; i < 4; i++) {
     byStep[i].sort((a, b) => a.id - b.id);
-    // Ring n holds 6·(n+1) dots; each ring turns as one, slower the further out, so its dots stay evenly spaced.
     let k = 0, ring = 0;
     while (k < byStep[i].length) {
-      const cap = PER * (ring + 1), group = byStep[i].slice(k, k + cap), r = R0 + ring * RING;
-      const key = `${i}:${ring}`;
-      if (!(s.frozen === i || paused || reduce)) s.phase[key] = (s.phase[key] ?? Math.random() * 6.28) + 0.0055 / (ring + 1);
+      const cap = PER * (ring + 1), group = byStep[i].slice(k, k + cap), r = R0 + ring * RING, key = `${i}:${ring}`;
+      if (!(s.frozen === i || paused || reduce)) s.phase[key] = (s.phase[key] ?? Math.random() * 6.28) + 0.0045 / (ring + 1);
       const base = s.phase[key] ?? 0;
+      const o = s.open[i];                       // 0 closed (at rest) … 1 open (hovered)
+      const rr = r * (0.52 + 0.48 * o), squash = 0.26 + 0.38 * o;
       group.forEach((t, j) => {
-        const a = base + (j * Math.PI * 2) / group.length;
-        draw(s, t, stepX(i) + Math.cos(a) * r, Y + Math.sin(a) * r * 0.62, i, seen);
+        const a = base + (j * Math.PI * 2) / group.length, z = Math.sin(a);   // z: +1 front, −1 back
+        t.tx = stepX(i) + Math.cos(a) * rr; t.ty = Y + z * rr * squash;
+        t.tz = z * (1 - 0.7 * o);                 // depth fades as the orbit opens toward face-on
       });
       k += cap; ring++;
     }
   }
-  for (const t of s.items) if (t.travel) {
-    const p = Math.min(1, (now - t.travel.start) / 900), e = p < .5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
-    const from = stepX(t.travel.from), to = t.travel.to > 3 ? X1 + 40 : stepX(t.travel.to);
-    draw(s, t, from + (to - from) * e, Y, -1, seen);
-    if (p >= 1) { if (t.travel.to > 3) { t.done = true; s.delivered++; } else t.step = t.travel.to; t.travel = null; }
-  }
-  for (const [id, c] of s.dots) if (!seen.has(id)) { c.remove(); s.dots.delete(id); }
-  s.items = s.items.filter((t) => !t.done);
-  s.head.querySelector('[data-k="live"]').textContent = s.items.length;
-  s.head.querySelector('[data-k="done"]').textContent = s.delivered;
-  for (let i = 0; i < 4; i++) s.labels.querySelector(`[data-step="${i}"]`).textContent = s.items.filter((t) => t.step === i && !t.travel).length;
+  for (const t of s.items) if (t.leaving) { t.tx = EXIT; t.ty = Y; }
 }
-function draw(s, t, x, y, step, seen) {
-  seen.add(t.id);
-  let c = s.dots.get(t.id);
-  const r = 2.6 + Math.min(4.4, Math.log10(Math.max(1, t.usd)) * 1.1);
-  if (!c) {
-    c = el("circle", { r, fill: "var(--passed)", stroke: "var(--page)", "stroke-width": 1.2, tabindex: 0, style: "cursor:pointer" });
-    c.addEventListener("pointerenter", (e) => { const st = t.travel ? -1 : t.step; s.frozen = st; c.setAttribute("fill", "var(--accent)"); showTip(t, e.clientX, e.clientY); });
-    c.addEventListener("pointermove", (e) => showTip(t, e.clientX, e.clientY));
-    c.addEventListener("pointerleave", () => { c.setAttribute("fill", "var(--passed)"); hideTip(); });
-    c.addEventListener("focus", () => { s.frozen = t.step; const b = c.getBoundingClientRect(); showTip(t, b.right, b.bottom); });
-    c.addEventListener("blur", () => { s.frozen = -1; hideTip(); });
-    s.layer.append(c); s.dots.set(t.id, c);
+function frame(now) {
+  const dt = Math.min(48, now - (frame.last ?? now)); frame.last = now;
+  for (const s of state) {
+    for (let i = 0; i < 4; i++) s.open[i] += ((s.hover === i || s.frozen === i ? 1 : 0) - s.open[i]) * (1 - Math.exp(-dt / 160));
+    targets(s);
+    const seen = new Set();
+    for (const t of s.items) {
+      // Critically damped ease toward the target; a planet changing step arcs up and over the track while it travels.
+      const k = 1 - Math.exp(-dt / (t.moving ? 260 : 120));
+      t.x += (t.tx - t.x) * k; t.y += (t.ty - t.y) * k;
+      let lift = 0;
+      if (t.moving) { const p = Math.min(1, (now - t.moving.start) / t.moving.span); lift = -Math.sin(p * Math.PI) * 26; if (p >= 1) t.moving = null; }
+      t.alpha += ((t.leaving ? 0 : 1) - t.alpha) * (1 - Math.exp(-dt / (t.leaving ? 500 : 250)));
+      if (t.leaving && Math.abs(t.x - EXIT) < 2 && t.alpha < 0.05) { t.gone = true; s.delivered++; continue; }
+      t.z = (t.z ?? 0) + ((t.moving || t.leaving ? 0 : (t.tz ?? 0)) - (t.z ?? 0)) * (1 - Math.exp(-dt / 120));
+      draw(s, t, t.x, t.y + lift, seen);
+    }
+    // Back to front: planets behind the step are drawn first, so the front ones overlap them.
+    [...s.items].filter((t) => s.dots.has(t.id)).sort((a, b) => (a.z ?? 0) - (b.z ?? 0)).forEach((t) => s.layer.append(s.dots.get(t.id)));
+    s.items = s.items.filter((t) => !t.gone);
+    for (const [id, g] of s.dots) if (!seen.has(id)) { g.remove(); s.dots.delete(id); }
+    s.head.querySelector('[data-k="live"]').textContent = s.items.filter((t) => !t.leaving).length;
+    s.head.querySelector('[data-k="done"]').textContent = s.delivered;
+    for (let i = 0; i < 4; i++) s.labels.querySelector(`[data-step="${i}"]`).textContent = s.items.filter((t) => t.step === i && !t.leaving).length;
   }
-  c.setAttribute("cx", x.toFixed(1)); c.setAttribute("cy", y.toFixed(1));
+  requestAnimationFrame(frame);
+}
+// A planet: a disc in its token's colour (size varies a little with value), an inner core for $1k+, a ring for $10k+.
+function draw(s, t, x, y, seen) {
+  seen.add(t.id);
+  let g = s.dots.get(t.id);
+  if (!g) {
+    const r = 7 + Math.min(2.5, Math.max(0, Math.log10(t.usd) - 1) * 0.8);
+    g = el("g", { tabindex: 0, style: "cursor:pointer" });
+    g.append(el("circle", { r: r + 1.5, fill: "var(--page)" }));
+    g.append(el("circle", { r, fill: `var(${t.colour})`, class: "body" }));
+    if (t.usd >= 1000) g.append(el("circle", { r: r * 0.38, fill: "var(--core)" }));
+    if (t.usd >= 10000) g.append(el("ellipse", { rx: r + 5, ry: (r + 5) * 0.35, fill: "none", stroke: "var(--ringc)", "stroke-width": 1.4, transform: "rotate(-18)" }));
+    const body = g.querySelector(".body");
+    g.addEventListener("pointerenter", (e) => { s.frozen = t.step; body.setAttribute("fill", "var(--accent)"); showTip(t, e.clientX, e.clientY); });
+    g.addEventListener("pointermove", (e) => showTip(t, e.clientX, e.clientY));
+    g.addEventListener("pointerleave", () => { body.setAttribute("fill", `var(${t.colour})`); hideTip(); });
+    g.addEventListener("focus", () => { s.frozen = t.step; const b = g.getBoundingClientRect(); showTip(t, b.right, b.bottom); });
+    g.addEventListener("blur", () => { s.frozen = -1; hideTip(); });
+    s.layer.append(g); s.dots.set(t.id, g);
+  }
+  const z = t.z ?? 0, scale = 1 + 0.32 * z;               // nearer is bigger …
+  g.setAttribute("transform", `translate(${x.toFixed(1)} ${y.toFixed(1)}) scale(${scale.toFixed(3)})`);
+  g.setAttribute("opacity", (t.alpha * (0.62 + 0.38 * (z + 1) / 2)).toFixed(2));   // … and brighter
 }
 function advance() {
   if (paused) return;
+  const now = performance.now();
   for (const s of state) {
-    const waiting = s.items.filter((t) => !t.travel && s.frozen !== t.step);
-    for (let n = 0; n < 2; n++) { const t = pick(waiting); if (t && !t.travel) { t.travel = { from: t.step, to: t.step + 1, start: performance.now() }; } }
+    const waiting = s.items.filter((t) => !t.leaving && !t.moving && s.frozen !== t.step);
+    for (let n = 0; n < 2; n++) {
+      const t = pick(waiting); if (!t || t.moving) continue;
+      if (t.step === 3) t.leaving = true; else { t.step += 1; t.moving = { start: now, span: 1100 }; }
+    }
     if (Math.random() < 0.7) s.items.push(transfer(s.dir, 0));
     for (const t of s.items) t.age += 0.05;
   }
 }
-function frame(now) { for (const s of state) place(s, now); requestAnimationFrame(frame); }
-build(); requestAnimationFrame(frame); setInterval(advance, 1400);
+build(); requestAnimationFrame(frame); setInterval(advance, 1600);
 document.getElementById("theme").onclick = () => document.documentElement.classList.toggle("light");
 document.getElementById("burst").onclick = () => { for (const s of state) for (let i = 0; i < 12; i++) s.items.push(transfer(s.dir, 0)); };
 document.getElementById("motion").onclick = (e) => { paused = !paused; e.target.textContent = paused ? "Resume" : "Pause all"; };
