@@ -129,6 +129,11 @@ and the time left while in flight or the age once delivered. A row links to the 
   on desktop; ⌘K, Ctrl K and / open it. The search itself is drawn like the token picker: the orange band edge to
   edge with the square close flush right, results as plain rows marked by the accent edge, hanging near the top on
   desktop so the field never moves as results change.
+- **Dark band (owner, 2026-10-30, picked D from design/ui/screens/dark-band-options.html):** in Ember on black the
+  band and the search band are a dark surface lit from the left by an ember gradient (#8a3a1c → #4a2214 → #231a16),
+  not solid orange; the mark and accents stay #eb6834. Light and Mono are unchanged.
+- **Column width (owner):** the column fills the viewport, less the 16 px gutters, until it reaches
+  clamp(640px, 40vw + 128px, 760px); it no longer sits at 480 px on mid-size windows.
 - **Header on every route:** the mark (home), a search pill (owner: "a generalized shortcut and search hamburger bar"
   that reaches anything: bridging, activity, the explorer and its pages, the indexer's data, docs, settings; it replaces
   a menu, works by tap on phones and by Ctrl/Cmd-K or / on desktop), and the wallet pill (its menu holds the explorer
@@ -531,3 +536,6 @@ don't call it "tip too high", call it "high tip %""
 80. "oh, i also do not like the orange streak in dark mode. can you bring back some options for dark mode? we need to soften that color"
 81. "also, the question mark tooltip buttons are kind of jumbled/mis-sized. the gas level button group is not changeable. which, i think you actually have the wrong idea. i want the 3 bars next to the gas can to be clickable. numbers then adjust when that happens because a new level of fee spend has been consented to. and the tip seems to be completly disconnected."
 82. "maybe this is all just because i don't have a wallet connected"
+83. "i like e, but i think that the gradient is really good. lets go with that"
+84. "we should also get the docs site / links online soon too"
+85. "i don't think you need to compress the ui so quickly. let it get to the edge of the viewport"
