@@ -72,12 +72,12 @@ describe("the msgboard nodes", () => {
 });
 
 describe("the beacon APIs", () => {
-  it("default to the valve.city beacon route of each chain, on the sample page and on a live page", () => {
+  it("default to each chain's first default beacon API, on the sample page and on a live page", () => {
     const sample = defaultValues({ fields, pair: FIXTURE_PAIR, configuration: fixture });
     expect(sample[`beacon:${FIRST_CHAIN}`]).toBe(defaultBeaconUrl(FIRST_CHAIN));
-    expect(sample[`beacon:${FIRST_CHAIN}`]).toBe(`https://one.valve.city/beacon/vk_demo/${FIRST_CHAIN}`);
+    expect(sample[`beacon:${FIRST_CHAIN}`]).toBe(defaultBeaconUrl(FIRST_CHAIN));
     const live = defaultValues({ fields, pair: FIXTURE_PAIR, configuration: liveConfiguration({}), sharedPair: sharedPairForTests() });
-    expect(live[`beacon:${SECOND_CHAIN}`]).toBe(`https://one.valve.city/beacon/vk_demo/${SECOND_CHAIN}`);
+    expect(live[`beacon:${SECOND_CHAIN}`]).toBe(defaultBeaconUrl(SECOND_CHAIN));
   });
 
   it("take the build's beacon API over the default", () => {
