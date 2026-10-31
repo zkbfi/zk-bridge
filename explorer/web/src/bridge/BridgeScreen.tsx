@@ -26,7 +26,7 @@ import { Chevron, FlipIcon, FloppyIcon, Identicon, LockIcon, UnlockIcon } from "
 import { destinationProblem, LOCK_TIPS } from "./destination";
 import { iconSubjectOf } from "./image-source";
 import { Num } from "./Num";
-import { dollarsText as dollarsOf } from "./number";
+import { dollarsRange, dollarsText as dollarsOf } from "./number";
 import { Sheet } from "./Sheet";
 import { TokenIcon } from "./TokenIcon";
 import { TokenPicker } from "./TokenPicker";
@@ -549,7 +549,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     const priority = probe.delivery?.priorityFeeWei ?? 0n;
     const coin = (wei: bigint): string => (gasUsed === null ? "" : amountText(gasUsed * (wei + priority), 18));
     const coinRange = gasSpan === null || gasUsed === null ? "" : ` (gas ${coin(gasSpan.lowWei)}–${coin(gasSpan.highWei)} ${destination.nativeSymbol})`;
-    const words = gasSpan === null ? null : `Anchored at today's gas · could land between ${dollarsText(gasSpan.lowUsd)} and ${dollarsText(gasSpan.highUsd)} over 15 min${coinRange}`;
+    const words = gasSpan === null ? null : `Anchored at today's gas · could land between ${dollarsRange(gasSpan.lowUsd, gasSpan.highUsd).join(" and ")} over 15 min${coinRange}`;
     return {
       label: "Gas level",
       help: "Today's gas is the anchor. Over the next 15 minutes the real price could land lower (left) or higher (right); this sets how high you let it go. The bars beside the gas can step through Normal, High and Highest.",
@@ -635,7 +635,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     save: hardSave,
   };
   const nextLevel = nextGasLevel(gasLevel);
-  const gasHelp = `${levelName(gasLevel)} gas: anchored at today's gas${gasSpan === null ? "" : `, the cost could land between ${dollarsText(gasSpan.lowUsd)} and ${dollarsText(gasSpan.highUsd)} over 15 min`}. Tap for ${levelName(nextLevel)}.`;
+  const gasHelp = `${levelName(gasLevel)} gas: anchored at today's gas${gasSpan === null ? "" : `, the cost could land between ${dollarsRange(gasSpan.lowUsd, gasSpan.highUsd).join(" and ")} over 15 min`}. Tap for ${levelName(nextLevel)}.`;
 
   // The tip modes of the delivery menu. Choosing one keeps the fee where it is when it can (the share or the amount
   // in force now), so switching never jumps the numbers; Automatic hands the fee back to the rule.

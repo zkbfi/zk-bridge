@@ -56,6 +56,33 @@ export const dollarsText = (usd: bigint): string => {
 };
 
 /**
+ * A dollar range as two texts that never read the same: each end in {@link dollarsText}, unless both would print alike
+ * ("$0.02 and $0.02"); then both get as many significant digits (cut) as it takes to tell them apart, up to six.
+ *
+ * @param low The lower end, USD × 1e18.
+ * @param high The upper end, USD × 1e18.
+ */
+export const dollarsRange = (low: bigint, high: bigint): readonly [string, string] => {
+  const [a, b] = [dollarsText(low), dollarsText(high)];
+  if (a !== b || low === high) return [a, b];
+  for (let digits = 3; digits <= 6; digits += 1) {
+    const pair = [precise(low, digits), precise(high, digits)] as const;
+    if (pair[0] !== pair[1]) return pair;
+  }
+  return [precise(low, 6), precise(high, 6)];
+};
+
+/** Dollars with `digits` significant digits, cut; the leading-zeros rule below a dollar. */
+const precise = (usd: bigint, digits: number): string => {
+  const DOLLAR = 10n ** 18n;
+  if (usd < DOLLAR) return `$${smallText(usd, 18, digits)}`;
+  const whole = usd / DOLLAR;
+  const room = Math.max(0, digits - whole.toString().length);
+  const fraction = (usd % DOLLAR).toString().padStart(18, "0").slice(0, Math.max(2, room));
+  return `$${whole.toLocaleString("en-US")}.${fraction}`;
+};
+
+/**
  * A coin amount as a short plain text, for places that hold a string rather than markup (a step's cost): three
  * significant digits, and below one the leading-zeros rule with subscript digits ("0.0₆315"), never an exponent.
  *
