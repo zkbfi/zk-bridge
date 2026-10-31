@@ -89,12 +89,25 @@ describe("usePrices", () => {
   it("reads nothing without a source or without tokens", async () => {
     const { result } = renderHook(() => usePrices({ tokens: [usdc], pair: pairOfChains, source: null }));
     await flush();
-    expect(result.current).toEqual({ data: undefined, error: null, isError: false });
+    expect(result.current).toEqual({ data: undefined, error: null, isError: false, isFetching: false });
     const poolReader = vi.fn();
     const empty = renderHook(() => usePrices({ tokens: [], pair: pairOfChains, source: { mode: "live", id: "a", poolReader } }));
     await flush();
     expect(empty.result.current.data).toBeUndefined();
     expect(poolReader).not.toHaveBeenCalled();
+  });
+
+  it("says while a read is out, so a host can count the requests in flight", async () => {
+    let release: (value: Awaited<ReturnType<typeof reader>>) => void = () => undefined;
+    const poolReader = vi.fn(() => new Promise<Awaited<ReturnType<typeof reader>>>((resolve) => (release = resolve)));
+    const source: PriceSource = { mode: "live", id: "rpc-f", poolReader };
+    const { result } = renderHook(() => usePrices({ tokens: [local], pair: pairOfChains, source }));
+    await flush();
+    expect(result.current.isFetching).toBe(true);
+    release(await reader());
+    await flush();
+    expect(result.current.isFetching).toBe(false);
+    expect(result.current.data).toBeDefined();
   });
 
   it("gives the sample prices of the sample source", async () => {

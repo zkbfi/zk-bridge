@@ -113,6 +113,8 @@ export type PricesState = {
   /** The error of the latest read, or null. */
   readonly error: unknown;
   readonly isError: boolean;
+  /** True while a read is out, so a host can show or count the requests in flight. */
+  readonly isFetching: boolean;
 };
 
 /** The default time between two reads, in milliseconds. */
@@ -126,6 +128,7 @@ export const PRICE_REFRESH_MILLISECONDS = 30_000;
 export const usePrices = ({ tokens, pair, source, refreshMilliseconds = PRICE_REFRESH_MILLISECONDS }: UsePricesOptions): PricesState => {
   const key = source === null || tokens.length === 0 ? null : [source.mode === "sample" ? "sample" : source.id, pair.first.chainId, pair.second.chainId, tokens.map(tokenPriceKey).join(",")].join("|");
   const [state, setState] = useState<{ readonly key: string | null; readonly data: PriceMap | undefined; readonly error: unknown }>({ key, data: undefined, error: null });
+  const [fetching, setFetching] = useState(false);
   const latest = useRef({ tokens, pair, source });
   latest.current = { tokens, pair, source };
   useEffect(() => {
@@ -133,6 +136,7 @@ export const usePrices = ({ tokens, pair, source, refreshMilliseconds = PRICE_RE
     let stopped = false;
     const read = async (): Promise<void> => {
       const { tokens: wanted, pair: chains, source: from } = latest.current;
+      setFetching(true);
       try {
         const data = from!.mode === "sample" ? samplePrices(wanted, chains) : await loadPrices(wanted, chains, await from!.poolReader());
         if (stopped) return;
@@ -140,6 +144,8 @@ export const usePrices = ({ tokens, pair, source, refreshMilliseconds = PRICE_RE
       } catch (error) {
         if (stopped) return;
         setState((before) => ({ key, data: before.key === key ? before.data : undefined, error }));
+      } finally {
+        if (!stopped) setFetching(false);
       }
     };
     void read();
@@ -147,8 +153,9 @@ export const usePrices = ({ tokens, pair, source, refreshMilliseconds = PRICE_RE
     return () => {
       stopped = true;
       clearInterval(timer);
+      setFetching(false);
     };
   }, [key, refreshMilliseconds]);
   const current = key !== null && state.key === key;
-  return { data: current ? state.data : undefined, error: current ? state.error : null, isError: current && state.error !== null };
+  return { data: current ? state.data : undefined, error: current ? state.error : null, isError: current && state.error !== null, isFetching: key !== null && fetching };
 };
