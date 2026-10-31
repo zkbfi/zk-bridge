@@ -58,7 +58,7 @@ export const verdictOf = (input: VerdictInput): Verdict => {
     return { kind: "warn", label: "Tip too low · may not be delivered", detail: "The fee is under twice what delivering and proving it should cost, so bots likely skip it and you would deliver it yourself. Raise it with the tip." };
   }
   if (input.highTip != null && input.draft.status === "ready") {
-    return { kind: "warn", label: "High tip %", detail: `The tip, before gas, is over ${input.highTip.thresholdText} of the amount. A lower tip still gets delivered; lower it with the tip.` };
+    return { kind: "warn", label: "High cap %", detail: `The tip, before gas, is over ${input.highTip.thresholdText} of the amount. A lower tip still gets delivered; lower it with the tip.` };
   }
   if (input.draft.status === "incomplete") return { kind: "blocked", label: "Bridge", detail: input.draft.reason };
   return { kind: "go", label: "Bridge", detail: null };

@@ -272,7 +272,7 @@ and the time left while in flight or the age once delivered. A row links to the 
   multiply is the full cost of releasing as if this bridge were the only one: $0.025 proof + the destination gas.
 - **Saving the cap (owner):** lowering the cap in the review applies to this bridge only; a small save button (a
   floppy-disk icon) next to the cap slider makes it the default for people who want that.
-- **High-tip warning (owner):** labelled **"High tip %"** (owner; not "tip too high"). The Bridge pill takes the
+- **High-tip warning (owner):** labelled **"High cap %"** (owner; earlier "High tip %", and not "tip too high"). The Bridge pill takes the
   overridable warning state when the tip is a large share of the amount: above 1% for transfers up to $100, a threshold that scales down to 0.1% at $1,000, and 0.1% above that.
   Between $100 and $1,000 the threshold is 1% × 100 / amount (a log-linear slide; it works out to a tip of about $1
   across that range). Uses the display price; without a price, the 1% threshold applies. The tip measured is the tip **before gas
@@ -291,8 +291,8 @@ and the time left while in flight or the age once delivered. A row links to the 
   the finalizing drawer (the review sheet). **When the cap warns (owner, superseding my earlier reading "the cap is
   above the high-tip line", which warned on every default transfer over $100):** the cap only matters when the fee
   can still move after signing, i.e. a gas-priced fee (base fee × gas level) paid at delivery, up to the limit signed
-  in. Then the review warns when that worst case, the most the signed terms allow, would be a "High tip %". A fee that
-  is fixed at signing has no cap warning; "High tip %" reads the fee itself.
+  in. Then the review warns when that worst case, the most the signed terms allow, would be a "High cap %". A fee that
+  is fixed at signing has no cap warning; "High cap %" reads the fee itself.
 - **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
   of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
   0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
@@ -480,3 +480,4 @@ don't call it "tip too high", call it "high tip %""
 59. "oh, so the cap only makes sense to warn about if it can shift, as in if the setting is to use the base fee/gas multiplier"
 60. "lets also integrate the 0.025 fixed cost that we have for all bridges"
 61. "well, no it should just be computed as part of the overall cost that we adjust the percentages against"
+62. ""high tip %" -> "high cap %""
