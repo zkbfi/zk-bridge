@@ -88,8 +88,7 @@ describe("the shell: one search field instead of a menu", () => {
     await searchFor(item.id);
     await userEvent.keyboard("{Enter}");
     await waitFor(() => expect(window.location.hash).toBe(`#/message/${item.id}`));
-    expect(await screen.findByRole("heading", { name: /^(Transfer|Message)$/, level: 1 })).toBeInTheDocument();
-    expect(screen.getByText(item.id)).toBeInTheDocument();
+    expect(await screen.findByText("message ID", { exact: false })).toHaveTextContent(`${item.id.slice(0, 10)}…${item.id.slice(-4)}`);
   });
 
   it("opens the bridge dialog from an action and asks for a wallet when none is connected", async () => {

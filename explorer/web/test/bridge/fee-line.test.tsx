@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { FeeLine, type FeeLineProps } from "../../src/bridge/FeeLine";
+import { FeeLine, tickRows, type FeeLineProps } from "../../src/bridge/FeeLine";
 
 const props = (overrides: Partial<FeeLineProps> = {}): FeeLineProps => ({
   tip: <span>0.0012 ETH</span>,
@@ -83,5 +83,31 @@ describe("the fee line", () => {
     await userEvent.click(screen.getByRole("button", { name: /~15 min/ }));
     expect(screen.getByText("Final on Ethereum")).toBeInTheDocument();
     expect(screen.getByText("~13 min")).toBeInTheDocument();
+  });
+  it("puts a small floppy-disk save button beside a slider that can be saved, disabled once saved", async () => {
+    const onSave = vi.fn();
+    const cap = { label: "Automatic fee cap", help: "The most the automatic fee may take.", value: 0.5, min: 0.05, max: 2, step: 0.05, valueText: "0.5%", ticks: [], onChange: vi.fn() };
+    const { rerender } = render(<FeeLine {...props({ sliders: [{ ...cap, save: { saved: false, onSave, label: "Save 0.5% as your default cap" } }] })} />);
+    await userEvent.click(screen.getByRole("button", { name: /Tip/ }));
+    const save = screen.getByRole("button", { name: "Save 0.5% as your default cap" });
+    expect(save.querySelector("svg")).not.toBeNull();
+    await userEvent.click(save);
+    expect(onSave).toHaveBeenCalledOnce();
+    rerender(<FeeLine {...props({ sliders: [{ ...cap, save: { saved: true, onSave, label: "0.5% is your default cap" } }] })} />);
+    expect(screen.getByRole("button", { name: "0.5% is your default cap" })).toBeDisabled();
+  });
+});
+
+describe("tickRows", () => {
+  it("keeps far-apart labels on one row and drops close ones to the next", () => {
+    expect(tickRows([{ label: "typical", left: 33 }, { label: "break-even", left: 16 }, { label: "high", left: 90 }])).toEqual([
+      { label: "break-even", left: 16, row: 0 },
+      { label: "typical", left: 33, row: 1 },
+      { label: "high", left: 90, row: 0 },
+    ]);
+  });
+
+  it("returns nothing for no ticks", () => {
+    expect(tickRows([])).toEqual([]);
   });
 });

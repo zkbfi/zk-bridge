@@ -102,6 +102,17 @@ export const useRouterAddresses = (chainId: number | null, router: Address | nul
 };
 
 /** The priority fee that a delivery on a chain pays now, in wei per gas. */
+/** The max fee per gas of a chain now (the gas reserve MAX keeps for the native coin). */
+export const useMaxFee = (chainId: number, options: { readonly enabled: boolean }) => {
+  const { chainAccess } = useServices();
+  return useQuery({
+    queryKey: ["max-fee", chainId],
+    queryFn: async () => (await chainAccess.flowClient(chainId).estimateFeesPerGas()).maxFeePerGas,
+    enabled: options.enabled,
+    refetchInterval: POLL_MILLISECONDS,
+  });
+};
+
 export const usePriorityFee = (chainId: number, options: { readonly enabled: boolean }) => {
   const { chainAccess } = useServices();
   return useQuery({

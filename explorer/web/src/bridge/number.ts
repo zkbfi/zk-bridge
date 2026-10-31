@@ -20,3 +20,24 @@ export const collapseZeros = (text: string): CollapsedZeros | null => {
   if (match === null) return null;
   return { lead: "0.0", zeros: match[1]!.length, rest: match[2]! };
 };
+
+const SUBSCRIPT = "₀₁₂₃₄₅₆₇₈₉";
+
+/**
+ * Dollars (USD × 1e18, as the shared fee rules keep them) as text: two decimals from $1, else three significant digits
+ * (cut, not rounded) with three or more leading zeros collapsed as subscript digits ($0.0₇504). "$0" for nothing.
+ *
+ * @param usd The value, USD × 1e18.
+ */
+export const dollarsText = (usd: bigint): string => {
+  if (usd === 0n) return "$0";
+  const SCALE = 10n ** 18n;
+  if (usd >= SCALE) {
+    const cents = usd / 10n ** 16n;
+    return `$${(cents / 100n).toLocaleString("en-US")}.${(cents % 100n).toString().padStart(2, "0")}`;
+  }
+  const fraction = usd.toString().padStart(18, "0");
+  const zeros = fraction.length - fraction.replace(/^0+/, "").length;
+  const digits = fraction.slice(zeros, zeros + 3).replace(/0+$/, "");
+  return zeros >= 3 ? `$0.0${[...String(zeros)].map((digit) => SUBSCRIPT[Number(digit)]).join("")}${digits}` : `$0.${"0".repeat(zeros)}${digits}`;
+};

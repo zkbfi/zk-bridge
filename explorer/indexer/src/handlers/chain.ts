@@ -3,6 +3,7 @@ import { chainTips, gateEvents, gateStates, headUpdates, lightClientHeads, regis
 import { beaconForkGateAbi, beaconLightClientAbi, sideOf } from "@zk-bridge/shared";
 import { ageMessages, coverMessages } from "../lib/message-store";
 import { pair } from "../lib/pair";
+import { recordTransactionCost } from "../lib/transaction-costs";
 
 /** Every few blocks: store the chain clock and age the sends that passed the finality window. */
 ponder.on("ChainTip:block", async ({ event, context }) => {
@@ -45,6 +46,7 @@ ponder.on("BeaconLightClient:HeadUpdated", async ({ event, context }) => {
     costWei: gasUsed * effectiveGasPrice,
     poster: event.transaction.from,
   });
+  await recordTransactionCost(context, event);
   const previous = await context.db.find(lightClientHeads, { chainId });
   const row = {
     chainId,

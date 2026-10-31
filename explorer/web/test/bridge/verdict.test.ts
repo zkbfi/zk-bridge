@@ -32,13 +32,37 @@ describe("the Bridge pill's verdict", () => {
     expect(pressable(verdict)).toBe(true);
   });
 
-  it("warns, overridably, when the tip is high for the amount, naming the threshold", () => {
-    const verdict = verdictOf({ ...base, highTip: { thresholdText: "0.32%" } });
-    expect(verdict).toMatchObject({ kind: "warn", label: "High tip for this amount" });
-    expect(verdict.detail).toMatch(/0\.32%/);
+  it("names the numbers in the low-fee detail when it has them", () => {
+    const verdict = verdictOf({ ...base, tipBelowBreakEven: true, lowFee: { feeText: "$0.05", costText: "$0.04" } });
+    expect(verdict.detail).toBe("The fee ($0.05) is under twice what delivering and proving it should cost ($0.04 now), so bots likely skip it and you would deliver it yourself. Raise it with the tip.");
+  });
+
+  it("warns, overridably, when the tip is high for the amount, naming the tip and the threshold", () => {
+    const verdict = verdictOf({ ...base, highTip: { thresholdText: "0.32%", tipText: "$1.40" } });
+    expect(verdict).toMatchObject({ kind: "warn", label: "High cap %" });
+    expect(verdict.detail).toBe("The tip, before gas, is $1.40, over the 0.32% of the amount a tip should stay under. A lower tip still gets delivered; lower it with the tip.");
     expect(pressable(verdict)).toBe(true);
     // A low fee says so first.
-    expect(verdictOf({ ...base, tipBelowBreakEven: true, highTip: { thresholdText: "1%" } }).label).toBe("Tip too low · may not be delivered");
+    expect(verdictOf({ ...base, tipBelowBreakEven: true, highTip: { thresholdText: "1%", tipText: "$1" } }).label).toBe("Tip too low · may not be delivered");
+  });
+
+  it("warns that a small transfer may not be delivered in a timely manner, ahead of every other warning", () => {
+    const small = { costText: "$0.05", capText: "1%", capAmountText: "$0.02" };
+    const verdict = verdictOf({ ...base, smallTransfer: small, tipBelowBreakEven: true, highTip: { thresholdText: "1%", tipText: "$1" }, firstBridge: true, omnibridge: true });
+    expect(verdict).toMatchObject({ kind: "warn", label: "Small transfer · may not be delivered in a timely manner" });
+    expect(verdict.detail).toBe("Delivery costs about $0.05, more than the 1% ($0.02) you allow. A bot may wait for cheaper gas: raise the cap in the tip drawer, or deliver it yourself.");
+    expect(pressable(verdict)).toBe(true);
+  });
+
+  it("puts the fee warnings ahead of the token warnings, one at a time", () => {
+    expect(verdictOf({ ...base, tipBelowBreakEven: true, firstBridge: true }).label).toBe("Tip too low · may not be delivered");
+    expect(verdictOf({ ...base, highTip: { thresholdText: "1%", tipText: "$1" }, omnibridge: true }).label).toBe("High cap %");
+    expect(verdictOf({ ...base, firstBridge: true, omnibridge: true }).label).toMatch(/^Already bridged/);
+    expect(verdictOf({ ...base, firstBridge: true }).label).toMatch(/^First time/);
+  });
+
+  it("shows no fee warning while the draft is incomplete", () => {
+    expect(verdictOf({ ...base, draft: { status: "incomplete", reason: "Waiting" }, smallTransfer: { costText: "$1", capText: "1%", capAmountText: "$0.1" } })).toMatchObject({ kind: "blocked", label: "Bridge", detail: "Waiting" });
   });
 
   it("blocks a paused route", () => {

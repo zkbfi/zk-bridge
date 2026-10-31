@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { chainTips, gateEvents, gateStates, headUpdates, lightClientHeads, messages, registryObservations } from "../../ponder.schema";
+import { chainTips, gateEvents, gateStates, headUpdates, lightClientHeads, messages, registryObservations, transactionCosts } from "../../ponder.schema";
 import { callHandler, handlers } from "./support/fake-registry";
 import { GATE_ON_PULSECHAIN, LIGHT_CLIENT_ON_PULSECHAIN, addressOf, createContext, createEvent, hashOf, sentMessageRow } from "./support/handler-fixtures";
 
@@ -71,6 +71,8 @@ describe("BeaconLightClient:HeadUpdated", () => {
         poster: addressOf("f0"),
       },
     ]);
+    // The update's cost is also served per transaction (GET /api/tx), from the same table as sends and deliveries.
+    expect(database.rows(transactionCosts)).toEqual([expect.objectContaining({ chainId: 369, transactionHash: hashOf("aa"), gasUsed: 21_000n, costWei: 63_000n })]);
   });
 
   it("starts the update count at one and adds one for each later head", async () => {

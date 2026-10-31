@@ -42,7 +42,7 @@ export const iconSubjectOf = (token: TokenInfo, pair: PairConfig): IconSubject =
   const own = chainOf(pair, token.side);
   const other = chainOf(pair, token.side === "first" ? "second" : "first");
   const isWrappedNative = (chain: ChainConfig, address: Address | null): boolean => address !== null && chain.contracts.wrappedNative?.toLowerCase() === address.toLowerCase();
-  if (isWrappedNative(own, token.address)) return { chainId: own.chainId };
+  if (isWrappedNative(own, token.address) || token.address === "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE") return { chainId: own.chainId };
   if (/^zkb/i.test(token.symbol) && token.counterpart !== null) {
     if (isWrappedNative(other, token.counterpart)) return { chainId: other.chainId };
     return { chainId: other.chainId, address: token.counterpart };

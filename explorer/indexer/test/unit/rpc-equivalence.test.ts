@@ -79,6 +79,8 @@ const indexerApi = (database: ReturnType<typeof createFakeDatabase>) => {
       .map((row) => ({ messages: row, transfers: (database.row(transfers, { messageId: row.messageId }) as unknown) ?? null }));
   respondWith((call) => {
     if (call.table === tokens) return database.rows(tokens);
+    // The message's costs read their own tables; the RPC source reads no receipts, so the comparison leaves them out.
+    if (call.table !== messages) return [];
     const all = joined();
     const wanted = all.filter((row) => call.whereValues.includes(row.messages.messageId));
     return call.limit === 1 ? wanted : all.slice(0, call.limit ?? all.length);
@@ -121,7 +123,8 @@ describe("one history, two data sources", () => {
     const database = await indexHistory();
     const call = indexerApi(database);
     for (const id of [scenario.ids.delivered, scenario.ids.plain, scenario.ids.stuck, scenario.ids.callbackFailed]) {
-      const indexer = await call(`/api/messages/${id}`);
+      const { costs, ...indexer } = await call(`/api/messages/${id}`);
+      expect(costs).toMatchObject({ sent: null, delivered: null });
       const { coverage, ...rpc } = (await rpcApi().get(`/api/messages/${id}`)).body as Record<string, unknown>;
       expect(coverage).toMatchObject({ source: "rpc" });
       expect(rpc).toEqual(indexer);

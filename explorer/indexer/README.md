@@ -148,7 +148,9 @@ An item:
 
 `GET /api/history` returns `{ items, nextCursor, partial: false }`, newest event first. An event is a send, a delivery or a stored head of the light client: `{ kind: "sent" | "delivered" | "head-update", chainId, timestamp, transactionHash, messageId, slot, status }`. It takes the filters of the feed, plus `chain` (events that happened on that chain) and `eventKind`. A time range applies to the time of the event. A head update belongs to no message, so a filter on kind, status, token or address leaves head updates out. The cursor is `<timestamp>:<kind>:<key>`.
 
-`GET /api/messages/:messageId` returns one item as above, plus `data` (the call data as hex).
+`GET /api/messages/:messageId` returns one item as above, plus `data` (the call data as hex) and `costs`: `{ sent, delivered, proof }`, each a transaction cost as in `GET /api/tx` or null, and `proof` with `coveredMessages` (how many messages that light client update covered, which share its cost).
+
+`GET /api/tx/:chainId/:hash` returns what one stored transaction (a send, a delivery or a light client update) cost: `{ chainId, hash, block, gasUsed, effectiveGasPriceWei, costWei, costUsd, nativeUsd: { usd, source, priceBlock } | null }`; 404 for a transaction the indexer does not store. Integers are decimal strings; USD values are scaled by 1e18 like wei (`costUsd` the cost, `nativeUsd.usd` one coin). The price is the PulseX one (`pulsex-pls-usd` for PLS, `pulsex-weth-copy` for ETH through WETH's Omnibridge copy) read at `priceBlock` on PulseChain: the transaction's own block on PulseChain, the PulseChain block nearest its timestamp for Ethereum. Testnets have no price (`costUsd` and `nativeUsd` null). The rows come from a schema table, so after deploying this a reindex from `startBlock` fills them for the past; there is no separate backfill.
 
 `GET /api/head-updates?chainId=&limit=&before=` returns `{ items: [{ chainId, slot, headerRoot, executionBlockHash, executionBlockNumber, transactionHash, blockNumber, timestamp, gasUsed, effectiveGasPrice, costWei, poster }] }`, newest first. `before` is a slot.
 
@@ -211,6 +213,7 @@ Ponder writes the tables into the schema that `--schema` names (default for `pon
 | `head_updates` | `chain_id, slot` | Every head update: header root, execution block, transaction, `gas_used`, `effective_gas_price`, `cost_wei`, `poster`. |
 | `light_client_heads` | `chain_id` | Newest head per chain. |
 | `chain_tips` | `chain_id` | Newest indexed block and time per chain, and its `base_fee_per_gas` (null when absent). |
+| `transaction_costs` | `chain_id, transaction_hash` | Every send, delivery and light client update transaction: `gas_used`, `effective_gas_price`, `cost_wei`, the coin's price `usd_per_native_e18` with `price_block` and `price_source`, and `cost_usd` (USD × 1e18); price columns null on testnets. |
 | `delivery_costs` | `message_id` | `gas_used` and `effective_gas_price` of the delivery transaction, one row per delivered message. No row for a batch. Index on `destination_chain_id, timestamp`. |
 | `gate_events`, `gate_states` | | Gate events and the folded state. |
 | `registry_observations` | `chain_id, version` | Fork versions the registry observed. |

@@ -44,7 +44,7 @@ describe('confirm before send: bridge tokens', () => {
     await app.settle(80)
     const review = app.frame()
     expect(review).toContain('Step 1 of 2')
-    expect(review).toContain('Approve USDC for TokenMediator')
+    expect(review).toContain('Approve USDC for ERC-20 mediator')
     for (const text of ['Chain', 'Ethereum (chain id 1)', 'Contract', 'Function', 'approve(address,uint256)', 'spender', 'amount', 'Gas', 'estimate 150000, limit 180000', 'Network fee', 'y sign and send']) {
       expect(review).toContain(text)
     }

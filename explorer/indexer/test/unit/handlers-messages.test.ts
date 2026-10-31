@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { encodeFunctionData } from "viem";
 import { buildMessageId, encodeAmbMessage, tokenMediatorAbi } from "@zk-bridge/shared";
-import { bridgeStates, deliveryCosts, messages, transfers } from "../../ponder.schema";
+import { bridgeStates, deliveryCosts, messages, transactionCosts, transfers } from "../../ponder.schema";
 import { AFFIRMATION_COMPLETED_SELECTOR } from "@zk-bridge/shared";
 import { callHandler } from "./support/fake-registry";
 import {
@@ -50,6 +50,8 @@ describe("MessageBridge:UserRequestForAffirmation", () => {
       sentBlockNumber: 100n,
       sentTimestamp: 1_000n,
     });
+    // The send's cost is stored with no dollars: the unit tests give no PulseChain access for an Ethereum price.
+    expect(database.rows(transactionCosts)).toEqual([expect.objectContaining({ chainId: 1, transactionHash: hashOf("aa"), costWei: 63_000n, costUsd: null })]);
     expect(database.row(transfers, { messageId })).toMatchObject({
       sourceChainId: 1,
       destinationChainId: 369,
@@ -133,6 +135,7 @@ describe("MessageBridge:AffirmationCompleted", () => {
       deliveredSuccess: true,
       executedBy: addressOf("f0"),
     });
+    expect(database.rows(transactionCosts)).toEqual([expect.objectContaining({ chainId: 369, transactionHash: hashOf("aa"), costWei: 63_000n })]);
   });
 
   it("marks a reverted call as a failed call", async () => {

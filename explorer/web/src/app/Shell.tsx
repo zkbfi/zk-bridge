@@ -17,9 +17,11 @@ import { ProverView } from "../views/ProverView";
 import { ConnectionsView } from "../views/ConnectionsView";
 import { ActivityScreen } from "../bridge/ActivityScreen";
 import { BridgeScreen } from "../bridge/BridgeScreen";
+import { ExploreScreen } from "../explore/ExploreScreen";
 import { Header } from "../bridge/Header";
 import { Notice } from "../ui/primitives";
 import { ActionsContext } from "./actions-context";
+import { resolvePair } from "./route";
 import { bridgeLinkedFields, formatLocation, formatRoute, linkedFields, NO_OVERLAY, parseLocation, resolveHome, routeTitle, type BridgeQuery, type Overlay, type PageLocation, type Route } from "./route";
 import { useServices } from "./services";
 import { SettingsDialog } from "./SettingsDialog";
@@ -39,24 +41,32 @@ type HistoryMode = "push" | "replace";
 const useHashLocation = (
   defaultPairId: string,
   onOutsideChange: (next: PageLocation) => void,
-): readonly [PageLocation, (next: PageLocation, mode?: HistoryMode) => void] => {
+): readonly [PageLocation, (next: PageLocation, mode?: HistoryMode) => void, string | null] => {
   const outside = useRef(onOutsideChange);
   outside.current = onOutsideChange;
+  // The pair the address asked for that this build does not have, for the notice.
+  const unknownPair = useRef<string | null>(null);
   const read = useCallback((): PageLocation => {
     const parsed = parseLocation(window.location.hash);
-    const route = resolveHome(parsed.route, defaultPairId);
+    const paired = resolvePair(resolveHome(parsed.route, defaultPairId), defaultPairId);
+    // Only set here: React's strict mode runs the first read twice, and the second sees the address already moved.
+    if (paired.unknown !== null) unknownPair.current = paired.unknown;
+    const route = paired.route;
     if (route === parsed.route) return parsed;
     const resolved = { route, overlay: parsed.overlay };
     window.history.replaceState(window.history.state, "", formatLocation(resolved));
     return resolved;
   }, [defaultPairId]);
   const [location, setLocation] = useState<PageLocation>(read);
+  const [unknown, setUnknown] = useState<string | null>(() => unknownPair.current);
   useEffect(() => {
     // pushState and replaceState fire neither event, so every change seen here came from outside the page: the address
     // bar, a link, or Back and Forward.
     const onChange = (): void => {
+      unknownPair.current = null;
       const next = read();
       setLocation(next);
+      setUnknown(unknownPair.current);
       outside.current(next);
     };
     window.addEventListener("hashchange", onChange);
@@ -74,7 +84,7 @@ const useHashLocation = (
     }
     setLocation(next);
   }, []);
-  return [location, go];
+  return [location, go, unknown];
 };
 
 const isTypingTarget = (target: EventTarget | null): boolean => {
@@ -98,7 +108,8 @@ const usePaletteShortcuts = (open: () => void): void => {
 };
 
 const renderRoute = (route: Route, navigate: (next: Route) => void, update: (next: Route) => void) => {
-  if (route.name === "home" || route.name === "global" || route.name === "explore") return <GlobalView />;
+  if (route.name === "home" || route.name === "global") return <GlobalView />;
+  if (route.name === "explore") return null;
   if (route.name === "bridge") return null;
   if (route.name === "activity") return null;
   if (route.name === "pair") return <PairView key={route.pairId} route={route} onChange={update} />;
@@ -108,7 +119,8 @@ const renderRoute = (route: Route, navigate: (next: Route) => void, update: (nex
   if (route.name === "history") return <HistoryPage route={route} onNavigate={navigate} onUpdate={update} />;
   if (route.name === "docs") return <DocsView slug={route.slug} heading={route.heading} />;
   if (route.name === "address") return <AddressView address={route.address} />;
-  return <MessageView messageId={route.messageId} />;
+  // The message route renders in Explore's frame (see the Shell); it never reaches here.
+  return null;
 };
 
 const shortAccount = (account: string | null): string => (account === null ? "No wallet" : `${account.slice(0, 6)}…${account.slice(-4)}`);
@@ -129,7 +141,7 @@ export const Shell = () => {
   // the token and the amount, every field it filled is named on the screen and in the review (see linkedFields).
   const linkedFormOf = (next: PageLocation): BridgeQuery | null => (next.route.name === "bridge" ? (next.route.form ?? null) : null);
   const [linkedForm, setLinkedForm] = useState<BridgeQuery | null>(() => linkedFormOf(parseLocation(window.location.hash)));
-  const [location, go] = useHashLocation(pair.id, (next) => {
+  const [location, go, unknownPair] = useHashLocation(pair.id, (next) => {
     setLinkedOverlay(linkedOf(next));
     setLinkedForm(linkedFormOf(next));
   });
@@ -229,7 +241,7 @@ export const Shell = () => {
     <ActionsContext.Provider value={actionsPort}>
       <Box className="zb" minHeight="100vh" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <Header
-          page={routeTitle(route)}
+          page={route.name === "message" ? "Explore" : routeTitle(route)}
           homeHref={formatRoute({ name: "bridge", pairId: pair.id, dir: "first-to-second" })}
           screenHref={(screen) => (screen === "Bridge" ? formatRoute({ name: "bridge", pairId: pair.id, dir: "first-to-second" }) : `#/${screen.toLowerCase()}`)}
           onSearch={openPalette}
@@ -240,12 +252,26 @@ export const Shell = () => {
           </div>
         ) : route.name === "bridge" ? (
           <div key="bridge" className={slideClass}>
+          {unknownPair === null ? null : (
+            <p className="zb-notice" role="status">
+              {unknownPair} isn't available here; showing {pair.label}
+            </p>
+          )}
           <BridgeScreen
             route={route}
             onRoute={update}
             fixture={configuration.dataMode === "fixture"}
             linked={linkedForm === null ? [] : bridgeLinkedFields(linkedForm, wallet.status === "connected" ? wallet.account : null)}
           />
+          </div>
+        ) : route.name === "explore" ? (
+          <div key={route.page === undefined ? "explore" : `explore-${route.page.kind}`} className={route.page === undefined ? slideClass : ""}>
+            <ExploreScreen route={route} onRoute={(next, mode = "push") => (mode === "replace" ? update(next) : navigate(next))} />
+          </div>
+        ) : route.name === "message" ? (
+          // The message page is one of Explore's pages (mockup explore-message.html), framed as they are.
+          <div key={`message-${route.messageId}`}>
+            <MessageView messageId={route.messageId} />
           </div>
         ) : (
         <Box as="main" paddingX={{ base: "4", md: "6" }} paddingY="4">

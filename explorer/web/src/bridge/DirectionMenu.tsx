@@ -96,7 +96,7 @@ export const DirectionMenu = ({ current, onPick, onClose }: DirectionMenuProps) 
                 <span>
                   {from.name} → {to.name}
                 </span>
-                <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--zb-muted)" }}>{reason}</span>
+                <span style={{ marginLeft: "auto", fontSize: "var(--zb-step--1)", color: "var(--zb-muted)" }}>{reason}</span>
               </button>
             );
           })}

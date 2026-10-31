@@ -8,6 +8,7 @@ import { registerFeedRoutes } from "./routes/feed";
 import { registerHistoryRoute } from "./routes/history";
 import { registerStateRoutes } from "./routes/state";
 import { registerSummaryRoutes } from "./routes/summary";
+import { registerTransactionRoutes } from "./routes/transactions";
 import { registerUndeliveredRoute } from "./routes/undelivered";
 
 const app = new Hono();
@@ -35,6 +36,7 @@ registerFeedRoutes(app);
 registerHistoryRoute(app);
 registerStateRoutes(app);
 registerSummaryRoutes(app);
+registerTransactionRoutes(app);
 registerUndeliveredRoute(app);
 
 export default app;

@@ -28,6 +28,15 @@ export const SlidersIcon = ({ title }: IconProps) => (
   </svg>
 );
 
+/** A floppy disk: save as the default. */
+export const FloppyIcon = ({ title }: IconProps) => (
+  <svg viewBox="0 0 16 16" {...svgProps(title)}>
+    <path d="M2.5 2.5h9l2 2v9h-11z" />
+    <path d="M5 2.5v3.5h5.5V2.5" />
+    <rect x="5" y="9" width="6" height="4.5" />
+  </svg>
+);
+
 /** A hand holding money: the tip ("take my money"). */
 export const MoneyHand = ({ title }: IconProps) => (
   <svg viewBox="0 0 24 24" {...svgProps(title)}>
@@ -73,6 +82,14 @@ export const ExternalLink = ({ title }: IconProps) => (
     <path d="M9.5 2.5h4v4" />
     <path d="M13.5 2.5 7.5 8.5" />
     <path d="M12 9.5V13a.5.5 0 0 1-.5.5h-8A.5.5 0 0 1 3 13V5a.5.5 0 0 1 .5-.5H7" />
+  </svg>
+);
+
+/** Two sheets: copy a value. */
+export const CopyIcon = ({ title }: IconProps) => (
+  <svg viewBox="0 0 16 16" {...svgProps(title)}>
+    <rect x="5.5" y="5.5" width="8" height="9" rx="1" />
+    <path d="M3 11V3a1 1 0 0 1 1-1h6" />
   </svg>
 );
 

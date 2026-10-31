@@ -261,7 +261,87 @@ factory) and it is not an Omnibridge copy. Icon: the image server, else the neut
 - [ ] Tests: an unknown address resolves and shows the warning; a known token does not; an Omnibridge copy keeps its
   own double-wrap warning instead.
 
+## Data-wiring audit (live build, Sepolia ↔ PulseChain v4, 2026-10-30)
+
+Owner: "it's getting there, but you need to connect a lot of data points". Every value that showed "—", a constant, a
+sample number or nothing in live mode, checked against `release.env` on the dev server and the indexer's answers
+(`/api/tokens` = `[]`, `/api/feed` = no items, `/api/heads` = the light client on Sepolia 9504 slots behind PulseChain v4,
+`/api/delivery-cost` = default gas 550000 on both chains). Watched as the deployer with the dev-only `?watch=`.
+
+Bridge
+- [x] Token pill and output with no wallet and no bridged tokens: native coin by default, fee estimated without a wallet.
+- [x] Source balance, per chain, native and ERC-20 (user's RPC). Native read from the snapshot's native balance.
+- [x] MAX = balance less a gas reserve (400k gas × max fee per gas) for the native coin; the full balance for a token.
+- [x] Route status from the gate (paused shows on the pill; real: Sepolia → PulseChain v4 is paused).
+- [x] Light-client lag in the time item ("~16 min + light client 32 h behind") from the indexer's heads. On v4 the
+      light client on Sepolia (PulseChain → Sepolia) is ~26 h behind; the one on PulseChain reports no lag (null), so
+      Sepolia → PulseChain shows the plain estimate.
+- [x] Fee from the delivery-cost report and the priority fee through the RPC; breakdown in the drawer (needs a price).
+- [ ] USD on the balance lines: "—" on testnets by spec. A labelled "mainnet price" is not trivial (the oracle maps
+      only Ethereum-mainnet origins), so it stays "—".
+- [ ] Arrival time per direction: still the per-chain constants (finality + proof + delivery). The heads give the lag
+      only; the backend has no proving-time status endpoint the dapp reads yet, and no recorded average is published.
+- [ ] "arrives as zkbETH" for the wrap route: the label should name what the wrap route mints; not checked on chain.
+
+Picker
+- [x] Token list per chain: the registry (`/api/tokens`, empty on v4) plus each chain's native coin.
+- [x] Balances per token including the native coin.
+- [ ] The wallet's history (indexer) adds tokens only through the feed, which is empty on v4.
+- [ ] Unit prices: "—" on testnets (spec).
+
+Drawers and review
+- [x] Gas level, ceiling, cap and tip sliders read the live report.
+- [ ] Time drawer steps: constants per chain (same as arrival time above).
+
+Signing
+- [x] Steps and decoded calls come from the planned transactions (real).
+
+Activity
+- [x] Feed from the indexer filtered by the wallet, plus pending local submissions. Empty on v4 (no transfers yet).
+- [ ] Not verifiable with real rows until a transfer exists on v4.
+
+Explore
+- [ ] Still the pairs table; the Explore build (spec "Explore", mockups explore-map, explore, explore-address-tx) is next.
+
+`/api/delivery-cost` is right (checked against the chains): testnet base fees really are 14 wei (Sepolia) and 7 wei
+(PulseChain v4). Near-zero gas shows through the leading-zeros rule, and the anticipated cost is then mostly the $0.025
+proof.
+
+Explore, where neither the indexer nor the chain gives a value (shown as "—", reason on hover): which of the 512 sync
+committee seats signed a proof; proving time; transfers a proof covered (no proof → message link); volume in dollars on
+testnets; who delivered (so "Delivered by bots" and "Tips earned"); contracts an address deployed; per-token gate caps;
+release versions (no release events yet). "Watch" on the address page is not built (no watched-address store).
+
 ## Later phase (not in this plan)
 
 Activity screen, Explore screen, the sideways slide between screens, the price oracle, the Omnibridge token list and
 warning, the restyled transaction dialog and message dialog.
+
+## Message page: status (2026-10-30)
+
+Done (web, on `bridge-first`):
+- Base restyle: the message page is now one of Explore's pages (header reads Explore). It has the orange band with the kind, the route icons on plates, the amount with its token icon, the message ID with copy, and status tags. Who and what has From/To linking to the address pages and Delivered by. The Fee is one row that opens a drawer using the approved motion. The steps use the joined line with drawers ("Block final on <chain>"). A reverted call opens by itself, with a red top line and its reason. "Retry with more gas" is shown disabled because the dapp has no retry path; "Open the call" links to the delivery transaction. The message itself shows the nonce, the source and target app, the gas limit and the decoded payload, collapsible. The proof panel shows only while the message is undelivered.
+- ERC-20 mediator naming: one contract-name map (`web/src/explore/contract-names.ts`) is used by search, the contract page, the transaction page and the message page. The terminal's review labels say "ERC-20 mediator" too. No "Token mediator" or "TokenMediator" label is left.
+- Sent/received order: "Sent on [chain icon] [explorer link]" sits on the left and the amount with the token icon (no badge) on the right. A chevron-wide spacer keeps the token icons in one column with Fee.
+- Token row: shows the symbol and icon once and links to the token page. Sent/Received show the amount and icon only, with no symbol. The left side is a fixed grid (11ch, chain icon, link icon). The fee's USD sits in the icon columns. Fee drawer values show the amount plus a 14 px token icon, and Delivery gas shows the chain icon only.
+- Owner words 50–55 and a "Message page" section are in the spec.
+
+Done since (fees, prices, costs; branch `bridge-first`):
+- Fee rules in `shared/src/fee-rules.ts`, pure and in integers: token base units, wei, USD as bigints × 1e18 (owner 76), shares on `RATE_SCALE` (1% = 1e16). One rounding: down. Thresholds are cross-multiplied, never rounded. The total cost is `PROOF_COST_USD` ($0.025, one constant) plus the delivery gas at the gas level (expected 1× / 1.5× / 2.5×, ceiling 2× / 3× / 5×). The default fee is max(curve × amount, 2 × cost), then min(cap). The curve is 1% × exp(−ln(amount/10) × ln10/ln50), computed in 1e36 fixed point (`fixed-point.ts`: ln by halving plus the atanh series, exp by ln 2 range reduction plus the Taylor series, each term truncated), then cut to 1e18. "High cap %" uses the tip before gas (fee − Normal cost) against 1% / $1 tip / 0.1%. The small-transfer line is total cost > cap × amount (owner 69); it suppresses "High cap %" and the cap warning. `capWarns` (owner 70–71): gas-based mode only; the fee is recomputed at the ceiling cost and capped, and it warns when fee − Normal cost is over the line. Vectors: `shared/test/fixtures/fee-rules-vectors.json`, self-describing. Every curve, fee and cost vector matches an independent Python `decimal` computation at 80 digits.
+- Web uses them: `web/src/bridge/fee-guard.ts` is gone. The cap's floppy-disk save button sits on the drawer slider and in the review. A gas-based fee now signs a limit no higher than the cap's share, so lowering the cap changes what can be paid.
+- Oracle (`shared/src/pulsex-oracle.ts`) in integers at a named block. A `PoolReader` carries `block`, and every quote carries its block and pool. Ties go to the lower pool address. Ethereum tokens reverse out through the current Omnibridge (`bridgedTokenAddress` on `0x4fD0…51Ef` at that block), with the known table as fallback. `nativeUsd(reader, 1)` prices ETH by WETH's copy. `nearestBlockAt` finds the PulseChain block for a past Ethereum time; on a tie it takes the earlier block.
+- Indexer: a `transaction_costs` table (sends, deliveries, light client updates) holding wei, the coin price and its block/source, and `cost_usd`. ETH is priced at the PulseChain block nearest the transaction's time, through the pair's PulseChain RPC. `GET /api/tx/:chainId/:hash` serves it (owner 75), and `GET /api/messages/:id` has `costs` built from the same rows (the proof's with `coveredMessages`). There is no migration tool: a reindex from `startBlock` is the backfill. `rpc-equivalence` drops `costs`.
+- Message page: a "Cost" row in each open step drawer ("0.00084 ETH · $2.52"; "shared · … over N transfers" for the proof; "—" when not stored or on testnets). The proof step opens a drawer when its cost is known. The indexer client gained `transactionCost`.
+
+Presentation choices (owner 72, "clearest to the end user"), to show the owner:
+- The pill shows at most one warning, in this order: "Small transfer · may not be delivered in a timely manner" > "Tip too low · may not be delivered" > "High cap %" > Omnibridge copy > first-time token. Each detail gives the numbers and what to do, e.g. "Delivery costs about $5.06, more than the 1% ($0.05) you allow. A bot may wait for cheaper gas: raise the cap in the tip drawer, or deliver it yourself."
+- The review of a gas-based fee shows "Can drift: $6.51 now, up to $10.00 if gas rises to the Normal ceiling". When the cap warns, a "High cap %" box offers 0.1 / 0.25 / 0.5 / 1% and the save button. Percent and fixed fees show neither.
+- Dollars under $1 show three significant digits, cut (not rounded), with the owner's zero rule ($0.0₇504). So $5.0675 reads "$5.06".
+- Sample mode prices USDC $1, ETH $3,000, PLS $0.00003 at block 0, so the fee rules and warnings can be seen without a network.
+- The price tooltip now says prices pick the default fee and its warnings but never an amount you sign (the old "never used for ... fees" was no longer true once the curve uses dollars).
+
+Left:
+- The coverage gate (100 %) still fails in web, in files this work did not cover before either (BridgeScreen, use-prices, ExplorePages, …). Measured against 03d8514, no file this work touched lost coverage. shared and indexer are at 100 %.
+- The React and data packages (owner 73–74) are not started.
+
+Fields shown as "—" because the indexer does not record them: the transfer's user (From) when the answer has no `transfer.sender`, the nonce, the fee and each of its parts, USD on testnets, the revert reason, gas used and gas on delivery, the delivered block (not yet parsed from live answers before this change), committee signers in block drawers, and the payload/function/arguments when the answer has no `data`.

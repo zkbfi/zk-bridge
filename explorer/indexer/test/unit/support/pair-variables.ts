@@ -8,3 +8,7 @@ process.env.EXPLORER_DEPLOYMENT_FILE = fileURLToPath(new URL("./deployment-with-
 process.env.EXPLORER_RPC_URL_1 = "http://127.0.0.1:1";
 process.env.EXPLORER_RPC_URL_369 = "http://127.0.0.1:369";
 process.env.EXPLORER_BEACON_URL_1 = "http://127.0.0.1:5052";
+
+// Ethereum costs are priced through a PulseChain RPC; the unit tests read none (a test that wants one sets it).
+const { setPulsechainAccess } = await import("../../../src/lib/transaction-costs");
+setPulsechainAccess(null);

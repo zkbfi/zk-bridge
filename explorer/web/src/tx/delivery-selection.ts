@@ -61,6 +61,11 @@ export type DeliverySelectionInput = {
   readonly gasMargin: bigint;
   /** The base fee above which a gas based tip stops rising, in wei per gas. Null takes twice the base fee now. */
   readonly baseFeeCeilingWei: bigint | null;
+  /**
+   * The most a gas based tip may take, in base units: the automatic cap's share of the amount (owner, quotes 70–71: the
+   * gas-based fee is "limited by the cap"). The limit signed is the lower of this and the tip at the ceiling. Optional.
+   */
+  readonly gasLimitCapUnits?: bigint | null;
 };
 
 /** The router of a selection: where the relay goes, and the router of the deployment. */
@@ -109,7 +114,9 @@ const directorOf = (input: DeliverySelectionInput, suggestions: FeeSuggestions):
     return { recipient: input.recipient, settings: settingsOf({ mode: "fixed", payout: input.payout }), limit: input.fixedAmount, multiplier: 0n };
   }
   const option = input.mode === "fixed" ? suggestions.fixed : suggestions.gasMultiplier;
-  return option.kind === "available" ? option.director : { kind: "unavailable", reason: option.reason };
+  if (option.kind !== "available") return { kind: "unavailable", reason: option.reason };
+  const cap = input.mode === "gas-multiplier" ? (input.gasLimitCapUnits ?? null) : null;
+  return cap !== null && cap < option.director.limit ? { ...option.director, limit: cap } : option.director;
 };
 
 /**
