@@ -15,6 +15,7 @@ export * from "./delivery-suggestion.js";
 export * from "./default-tip.js";
 export * from "./fee-rules.js";
 export * from "./fixed-point.js";
+export * from "./transaction-cost.js";
 export * from "./multicall3.js";
 export * from "./tip-copy.js";
 export * from "./message-merge.js";

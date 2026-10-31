@@ -243,8 +243,8 @@ export type ContractCaller = {
  */
 export const poolReaderOver = (client: ContractCaller, block: bigint): PoolReader => {
   const address = async (call: Parameters<ContractCaller["readContract"]>[0]): Promise<Address | null> => {
-    const result = (await client.readContract({ ...call, blockNumber: block }).catch(() => ZERO_ADDRESS)) as Address;
-    return lower(result) === ZERO_ADDRESS ? null : result;
+    const result = await client.readContract({ ...call, blockNumber: block }).catch(() => ZERO_ADDRESS);
+    return typeof result !== "string" || lower(result as Address) === ZERO_ADDRESS ? null : (result as Address);
   };
   return {
     block,

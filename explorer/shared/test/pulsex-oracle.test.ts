@@ -218,8 +218,9 @@ describe("the pool reader over a contract caller", () => {
     expect(await broken.bridgedCopyOf!(WETH_ETHEREUM)).toBeNull();
   });
 
-  it("reads a zero copy address as none", async () => {
+  it("reads a zero copy address, or an answer that is not an address, as none", async () => {
     const reader = poolReaderOver({ readContract: async () => "0x0000000000000000000000000000000000000000" }, BLOCK);
     expect(await reader.bridgedCopyOf!(WETH_ETHEREUM)).toBeNull();
+    expect(await poolReaderOver({ readContract: async () => undefined }, BLOCK).pairOf(V1, USDC.address, WPLS)).toBeNull();
   });
 });
