@@ -4,6 +4,7 @@ import { and, desc, eq, gte, isNotNull, lt, lte, or, sql, inArray } from "ponder
 import type { Hono } from "hono";
 import type { Hex } from "viem";
 import { encodeCursor, feedItemView, indexTokens, parseFeedQuery, type FeedFilters } from "@zk-bridge/shared";
+import { messageCostsOf } from "./transactions";
 
 /** The filters that pick messages and their transfers, shared by the feed and the history. */
 type MessageFilters = Pick<FeedFilters, "direction" | "kind" | "statuses" | "token" | "address">;
@@ -62,7 +63,7 @@ const cursorAfter = (page: readonly { readonly messages: { readonly sentTimestam
 };
 
 /**
- * Registers `GET /api/feed` and `GET /api/messages/:messageId`.
+ * Registers `GET /api/feed` and `GET /api/messages/:messageId` (with the message's step `costs`).
  *
  * @param app The Hono application.
  */
@@ -97,6 +98,6 @@ export const registerFeedRoutes = (app: Hono): void => {
       .limit(1);
     if (row === undefined) return c.json({ error: "unknown message" }, 404);
     const index = indexTokens(await db.select().from(tokens));
-    return c.json({ ...feedItemView(row.messages, row.transfers, index), data: row.messages.data });
+    return c.json({ ...feedItemView(row.messages, row.transfers, index), data: row.messages.data, costs: await messageCostsOf(row.messages) });
   });
 };

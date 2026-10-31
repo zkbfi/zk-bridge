@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { costView, transactionCostRow } from "../src/transaction-cost.js";
+import { costView, costViewSchema, messageCostsSchema, transactionCostRow } from "../src/transaction-cost.js";
 
 const E18 = 10n ** 18n;
 const base = { chainId: 369, transactionHash: "0xaa" as const, blockNumber: 100n, timestamp: 1_000n, gasUsed: 200_000n, effectiveGasPrice: 1_000_000n * 10n ** 9n };
@@ -17,20 +17,28 @@ describe("a transaction's cost", () => {
 });
 
 describe("the cost view", () => {
-  it("writes every integer as a decimal string", () => {
-    const row = transactionCostRow({ ...base, price: { usdE18: 3_000n * E18, block: 99n, pool: null, source: "pulsex-weth-copy" } });
-    expect(costView(row)).toEqual({
+  const hash = `0x${"ab".repeat(32)}` as const;
+  it("writes every integer as a decimal string, with the coin's price in micro-dollars and at 1e18", () => {
+    const row = transactionCostRow({ ...base, transactionHash: hash, price: { usdE18: 3_000n * E18, block: 99n, pool: null, source: "pulsex-weth-copy" } });
+    const view = costView(row);
+    expect(view).toEqual({
       chainId: 369,
-      transactionHash: "0xaa",
+      hash,
+      block: "100",
       gasUsed: "200000",
-      effectiveGasPrice: "1000000000000000",
+      effectiveGasPriceWei: "1000000000000000",
       costWei: "200000000000000000000",
-      usdPerNative: "3000000000000000000000",
       costMicroUsd: "600000000000",
-      priceBlock: "99",
-      priceSource: "pulsex-weth-copy",
+      nativeUsd: { usd: "3000000000", usdE18: "3000000000000000000000", source: "pulsex-weth-copy", priceBlock: "99" },
     });
-    expect(costView(transactionCostRow({ ...base, price: null }))).toMatchObject({ usdPerNative: null, costMicroUsd: null, priceBlock: null, priceSource: null });
+    expect(costViewSchema.parse(view)).toEqual(view);
+    expect(costView(transactionCostRow({ ...base, transactionHash: hash, price: null }))).toMatchObject({ costMicroUsd: null, nativeUsd: null });
     expect(costView(null)).toBeNull();
+  });
+
+  it("parses a message's costs, with the proof's covered count", () => {
+    const sent = costView(transactionCostRow({ ...base, transactionHash: hash, price: null }))!;
+    expect(messageCostsSchema.parse({ sent, delivered: null, proof: { ...sent, coveredMessages: 3 } }).proof?.coveredMessages).toBe(3);
+    expect(() => messageCostsSchema.parse({ sent: { ...sent, block: "x" }, delivered: null, proof: null })).toThrow();
   });
 });

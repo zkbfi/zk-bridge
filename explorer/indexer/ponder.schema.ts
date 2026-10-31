@@ -222,6 +222,34 @@ export const deliveryCosts = onchainTable(
   (table) => ({ chainTimeIndex: index().on(table.destinationChainId, table.timestamp) }),
 );
 
+/**
+ * What one transaction of the bridge cost (a send, a delivery, a light client update): gas × effective gas price in wei,
+ * and in dollars at the native coin's PulseX price read at a named PulseChain block (for an Ethereum transaction, the
+ * PulseChain block nearest its timestamp). No price on testnets. A reindex from `startBlock` fills it for the past.
+ */
+export const transactionCosts = onchainTable(
+  "transaction_costs",
+  (t) => ({
+    chainId: t.integer().notNull(),
+    transactionHash: t.hex().notNull(),
+    blockNumber: t.bigint().notNull(),
+    timestamp: t.bigint().notNull(),
+    gasUsed: t.bigint().notNull(),
+    effectiveGasPrice: t.bigint().notNull(),
+    /** `gasUsed * effectiveGasPrice`, in wei of the chain's coin. */
+    costWei: t.bigint().notNull(),
+    /** One native coin in USD × 1e18, or null. */
+    usdPerNativeE18: t.bigint(),
+    /** The PulseChain block the price was read at, or null. */
+    priceBlock: t.bigint(),
+    /** `pulsex-pls-usd` or `pulsex-weth-copy`, or null. */
+    priceSource: t.text(),
+    /** The cost in USD micro-dollars, rounded down, or null. */
+    costMicroUsd: t.bigint(),
+  }),
+  (table) => ({ pk: primaryKey({ columns: [table.chainId, table.transactionHash] }) }),
+);
+
 /** Gate events. `kind` is `confirmed`, `sealed`, `beacon_roots_detected` or `canary_fired`. */
 export const gateEvents = onchainTable(
   "gate_events",

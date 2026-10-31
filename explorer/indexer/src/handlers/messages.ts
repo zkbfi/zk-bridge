@@ -4,6 +4,7 @@ import { decodeSend, isSingleDelivery, otherSide, sideOf } from "@zk-bridge/shar
 import { pair } from "../lib/pair";
 import { writeMessage } from "../lib/message-store";
 import { writeTransfer } from "../lib/transfer-store";
+import { recordTransactionCost } from "../lib/transaction-costs";
 
 /** A message was sent on this chain. Decode it and, for a mediator call, record the transfer side. */
 ponder.on("MessageBridge:UserRequestForAffirmation", async ({ event, context }) => {
@@ -25,6 +26,7 @@ ponder.on("MessageBridge:UserRequestForAffirmation", async ({ event, context }) 
       sentLogIndex: event.log.logIndex,
     },
   });
+  await recordTransactionCost(context, event);
   const transfer = decoded.transfer;
   if (transfer === null) return;
   await writeTransfer({
@@ -61,6 +63,7 @@ ponder.on("MessageBridge:AffirmationCompleted", async ({ event, context }) => {
       executedBy: event.transaction.from,
     },
   });
+  await recordTransactionCost(context, event);
   const bridge = sideOf(pair, context.chain.id).contracts.bridge;
   // The receipt that Ponder attaches to the event has no logs, so the handler reads the full receipt (cached by Ponder).
   const receipt = await context.client.getTransactionReceipt({ hash: event.transaction.hash });

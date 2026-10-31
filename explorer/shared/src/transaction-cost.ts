@@ -4,8 +4,11 @@
  * the caller at a named block (`nativeUsd` in `pulsex-oracle.ts`) and passed in.
  */
 import type { Hex } from "viem";
+import { z } from "zod";
 import { usdMicroOf } from "./fee-rules.js";
 import type { NativePriceSource, PriceQuote } from "./pulsex-oracle.js";
+
+const decimal = z.string().regex(/^\d+$/);
 
 /** One transaction's cost, as the indexer stores it. */
 export type TransactionCostRow = {
@@ -52,28 +55,34 @@ export const transactionCostRow = (input: {
   };
 };
 
-/** A transaction's cost in an API answer: integers as decimal strings. */
-export type CostView = {
-  readonly chainId: number;
-  readonly transactionHash: Hex;
-  readonly gasUsed: string;
-  readonly effectiveGasPrice: string;
-  readonly costWei: string;
-  /** One coin in USD × 1e18. */
-  readonly usdPerNative: string | null;
-  readonly costMicroUsd: string | null;
-  readonly priceBlock: string | null;
-  readonly priceSource: NativePriceSource | null;
-};
+/**
+ * A transaction's cost as the indexer serves it (`GET /api/tx/:chainId/:hash`, and each step of a message's `costs`):
+ * integers as decimal strings. `nativeUsd.usd` is one coin in micro-dollars (rounded down) as asked; `usdE18` keeps the
+ * precision a coin worth fractions of a cent needs (PLS).
+ */
+export const costViewSchema = z.object({
+  chainId: z.number().int(),
+  hash: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  block: decimal,
+  gasUsed: decimal,
+  effectiveGasPriceWei: decimal,
+  costWei: decimal,
+  costMicroUsd: decimal.nullable(),
+  nativeUsd: z.object({ usd: decimal, usdE18: decimal, source: z.enum(["pulsex-pls-usd", "pulsex-weth-copy"]), priceBlock: decimal }).nullable(),
+});
+
+/** A transaction's cost in an API answer. */
+export type CostView = z.infer<typeof costViewSchema>;
 
 /** The step costs of one message: its send, its delivery, and the proof (shared by the messages it covered). */
-export type MessageCosts = {
-  readonly sent: CostView | null;
-  readonly delivered: CostView | null;
-  readonly proof: (CostView & { readonly coveredMessages: number }) | null;
-};
+export const messageCostsSchema = z.object({
+  sent: costViewSchema.nullable(),
+  delivered: costViewSchema.nullable(),
+  proof: costViewSchema.extend({ coveredMessages: z.number().int() }).nullable(),
+});
 
-const text = (value: bigint | null): string | null => (value === null ? null : value.toString());
+/** The step costs of one message. */
+export type MessageCosts = z.infer<typeof messageCostsSchema>;
 
 /**
  * A stored cost row as the API shows it, or null.
@@ -85,12 +94,14 @@ export const costView = (row: TransactionCostRow | null): CostView | null =>
     ? null
     : {
         chainId: row.chainId,
-        transactionHash: row.transactionHash,
+        hash: row.transactionHash,
+        block: row.blockNumber.toString(),
         gasUsed: row.gasUsed.toString(),
-        effectiveGasPrice: row.effectiveGasPrice.toString(),
+        effectiveGasPriceWei: row.effectiveGasPrice.toString(),
         costWei: row.costWei.toString(),
-        usdPerNative: text(row.usdPerNativeE18),
-        costMicroUsd: text(row.costMicroUsd),
-        priceBlock: text(row.priceBlock),
-        priceSource: row.priceSource,
+        costMicroUsd: row.costMicroUsd === null ? null : row.costMicroUsd.toString(),
+        nativeUsd:
+          row.usdPerNativeE18 === null || row.priceSource === null || row.priceBlock === null
+            ? null
+            : { usd: (row.usdPerNativeE18 / 10n ** 12n).toString(), usdE18: row.usdPerNativeE18.toString(), source: row.priceSource, priceBlock: row.priceBlock.toString() },
       };
