@@ -5,7 +5,7 @@
  */
 import type { Hex } from "viem";
 import { z } from "zod";
-import { usdMicroOf } from "./fee-rules.js";
+import { usdOf } from "./fee-rules.js";
 import type { NativePriceSource, PriceQuote } from "./pulsex-oracle.js";
 
 const decimal = z.string().regex(/^\d+$/);
@@ -25,8 +25,8 @@ export type TransactionCostRow = {
   /** The PulseChain block the price was read at, or null. */
   readonly priceBlock: bigint | null;
   readonly priceSource: NativePriceSource | null;
-  /** The cost in micro-dollars, rounded down, or null. */
-  readonly costMicroUsd: bigint | null;
+  /** The cost in USD × 1e18, rounded down, or null. */
+  readonly costUsd: bigint | null;
 };
 
 /**
@@ -51,14 +51,13 @@ export const transactionCostRow = (input: {
     usdPerNativeE18: price?.usdE18 ?? null,
     priceBlock: price?.block ?? null,
     priceSource: price?.source ?? null,
-    costMicroUsd: price === null ? null : usdMicroOf(costWei, 18, price.usdE18),
+    costUsd: price === null ? null : usdOf(costWei, 18, price.usdE18),
   };
 };
 
 /**
  * A transaction's cost as the indexer serves it (`GET /api/tx/:chainId/:hash`, and each step of a message's `costs`):
- * integers as decimal strings. `nativeUsd.usd` is one coin in micro-dollars (rounded down) as asked; `usdE18` keeps the
- * precision a coin worth fractions of a cent needs (PLS).
+ * integers as decimal strings, USD scaled by 1e18 (`costUsd`, and `nativeUsd.usd`: one coin).
  */
 export const costViewSchema = z.object({
   chainId: z.number().int(),
@@ -67,8 +66,8 @@ export const costViewSchema = z.object({
   gasUsed: decimal,
   effectiveGasPriceWei: decimal,
   costWei: decimal,
-  costMicroUsd: decimal.nullable(),
-  nativeUsd: z.object({ usd: decimal, usdE18: decimal, source: z.enum(["pulsex-pls-usd", "pulsex-weth-copy"]), priceBlock: decimal }).nullable(),
+  costUsd: decimal.nullable(),
+  nativeUsd: z.object({ usd: decimal, source: z.enum(["pulsex-pls-usd", "pulsex-weth-copy"]), priceBlock: decimal }).nullable(),
 });
 
 /** A transaction's cost in an API answer. */
@@ -99,9 +98,9 @@ export const costView = (row: TransactionCostRow | null): CostView | null =>
         gasUsed: row.gasUsed.toString(),
         effectiveGasPriceWei: row.effectiveGasPrice.toString(),
         costWei: row.costWei.toString(),
-        costMicroUsd: row.costMicroUsd === null ? null : row.costMicroUsd.toString(),
+        costUsd: row.costUsd === null ? null : row.costUsd.toString(),
         nativeUsd:
           row.usdPerNativeE18 === null || row.priceSource === null || row.priceBlock === null
             ? null
-            : { usd: (row.usdPerNativeE18 / 10n ** 12n).toString(), usdE18: row.usdPerNativeE18.toString(), source: row.priceSource, priceBlock: row.priceBlock.toString() },
+            : { usd: row.usdPerNativeE18.toString(), source: row.priceSource, priceBlock: row.priceBlock.toString() },
       };

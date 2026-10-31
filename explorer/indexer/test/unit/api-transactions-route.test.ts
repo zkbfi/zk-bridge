@@ -51,8 +51,8 @@ describe("GET /api/tx/:chainId/:hash", () => {
       gasUsed: "100000",
       effectiveGasPriceWei: "1000000000",
       costWei: "100000000000000",
-      costMicroUsd: "300000",
-      nativeUsd: { usd: "3000000000", usdE18: "3000000000000000000000", source: "pulsex-weth-copy", priceBlock: "90" },
+      costUsd: "300000000000000000",
+      nativeUsd: { usd: "3000000000000000000000", source: "pulsex-weth-copy", priceBlock: "90" },
     });
     expect(calls[0]?.whereValues).toEqual([1, hashOf("aa")]);
   });
@@ -72,8 +72,8 @@ describe("a message's costs", () => {
   it("are its send, its delivery, and the covering update shared by the messages it covered, from the same rows as /api/tx", async () => {
     serve({ messageRow: { messages: delivered, transfers: null }, costs: [costOf(1, "01", true), costOf(369, "02", false), costOf(369, "03", false)], updates: [{ transactionHash: hashOf("03") }], covered: 4 });
     const { body } = await get(`/api/messages/${id}`);
-    expect(body.costs.sent).toMatchObject({ chainId: 1, hash: hashOf("01"), costMicroUsd: "300000" });
-    expect(body.costs.delivered).toMatchObject({ chainId: 369, hash: hashOf("02"), costMicroUsd: null, nativeUsd: null });
+    expect(body.costs.sent).toMatchObject({ chainId: 1, hash: hashOf("01"), costUsd: "300000000000000000" });
+    expect(body.costs.delivered).toMatchObject({ chainId: 369, hash: hashOf("02"), costUsd: null, nativeUsd: null });
     expect(body.costs.proof).toMatchObject({ chainId: 369, hash: hashOf("03"), coveredMessages: 4 });
     expect((await get(`/api/tx/369/${hashOf("03")}`)).body).toEqual((({ coveredMessages: _drop, ...rest }) => rest)(body.costs.proof));
   });

@@ -57,14 +57,14 @@ describe("recording a transaction's cost", () => {
     await recordTransactionCost({ ...context, client: pulsechainCaller() } as never, event as never, null);
     await recordTransactionCost({ ...context, client: pulsechainCaller() } as never, event as never, null);
     expect(database.rows(transactionCosts)).toEqual([
-      { chainId: 369, transactionHash: hashOf("ab"), blockNumber: 100n, timestamp: 1_000n, gasUsed: 200_000n, effectiveGasPrice: 10n ** 15n, costWei: 200n * E18, usdPerNativeE18: 30_000_000_000_000_000n, priceBlock: 100n, priceSource: "pulsex-pls-usd", costMicroUsd: 6_000_000n },
+      { chainId: 369, transactionHash: hashOf("ab"), blockNumber: 100n, timestamp: 1_000n, gasUsed: 200_000n, effectiveGasPrice: 10n ** 15n, costWei: 200n * E18, usdPerNativeE18: 30_000_000_000_000_000n, priceBlock: 100n, priceSource: "pulsex-pls-usd", costUsd: 6_000_000_000_000_000_000n },
     ]);
   });
 
   it("stores the wei with no dollars when no price is found", async () => {
     const { database, context } = createContext(943);
     await recordTransactionCost(context as never, createEvent({}) as never, null);
-    expect(database.rows(transactionCosts)[0]).toMatchObject({ chainId: 943, costWei: 63_000n, costMicroUsd: null, priceSource: null });
+    expect(database.rows(transactionCosts)[0]).toMatchObject({ chainId: 943, costWei: 63_000n, costUsd: null, priceSource: null });
   });
 
   it("uses the PulseChain access of the pair by default: its RPC's latest block and block times", async () => {

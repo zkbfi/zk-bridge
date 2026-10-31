@@ -244,8 +244,8 @@ export const transactionCosts = onchainTable(
     priceBlock: t.bigint(),
     /** `pulsex-pls-usd` or `pulsex-weth-copy`, or null. */
     priceSource: t.text(),
-    /** The cost in USD micro-dollars, rounded down, or null. */
-    costMicroUsd: t.bigint(),
+    /** The cost in USD scaled by 1e18 (like wei), rounded down, or null. */
+    costUsd: t.bigint(),
   }),
   (table) => ({ pk: primaryKey({ columns: [table.chainId, table.transactionHash] }) }),
 );

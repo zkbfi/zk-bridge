@@ -51,7 +51,7 @@ describe("MessageBridge:UserRequestForAffirmation", () => {
       sentTimestamp: 1_000n,
     });
     // The send's cost is stored with no dollars: the unit tests give no PulseChain access for an Ethereum price.
-    expect(database.rows(transactionCosts)).toEqual([expect.objectContaining({ chainId: 1, transactionHash: hashOf("aa"), costWei: 63_000n, costMicroUsd: null })]);
+    expect(database.rows(transactionCosts)).toEqual([expect.objectContaining({ chainId: 1, transactionHash: hashOf("aa"), costWei: 63_000n, costUsd: null })]);
     expect(database.row(transfers, { messageId })).toMatchObject({
       sourceChainId: 1,
       destinationChainId: 369,
