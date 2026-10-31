@@ -221,7 +221,9 @@ export const findUnresolvedLinks = (input: DocsSiteInput): UnresolvedLink[] => {
 /** The pages of the real files, read when the site is built. */
 export const SITE_INPUT: DocsSiteInput = {
   userPages: import.meta.glob("../../web/docs/pages/*.md", { query: "?raw", import: "default", eager: true }) as Record<string, string>,
-  operatorPages: import.meta.glob(["../../../docs/**/*.md", "!../../../docs/superpowers/**"], { query: "?raw", import: "default", eager: true }) as Record<string, string>,
+  // No repository document is published. They were (every docs/**/*.md), which put internal reports such as the
+  // red-team findings on IPFS; an operator page is added here by name only once the owner has decided it is public.
+  operatorPages: {},
 };
 
 /** Every page of the site, in reading order. */
