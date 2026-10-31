@@ -17,6 +17,7 @@ import {
   REWARD_ADDRESS,
   TEST_PROOF_CHECK_GAS,
   WRAPPED_NATIVE,
+  BRIDGE,
   address,
   affirmationLog,
   emptyExecuteMessage,
@@ -67,6 +68,7 @@ function dependencies(overrides: Partial<DeliveryDependencies> = {}): DeliveryDe
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
+    bridge: BRIDGE,
     tokenFactory: null,
     settings: {
       maximumLossPercent: 20,
@@ -294,10 +296,10 @@ describe("red team: delivery decisions of the runner", () => {
     expect(deps.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(0);
   });
 
-  it("ATTACK SUCCEEDS forged AffirmationCompleted from a target contract marks a failed item as delivered", async () => {
+  it("ATTACK forged AffirmationCompleted from a target contract does not mark a failed item as delivered (BLOCKED, was B-3)", async () => {
     // Item 2 fails in the mined block (it simulated fine: a race). Item 1's target, an attacker contract, emits an
-    // event with the AffirmationCompleted signature naming message 2. readReceipt does not check the log address,
-    // so the runner records message 2 as delivered and the runner writes it to `finished`: never tried again.
+    // event with the AffirmationCompleted signature naming message 2. readReceipt believes only the address of the
+    // destination bridge, so message 2 stays failed and is tried again.
     const deps = dependencies();
     deps.chain.feeTokens = 10n ** 17n;
     deps.chain.receiptResult = (position) => (position === 1 ? { success: false, returnData: "0x" } : { success: true, returnData: "0x" });
@@ -316,7 +318,7 @@ describe("red team: delivery decisions of the runner", () => {
       };
     });
     const report = await sendBatch(deps, ledger(), { readies, update: null });
-    expect(report.outcomes[1]).toMatchObject({ status: "delivered", messageId: word(2) });
+    expect(report.outcomes[1]).toMatchObject({ status: "failed", messageId: word(2), reason: "batch-result-missing" });
   });
 });
 

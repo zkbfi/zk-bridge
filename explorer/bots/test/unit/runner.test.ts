@@ -143,6 +143,7 @@ function world(options: WorldOptions = {}) {
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
+    bridge: BRIDGE,
     tokenFactory: null,
     settings: {
       maximumLossPercent: options.maximumLossPercent ?? 20,

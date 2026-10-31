@@ -48,6 +48,11 @@ export interface DeliveryDependencies {
   /** The address that receives the tips, read from the router at start up. It serves the accounting and the log. Not null whenever `deliveryRouter` is not null. */
   readonly rewardAddress: Address | null;
   readonly wrappedNative: Address;
+  /**
+   * The message bridge of the destination chain. The runner believes an `AffirmationCompleted` event of a batch only
+   * from this address: the target of a message runs inside the batch and can write an event of the same shape.
+   */
+  readonly bridge: Address;
   /** The token factory of the destination chain. It names the copy that a first transfer of a native token deploys. Null when unknown. */
   readonly tokenFactory: Address | null;
   readonly settings: DeliverySettings;

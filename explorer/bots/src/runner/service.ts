@@ -188,6 +188,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       multicall,
       rewardAddress,
       wrappedNative: destination.contracts.wrappedNative,
+      bridge: destination.contracts.bridge,
       tokenFactory: destination.contracts.tokenFactory as Address,
       settings: deliverySettingsOf(runnerConfig),
       logger: directionLogger,
