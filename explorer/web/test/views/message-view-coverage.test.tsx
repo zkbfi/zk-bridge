@@ -211,10 +211,10 @@ describe("the message page, step costs", () => {
     renderDetail(detail);
     const sent = await stepButton(/^Sent on Ethereum/);
     // Collapsed, the cost is in a hidden drawer; it shows once the step opens.
-    expect(screen.getByText(/0\.00084 ETH/).closest(".zb-drawer")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByText(/0\.0₃84 ETH/).closest(".zb-drawer")).toHaveAttribute("aria-hidden", "true");
     await userEvent.click(sent);
-    expect(screen.getByText(/0\.00084 ETH/).closest(".zb-drawer")).toHaveAttribute("aria-hidden", "false");
-    expect(within(sent.closest("li")!).getByText("Cost").nextSibling).toHaveTextContent(/^0\.00084 ETH · \$2\.52$/);
+    expect(screen.getByText(/0\.0₃84 ETH/).closest(".zb-drawer")).toHaveAttribute("aria-hidden", "false");
+    expect(within(sent.closest("li")!).getByText("Cost").nextSibling).toHaveTextContent(/^0\.0₃84 ETH · \$2\.52$/);
     const proof = await stepButton(/posted to PulseChain/);
     await userEvent.click(proof);
     const drawer = within(proof.closest("li")!);
