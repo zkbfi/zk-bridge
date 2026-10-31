@@ -353,6 +353,13 @@ and the time left while in flight or the age once delivered. A row links to the 
   lock toggle, not a chevron. Locked (default): the destination is the connected wallet and follows it. Unlocked: the
   row itself is the editable address field, in place (no menu dropping down), independent of the connected wallet.
   The lock's tooltip explains both states.
+- **One delivery control (owner, 2026-10-31, supersedes the separate fee line and the sliders pill):** the delivery
+  pill and the fee line merge into one joined button group under the band: [money-hand icon + the tight summary
+  ("A bot delivers it · 0.39%")] [the gas bars, a low-resolution quick control that cycles the level] [the clock +
+  ~16 min]. There is no second row. Every fee and delivery setting lives in the one menu that the group opens (one
+  layer): who delivers, that mode's value, the gas level as an anchor with its range, both caps, the breakdown, and an
+  Advanced fold (gas limit, router, call). The time segment opens the steps. The sliders icon is replaced by the
+  money-hand icon.
 - **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
   of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
   0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
@@ -585,3 +592,4 @@ don't call it "tip too high", call it "high tip %""
 95. "i think the ui page is a bit too expansive. it looks like you just jammed everything together. decisions have been made on this. we should reflect what is actually built"
 96. "it looks like the back to automatic button did something, but now i cannot reverse it"
 97. "and the "your wallet" should really just be a "destination wallet". and the chevron on the right should turn into a lock button with the tooltip explaining that locked means just go to the connected wallet, unlocked means the input (which is currently coming down and should just be the content editable input space) floats independently"
+98. "hm. right now we have 2 places where tips are controlled. what can we do to consolidate this" — picked "All in the delivery menu", with: "what if we made the "a bot delivers it" menu in to a menu with button groups. so we put the low resolution gas button next to the menu and then the timing button next to that, all in the same menu button. then we don't have 2 layers and you are foced to have a tighter summary of actions in the "a bot delivers" menu. the sliders icon can also be replaced with the take my money icon."
