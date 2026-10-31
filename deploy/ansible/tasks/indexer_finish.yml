@@ -1,0 +1,77 @@
+---
+# Makes the real unit the one that serves the new schema. Green is a transient unit that does not survive a reboot, and
+# Ponder holds its schema, so green and the real unit cannot run on it together:
+#  1. stop green (Caddy's health check sends requests to blue, which still serves the old schema)
+#  2. ZKB_SERVICES=indexer deploy.sh <commit>: the unit restarts on the new, full schema (a warm start, not a backfill)
+#  3. wait for /ready on the real port, then point Caddy at it alone
+# If the unit is not ready in time: stop it, start green again on the same schema, point Caddy at it, and fail.
+- name: Check that green is ready, so there is something to finish
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ zkb_indexer_green_port }}/ready"
+    status_code: 200
+  check_mode: false
+
+- name: Read the schema of the running indexer unit
+  ansible.builtin.include_tasks: live_indexer_schema.yml
+
+- name: Check that the unit does not already run this schema
+  ansible.builtin.assert:
+    that:
+      - zkb_release_schema != zkb_live_schema
+    fail_msg: "The indexer unit already runs {{ zkb_live_schema }}: nothing to finish."
+    quiet: true
+
+- name: Restart the real unit on the new schema
+  block:
+    - name: Stop green
+      ansible.builtin.include_tasks: stop_transient.yml
+      vars:
+        zkb_unit: "{{ zkb_green_indexer_unit }}"
+
+    - name: Restart only the indexer, on the release (deploy.sh moves current and installs the units)
+      ansible.builtin.command:
+        argv:
+          - bash
+          - "{{ zkb_release }}/deploy/app-server/deploy.sh"
+          - "{{ zkb_commit }}"
+      environment:
+        ZKB_SERVICES: indexer
+      register: zkb_finish_deploy
+      changed_when: true
+      failed_when: false
+
+    - name: Wait for the unit to answer /ready
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ zkb_indexer_port }}/ready"
+        status_code: 200
+      register: zkb_unit_ready
+      until: zkb_unit_ready.status == 200
+      retries: "{{ (zkb_finish_ready_timeout | int / 10) | round(0, 'ceil') | int }}"
+      delay: 10
+      when: not ansible_check_mode
+
+    - name: Point Caddy at the indexer unit alone
+      ansible.builtin.include_tasks: caddy_upstream.yml
+      vars:
+        zkb_upstream: indexer
+        zkb_upstream_mode: normal
+  rescue:
+    - name: Stop the indexer unit, which did not become ready
+      ansible.builtin.systemd_service:
+        name: "{{ zkb_indexer_unit }}.service"
+        state: stopped
+
+    - name: Start green again on the same schema
+      ansible.builtin.include_tasks: indexer_green_up.yml
+
+    - name: Point Caddy at green again
+      ansible.builtin.include_tasks: caddy_upstream.yml
+      vars:
+        zkb_upstream: indexer
+        zkb_upstream_mode: green
+
+    - name: Stop, because the finish did not complete
+      ansible.builtin.fail:
+        msg: >-
+          The indexer unit was not ready in {{ zkb_finish_ready_timeout }} s. Caddy is on green again and the site is up.
+          Read: journalctl -u {{ zkb_indexer_unit }} --no-pager | tail -n 50

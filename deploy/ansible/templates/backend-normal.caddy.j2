@@ -1,0 +1,4 @@
+# Written by deploy/ansible (docs/deploy-blue-green.md). Normal: the backend, alone.
+(backend_upstream) {
+	reverse_proxy 127.0.0.1:{$ZKB_BACKEND_PORT:{{ zkb_default_backend_port }}}
+}

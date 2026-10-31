@@ -1,0 +1,8 @@
+---
+profile: production
+exclude_paths:
+  - .venv
+skip_list:
+  # The reloads of Caddy sit in blocks with a rescue that puts the previous file back; a handler would run after the
+  # block, past the validation and the rollback, which is the order this deploy must not have.
+  - no-handler

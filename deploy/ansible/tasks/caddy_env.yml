@@ -1,0 +1,19 @@
+---
+# Reads the host names and ports from /etc/caddy/zkb.env into facts. The file holds names and ports (and an e-mail
+# address); the slurp is no_log so none of it reaches the output, and only the facts below are kept.
+- name: Read the Caddy environment file
+  ansible.builtin.slurp:
+    src: "{{ zkb_caddy_env }}"
+  register: zkb_caddy_env_file
+  failed_when: false
+  no_log: true
+  check_mode: false
+
+- name: Take the ports and the indexer host name from it
+  ansible.builtin.set_fact:
+    zkb_indexer_port: "{{ (zkb_caddy_env_text | regex_findall('(?m)^ZKB_INDEXER_PORT=(.*)$') | last | default(zkb_default_indexer_port)) | trim }}"
+    zkb_backend_port: "{{ (zkb_caddy_env_text | regex_findall('(?m)^ZKB_BACKEND_PORT=(.*)$') | last | default(zkb_default_backend_port)) | trim }}"
+    zkb_indexer_host: "{{ (zkb_caddy_env_text | regex_findall('(?m)^ZKB_INDEXER_HOST=(.*)$') | last | default('')) | trim }}"
+  vars:
+    zkb_caddy_env_text: "{{ (zkb_caddy_env_file.content | default('')) | b64decode }}"
+  no_log: true

@@ -1,0 +1,13 @@
+# Written by deploy/ansible (docs/deploy-blue-green.md). Green (port {{ zkb_indexer_green_port }}) first; blue is the fallback.
+# A request goes to blue when green does not answer /ready. lb_try_duration holds a request for a moment when no upstream
+# is ready, so a restart of one does not show as an error.
+(indexer_upstream) {
+	reverse_proxy 127.0.0.1:{{ zkb_indexer_green_port }} 127.0.0.1:{$ZKB_INDEXER_PORT:{{ zkb_default_indexer_port }}} {
+		lb_policy first
+		lb_try_duration 30s
+		lb_try_interval 250ms
+		health_uri /ready
+		health_interval 5s
+		health_timeout 3s
+	}
+}

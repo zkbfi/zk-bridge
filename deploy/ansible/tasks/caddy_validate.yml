@@ -1,0 +1,14 @@
+---
+# Validates the whole Caddyfile (with the upstream files it imports). The Caddyfile reads its host names from the
+# environment, so this uses the same file that the service loads. Read-only, so it also runs under --check.
+- name: Validate the Caddy configuration
+  ansible.builtin.shell: |
+    set -a
+    [ ! -f {{ zkb_caddy_env | quote }} ] || . {{ zkb_caddy_env | quote }}
+    set +a
+    caddy validate --config {{ zkb_caddyfile | quote }} --adapter caddyfile
+  args:
+    executable: /bin/bash
+  register: zkb_caddy_validate
+  changed_when: false
+  check_mode: false

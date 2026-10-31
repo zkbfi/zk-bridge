@@ -1,0 +1,63 @@
+---
+# Points Caddy at green first, blue as the fallback, and tries the public route from the server itself. Puts Caddy back
+# on blue when the route does not answer 200. Blue keeps running.
+- name: Check that green is ready
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ zkb_indexer_green_port }}/ready"
+    status_code: 200
+  check_mode: false
+  register: zkb_green_ready
+
+- name: Look at blue
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ zkb_indexer_port }}/ready"
+    status_code: [200, 503]
+  check_mode: false
+  register: zkb_blue_ready
+
+- name: Warn when blue is not ready, because then there is no fallback
+  ansible.builtin.debug:
+    msg: "Warning: blue answers {{ zkb_blue_ready.status }} on /ready, so green has no fallback."
+  when: zkb_blue_ready.status != 200
+
+- name: Switch and try the public route
+  block:
+    - name: Send the indexer traffic to green, with blue as the fallback
+      ansible.builtin.include_tasks: caddy_upstream.yml
+      vars:
+        zkb_upstream: indexer
+        zkb_upstream_mode: green
+
+    - name: Give Caddy's health check a few seconds
+      ansible.builtin.wait_for:
+        timeout: 6
+      when: not ansible_check_mode and zkb_indexer_host | length > 0
+
+    - name: Ask for /ready through Caddy, on this machine
+      ansible.builtin.command:
+        argv:
+          - curl
+          - -s
+          - -o
+          - /dev/null
+          - -m
+          - "15"
+          - -w
+          - "%{http_code}"
+          - --resolve
+          - "{{ zkb_indexer_host }}:443:127.0.0.1"
+          - "https://{{ zkb_indexer_host }}/ready"
+      register: zkb_public_ready
+      changed_when: false
+      failed_when: zkb_public_ready.stdout != '200'
+      when: not ansible_check_mode and zkb_indexer_host | length > 0
+  rescue:
+    - name: Put Caddy back on blue
+      ansible.builtin.include_tasks: caddy_upstream.yml
+      vars:
+        zkb_upstream: indexer
+        zkb_upstream_mode: normal
+
+    - name: Stop, because the switch did not hold
+      ansible.builtin.fail:
+        msg: "The public route did not answer 200 after the switch (or Caddy rejected the file). Caddy is back on blue."

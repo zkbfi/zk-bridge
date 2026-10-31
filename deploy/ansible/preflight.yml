@@ -1,0 +1,112 @@
+---
+# Read-only checks before a deploy. Collects every problem and fails once at the end with the list. Safe to run at any
+# time, and it runs fully under --check.
+#
+#   cd deploy/ansible
+#   ansible-playbook preflight.yml
+#
+# Checks: free disk, the Caddy upstream files and a valid Caddyfile that imports them, no drain left on, a live indexer
+# and backend, no leftover green or check unit, no keep-alive march, no publisher proof in progress, the jobs in flight.
+- name: Check that the app server is ready for a deploy
+  hosts: zkbfi
+  gather_facts: false
+  tasks:
+    - name: Read the ports from the Caddy environment
+      ansible.builtin.include_tasks: tasks/caddy_env.yml
+
+    - name: Read the state of the units
+      ansible.builtin.service_facts:
+      check_mode: false
+
+    - name: Free disk on /var/lib
+      ansible.builtin.command: df -BG --output=avail /var/lib
+      register: zkb_df
+      changed_when: false
+      check_mode: false
+
+    - name: Look at the leftover transient units and the upstream files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ zkb_transient_dir }}/{{ zkb_green_indexer_unit }}.service"
+        - "{{ zkb_transient_dir }}/{{ zkb_check_backend_unit }}.service"
+        - "{{ zkb_caddy_upstreams }}/indexer.caddy"
+        - "{{ zkb_caddy_upstreams }}/backend.caddy"
+      register: zkb_pf_stats
+      check_mode: false
+
+    - name: Read the Caddyfile in use and the backend upstream
+      ansible.builtin.slurp:
+        src: "{{ item }}"
+      loop:
+        - "{{ zkb_caddyfile }}"
+        - "{{ zkb_caddy_upstreams }}/backend.caddy"
+      register: zkb_pf_files
+      failed_when: false
+      check_mode: false
+
+    - name: Validate the Caddyfile in use
+      ansible.builtin.include_tasks: tasks/caddy_validate.yml
+      args:
+        apply:
+          ignore_errors: true
+
+    - name: Ask the indexer and the backend
+      ansible.builtin.uri:
+        url: "{{ item }}"
+        status_code: [200, 503, -1]
+      loop:
+        - "http://127.0.0.1:{{ zkb_indexer_port }}/ready"
+        - "http://127.0.0.1:{{ zkb_backend_port }}/health"
+      register: zkb_pf_http
+      failed_when: false
+      check_mode: false
+
+    - name: Look at the publisher journal
+      ansible.builtin.include_tasks: tasks/publisher_idle.yml
+
+    - name: Count the jobs in flight
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/files/jobs_idle.py --port {{ zkb_backend_port }} --reads 1"
+        executable: python3
+      register: zkb_pf_jobs
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Collect the problems
+      ansible.builtin.set_fact:
+        zkb_problems: >-
+          {{ [] + (['only ' ~ zkb_free_gb ~ ' GB free on /var/lib (need ' ~ zkb_min_free_gb ~ ' for a second schema)'] if zkb_free_gb | int < zkb_min_free_gb | int else [])
+             + (['a unit is not running: ' ~ zkb_down_units | join(', ')] if zkb_down_units | length > 0 else [])
+             + (['the Caddy upstream files are missing: run caddy.yml'] if not (zkb_pf_stats.results[2].stat.exists and zkb_pf_stats.results[3].stat.exists) else [])
+             + (['the Caddyfile in use does not import the upstream files: run caddy.yml'] if 'import /etc/caddy/upstreams/backend.caddy' not in zkb_caddyfile_text else [])
+             + (['the Caddyfile does not validate'] if zkb_caddy_validate.rc | default(1) != 0 else [])
+             + (['the backend routes are still draining: backend.yml -e action=undrain'] if 'DRAINING' in zkb_backend_upstream_text else [])
+             + (['the live indexer is not ready'] if zkb_pf_http.results[0].status | default(0) != 200 else [])
+             + (['the live backend does not answer /health'] if zkb_pf_http.results[1].status | default(0) != 200 else [])
+             + (['zk-bridge-indexer-pre is running from an earlier attempt'] if zkb_pf_stats.results[0].stat.exists else [])
+             + (['zk-bridge-backend-pre is running from an earlier attempt'] if zkb_pf_stats.results[1].stat.exists else [])
+             + (['a keep-alive march is running'] if ansible_facts.services[zkb_keepalive_service].state | default('') == 'running' else [])
+             + (['the publisher is proving'] if zkb_publisher_proving else [])
+             + (['the jobs in flight could not be read'] if zkb_pf_jobs.rc | default(99) == 99 else []) }}
+      vars:
+        zkb_free_gb: "{{ zkb_df.stdout_lines[-1] | regex_replace('[^0-9]', '') }}"
+        zkb_down_units: >-
+          {{ [zkb_indexer_unit ~ '.service', zkb_backend_unit ~ '.service', 'caddy.service']
+             | reject('in', ansible_facts.services | dict2items | selectattr('value.state', 'equalto', 'running') | map(attribute='key') | list) | list }}
+        zkb_caddyfile_text: "{{ zkb_pf_files.results[0].content | default('') | b64decode }}"
+        zkb_backend_upstream_text: "{{ zkb_pf_files.results[1].content | default('') | b64decode }}"
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          - "jobs: {{ zkb_pf_jobs.stdout | default('?') }}"
+          - "problems: {{ zkb_problems if zkb_problems | length > 0 else 'none' }}"
+
+    - name: Stop when there are problems
+      ansible.builtin.assert:
+        that:
+          - zkb_problems | length == 0
+        fail_msg: "{{ zkb_problems | length }} problem(s): {{ zkb_problems | join('; ') }}"
+        quiet: true

@@ -1,0 +1,37 @@
+---
+# Starts the release's copy of zk-bridge-<service>.service as a transient unit (systemd-run): the same user, sandbox,
+# environment files and command, read from the unit file of that release. Only what the caller adds differs.
+#   zkb_tu_name     the transient unit name, without .service
+#   zkb_tu_release  the release directory
+#   zkb_tu_service  indexer or backend
+#   zkb_tu_props    extra properties, "Key=value" (default none)
+#   zkb_tu_args     words added to the end of the command (default none)
+# Idempotent: nothing is started while the transient unit already exists.
+- name: Read the unit file of the release
+  ansible.builtin.slurp:
+    src: "{{ zkb_tu_release }}/deploy/app-server/zk-bridge-{{ zkb_tu_service }}.service"
+  register: zkb_tu_file
+  check_mode: false
+
+- name: Take the [Service] settings that a transient copy keeps
+  ansible.builtin.set_fact:
+    zkb_tu_properties: >-
+      {{ zkb_tu_lines
+         | select('match', '^(' ~ (zkb_unit_keys | join('|')) ~ ')=')
+         | map('replace', zkb_current, zkb_tu_release)
+         | map('regex_replace', '^', '--property=')
+         | list }}
+    zkb_tu_exec: >-
+      {{ (zkb_tu_lines | select('match', '^ExecStart=') | first | replace('ExecStart=', '', 1)
+         | replace(zkb_current, zkb_tu_release)).split() }}
+  vars:
+    zkb_tu_lines: "{{ (zkb_tu_file.content | b64decode).split('[Service]')[1].split('\n[')[0].splitlines() }}"
+
+- name: Start {{ zkb_tu_name }}
+  ansible.builtin.command:
+    argv: >-
+      {{ ['systemd-run', '--unit=' ~ zkb_tu_name, '--collect', '--quiet', '--property=Restart=no']
+         + zkb_tu_properties
+         + (zkb_tu_props | default([]) | map('regex_replace', '^', '--property=') | list)
+         + ['--'] + zkb_tu_exec + (zkb_tu_args | default([])) }}
+    creates: "{{ zkb_transient_dir }}/{{ zkb_tu_name }}.service"

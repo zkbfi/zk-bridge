@@ -1,0 +1,363 @@
+---
+# Moves the backend to a release without losing a proof job. The prover is a child process of the backend, so a restart
+# kills the job in flight (the loss of 2026-10-31). The backend cannot run twice on the live database, so "green" here is
+# the release after a drain:
+#   1. refuse while a keep-alive march runs; stop the keep-alive timer
+#   2. drain: Caddy answers POST /requests with 503 + Retry-After; every other route goes on
+#   3. wait until /health shows no queued or proving job on three reads in a row (zkb_drain_timeout, 40 minutes);
+#      on timeout NOTHING is restarted, the drain is lifted and the playbook fails
+#   4. back up the SQLite database (VACUUM INTO, newest three kept)
+#   5. ZKB_SERVICES=backend deploy.sh: current moves, the backend restarts
+#   6. /health 200, and every module that ran before runs again; if not, the previous release is put back
+#   7. always: normal routes back, the timer restarted if it was running
+#
+#   cd deploy/ansible
+#   ansible-playbook backend.yml -e commit=<hash>                    # drain and switch
+#   ansible-playbook backend.yml -e commit=<previous-hash>           # rollback: the same drain, the old release
+#   ansible-playbook backend.yml -e commit=<hash> -e action=check    # start the release on a scratch database, port 8788
+#   ansible-playbook backend.yml -e action=undrain                   # lift a drain left by a killed run
+#
+# Under --check the reads run (state, jobs, modules) and nothing is drained, backed up or restarted.
+- name: Switch the backend to a release (drain, back up, restart, check)
+  hosts: zkbfi
+  gather_facts: false
+  vars:
+    zkb_scratch_dir: "{{ zkb_backend_state }}/bluegreen-check"
+    # JavaScript run by the backend's own user with node (node:sqlite), so no file of the service is touched as root.
+    zkb_js_scratch_config: |
+      const fs = require("node:fs");
+      const [src, dest, db, port] = process.argv.slice(1);
+      const config = JSON.parse(fs.readFileSync(src, "utf8"));
+      config.databasePath = db;
+      config.listen = { ...config.listen, port: Number(port) };
+      fs.writeFileSync(dest, JSON.stringify(config), { mode: 0o600 });
+    zkb_js_backup: |
+      const { DatabaseSync } = require("node:sqlite");
+      const db = new DatabaseSync(process.argv[1]);
+      db.exec("PRAGMA busy_timeout = 5000");
+      db.exec("VACUUM INTO '" + process.argv[2] + "'");
+      db.close();
+  tasks:
+    - name: Take the action from -e action=... (site.yml passes zkb_step)
+      ansible.builtin.set_fact:
+        zkb_action: "{{ zkb_step | default(step | default(action | default('switch'))) }}"
+
+    - name: Check the action
+      ansible.builtin.assert:
+        that:
+          - zkb_action in ['switch', 'check', 'undrain']
+        fail_msg: "action is one of switch, check, undrain."
+        quiet: true
+
+    - name: Read the ports from the Caddy environment
+      ansible.builtin.include_tasks: tasks/caddy_env.yml
+
+    - name: Lift a drain
+      ansible.builtin.include_tasks: tasks/caddy_upstream.yml
+      vars:
+        zkb_upstream: backend
+        zkb_upstream_mode: normal
+      when: zkb_action == 'undrain'
+
+    - name: Find the release
+      ansible.builtin.include_tasks: tasks/resolve_release.yml
+      when: zkb_action in ['switch', 'check']
+
+    # --- check: the release on a scratch database -------------------------------------------------------------------
+    - name: Start the release's backend on a scratch database and look at it
+      when: zkb_action == 'check'
+      block:
+        - name: Make the scratch directory as the backend's user (an empty database of its own, never the live file)
+          ansible.builtin.command:
+            argv: [runuser, -u, "{{ zkb_backend_user }}", --, sh, -c, "rm -rf '{{ zkb_scratch_dir }}' && mkdir -m 0700 '{{ zkb_scratch_dir }}'"]
+          changed_when: true
+
+        - name: Write a copy of backend.json with the scratch database and port
+          ansible.builtin.command:
+            argv:
+              - runuser
+              - -u
+              - "{{ zkb_backend_user }}"
+              - --
+              - node
+              - -e
+              - "{{ zkb_js_scratch_config }}"
+              - "{{ zkb_etc }}/backend/backend.json"
+              - "{{ zkb_scratch_dir }}/backend.json"
+              - "{{ zkb_scratch_dir }}/backend.sqlite"
+              - "{{ zkb_backend_check_port }}"
+          changed_when: true
+          no_log: true
+
+        - name: Start the check instance (the unit's sandbox, the real backend.env, the scratch config)
+          ansible.builtin.include_tasks: tasks/transient_unit.yml
+          vars:
+            zkb_tu_name: "{{ zkb_check_backend_unit }}"
+            zkb_tu_release: "{{ zkb_release }}"
+            zkb_tu_service: backend
+            zkb_tu_args:
+              - --config
+              - "{{ zkb_scratch_dir }}/backend.json"
+
+        - name: Wait for /health on the check instance
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ zkb_backend_check_port }}/health"
+            status_code: 200
+          register: zkb_check_health
+          until: zkb_check_health.status == 200
+          retries: 18
+          delay: 5
+          when: not ansible_check_mode
+
+        - name: Let the modules start
+          ansible.builtin.wait_for:
+            timeout: 20
+          when: not ansible_check_mode
+
+        - name: Modules not running on the check instance
+          ansible.builtin.include_tasks: tasks/backend_modules.yml
+          vars:
+            zkb_port: "{{ zkb_backend_check_port }}"
+          when: not ansible_check_mode
+
+        - name: Remember them
+          ansible.builtin.set_fact:
+            zkb_check_down: "{{ zkb_modules_down | default([]) }}"
+
+        - name: Modules not running on the live backend
+          ansible.builtin.include_tasks: tasks/backend_modules.yml
+          vars:
+            zkb_port: "{{ zkb_backend_port }}"
+
+        - name: Compare
+          ansible.builtin.debug:
+            msg:
+              - "not running on the check instance (empty is good): {{ zkb_check_down }}"
+              - "not running on the live backend (the check may show the same): {{ zkb_modules_down }}"
+              - "{{ 'A module is down on the check and not on the live backend: do not switch.' if (zkb_check_down | difference(zkb_modules_down)) | length > 0 else 'No module is down only on the check.' }}"
+      always:
+        - name: Stop the check instance
+          ansible.builtin.include_tasks: tasks/stop_transient.yml
+          vars:
+            zkb_unit: "{{ zkb_check_backend_unit }}"
+
+        - name: Remove the scratch directory
+          ansible.builtin.command:
+            argv: [runuser, -u, "{{ zkb_backend_user }}", --, rm, -rf, "{{ zkb_scratch_dir }}"]
+          changed_when: false
+          when: not ansible_check_mode
+
+    # --- switch: drain, back up, restart ----------------------------------------------------------------------------
+    - name: Look at the backend before touching anything
+      when: zkb_action == 'switch'
+      block:
+        - name: Look at the current release
+          ansible.builtin.stat:
+            path: "{{ zkb_current }}"
+          register: zkb_current_stat
+          check_mode: false
+
+        - name: Remember the release that runs now
+          ansible.builtin.set_fact:
+            zkb_previous: "{{ (zkb_current_stat.stat.lnk_target | default('none')) | basename }}"
+
+        - name: Look at the backend and the keep-alive units
+          ansible.builtin.systemd_service:
+            name: "{{ item }}"
+          loop:
+            - "{{ zkb_backend_unit }}.service"
+            - "{{ zkb_keepalive_service }}"
+            - "{{ zkb_keepalive_timer }}"
+          register: zkb_units
+          check_mode: false
+
+        - name: Check that the backend runs and no keep-alive march is going
+          ansible.builtin.assert:
+            that:
+              - zkb_units.results[0].status.ActiveState == 'active'
+              - zkb_units.results[1].status.ActiveState not in ['active', 'activating']
+            fail_msg: >-
+              {{ 'The backend is not running; use deploy.sh.' if zkb_units.results[0].status.ActiveState != 'active'
+                 else 'A keep-alive march is running (it holds a job for up to 6 hours): wait for it, then run this again.' }}
+            quiet: true
+
+        - name: Remember whether the timer runs
+          ansible.builtin.set_fact:
+            zkb_timer_was_active: "{{ zkb_units.results[2].status.ActiveState == 'active' }}"
+
+        - name: Check that the live backend answers /health, and note which modules are down
+          ansible.builtin.include_tasks: tasks/backend_modules.yml
+          vars:
+            zkb_port: "{{ zkb_backend_port }}"
+
+        - name: Remember them
+          ansible.builtin.set_fact:
+            zkb_modules_before: "{{ zkb_modules_down }}"
+
+        - name: Report the release already runs
+          ansible.builtin.debug:
+            msg: "{{ zkb_commit }} is already the current release. Nothing to switch."
+          when: zkb_previous == zkb_commit
+
+        - name: Leave the host out of this play
+          ansible.builtin.meta: end_host
+          when: zkb_previous == zkb_commit
+
+    - name: Drain, back up, restart, check
+      when: zkb_action == 'switch'
+      block:
+        - name: Stop the keep-alive timer (a run during the drain would get a 503)
+          ansible.builtin.systemd_service:
+            name: "{{ zkb_keepalive_timer }}"
+            state: stopped
+          when: zkb_timer_was_active
+
+        - name: Drain. POST /requests answers 503 with Retry-After; the job routes stay up
+          ansible.builtin.include_tasks: tasks/caddy_upstream.yml
+          vars:
+            zkb_upstream: backend
+            zkb_upstream_mode: drain
+
+        - name: Wait 15 seconds (a request that passed Caddy before the reload may still be creating its job)
+          ansible.builtin.wait_for:
+            timeout: 15
+          when: not ansible_check_mode
+
+        - name: Wait until no job is queued or proving on three reads in a row
+          ansible.builtin.script:
+            cmd: >-
+              {{ playbook_dir }}/files/jobs_idle.py --port {{ zkb_backend_port }}
+              --reads {{ zkb_drain_idle_reads }} --interval {{ zkb_drain_poll }}
+            executable: python3
+          register: zkb_drain_wait
+          until: zkb_drain_wait.rc != 1
+          # Under --check the drain is not on, so this reads once and reports instead of waiting for the jobs.
+          retries: "{{ 1 if ansible_check_mode else ((zkb_drain_timeout | int / zkb_drain_poll | int) | round(0, 'ceil') | int) }}"
+          delay: "{{ zkb_drain_poll }}"
+          changed_when: false
+          failed_when: zkb_drain_wait.rc != 0 and not ansible_check_mode
+          check_mode: false
+
+        - name: Make the directory for database copies, as the backend's user
+          ansible.builtin.command:
+            argv: [runuser, -u, "{{ zkb_backend_user }}", --, mkdir, -p, -m, "0700", "{{ zkb_backend_backups }}"]
+            creates: "{{ zkb_backend_backups }}"
+
+        - name: Copy the database (VACUUM INTO) before the restart
+          ansible.builtin.command:
+            argv:
+              - runuser
+              - -u
+              - "{{ zkb_backend_user }}"
+              - --
+              - node
+              - -e
+              - "{{ zkb_js_backup }}"
+              - "{{ zkb_backend_state }}/backend.sqlite"
+              - "{{ zkb_backend_backups }}/backend-{{ now(utc=true).strftime('%Y%m%dT%H%M%S') }}.sqlite"
+          changed_when: true
+
+        - name: Find the database copies
+          ansible.builtin.find:
+            paths: "{{ zkb_backend_backups }}"
+            patterns: "backend-*.sqlite"
+          register: zkb_backups
+          check_mode: false
+
+        - name: Delete all but the newest {{ zkb_backups_kept }}
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            state: absent
+          loop: "{{ (zkb_backups.files | sort(attribute='mtime', reverse=true))[zkb_backups_kept:] }}"
+          loop_control:
+            label: "{{ item.path | basename }}"
+
+        - name: Note that the restart starts
+          ansible.builtin.set_fact:
+            zkb_switch_started: true
+
+        - name: Restart only the backend on the new release
+          ansible.builtin.command:
+            argv:
+              - bash
+              - "{{ zkb_release }}/deploy/app-server/deploy.sh"
+              - "{{ zkb_commit }}"
+          environment:
+            ZKB_SERVICES: backend
+          changed_when: true
+          failed_when: false
+
+        - name: Wait for /health after the restart
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ zkb_backend_port }}/health"
+            status_code: 200
+          register: zkb_after_health
+          until: zkb_after_health.status == 200
+          retries: 24
+          delay: 5
+          when: not ansible_check_mode
+
+        - name: Wait until every module that ran before runs again
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ zkb_backend_port }}/health"
+            return_content: true
+          register: zkb_after_modules
+          until: >-
+            (zkb_after_modules.json.modules | default({}) | dict2items | rejectattr('value.state', 'equalto', 'running')
+             | map(attribute='key') | list | difference(zkb_modules_before)) | length == 0
+          retries: 12
+          delay: 5
+          when: not ansible_check_mode
+
+        - name: Report
+          ansible.builtin.debug:
+            msg: "The backend is healthy on {{ zkb_commit }}. Rollback: ansible-playbook backend.yml -e commit={{ zkb_previous }}"
+      rescue:
+        - name: Stop if nothing was restarted
+          ansible.builtin.fail:
+            msg: >-
+              Nothing was restarted ({{ ansible_failed_result.msg | default('see above') }}).
+              The drain is lifted and the timer comes back. Try again later; do not force it.
+          when: not (zkb_switch_started | default(false))
+
+        - name: The new release is not healthy. Put the previous one back (the drain is still on)
+          ansible.builtin.command:
+            argv:
+              - bash
+              - "{{ zkb_releases }}/{{ zkb_previous }}/deploy/app-server/deploy.sh"
+              - "{{ zkb_previous }}"
+          environment:
+            ZKB_SERVICES: backend
+          changed_when: true
+          failed_when: false
+          when: zkb_previous != 'none'
+
+        - name: Wait for /health on the previous release
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ zkb_backend_port }}/health"
+            status_code: 200
+          register: zkb_rollback_health
+          until: zkb_rollback_health.status == 200
+          retries: 24
+          delay: 5
+          failed_when: false
+          when: zkb_previous != 'none'
+
+        - name: Stop, because the new release failed
+          ansible.builtin.fail:
+            msg: >-
+              The backend was not healthy on {{ zkb_commit }}.
+              {{ 'Rolled back to ' ~ zkb_previous ~ ', which ' ~ ('answers /health.' if (zkb_rollback_health.status | default(0)) == 200 else 'does NOT answer /health either: read journalctl -u zk-bridge-backend.')
+                 if zkb_previous != 'none' else 'There was no previous release to go back to.' }}
+      always:
+        - name: Normal routes back, new jobs accepted
+          ansible.builtin.include_tasks: tasks/caddy_upstream.yml
+          vars:
+            zkb_upstream: backend
+            zkb_upstream_mode: normal
+
+        - name: Start the keep-alive timer again if it was running
+          ansible.builtin.systemd_service:
+            name: "{{ zkb_keepalive_timer }}"
+            state: started
+          when: zkb_timer_was_active | default(false)

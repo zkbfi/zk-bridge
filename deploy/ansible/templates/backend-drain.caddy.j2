@@ -1,0 +1,22 @@
+# Written by deploy/ansible (docs/deploy-blue-green.md). DRAINING: no new proof jobs; everything else goes on.
+# POST /requests is the only route that starts a job. It answers in the shape of the backend's own "cannot-check"
+# answer, which the dapp already treats as "try again". A restart of the backend is held for up to 20 seconds.
+(backend_upstream) {
+	@zkb_new_jobs {
+		method POST
+		path /requests
+	}
+	handle @zkb_new_jobs {
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Expose-Headers "Retry-After"
+		header Content-Type "application/json"
+		header Retry-After "30"
+		respond `{"error":"cannot-check","retryAfterSeconds":30}` 503
+	}
+	handle {
+		reverse_proxy 127.0.0.1:{$ZKB_BACKEND_PORT:{{ zkb_default_backend_port }}} {
+			lb_try_duration 20s
+			lb_try_interval 250ms
+		}
+	}
+}

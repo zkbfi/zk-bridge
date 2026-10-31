@@ -1,0 +1,24 @@
+---
+# Settings for sites.yml, which runs on the control machine. No secret is here, only where to read one.
+# The Cloudflare token is read with `op read` when a task needs it, and the tasks that use it are no_log.
+zkb_repo_root: "{{ playbook_dir }}/../.."
+
+# 1Password references (op://vault/item/field). Confirm the item names before the first run; a wrong reference makes
+# `op read` fail and the playbook stop, and nothing else happens.
+zkb_op_cloudflare_token_ref: "op://zkb.fi/Cloudflare API token/credential"
+zkb_op_cloudflare_account_ref: "op://zkb.fi/Cloudflare API token/account id"
+
+# Public names. Nothing here is a secret.
+zkb_cf_zone: zkb.fi
+zkb_dnslink_name: _dnslink.docs.zkb.fi
+zkb_ipfs_gateway: https://ipfs.io
+zkb_sites:
+  next:
+    channel: next
+    worker: zkb-fi-next
+    domains: next.zkb.fi
+  stable:
+    channel: stable
+    worker: zkb-fi
+    domains: zkb.fi,www.zkb.fi
+zkb_ui_config: design/ui/wrangler.json

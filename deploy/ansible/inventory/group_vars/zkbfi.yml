@@ -1,0 +1,118 @@
+---
+# Every path, port, unit name and limit that the playbooks use for the app server. No secret is here: the server keeps
+# its secrets in /etc/zk-bridge, and the playbooks never read them.
+
+# --- Layout (deploy/app-server/deploy.sh and provision.sh) ----------------------------------------------------------
+zkb_base: /opt/zk-bridge
+zkb_releases: "{{ zkb_base }}/releases"
+zkb_current: "{{ zkb_base }}/current"
+zkb_etc: /etc/zk-bridge
+zkb_unit_dir: /etc/systemd/system
+zkb_backend_state: /var/lib/zk-bridge-backend
+zkb_backend_backups: "{{ zkb_backend_state }}/backups"
+zkb_backend_user: zkb_backend
+zkb_backups_kept: 3
+
+# --- Caddy ----------------------------------------------------------------------------------------------------------
+zkb_caddyfile: /etc/caddy/Caddyfile
+zkb_caddy_env: /etc/caddy/zkb.env
+zkb_caddy_upstreams: /etc/caddy/upstreams
+zkb_caddy_backups_kept_days: 14
+
+# --- Ports (defaults of the Caddyfile; ZKB_INDEXER_PORT and ZKB_BACKEND_PORT in zkb.env override them) ----------------
+zkb_default_indexer_port: 42069
+zkb_default_backend_port: 8787
+zkb_indexer_green_port: 42070
+zkb_backend_check_port: 8788
+
+# --- Units ----------------------------------------------------------------------------------------------------------
+zkb_indexer_unit: zk-bridge-indexer
+zkb_backend_unit: zk-bridge-backend
+zkb_publisher_unit: zk-bridge-publisher
+zkb_runner_unit: zk-bridge-runner
+zkb_keepalive_service: zk-bridge-keepalive.service
+zkb_keepalive_timer: zk-bridge-keepalive.timer
+zkb_green_indexer_unit: zk-bridge-indexer-pre
+zkb_check_backend_unit: zk-bridge-backend-pre
+zkb_transient_dir: /run/systemd/transient
+
+# The settings of a service unit that a transient copy takes over: user, files and sandbox, read from the unit file of
+# the release. Nothing of the sandbox is repeated in these playbooks.
+zkb_unit_keys:
+  - User
+  - Group
+  - WorkingDirectory
+  - Environment
+  - EnvironmentFile
+  - ReadWritePaths
+  - NoNewPrivileges
+  - ProtectSystem
+  - ProtectHome
+  - PrivateTmp
+  - PrivateDevices
+  - ProtectKernelTunables
+  - ProtectKernelModules
+  - ProtectKernelLogs
+  - ProtectControlGroups
+  - ProtectClock
+  - ProtectHostname
+  - ProtectProc
+  - RestrictAddressFamilies
+  - RestrictNamespaces
+  - RestrictRealtime
+  - RestrictSUIDSGID
+  - LockPersonality
+  - SystemCallArchitectures
+  - SystemCallFilter
+  - SystemCallErrorNumber
+  - CapabilityBoundingSet
+  - AmbientCapabilities
+  - UMask
+  - TimeoutStopSec
+
+# Files a bot needs before it may start, relative to zkb_etc (the same list as required_files in deploy.sh).
+zkb_bot_required_files:
+  publisher:
+    - publisher/bots.json
+    - publisher/prover-setup.json
+    - publisher/bots.env
+    - deployment.json
+  runner:
+    - runner/bots.json
+    - runner/prover-setup.json
+    - runner/bots.env
+    - runner/runner.env
+    - deployment.json
+
+# The journal events that tell whether the publisher is in the middle of a paid proof (explorer/bots/src/publisher).
+zkb_publisher_events: proving_started|proof_made|nothing_to_prove|proof_discarded
+
+# --- Limits (seconds unless said) -------------------------------------------------------------------------------------
+zkb_green_timeout: 7200 # how long green may take to answer /ready
+zkb_green_poll_seconds: 15
+zkb_stall_seconds: 600 # green is stopped when /status does not change for this long
+zkb_drain_timeout: 2400 # the prover limit of 30 minutes plus 10
+zkb_drain_poll: 10
+zkb_drain_idle_reads: 3
+zkb_finish_ready_timeout: 600
+zkb_min_free_gb: 10
+zkb_soak_seconds: 3600 # site.yml waits this long between the indexer switch and the finish
+
+# The routes of the indexer that the comparison reads. Routes with a path parameter are left out.
+zkb_compare_routes:
+  - /api/summary
+  - /api/pair
+  - /api/heads
+  - /api/head-updates
+  - /api/light-client-costs
+  - /api/gate
+  - /api/registry
+  - /api/tokens
+  - /api/audit
+  - /api/escrow
+  - /api/release-events
+  - /api/feed
+  - /api/delivered
+  - /api/undelivered
+  - /api/history
+  - /api/delivery-cost

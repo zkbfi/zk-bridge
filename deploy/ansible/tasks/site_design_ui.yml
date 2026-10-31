@@ -1,0 +1,38 @@
+---
+# The design UI Worker. One Worker serves both routes, so a deploy changes zkb.fi/ui and next.zkb.fi/ui together. A version
+# that is uploaded and not deployed is the green side: it gets no traffic until it is deployed.
+#   design_ui=upload    build dist, then upload a version (no traffic)
+#   design_ui=deploy    put 100% of the traffic on the newest uploaded version
+#   design_ui=rollback  go back to the previous deployed version
+- name: Check the design_ui action
+  ansible.builtin.assert:
+    that:
+      - design_ui in ['upload', 'deploy', 'rollback']
+    fail_msg: "design_ui is upload, deploy or rollback."
+    quiet: true
+
+- name: Build the page into design/ui/dist
+  ansible.builtin.command:
+    argv: [python3, "{{ zkb_repo_root }}/design/ui/build.py"]
+    creates: "{{ zkb_repo_root }}/design/ui/dist/ui/index.html"
+  when: design_ui == 'upload'
+
+- name: Run wrangler for {{ design_ui }}
+  ansible.builtin.command:
+    argv: >-
+      {{ ['npx', '--yes', 'wrangler@4']
+         + {'upload': ['versions', 'upload'], 'deploy': ['versions', 'deploy', '--yes'], 'rollback': ['rollback', '--yes']}[design_ui]
+         + ['-c', zkb_repo_root ~ '/' ~ zkb_ui_config] }}
+  environment:
+    CLOUDFLARE_API_TOKEN: "{{ lookup('ansible.builtin.pipe', 'op read ' ~ (zkb_op_cloudflare_token_ref | quote)) }}"
+    CLOUDFLARE_ACCOUNT_ID: "{{ lookup('ansible.builtin.pipe', 'op read ' ~ (zkb_op_cloudflare_account_ref | quote)) }}"
+  register: zkb_wrangler_ui
+  changed_when: true
+  no_log: true
+
+- name: Say what to do next
+  ansible.builtin.debug:
+    msg: >-
+      {{ {'upload': 'Uploaded, not active. Try it with the header Cloudflare-Workers-Version-Overrides: zkb-fi-ui="<version-id>" on https://next.zkb.fi/ui/, then design_ui=deploy.',
+          'deploy': 'Deployed to 100%. Rollback: design_ui=rollback.',
+          'rollback': 'Rolled back to the previous version.'}[design_ui] }}

@@ -1,0 +1,4 @@
+# Written by deploy/ansible (docs/deploy-blue-green.md). Normal: the indexer unit, alone.
+(indexer_upstream) {
+	reverse_proxy 127.0.0.1:{$ZKB_INDEXER_PORT:{{ zkb_default_indexer_port }}}
+}
