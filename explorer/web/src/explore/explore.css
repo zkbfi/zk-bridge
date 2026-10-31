@@ -27,7 +27,7 @@
 .zb-tile-t { grid-column: 2; grid-row: 1; font-weight: 700; align-self: end; }
 .zb-tile-s { grid-column: 2; grid-row: 2; font-size: var(--zb-step--1); color: var(--zb-muted); align-self: start; }
 .zb-tile-go { grid-column: 3; grid-row: 1 / 3; color: var(--zb-muted); display: grid; place-items: center; }
-.zb-xmap { position: relative; background: var(--zb-from); color: var(--zb-from-ink); margin-top: 18px; }
+.zb-xmap { position: relative; background: var(--zb-from-bg, var(--zb-from)); color: var(--zb-from-ink); margin-top: 18px; }
 .zb-xmap-in { position: relative; max-width: var(--zb-col-width); margin: 0 auto; }
 .zb-xmap svg { display: block; width: 100%; height: auto; }
 .zb-xmap-count { font-size: var(--zb-step-0); }
@@ -53,7 +53,7 @@
 .zb-xsvc-dot[data-ok="false"] { background: var(--zb-bad, #c8102e); }
 .zb-xsvc-url { margin-left: auto; font-size: var(--zb-step--1); color: var(--zb-muted); overflow: hidden; text-overflow: ellipsis; }
 .zb-xsvc-ms { min-width: 52px; text-align: right; font-size: var(--zb-step--1); color: var(--zb-muted); }
-.zb-xband { background: var(--zb-from); color: var(--zb-from-ink); }
+.zb-xband { background: var(--zb-from-bg, var(--zb-from)); color: var(--zb-from-ink); }
 .zb-xband-in { display: flex; align-items: center; gap: 14px; padding-block: 16px; }
 .zb-xband-lbl { color: var(--zb-from-muted); font-size: var(--zb-step--1); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .zb-xband-big { font-size: var(--zb-step-2); font-weight: 700; word-break: break-all; }

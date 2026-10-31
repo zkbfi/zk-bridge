@@ -13,7 +13,9 @@
   --zb-step-1: clamp(17px, 0.95rem + 0.5vw, 22px);
   --zb-step-2: clamp(24px, 1.3rem + 0.8vw, 32px);
   --zb-step-amount: clamp(40px, 6vw, 64px);
-  --zb-col-width: clamp(480px, 30vw + 150px, 600px);
+  /* The column fills the viewport (less the gutters) until it reaches this width, which grows on large screens
+     (owner: "don't compress the ui so quickly. let it get to the edge of the viewport"). */
+  --zb-col-width: clamp(640px, 40vw + 128px, 760px);
   --zb-touch: 44px;
   --zb-joined-h: 48px;
   --zb-go-h: 56px;
@@ -63,9 +65,12 @@
   --zb-soft: #8d877e;
   --zb-accent: #eb6834;
   --zb-accent-text: #ff9a6e;
-  --zb-from: #eb6834;
-  --zb-from-ink: #ffffff;
-  --zb-from-muted: #ffe0d0;
+  /* The band is a dark surface lit from the left by an ember gradient (owner picked option D, 2026-10-30), not a slab of orange. */
+  --zb-from: #4a2214;
+  --zb-from-bg: linear-gradient(100deg, #8a3a1c 0%, #4a2214 45%, #231a16 100%);
+  --zb-from-end: #231a16;
+  --zb-from-ink: #fbefe7;
+  --zb-from-muted: #d6a58c;
   --zb-to: #1c1a18;
   --zb-to-ink: #f0ede8;
   --zb-pill: #121110;
@@ -184,7 +189,7 @@
 .zb-row-pad { padding-block: 10px; }
 
 /* Bands */
-.zb-band-from { background: var(--zb-from); color: var(--zb-from-ink); }
+.zb-band-from { background: var(--zb-from-bg, var(--zb-from)); color: var(--zb-from-ink); }
 .zb-band-to { background: var(--zb-to); color: var(--zb-to-ink); }
 .zb-band-from .zb-col { padding-block: 14px 26px; }
 .zb-band-to .zb-col { padding-block: 26px 14px; }
@@ -297,7 +302,7 @@
 .zb-pop-group { font-size: var(--zb-step-micro); letter-spacing: .08em; text-transform: uppercase; color: var(--zb-muted); padding: 8px 14px 4px; }
 .zb-scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, 0.55); }
 .zb-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 41; max-height: 86vh; overflow: auto; background: var(--zb-to); color: var(--zb-to-ink); border-top: 3px solid var(--zb-accent); }
-@media (min-width: 720px) { .zb-sheet { left: 50%; right: auto; width: var(--zb-col-width); transform: translateX(-50%); bottom: 10vh; border: 3px solid var(--zb-accent); } }
+@media (min-width: 720px) { .zb-sheet { left: 50%; right: auto; width: min(var(--zb-col-width), calc(100vw - 32px)); transform: translateX(-50%); bottom: 10vh; border: 3px solid var(--zb-accent); } }
 .zb-sheet-head { display: flex; align-items: center; padding-block: 14px 8px; }
 .zb-sheet-head h2 { font-size: var(--zb-step-1); margin: 0; }
 .zb-search-field { display: flex; align-items: center; gap: 8px; border: 1.5px solid var(--zb-ink); border-radius: 999px; padding: 8px 14px; }
@@ -352,10 +357,10 @@
    orange, 52 x 52, set off by a full-height dark rule; tabs are icons only. */
 .zb-sheet-bare { border-top: 0 !important; }
 @media (min-width: 720px) { .zb-sheet-bare { border: 3px solid var(--zb-from) !important; } }
-.zb-picker-search { display: flex; align-items: center; gap: 10px; height: 56px; padding-left: 16px; background: var(--zb-from); color: var(--zb-from-ink); }
+.zb-picker-search { display: flex; align-items: center; gap: 10px; height: 56px; padding-left: 16px; background: var(--zb-from-bg, var(--zb-from)); color: var(--zb-from-ink); }
 .zb-picker-search input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none; color: inherit; font: inherit; font-size: var(--zb-step-0); }
 .zb-picker-search input::placeholder { color: var(--zb-from-muted); }
-.zb .zb-picker-close { width: 56px; height: 56px; flex: none; display: grid; place-items: center; background: var(--zb-from); color: #ffffff; border-left: 3px solid #121110; }
+.zb .zb-picker-close { width: 56px; height: 56px; flex: none; display: grid; place-items: center; background: var(--zb-from-end, var(--zb-from)); color: #ffffff; border-left: 3px solid #121110; }
 .zb-tabs [role="tab"] svg, .zb-tabs [role="tab"] .zb-tok-icon { flex: none; }
 .zb-omni { position: relative; display: inline-flex; color: var(--zb-accent-text); cursor: pointer; }
 .zb .zb-link { display: inline-flex; align-items: center; gap: 4px; color: var(--zb-accent-text); font-weight: 600; text-decoration: underline; }
