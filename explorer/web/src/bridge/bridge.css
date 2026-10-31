@@ -237,7 +237,7 @@
 .zb-dest > .zb-dest-wallet, .zb-dest > .zb-dest-input { flex: 1; min-width: 0; margin-left: 0; justify-content: flex-end; }
 .zb-dest > .zb-dest-input { padding: 6px 12px; background: none; border: 0; color: inherit; font: inherit; font-size: var(--zb-step--1); text-align: right; outline: none; }
 .zb-dest > .zb-dest-input:focus-visible { box-shadow: inset 0 0 0 2px var(--zb-accent); }
-.zb-dest > .zb-dest-input[aria-invalid="true"] { color: var(--zb-bad, #c8102e); }
+.zb-dest > .zb-dest-input[aria-invalid="true"] { color: var(--zb-bad); }
 .zb-dest > .zb-dest-lock-wrap { position: relative; display: flex; padding: 0; margin-left: 0; border-left: 1.5px solid var(--zb-pill-edge); }
 .zb-dest-lock { display: inline-grid; place-items: center; min-width: 48px; min-height: 44px; padding: 0 12px 0 10px; background: none; border: 0; color: inherit; cursor: pointer; }
 .zb-dest-lock .zb-icon { width: 20px; height: 20px; }
