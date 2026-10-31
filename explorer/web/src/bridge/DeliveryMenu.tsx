@@ -14,7 +14,8 @@ export const deliverySummary = (form: BridgeQuery): string => {
   if (tip.mode === "fixed") parts.push("fixed tip");
   else if (tip.mode === "gas-multiplier") parts.push("gas-based tip");
   else if (tip.mode === "none") parts.push("no tip");
-  else if (speed === undefined) parts.push(`tip ${tip.percentText}%`);
+  // A share set in the tip drawer is the whole fee's (tip and cost together), shown short.
+  else if (speed === undefined) parts.push(tip.percentText === undefined || !Number.isFinite(Number(tip.percentText)) ? "custom fee" : `fee ${Number(Number(tip.percentText).toPrecision(3))}%`);
   else if (speed.key !== "standard") parts.push(`${speed.label} · tip ${speed.percent}%`);
   if (form.gasLimit !== undefined) parts.push(`gas ${form.gasLimit}`);
   if (tip.routerText !== undefined) parts.push("custom router");

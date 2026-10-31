@@ -216,6 +216,14 @@
 .zb-fees { display: flex; gap: 18px; flex-wrap: wrap; font-size: var(--zb-step-fee); color: var(--zb-soft); margin-bottom: 6px; }
 .zb-fee { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 9px 2px 5px; position: relative; transition: background-color 160ms cubic-bezier(.2,.7,.2,1), color 160ms cubic-bezier(.2,.7,.2,1); }
 .zb-fee[aria-expanded="true"] { background: var(--zb-raised); color: var(--zb-raised-ink); }
+/* The gas can and its bars are the gas level control: a tap moves up a level. */
+/* The fee line's tooltips hang from the row, not the item, so one opened from the gas can or the clock stays on screen. */
+.zb-fees { position: relative; }
+.zb-fees .zb-fee { position: static; }
+.zb-fees .zb-tooltip { width: min(280px, 100%); }
+.zb-gas { padding-right: 8px; }
+.zb-gas:hover { color: var(--zb-ink); }
+.zb-gas svg[data-level] { width: 14px; height: 17px; }
 .zb-tooltip { position: absolute; z-index: 20; left: 0; top: calc(100% + 8px); width: 280px; padding: 9px 11px; font-size: var(--zb-step--1); line-height: 1.45; font-weight: 400; text-align: left; background: var(--zb-raised); color: var(--zb-raised-ink); border: 1.5px solid var(--zb-raised-edge); white-space: normal; }
 /* The fee drawer (owner: "the drawer animation is fine"; mockup accordion-motion.html). The height follows the content
    through grid rows 0fr → 1fr, so nothing is measured. Open 200 ms, close 120 ms; no overshoot, no bounce. */
@@ -228,10 +236,21 @@
 .zb-drawer-body::before { content: ""; position: absolute; left: 0; top: 0; width: 100%; height: 3px; background: var(--zb-accent); transform: scaleX(0); transform-origin: var(--zb-from, 0) 50%; transition: transform 120ms ease-in; }
 .zb-drawer.zb-open .zb-drawer-body::before { transform: scaleX(1); transition: transform 220ms ease-out; }
 @media (prefers-reduced-motion: reduce) { .zb-drawer, .zb-drawer-body, .zb-drawer-body::before, .zb-fee { transition: none !important; } }
+/* Once open, the drawer stops clipping so a help tooltip near its bottom shows whole; closing clips again at once. */
+.zb-drawer.zb-open .zb-drawer-inner { animation: zb-unclip 0s linear 220ms forwards; }
+@keyframes zb-unclip { to { overflow: visible; } }
 .zb-drawer-head { display: flex; align-items: baseline; gap: 6px; }
 .zb-slider { margin-top: 12px; }
-.zb-slider-top { display: flex; font-size: var(--zb-step--1); color: var(--zb-muted); }
-.zb-slider-top b { margin-left: auto; color: var(--zb-ink); font-weight: 600; }
+/* A slider's label row: the label and its ? on the left, the value (and a save button) on the right, all centred on
+   one line. The row places the help tooltip, so it opens under the whole row. */
+.zb-slider-top { position: relative; display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-slider-top .zb-tooltip { width: min(280px, 100%); top: calc(100% + 4px); }
+.zb-label { display: inline-flex; align-items: center; gap: 3px; }
+.zb-slider-value { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; text-align: right; }
+.zb-slider-value b { color: var(--zb-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.zb-slider-mode { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 2px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
+.zb-slider-mode .zb-link { font-size: inherit; }
+.zb-slider-note { margin: 10px 0 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-range { position: relative; height: 24px; margin-top: 4px; }
 .zb-range input { position: absolute; inset: 0; width: 100%; opacity: 0; margin: 0; cursor: pointer; }
 .zb-range-bar { position: absolute; left: 0; right: 0; top: 10px; height: 4px; border-radius: 999px; background: var(--zb-track-ahead); }
@@ -240,8 +259,12 @@
 .zb-range-tick { position: absolute; top: 5px; width: 2px; height: 14px; background: var(--zb-ink); pointer-events: none; }
 .zb-ticks { position: relative; min-height: 30px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
 .zb-ticks span { position: absolute; transform: translateX(-50%); text-align: center; line-height: 1.2; white-space: nowrap; }
-.zb-q { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; border: 1px solid var(--zb-muted); font-size: var(--zb-step-micro); color: var(--zb-muted); position: relative; }
-.zb-save { width: 24px; height: 24px; border-radius: 4px; color: var(--zb-ink); cursor: pointer; }
+/* The ? help button, one size everywhere: an 18 px ring drawn inside a 24 px hit area, pulled into the line by negative
+   block margins so it never makes its row taller, centred with its label. */
+.zb .zb-q { position: relative; flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; margin-block: -4px; vertical-align: middle; color: var(--zb-muted); font-size: var(--zb-step-micro); font-weight: 700; line-height: 1; cursor: help; }
+.zb .zb-q::before { content: ""; position: absolute; inset: 3px; border: 1.5px solid currentColor; border-radius: 50%; }
+.zb .zb-q:hover, .zb .zb-q[aria-expanded="true"] { color: var(--zb-ink); }
+.zb .zb-save { display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; border: 1px solid var(--zb-pill-edge); border-radius: 4px; color: var(--zb-ink); cursor: pointer; }
 .zb-save .zb-icon { width: 14px; height: 14px; }
 .zb-save:disabled { opacity: 0.45; cursor: default; }
 
@@ -284,7 +307,8 @@
 .zb-kv .zb-k { color: var(--zb-muted); }
 .zb-kv-sub { padding: 2px 0 2px 14px; border-top: 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-breakdown { list-style: none; margin: 0 0 10px; padding: 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
-.zb-breakdown li { display: flex; justify-content: space-between; padding: 2px 0; font-variant-numeric: tabular-nums; }
+.zb-breakdown li { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; font-variant-numeric: tabular-nums; }
+.zb-breakdown li[data-total] { margin-top: 3px; padding-top: 5px; border-top: 1px solid var(--zb-line); color: var(--zb-ink); font-weight: 600; }
 .zb-warnbox { border: 1.5px solid var(--zb-accent); color: var(--zb-warn); padding: 8px 12px; font-size: var(--zb-step--1); margin: 10px 0; }
 
 /* Pulse and steps */
