@@ -338,6 +338,11 @@ and the time left while in flight or the age once delivered. A row links to the 
   "recommended" tick, an exact input next to it, and a "Reset to recommended" button; the user controls everything
   (tip share, fixed amount, gas multiplier, price ceiling, gas level, gas limit, both caps), nothing is locked to a
   preset.
+- **How the gas setting is explained (owner):** never as "a price multiplier". The chosen level is an **anchor
+  point**: today's price, around which the real price may drift over the next ~15 minutes, lower (left) or higher
+  (right). The control shows that range on a track with the anchor marked, e.g. "Anchored at today's gas · could
+  land between $0.18 and $0.31 over 15 min". The caps are shown the same way, as ranges: the fee's possible span
+  against the automatic cap and the hard cap.
 - **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
   of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
   0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
@@ -563,3 +568,5 @@ don't call it "tip too high", call it "high tip %""
 88. "also, i do not like the dismissiveness? the assumptiveness of "standard delivery" just tell the user what is happening"
 89. "also, it looks like you are not giving the user control over the percentages, over the fixed amount, over the gas multiplier"
 90. "we can present a slider to them with a recommended tick and a reset to receommended button but they need to be able to control everything"
+91. "yes, go ahead with docs.zkb.fi. when controling the gas setting, the price multiplier as we understand it should not be explained to the user like that. we should tell them that this is an anchor point, but the price could end up being (left) lower over the course of 15 minutes, or higher (right) over the course of 15 mins"
+92. "and then we can also present their caps as ranges"
