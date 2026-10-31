@@ -4,7 +4,7 @@
  * numbers, the light clients, the latest transfers and the services. Each kind has its own page (see ExplorePages).
  */
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import type { FeedItem, PairConfig } from "@terminal/model/types";
 import { formatLocation, formatRoute, NO_OVERLAY, type ExplorePage, type Route } from "../app/route";
@@ -17,8 +17,13 @@ import { amountText, chainsFor } from "../bridge/bridge-model";
 import { Chevron, SearchIcon } from "../bridge/icons";
 import { Num } from "../bridge/Num";
 import { TokenIcon } from "../bridge/TokenIcon";
+import { priceNumber } from "../bridge/price-oracle";
+import { usePrices } from "../bridge/use-prices";
 import { durationText, exploreNumbers, lightClientCards, statusWord } from "./explore-model";
 import { ExplorePageView } from "./ExplorePages";
+import { InFlightOrbits } from "./InFlightOrbits";
+import { dayStartOf, orbitTracks } from "./orbit-model";
+import { orbitSample } from "./orbit-sample";
 import { Marked, RouteIcons, XGroup, XRow } from "./parts";
 import { recognise, searchExplore } from "./search";
 import "./explore.css";
@@ -111,6 +116,7 @@ const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
         </div>
       ) : (
         <>
+          <InFlight data={data} />
           <Browse data={data} />
           <RingMap feed={data.feed} pair={data.pair} />
           <Numbers feed={data.feed} now={data.now} />
@@ -124,6 +130,45 @@ const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
 };
 
 type ExploreData = ReturnType<typeof useExploreData>;
+
+/**
+ * The transfers in flight, per status, on the Explore polling (useFeed's interval), and those delivered today; with
+ * the sample data, a steady stream of sample transfers is added so the orbits have planets.
+ */
+const InFlight = ({ data }: { readonly data: ExploreData }) => {
+  const { pair, tokens, now } = data;
+  const { configuration } = useServices();
+  const dayStart = dayStartOf(now);
+  const sent = useFeed(pair.id, { status: "sent" }, 200);
+  const waiting = useFeed(pair.id, { status: "waiting_for_finality" }, 200);
+  const covered = useFeed(pair.id, { status: "covered" }, 200);
+  const delivered = useFeed(pair.id, { status: "delivered", sentAtOrAfter: dayStart - 86_400 }, 200);
+  const samples = useQuery({
+    queryKey: ["explore", "orbit-sample", pair.id, tokens.length],
+    queryFn: () => orbitSample(pair, tokens, Date.now() / 1000, now),
+    enabled: configuration.dataMode === "fixture",
+    refetchInterval: 15_000,
+  });
+  const prices = usePrices(tokens).data;
+  const tracks = useMemo(
+    () =>
+      orbitTracks({
+        pair,
+        inFlight: [...(sent.data?.items ?? []), ...(waiting.data?.items ?? []), ...(covered.data?.items ?? []), ...(samples.data?.inFlight ?? [])],
+        delivered: [...(delivered.data?.items ?? []), ...(samples.data?.delivered ?? [])],
+        now,
+        dayStart,
+        priceOf: (token) => {
+          const quote = prices?.get(`${token.side}:${token.address}`) ?? null;
+          return quote === null ? null : priceNumber(quote);
+        },
+      }),
+    // Rebuilt when an answer changes, not on every render (`now` moves each render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pair, sent.data, waiting.data, covered.data, delivered.data, samples.data, prices, dayStart],
+  );
+  return <InFlightOrbits tracks={tracks} now={now} />;
+};
 
 const Browse = ({ data }: { readonly data: ExploreData }) => {
   const { pair, feed, proofs, tokens, gates, costs, counts } = data;

@@ -118,3 +118,39 @@
 .zb-xkg > .zb-xusd { grid-column: 2 / 4; font-size: var(--zb-step--1); }
 .zb-xamt-sm { display: inline-flex; align-items: center; gap: 5px; }
 a.zb-kv.zb-xkv { color: inherit; text-decoration: none; }
+/* In-flight orbits (mockup inflight-orbits.html): a track per direction, each transfer a planet circling the step it
+   waits at. Planets move in orbit-engine.ts; colours are the planet roles of bridge.css. */
+.zb-orb { margin-top: 6px; }
+.zb-orb-head { margin: 12px 0 4px; font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-orb-head b { color: var(--zb-ink); font-size: var(--zb-step-0); }
+.zb-orb-box { position: relative; }
+.zb-orb-svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: manipulation; }
+.zb-orb-track { stroke: var(--zb-track-ahead); stroke-width: 3; }
+.zb-orb-stop { fill: var(--zb-stop-ahead); }
+.zb-orb-stop-first { fill: var(--zb-accent); }
+.zb-orb-exit { fill: var(--zb-accent); opacity: .35; }
+.zb-orb-path { fill: none; stroke: var(--zb-line); stroke-width: 1.2; }
+.zb-orb-more { fill: var(--zb-muted); font-size: 13px; font-weight: 600; }
+.zb-orb-planet { cursor: pointer; outline: none; }
+.zb-orb-halo { fill: var(--zb-page); }
+.zb-orb-t1 { fill: var(--zb-planet-1); }
+.zb-orb-t2 { fill: var(--zb-planet-2); }
+.zb-orb-t3 { fill: var(--zb-planet-3); }
+.zb-orb-t4 { fill: var(--zb-planet-4); }
+.zb-orb-core { fill: var(--zb-planet-core); }
+.zb-orb-ring { fill: none; stroke: var(--zb-planet-ring); stroke-width: 1.4; }
+.zb-orb-hot .zb-orb-body { fill: var(--zb-accent); }
+.zb-orb-planet:focus-visible .zb-orb-halo { stroke: var(--zb-accent); stroke-width: 2.5; }
+.zb-orb-labels { position: relative; height: 3.2em; font-size: var(--zb-step-micro); color: var(--zb-muted); }
+.zb-orb-labels span { position: absolute; top: 0; transform: translateX(-50%); text-align: center; white-space: nowrap; }
+.zb-orb-labels b { display: block; color: var(--zb-ink); font-size: var(--zb-step--1); }
+.zb-orb-empty { margin: 0 0 6px; }
+.zb-orb-toggle { font: inherit; font-weight: 600; color: var(--zb-ink); background: none; border: 1.5px solid var(--zb-pill-edge); border-radius: 999px; padding: 2px 12px; cursor: pointer; }
+.zb-orb-toggle[aria-pressed="true"] { border-color: var(--zb-accent); }
+.zb-orb-list { list-style: none; margin: 0; padding: 0; }
+.zb-orb-list a { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--zb-line); color: inherit; text-decoration: none; font-size: var(--zb-step--1); }
+.zb-orb-tip { position: fixed; z-index: 30; pointer-events: none; min-width: 210px; max-width: min(320px, calc(100vw - 16px)); padding: 9px 11px; background: var(--zb-raised); color: var(--zb-raised-ink); border: 1.5px solid var(--zb-raised-edge); font: var(--zb-step--1)/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.zb-orb-tip-amt { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.zb-orb-tip-amt b { font-size: var(--zb-step-0); }
+.zb-orb-tip-muted { color: var(--zb-muted); }
+.zb-orb-tip-eta { color: var(--zb-accent-text); }
