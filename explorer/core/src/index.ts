@@ -1,0 +1,176 @@
+/**
+ * @zkb/core: the deterministic rules of the zkb.fi bridge screen. Pure functions over integers (bigint): no I/O,
+ * no clock, no randomness. See README.md for the rules and the test vectors.
+ */
+
+// Address helpers
+export {
+  normalizeAddress,
+  sameAddress,
+  ZERO_ADDRESS,
+} from "./address.js";
+
+// The default tip choice
+export {
+  type DefaultTipChoiceInput,
+  type DefaultTipPriceSource,
+  type DefaultTipChoice,
+  defaultTipChoiceOf,
+} from "./default-tip.js";
+
+// Voluntary delivery tips: suggestions
+export {
+  type TokenPrice,
+  weiToTokenUnitsCeiling,
+  tokenUnitsToWeiFloor,
+  type DeliveryCostInput,
+  type DeliveryCostBreakdown,
+  deliveryCostBreakdown,
+  deliveryCostWei,
+  type SuggestPercentageInput,
+  suggestPercentage,
+  suggestFixed,
+  type SenderPrice,
+  senderPriceOfToken,
+  DEFAULT_TIP_PERCENTAGE_MULTIPLIER,
+  defaultTip,
+  type SuggestGasMultiplierInput,
+  gasMultiplierOf,
+  suggestGasMultiplier,
+} from "./delivery-fee.js";
+
+// Delivery terms: settings bits, FeeDirector encoding, fee formulas
+export {
+  FIXED_FEE,
+  UNWRAP,
+  EXCLUDE_PRIORITY,
+  MULTIPLIER_OF_TOTAL,
+  TOKEN_GAS_OVERHEAD,
+  NATIVE_GAS_OVERHEAD,
+  type SettingFlagName,
+  SETTING_FLAG_VALUES,
+  KNOWN_SETTING_BITS,
+  UINT256_MAXIMUM,
+  CALL_GAS_RESERVE,
+  LEGACY_RECEIVER_BYTES,
+  FEE_DIRECTOR_BYTES,
+  DELIVERY_CALL_TARGET_BYTES,
+  DELIVERY_CALL_OFFSET_BYTES,
+  type DeliveryCall,
+  type FeeDirector,
+  type FeeMode,
+  type PayoutKind,
+  type GasPriceBasis,
+  type SettingsChoice,
+  settingsOf,
+  feeModeOf,
+  settingFlagsOf,
+  requestedPayoutOf,
+  gasPriceBasisOf,
+  gasOverheadOf,
+  type ProtectedAddress,
+  type BaseFeeSupport,
+  type FeeTermsContext,
+  type FeeTermsInput,
+  FeeTermsError,
+  type ProtectedChain,
+  protectedAddressesOf,
+  isKnownDeliveryRouter,
+  assertValidFeeTerms,
+  encodeFeeDirector,
+  decodeFeeDirector,
+  decodeDeliveryCall,
+  type DeliveryTerms,
+  readDeliveryTerms,
+  gasPriceBasisFor,
+  payoutOf,
+  ceilingDivide,
+  type ExpectedFeeInput,
+  type FeeSplit,
+  expectedFee,
+  maximumFee,
+} from "./delivery-terms.js";
+
+// Fee rules of the bridge screen
+export {
+  WAD,
+  PERCENT_WAD,
+  USD,
+  PROOF_COST_USD,
+  COST_MARGIN,
+  DEFAULT_CAP_WAD,
+  DEFAULT_HARD_CAP_WAD,
+  HARD_CAP_STEP_WAD,
+  NO_PRICE_SHARE_WAD,
+  type GasLevel,
+  GAS_LEVELS,
+  ceilingWeiOf,
+  gasLevelOfCeiling,
+  usdOf,
+  type CostInput,
+  deliveryGasUsd,
+  totalCostUsd,
+  defaultCurveShareWad,
+  type FeeBinding,
+  type DefaultFee,
+  defaultFee,
+  type Fraction,
+  highCapLine,
+  highCap,
+  smallTransfer,
+  lowFee,
+  ceilingCostUsd,
+  capWarns,
+  type FeeWarningsInput,
+  type FeeWarnings,
+  feeWarnings,
+  type GasRange,
+  gasRange,
+  feeSpanUsd,
+  type HardCapCheck,
+  hardCapCheck,
+  clampAutoCap,
+  shareWadOfPercentText,
+} from "./fee-rules.js";
+
+// Deterministic fixed-point ln and exp
+export {
+  FIXED_SCALE,
+  LN2_SCALED,
+  lnScaled,
+  expNegScaled,
+} from "./fixed-point.js";
+
+// Number formatting and parsing
+export {
+  RATE_SCALE,
+  type FormatAmountOptions,
+  formatTokenAmount,
+  parseTokenAmount,
+  formatRate,
+  formatDuration,
+} from "./format.js";
+
+// Pure PulseX price maths
+export {
+  PULSEX_FACTORIES,
+  WPLS,
+  STABLES,
+  OMNIBRIDGE_PULSECHAIN,
+  WETH_ETHEREUM,
+  MINIMUM_DEPTH_USD,
+  TESTNETS,
+  PULSECHAIN_COPY_OF,
+  type Reserves,
+  type PriceQuote,
+  type Pool,
+  type WeightedEntry,
+  poolOf,
+  weightedMedianEntry,
+  weightedMedian,
+  stablePoolEntry,
+  plsQuoteOf,
+  tokenQuoteOf,
+  type PricedToken,
+  pricingAddress,
+} from "./pulsex-pricing.js";

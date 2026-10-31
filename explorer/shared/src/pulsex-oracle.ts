@@ -12,36 +12,30 @@
  * broken by the lower pool address, so input order never matters.
  */
 import type { Address } from "viem";
+import {
+  MINIMUM_DEPTH_USD,
+  OMNIBRIDGE_PULSECHAIN,
+  PULSECHAIN_COPY_OF,
+  PULSEX_FACTORIES,
+  STABLES,
+  TESTNETS,
+  WETH_ETHEREUM,
+  WPLS,
+  plsQuoteOf,
+  poolOf,
+  pricingAddress,
+  stablePoolEntry,
+  tokenQuoteOf,
+  weightedMedian,
+  type Pool,
+  type PriceQuote,
+  type PricedToken,
+  type Reserves,
+} from "@zkb/core";
 
-export const PULSEX_FACTORIES: readonly Address[] = ["0x1715a3E4A142d8b698131108995174F37aEBA10D", "0x29eA7545DEf87022BAdc76323F373EA1e707C523"];
-export const WPLS: Address = "0xA1077a294dDE1B09bB078844df40758a5D0f9a27";
-export const STABLES: readonly { readonly address: Address; readonly decimals: number }[] = [
-  { address: "0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07", decimals: 6 }, // USDC from Ethereum
-  { address: "0xefD766cCb38EaF1dfd701853BFCe31359239F305", decimals: 18 }, // DAI from Ethereum
-  { address: "0x0Cb6F5a34ad42ec934882A05265A7d5F59b51A2f", decimals: 6 }, // USDT from Ethereum
-];
-/** The current Omnibridge mediator on PulseChain (docs/pulsechain-amb-review.md): `bridgedTokenAddress(ethereumToken)`. */
-export const OMNIBRIDGE_PULSECHAIN: Address = "0x4fD0aaa7506f3d9cB8274bdB946Ec42A1b8751Ef";
-/** WETH on Ethereum: ETH's price is its PulseChain copy's. */
-export const WETH_ETHEREUM: Address = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2";
-/** The smallest WPLS-side depth, in dollars, a pool needs before its price is shown. */
-export const MINIMUM_DEPTH_USD = 10_000;
-/** Chains that show no prices. */
-export const TESTNETS: ReadonlySet<number> = new Set([11155111, 943]);
-
-/**
- * Known PulseChain copies of Ethereum tokens, used when a reader cannot ask the Omnibridge. A zkb.fi token whose origin
- * is on Ethereum maps through this (zkbWETH → WETH from Ethereum).
- */
-export const PULSECHAIN_COPY_OF: Readonly<Record<string, Address>> = {
-  "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "0x02DcdD04e3F455D838cd1249292C58f3B79e3C3C", // WETH
-  "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": "0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07", // USDC
-  "0x6b175474e89094c44da98b954eedeac495271d0f": "0xefD766cCb38EaF1dfd701853BFCe31359239F305", // DAI
-  "0xdac17f958d2ee523a2206206994597c13d831ec7": "0x0Cb6F5a34ad42ec934882A05265A7d5F59b51A2f", // USDT
-};
-
-/** A pool's reserves, with which token is token0. */
-export type Reserves = { readonly token0: Address; readonly reserve0: bigint; readonly reserve1: bigint };
+// The constants, the types and the pure price maths moved to @zkb/core; they keep their old path here.
+export { MINIMUM_DEPTH_USD, OMNIBRIDGE_PULSECHAIN, PULSECHAIN_COPY_OF, PULSEX_FACTORIES, STABLES, TESTNETS, WETH_ETHEREUM, WPLS, pricingAddress, weightedMedian };
+export type { PriceQuote, Reserves };
 
 /**
  * Reads PulseChain at one named block: the pair address of two tokens on a factory (null when none), its reserves, and
@@ -54,15 +48,7 @@ export type PoolReader = {
   readonly bridgedCopyOf?: (ethereumToken: Address) => Promise<Address | null>;
 };
 
-/** A price: USD per whole token × 1e18, the block it was read at, and the pool it came from (null when derived). */
-export type PriceQuote = { readonly usdE18: bigint; readonly block: bigint; readonly pool: Address | null };
-
-const E18 = 10n ** 18n;
 const lower = (address: Address): string => address.toLowerCase();
-const byAddress = (a: Address, b: Address): number => (lower(a) < lower(b) ? -1 : lower(a) > lower(b) ? 1 : 0);
-
-/** A pool of a token against WPLS: its address and both reserves in base units. */
-type Pool = { readonly pair: Address; readonly token: bigint; readonly wpls: bigint };
 
 /** The pools of a token against WPLS on both factories. */
 const poolsOf = async (reader: PoolReader, token: Address): Promise<Pool[]> => {
@@ -72,51 +58,21 @@ const poolsOf = async (reader: PoolReader, token: Address): Promise<Pool[]> => {
       if (pair === null) return null;
       const reserves = await reader.reservesOf(pair);
       if (reserves === null) return null;
-      const tokenIs0 = lower(reserves.token0) === lower(token);
-      return { pair, token: tokenIs0 ? reserves.reserve0 : reserves.reserve1, wpls: tokenIs0 ? reserves.reserve1 : reserves.reserve0 };
+      return poolOf(pair, token, reserves);
     }),
   );
-  return found.filter((pool): pool is Pool => pool !== null && pool.token > 0n && pool.wpls > 0n);
-};
-
-/**
- * The weighted median of values: sorted by value, then by key (pool address), it is the first value at which the running
- * weight reaches half the total (so with weight split evenly, the lower value).
- *
- * @param entries Each value with its weight and key.
- */
-export const weightedMedian = <T extends { readonly value: bigint; readonly weight: bigint; readonly key: Address }>(entries: readonly T[]): T["value"] | null => weightedMedianEntry(entries)?.value ?? null;
-
-const weightedMedianEntry = <T extends { readonly value: bigint; readonly weight: bigint; readonly key: Address }>(entries: readonly T[]): T | null => {
-  const sorted = entries.filter((entry) => entry.weight > 0n).sort((a, b) => (a.value < b.value ? -1 : a.value > b.value ? 1 : byAddress(a.key, b.key)));
-  const total = sorted.reduce((sum, entry) => sum + entry.weight, 0n);
-  let running = 0n;
-  for (const entry of sorted) {
-    running += entry.weight;
-    if (2n * running >= total) return entry;
-  }
-  return null;
+  return found.filter((pool): pool is Pool => pool !== null);
 };
 
 /**
  * PLS in dollars at the reader's block: the median of each stable pool's price, weighted by its stable side (in whole
  * dollars, at 18 decimals), or null.
  */
-export const plsUsd = async (reader: PoolReader): Promise<PriceQuote | null> => {
-  const entries = (
-    await Promise.all(
-      STABLES.map(async (stable) =>
-        (await poolsOf(reader, stable.address)).map((pool) => ({
-          value: (pool.token * E18 * E18) / (10n ** BigInt(stable.decimals) * pool.wpls),
-          weight: pool.token * 10n ** BigInt(18 - stable.decimals),
-          key: pool.pair,
-        })),
-      ),
-    )
-  ).flat();
-  const median = weightedMedianEntry(entries);
-  return median === null ? null : { usdE18: median.value, block: reader.block, pool: median.key };
-};
+export const plsUsd = async (reader: PoolReader): Promise<PriceQuote | null> =>
+  plsQuoteOf(
+    (await Promise.all(STABLES.map(async (stable) => (await poolsOf(reader, stable.address)).map((pool) => stablePoolEntry(pool, stable.decimals))))).flat(),
+    reader.block,
+  );
 
 /**
  * A PulseChain token's price: its deepest WPLS pool (ties to the lower pool address) times PLS/USD, when the WPLS side is
@@ -127,35 +83,18 @@ export const plsUsd = async (reader: PoolReader): Promise<PriceQuote | null> => 
 export const tokenUsd = async (reader: PoolReader, token: Address, decimals: number, pls: PriceQuote): Promise<PriceQuote | null> => {
   if (pls.block !== reader.block) throw new Error(`the PLS price is from block ${pls.block}, the reader reads block ${reader.block}`);
   if (lower(token) === lower(WPLS)) return pls;
-  const deepest = (await poolsOf(reader, token)).sort((a, b) => (a.wpls > b.wpls ? -1 : a.wpls < b.wpls ? 1 : byAddress(a.pair, b.pair)))[0];
-  if (deepest === undefined || deepest.wpls * pls.usdE18 < BigInt(MINIMUM_DEPTH_USD) * E18 * E18) return null;
-  return { usdE18: (deepest.wpls * 10n ** BigInt(decimals) * pls.usdE18) / (deepest.token * E18), block: reader.block, pool: deepest.pair };
+  return tokenQuoteOf(await poolsOf(reader, token), decimals, pls, reader.block);
 };
 
 /** A price as a number, for display only. */
 export const priceNumber = (quote: PriceQuote): number => Number(quote.usdE18) / 1e18;
 
 /**
- * The PulseChain token whose pools price a token, from the known table: itself on PulseChain; on Ethereum, its known
- * Omnibridge copy; a zkb.fi token takes its origin's. Null on a testnet or when there is no known copy. Prefer
- * {@link resolvePricingAddress}, which asks the Omnibridge at the reader's block.
- *
- * @param token The token's chain, address, and origin (chain and address) when zkb.fi minted it.
- */
-export const pricingAddress = (token: { readonly chainId: number; readonly address: Address; readonly origin?: { readonly chainId: number; readonly address: Address } | null }): Address | null => {
-  const subject = token.origin ?? { chainId: token.chainId, address: token.address };
-  if (TESTNETS.has(token.chainId) || TESTNETS.has(subject.chainId)) return null;
-  if (subject.chainId === 369) return subject.address;
-  if (subject.chainId === 1) return PULSECHAIN_COPY_OF[lower(subject.address)] ?? null;
-  return null;
-};
-
-/**
  * The PulseChain token whose pools price a token, reversing an Ethereum token out through the current Omnibridge
  * (`bridgedTokenAddress` at the reader's block); the known table when the reader cannot ask or the bridge has no copy.
  */
 export const resolvePricingAddress = async (
-  token: { readonly chainId: number; readonly address: Address; readonly origin?: { readonly chainId: number; readonly address: Address } | null },
+  token: PricedToken,
   reader: PoolReader,
 ): Promise<Address | null> => {
   const subject = token.origin ?? { chainId: token.chainId, address: token.address };

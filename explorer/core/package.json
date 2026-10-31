@@ -1,0 +1,42 @@
+{
+  "name": "@zkb/core",
+  "version": "0.0.0",
+  "description": "The deterministic rules of the zkb.fi bridge screen: fees, tips, fixed-point maths, delivery terms and PulseX price maths. Pure functions, no I/O.",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./vectors": "./vectors/fee-rules-vectors.json"
+  },
+  "files": [
+    "dist",
+    "vectors/fee-rules-vectors.json",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "viem": "2.56.9"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

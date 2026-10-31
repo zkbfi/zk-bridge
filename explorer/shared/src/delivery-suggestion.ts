@@ -10,7 +10,7 @@ import {
   type DeliveryCostBreakdown,
   type SenderPrice,
 } from "./delivery-fee.js";
-import { expectedFee, feeModeOf, maximumFee, type BaseFeeSupport, type FeeDirector, type FeeMode, type GasPriceBasis, type PayoutKind } from "./delivery-terms.js";
+import { expectedFee, feeModeOf, gasPriceBasisFor, maximumFee, type BaseFeeSupport, type FeeDirector, type FeeMode, type GasPriceBasis, type PayoutKind } from "./delivery-terms.js";
 import { formatRate, formatTokenAmount, RATE_SCALE } from "./format.js";
 import { minimumGasLimitOf, requiredDeliveryGas, type MessageKind } from "./gas-limit.js";
 
@@ -261,14 +261,6 @@ export const DEFAULT_GAS_MARGIN = RATE_SCALE;
  */
 export const SUGGESTED_TIP_RANGE = { low: RATE_SCALE / 2n, high: (RATE_SCALE * 3n) / 2n } as const;
 
-/**
- * The gas price basis that the default gas based tip uses on a destination chain. A chain that reports a base fee gets
- * `base-fee-only` (the router flag `EXCLUDE_PRIORITY`). A chain with no base fee (`block.basefee` is 0) gets
- * `transaction`, the whole gas price, because the base fee flag would make the tip zero.
- *
- * @param support Whether the destination chain reports a base fee. Default: `reported`.
- */
-export const gasPriceBasisFor = (support: BaseFeeSupport | undefined): GasPriceBasis => (support === "none" ? "transaction" : "base-fee-only");
 
 const attempt = <Value>(build: () => Value): { readonly value: Value } | { readonly reason: string } => {
   try {
@@ -401,3 +393,6 @@ export const buildFeeSuggestions = (input: BuildFeeSuggestionsInput): FeeSuggest
     tipRange,
   };
 };
+
+// The gas price basis rule lives in core (`gasPriceBasisFor`); this file keeps its old path for it.
+export { gasPriceBasisFor };
