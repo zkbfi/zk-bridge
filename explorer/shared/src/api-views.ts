@@ -99,14 +99,27 @@ export type HeadUpdateRow = {
   readonly poster: Hex;
 };
 
-/** The newest stored head of the light client on a chain. */
+/**
+ * The stored head of the light client on a chain: the newest update, or the checkpoint it was deployed with when no
+ * update came yet. The deployment checkpoint has no execution block: the contract stores none for it.
+ */
 export type LightClientHeadRow = {
   readonly chainId: number;
   readonly slot: bigint;
   readonly headerRoot: Hex;
-  readonly executionBlockNumber: bigint;
-  readonly updatedTimestamp: bigint;
+  /** The execution block of the tracked chain that the head holds. Null while the head is the deployment checkpoint. */
+  readonly executionBlockNumber: bigint | null;
+  /** When the newest update was stored. Null while no update came. */
+  readonly updatedTimestamp: bigint | null;
   readonly updateCount: number;
+  /** The head the light client was deployed with (`head()` before any update), or null when it was not read. */
+  readonly initialSlot: bigint | null;
+  /** The block of the light client's chain at which the indexer read that first head. */
+  readonly initialHeadBlockNumber: bigint | null;
+  /** `genesisTime()` of the light client: the tracked beacon chain's genesis, in seconds. */
+  readonly genesisTime: bigint | null;
+  /** `secondsPerSlot()` of the light client. */
+  readonly secondsPerSlot: bigint | null;
 };
 
 /** The newest block that was seen on a chain. */
@@ -293,8 +306,11 @@ export const lastHeadUpdateView = (chainId: number, row: HeadUpdateRow | undefin
         },
       };
 
+/** The fields of a head that only the indexer knows. The RPC data source leaves them out. */
+type InitialHeadFields = "initialSlot" | "initialHeadBlockNumber" | "genesisTime" | "secondsPerSlot";
+
 /** The stored head of a light client. The RPC data source does not always know when the head was stored. */
-export type HeadViewRow = Omit<LightClientHeadRow, "updatedTimestamp"> & { readonly updatedTimestamp: bigint | null };
+export type HeadViewRow = Omit<LightClientHeadRow, InitialHeadFields> & Partial<Pick<LightClientHeadRow, InitialHeadFields>>;
 
 /** What the light client view of one side needs. The light client on `side` tracks the beacon chain of `tracked`. */
 export type HeadViewInput = {
@@ -312,18 +328,33 @@ export type HeadViewInput = {
 /** The light client view of one side, as `GET /api/heads` shows it. */
 export const headView = (input: HeadViewInput) => {
   const { side, tracked, head, finalizedSlot, headBlockTimestamp, trackedTip, ownTip } = input;
+  // The start time of the head's slot. A post-merge execution block carries exactly that timestamp, so it stands in
+  // for the block time of the deployment checkpoint, which has no execution block.
+  const slotTimestamp =
+    head === undefined || head.genesisTime == null || head.secondsPerSlot == null
+      ? null
+      : Number(head.genesisTime + head.slot * head.secondsPerSlot);
+  const headTimestamp = headBlockTimestamp ?? slotTimestamp;
   const lagSeconds =
-    headBlockTimestamp === null || trackedTip === undefined ? null : Math.max(0, Number(trackedTip.timestamp) - headBlockTimestamp);
+    headTimestamp === null || trackedTip === undefined ? null : Math.max(0, Number(trackedTip.timestamp) - headTimestamp);
   return {
     chainId: side.chainId,
     name: side.name,
     lightClient: side.contracts.lightClient,
     trackedChainId: tracked.chainId,
+    /** The head the contract stores now: the newest update, or the checkpoint it was deployed with. */
     storedHeadSlot: numberOf(head?.slot),
+    /** `update` once an update stored the head, `deployment` while it is the checkpoint of the deployment. */
+    storedHeadSource: head === undefined ? null : head.updateCount > 0 || head.executionBlockNumber !== null ? ("update" as const) : ("deployment" as const),
     storedHeadExecutionBlock: numberOf(head?.executionBlockNumber),
     storedHeadExecutionTimestamp: headBlockTimestamp,
+    storedHeadSlotTimestamp: slotTimestamp,
     lastUpdateTimestamp: numberOf(head?.updatedTimestamp),
     updateCount: head?.updateCount ?? 0,
+    /** True when the light client holds a head at all. */
+    initialized: head !== undefined,
+    initializedAtSlot: numberOf(head?.initialSlot),
+    initializedAtBlock: numberOf(head?.initialHeadBlockNumber),
     finalizedSlot,
     lagSlots: finalizedSlot === null || head === undefined ? null : Math.max(0, finalizedSlot - Number(head.slot)),
     lagSeconds,

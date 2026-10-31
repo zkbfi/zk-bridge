@@ -105,7 +105,33 @@ In flight means `sent`, `waiting_for_finality` or `covered`.
 
 `volume24h` sums the amount of transfers sent in the last 24 hours, per source chain and source token. `lastHeadUpdates[].update` is null when the light client has not stored a head.
 
-`GET /api/heads` returns `{ heads: [...] }`, one per side. The light client on a side tracks the other chain: `trackedChainId`. Fields: `chainId`, `name`, `lightClient`, `trackedChainId`, `storedHeadSlot`, `storedHeadExecutionBlock`, `storedHeadExecutionTimestamp`, `lastUpdateTimestamp`, `updateCount`, `finalizedSlot` (needs a beacon URL, else null), `lagSlots` (`finalizedSlot - storedHeadSlot`), `lagSeconds` (newest indexed time of the tracked chain minus the time of the head's execution block), `trackedChainTipBlock`, `trackedChainTipTimestamp`, `ownChainTipBlock`, `ownChainTipTimestamp`. Unknown values are null.
+`GET /api/heads` returns `{ heads: [...] }`, one per side. The light client on a side tracks the other chain: `trackedChainId`. Fields:
+
+| Field | Meaning |
+|---|---|
+| `chainId`, `name`, `lightClient`, `trackedChainId` | The chain that holds the light client, the light client, and the chain it tracks. |
+| `storedHeadSlot` | The head the contract stores now: the newest update, or the checkpoint it was deployed with. Null only when the light client holds no head (not deployed yet). |
+| `storedHeadSource` | `update` once an update stored the head, `deployment` while it is still the deployment checkpoint, null with no head. |
+| `storedHeadExecutionBlock`, `storedHeadExecutionTimestamp` | The execution block of the tracked chain that the head holds, and its time. Null for the deployment checkpoint: the contract keeps no execution block for it. |
+| `storedHeadSlotTimestamp` | The start time of the head's slot, `genesisTime + slot × secondsPerSlot` from the light client. |
+| `lastUpdateTimestamp`, `updateCount` | When the newest update landed and how many there were. Null and 0 before the first update. |
+| `initialized` | True when the light client holds a head, from its deployment or an update. |
+| `initializedAtSlot`, `initializedAtBlock` | The head the light client was deployed with, and the block of its own chain at which the indexer read it. |
+| `finalizedSlot` | The finalized slot of the tracked chain. Needs a beacon URL (`EXPLORER_BEACON_URL_<chainId>`), else null. |
+| `lagSlots` | `finalizedSlot - storedHeadSlot`, never below zero. |
+| `lagSeconds` | Newest indexed time of the tracked chain minus the time of the head: its execution block, or the start of its slot for the deployment checkpoint. |
+| `trackedChainTipBlock`, `trackedChainTipTimestamp`, `ownChainTipBlock`, `ownChainTipTimestamp` | The newest indexed block of each chain. |
+
+Unknown values are null. A light client of the PulseChain testnet v4 pair that was deployed at Sepolia slot 11463040 and never updated reads:
+
+```json
+{ "chainId": 943, "trackedChainId": 11155111, "storedHeadSlot": 11463040, "storedHeadSource": "deployment",
+  "storedHeadExecutionBlock": null, "storedHeadExecutionTimestamp": null, "storedHeadSlotTimestamp": 1793290080,
+  "lastUpdateTimestamp": null, "updateCount": 0, "initialized": true, "initializedAtSlot": 11463040,
+  "initializedAtBlock": 25767020, "finalizedSlot": 11477760, "lagSlots": 14720, "lagSeconds": 177696, "trackedChainTipTimestamp": 1793467776, "...": "..." }
+```
+
+How the indexer learns the deployment checkpoint: `head()` is read at a named block, so a reindex gives the same row. Each chain tip (every few blocks, from the start block) reads it until a row exists; the light client may be deployed a block or two after the start block, so a tip with no code yet stores nothing. When an update comes before any tip read it, the update handler reads `head()` one block before the update. The row also keeps `genesisTime()` and `secondsPerSlot()`, which give the slot time. The deployment checkpoint never covers a message, since it holds no execution block.
 
 `GET /api/feed` returns `{ items: [...], nextCursor }`, newest send first. Query parameters, all optional:
 
@@ -211,7 +237,7 @@ Ponder writes the tables into the schema that `--schema` names (default for `pon
 | `bridged_supply` | `chain_id, token` | `minted`, `burned`, `supply` of a copy. |
 | `release_events` | `id` | Failed-release and callback-failure events of the token mediator. |
 | `head_updates` | `chain_id, slot` | Every head update: header root, execution block, transaction, `gas_used`, `effective_gas_price`, `cost_wei`, `poster`. |
-| `light_client_heads` | `chain_id` | Newest head per chain. |
+| `light_client_heads` | `chain_id` | Stored head per chain: the newest update, else the deployment checkpoint (`execution_block_number` and `updated_timestamp` null, `update_count` 0). `initial_slot` and `initial_head_block_number` record the deployment head; `genesis_time` and `seconds_per_slot` give slot times. |
 | `chain_tips` | `chain_id` | Newest indexed block and time per chain, and its `base_fee_per_gas` (null when absent). |
 | `transaction_costs` | `chain_id, transaction_hash` | Every send, delivery and light client update transaction: `gas_used`, `effective_gas_price`, `cost_wei`, the coin's price `usd_per_native_e18` with `price_block` and `price_source`, and `cost_usd` (USD × 1e18); price columns null on testnets. |
 | `delivery_costs` | `message_id` | `gas_used` and `effective_gas_price` of the delivery transaction, one row per delivered message. No row for a batch. Index on `destination_chain_id, timestamp`. |

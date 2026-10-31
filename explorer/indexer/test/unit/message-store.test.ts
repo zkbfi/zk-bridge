@@ -82,6 +82,12 @@ describe("writeMessage", () => {
     expect(await write(database, send)).toMatchObject({ status: "sent", coveredByHeadSlot: null });
   });
 
+  it("does not cover the message with the head of the deployment, which holds no execution block", async () => {
+    const database = createFakeDatabase();
+    database.seed(lightClientHeads, { ...head(0n), executionBlockNumber: null, updatedTimestamp: null, updateCount: 0, initialSlot: 77n });
+    expect(await write(database, send)).toMatchObject({ status: "sent", coveredByHeadSlot: null });
+  });
+
   it("does not cover a message with no send block, as when the delivery arrives first", async () => {
     const database = createFakeDatabase();
     database.seed(lightClientHeads, head(100n));

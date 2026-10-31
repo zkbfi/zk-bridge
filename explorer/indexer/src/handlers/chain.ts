@@ -1,6 +1,7 @@
 import { ponder } from "ponder:registry";
 import { chainTips, gateEvents, gateStates, headUpdates, lightClientHeads, registryObservations } from "ponder:schema";
 import { beaconForkGateAbi, beaconLightClientAbi, sideOf } from "@zk-bridge/shared";
+import { initialHeadColumns, readInitialHead, type ContractReader } from "../lib/initial-head";
 import { ageMessages, coverMessages } from "../lib/message-store";
 import { pair } from "../lib/pair";
 import { recordTransactionCost } from "../lib/transaction-costs";
@@ -15,7 +16,31 @@ ponder.on("ChainTip:block", async ({ event, context }) => {
   };
   await context.db.insert(chainTips).values(row).onConflictDoUpdate(row);
   await ageMessages(context.db, context.chain.id, event.block.timestamp);
+  await recordInitialHead(context, event.block.number);
 });
+
+/**
+ * Until the light client of this chain holds a known head, reads the head it was deployed with at this tip block. The
+ * light client may be deployed a few blocks after the start block, so a tip with no code yet stores nothing and the
+ * next tip tries again. Once a row exists (from a tip or an update) nothing is read.
+ */
+const recordInitialHead = async (context: TipContext, blockNumber: bigint): Promise<void> => {
+  const chainId = context.chain.id;
+  if ((await context.db.find(lightClientHeads, { chainId })) !== null) return;
+  const initial = await readInitialHead(context.client as unknown as ContractReader, sideOf(pair, chainId).contracts.lightClient, blockNumber);
+  if (initial === null) return;
+  await context.db.insert(lightClientHeads).values({
+    chainId,
+    slot: initial.slot,
+    headerRoot: initial.headerRoot,
+    executionBlockNumber: null,
+    updatedTimestamp: null,
+    updateCount: 0,
+    ...initialHeadColumns(initial),
+  });
+};
+
+type TipContext = Parameters<Parameters<typeof ponder.on<"ChainTip:block">>[1]>[0]["context"];
 
 /**
  * The light client on this chain stored a head of the other chain. The event holds the slot, the header root and the
@@ -48,6 +73,18 @@ ponder.on("BeaconLightClient:HeadUpdated", async ({ event, context }) => {
   });
   await recordTransactionCost(context, event);
   const previous = await context.db.find(lightClientHeads, { chainId });
+  // No tip read the deployment head yet (the update came first): the state one block earlier still holds it.
+  const initial =
+    previous === null
+      ? initialHeadColumns(
+          await readInitialHead(context.client as unknown as ContractReader, sideOf(pair, chainId).contracts.lightClient, event.block.number - 1n),
+        )
+      : {
+          initialSlot: previous.initialSlot,
+          initialHeadBlockNumber: previous.initialHeadBlockNumber,
+          genesisTime: previous.genesisTime,
+          secondsPerSlot: previous.secondsPerSlot,
+        };
   const row = {
     chainId,
     slot: event.args.slot,
@@ -55,6 +92,7 @@ ponder.on("BeaconLightClient:HeadUpdated", async ({ event, context }) => {
     executionBlockNumber,
     updatedTimestamp: event.block.timestamp,
     updateCount: (previous?.updateCount ?? 0) + 1,
+    ...initial,
   };
   await context.db.insert(lightClientHeads).values(row).onConflictDoUpdate(row);
   await coverMessages(context.db, chainId, {
