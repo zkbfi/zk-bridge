@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { PAIR_DEFINITIONS, beaconVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
+import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, beaconVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
+import { DEFAULT_WARMUP } from "./watch/decide.ts";
 
 /** The modules that the backend can run, in the order that the example file lists them. */
 export const MODULE_NAMES = ["requests", "webhook", "msgboard-indexer", "archive"] as const;
@@ -84,6 +85,37 @@ export const backendConfigSchema = z
      * archive module reads its work list from it. Needed when the requests module runs.
      */
     indexerUrl: z.url().optional(),
+    /**
+     * Prove on finality: the requests module watches the source beacon chain of each direction and starts a proof
+     * within seconds of the finality (with enough signatures) that a waiting message or a keep-alive needs. See
+     * README.md, "Proving on finality".
+     */
+    watch: z
+      .object({
+        /** Default: on when `indexerUrl` and the beacon endpoint of each watched source chain are set. */
+        enabled: z.boolean().optional(),
+        /** The directions to watch. Default: both. */
+        directions: z.array(z.enum(PROOF_DIRECTIONS)).min(1).optional(),
+        /** Try the beacon event stream before falling back to the poll. */
+        sse: z.boolean().default(true),
+        /** The poll interval while no event stream runs. Default: one slot of the source chain (12 s or 10 s). */
+        pollSeconds: positiveInteger.optional(),
+        /** How often to look at the sent messages for a warm-up. */
+        scanSeconds: positiveInteger.default(15),
+        /** Ping the remote prover (`<remote.endpoint>/ping`) shortly before a proof is expected. */
+        warmup: z
+          .object({
+            enabled: z.boolean().default(true),
+            leadSeconds: positiveInteger.default(DEFAULT_WARMUP.leadSeconds),
+            intervalSeconds: positiveInteger.default(DEFAULT_WARMUP.intervalSeconds),
+            graceSeconds: positiveInteger.default(DEFAULT_WARMUP.graceSeconds),
+            minGapSeconds: positiveInteger.default(DEFAULT_WARMUP.minGapSeconds),
+          })
+          .strict()
+          .prefault({}),
+      })
+      .strict()
+      .prefault({}),
   })
   .strict()
   .refine((config) => config.limits.requestRetentionHours * 3600 >= config.prover.timeoutSeconds, {

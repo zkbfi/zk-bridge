@@ -139,6 +139,11 @@ the command `explorer/backend/bin/zk-bridge-keepalive.mjs status|march` (without
 
 ### Schedule on the app server
 
+The backend proves on finality by itself (explorer/backend/README.md, "Proving on finality"): a message gets its proof
+seconds after the source chain finalizes it, and a keep-alive the planner calls for starts at the next finality. Check
+it with `journalctl -u zk-bridge-backend -g '"finality_seen"\|"proof_due"\|"job_started"\|"watch_transport"' --since -1h`.
+The timer below stays as the backstop.
+
 `deploy/app-server/keepalive/zk-bridge-keepalive.{service,timer}` run the status and then the march every three hours
 as the backend's user, with the backend's own settings (`--backend-config /etc/zk-bridge/backend/backend.json`):
 same endpoints, same keep-alive age. `deploy.sh` does not install them:
