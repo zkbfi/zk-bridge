@@ -35,8 +35,7 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
   const active = search.flat[highlight] ?? null;
   const { pair } = useServices();
   // The footer's quick links are the palette's own Settings action and Docs view, so they open exactly what those rows open.
-  const settings = actionResults({ pair, walletConnected }).find((result) => result.id === "action:settings");
-  const docs = viewResults(pair.id).find((result) => result.id === "view:docs");
+  const quickLinks = [...actionResults({ pair, walletConnected }), ...viewResults(pair.id)].filter((result) => result.id === "action:settings" || result.id === "view:docs");
   const optionId = useCallback((result: SearchResult): string => `${listId}-${result.id}`, [listId]);
 
   useEffect(() => {
@@ -127,13 +126,11 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
           <kbd>↓</kbd> move <kbd>↵</kbd> open <kbd>esc</kbd> close
         </span>
         <span className="zb-palette-links">
-          {[settings, docs].map((result) =>
-            result === undefined ? null : (
-              <button key={result.id} type="button" onClick={() => onSelect(result)}>
-                {result.title}
-              </button>
-            ),
-          )}
+          {quickLinks.map((result) => (
+            <button key={result.id} type="button" onClick={() => onSelect(result)}>
+              {result.title}
+            </button>
+          ))}
         </span>
       </div>
     </Sheet>
