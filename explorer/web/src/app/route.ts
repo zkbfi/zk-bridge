@@ -310,7 +310,7 @@ export type TipQuery = {
 
 /** The fields of the bridge and wrap form that differ from the defaults. */
 export type BridgeQuery = {
-  /** `<side>:<token address>` or `<side>:native`. */
+  /** `<side>:<token address>` or `<side>:native` (a link writes the native coin as the zero address). */
   readonly token?: string;
   readonly amount?: string;
   readonly receiver?: string;
@@ -338,6 +338,35 @@ export const NO_OVERLAY: Overlay = Object.freeze({ dialog: null, bridge: Object.
 
 const MAXIMUM_DATA_DIGITS = 24_000;
 const TOKEN_CHOICE = /^(first|second):(native|0x[0-9a-fA-F]{40})$/;
+/** The zero address: how a link names a chain's native coin (owner, quotes 101–102). */
+export const NATIVE_IN_LINK = "0x0000000000000000000000000000000000000000";
+
+/**
+ * A token choice as a link writes it, read into the page's own form: `<side>:<address>`, where the zero address is the
+ * native coin (the page keeps `<side>:native`). "native" alone, and the older `<side>:native`, are read too; the shell
+ * then rewrites the address to the zero-address form ({@link linkNamesNativeOldWay}).
+ *
+ * @param text The `bridge.token` value, or null.
+ * @param dir The direction the link asks for, which says the side of a bare "native".
+ */
+const tokenChoiceOf = (text: string | null, dir: string | null): string | undefined => {
+  if (text === null) return undefined;
+  if (text.toLowerCase() === "native") return `${dir === "second-to-first" ? "second" : "first"}:native`;
+  if (!TOKEN_CHOICE.test(text)) return undefined;
+  const [side, address] = text.split(":") as [string, string];
+  return address.toLowerCase() === NATIVE_IN_LINK ? `${side}:native` : text;
+};
+
+/** The token choice as a link writes it: the native coin as the zero address on its chain. */
+const tokenChoiceInLink = (choice: string): string => (choice.endsWith(":native") ? `${choice.slice(0, -"native".length)}${NATIVE_IN_LINK}` : choice);
+
+/**
+ * Whether an address names the native coin the older way ("native" rather than the zero address), so the shell
+ * rewrites it in place.
+ *
+ * @param hash The address's hash.
+ */
+export const linkNamesNativeOldWay = (hash: string): boolean => /[?&]bridge\.token=([a-z]+(:|%3A))?native(&|$)/i.test(hash);
 const BRIDGE_KEYS = ["token", "amount", "receiver", "mode", "data", "gas", "callTarget", "callData"] as const;
 const TIP_KEYS = ["mode", "percent", "fixed", "margin", "gas", "ceiling", "cap", "price", "router", "native"] as const;
 const MESSAGE_KEYS = ["from", "target", "data", "gas"] as const;
@@ -366,7 +395,7 @@ const bridgeOf = (params: URLSearchParams): BridgeQuery => {
   const token = get("token");
   const tip = tipOf(params);
   return {
-    ...optional("token", token !== null && TOKEN_CHOICE.test(token) ? token : undefined),
+    ...optional("token", tokenChoiceOf(token, params.get("dir"))),
     // A bare `amount` is read too: people type it by hand (the owner did).
     ...optional("amount", decimalText(get("amount") ?? params.get("amount"))),
     ...optional("receiver", hexText(get("receiver"), 40)),
@@ -412,7 +441,7 @@ const writeBridge = (params: URLSearchParams, bridge: BridgeQuery): void => {
   const set = (key: (typeof BRIDGE_KEYS)[number], value: string | undefined): void => {
     if (value !== undefined) params.set(`bridge.${key}`, value);
   };
-  set("token", token);
+  set("token", token === undefined ? undefined : tokenChoiceInLink(token));
   set("amount", amount);
   set("receiver", receiver);
   set("mode", mode);

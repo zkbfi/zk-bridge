@@ -77,16 +77,32 @@ export const tokenFor = (choice: string | undefined, tokens: readonly TokenInfo[
 };
 
 /**
- * The token a flip moves to: the token's counterpart on the other chain, or that chain's first token.
+ * The token a flip moves to, keeping the asset (owner, quotes 101–102): a token's counterpart on the other chain; the
+ * native coin's counterpart is its wrapped native token's counterpart (ETH on Ethereum ↔ zkbWETH on PulseChain); and a
+ * counterpart that is the other chain's wrapped native token lands on that chain's native coin when the list has it.
+ * Only a token with no counterpart in the list falls back to the other chain's first token.
  *
  * @param token The token now chosen.
  * @param tokens Every token of the pair.
+ * @param pair The pair, for each chain's wrapped native token; without it the native coin has no counterpart.
  */
-export const counterpartOf = (token: TokenInfo, tokens: readonly TokenInfo[]): TokenInfo | null => {
+export const counterpartOf = (token: TokenInfo, tokens: readonly TokenInfo[], pair?: PairConfig): TokenInfo | null => {
   const otherSide: ChainSide = token.side === "first" ? "second" : "first";
-  const byCounterpart = tokens.find((candidate) => candidate.side === otherSide && candidate.address.toLowerCase() === token.counterpart?.toLowerCase());
-  const byReference = tokens.find((candidate) => candidate.side === otherSide && candidate.counterpart?.toLowerCase() === token.address.toLowerCase());
-  return byCounterpart ?? byReference ?? tokens.find((candidate) => candidate.side === otherSide) ?? null;
+  const chainOf = (side: ChainSide) => (pair === undefined ? null : side === "first" ? pair.first : pair.second);
+  const same = (a: string | null | undefined, b: string | null | undefined): boolean => a != null && b != null && a.toLowerCase() === b.toLowerCase();
+  // The native coin stands for its chain's wrapped native token, whose copy is what crosses.
+  const wrapped = isNativeToken(token) ? (chainOf(token.side)?.contracts.wrappedNative ?? null) : null;
+  const address = wrapped ?? token.address;
+  const asToken = wrapped === null ? token : (tokens.find((candidate) => candidate.side === token.side && same(candidate.address, wrapped)) ?? { ...token, address: wrapped, counterpart: null });
+  const others = tokens.filter((candidate) => candidate.side === otherSide && !isNativeToken(candidate));
+  const found = others.find((candidate) => same(candidate.address, asToken.counterpart)) ?? others.find((candidate) => same(candidate.counterpart, address)) ?? null;
+  if (found !== null) {
+    // Back home to the wrapped native token: the native coin, when the list offers it.
+    const otherWrapped = chainOf(otherSide)?.contracts.wrappedNative ?? null;
+    const native = tokens.find((candidate) => candidate.side === otherSide && isNativeToken(candidate));
+    return same(found.address, otherWrapped) && native !== undefined ? native : found;
+  }
+  return tokens.find((candidate) => candidate.side === otherSide && !isNativeToken(candidate)) ?? tokens.find((candidate) => candidate.side === otherSide) ?? null;
 };
 
 /** The steps a transfer goes through, with an estimate each, for the time drawer. */

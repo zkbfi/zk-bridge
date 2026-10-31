@@ -22,7 +22,7 @@ import { Header } from "../bridge/Header";
 import { Notice } from "../ui/primitives";
 import { ActionsContext } from "./actions-context";
 import { resolvePair } from "./route";
-import { bridgeLinkedFields, formatLocation, formatRoute, linkedFields, NO_OVERLAY, parseLocation, resolveHome, routeTitle, type BridgeQuery, type Overlay, type PageLocation, type Route } from "./route";
+import { bridgeLinkedFields, formatLocation, linkNamesNativeOldWay, formatRoute, linkedFields, NO_OVERLAY, parseLocation, resolveHome, routeTitle, type BridgeQuery, type Overlay, type PageLocation, type Route } from "./route";
 import { useServices } from "./services";
 import { SettingsDialog } from "./SettingsDialog";
 import { SourceBadge } from "./SourceBadge";
@@ -52,7 +52,11 @@ const useHashLocation = (
     // Only set here: React's strict mode runs the first read twice, and the second sees the address already moved.
     if (paired.unknown !== null) unknownPair.current = paired.unknown;
     const route = paired.route;
-    if (route === parsed.route) return parsed;
+    // A link that names the native coin as "native" opens, and its address moves at once to the zero-address form.
+    if (route === parsed.route) {
+      if (linkNamesNativeOldWay(window.location.hash)) window.history.replaceState(window.history.state, "", formatLocation(parsed));
+      return parsed;
+    }
     const resolved = { route, overlay: parsed.overlay };
     window.history.replaceState(window.history.state, "", formatLocation(resolved));
     return resolved;
