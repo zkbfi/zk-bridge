@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import type { FeedItem, PairConfig } from "@terminal/model/types";
-import { formatRoute, type ExplorePage, type Route } from "../app/route";
+import { formatLocation, formatRoute, NO_OVERLAY, type ExplorePage, type Route } from "../app/route";
 import { useFeed, useHeads, useTokens } from "../app/queries";
 import { useServices } from "../app/services";
 import type { ProbeKind } from "../app/service-probe";
@@ -281,7 +281,7 @@ const LatestTransfers = ({ feed, pair, now }: { readonly feed: readonly FeedItem
 };
 
 /** One outside service: a dot (green up, red down, grey not set or checking), its host and its latency. */
-const ServiceRow = ({ name, url, kind }: { readonly name: string; readonly url: string | null; readonly kind: ProbeKind }) => {
+export const ServiceRow = ({ name, url, kind }: { readonly name: string; readonly url: string | null; readonly kind: ProbeKind }) => {
   const state = useServiceProbe(url, kind);
   return (
     <div className="zb-xsvc">
@@ -312,7 +312,7 @@ const Services = ({ pair }: { readonly pair: PairConfig }) => {
   const fixture = configuration.dataMode === "fixture";
   return (
     <div className="zb-col">
-      <XGroup title="Services" right={<a href="#/settings">Change in Settings</a>} />
+      <XGroup title="Services" right={<a href={formatLocation({ route: { name: "explore" }, overlay: { ...NO_OVERLAY, dialog: "settings" } })}>Change in Settings</a>} />
       <ServiceRow name="Indexer" url={fixture ? null : (resolved?.indexerUrl?.value ?? configuration.indexerUrl)} kind={HEALTH} />
       <ServiceRow name="Prover" url={fixture ? null : (resolved?.backendUrl?.value ?? configuration.backendUrl)} kind={HEALTH} />
       <ServiceRow name="Archive" url={fixture ? null : (resolved?.archiveUrl?.value ?? configuration.archiveUrl)} kind={HEALTH} />

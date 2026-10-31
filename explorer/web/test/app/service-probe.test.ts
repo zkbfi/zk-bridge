@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HttpClient, HttpRequest } from "@zk-bridge/shared";
 import { createProber, fixtureProber, probeIconUrl } from "../../src/app/service-probe";
 
@@ -75,5 +75,34 @@ describe("the service probe", () => {
     const first = await fixtureProber("https://a.test", { kind: "health" });
     expect(first.ok).toBe(true);
     expect(await fixtureProber("https://a.test", { kind: "health" })).toEqual(first);
+  });
+});
+
+describe("the image check in a browser", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const stubImage = (outcome: "load" | "error", naturalWidth = 32) => {
+    const sources: string[] = [];
+    class FakeImage {
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      naturalWidth = naturalWidth;
+      set src(value: string) {
+        sources.push(value);
+        queueMicrotask(() => (outcome === "load" ? this.onload?.() : this.onerror?.()));
+      }
+    }
+    vi.stubGlobal("Image", FakeImage);
+    return sources;
+  };
+
+  it("passes when the icon loads with a size, and fails on an error or an empty image", async () => {
+    const sources = stubImage("load");
+    expect((await createProber()("https://gib.show/image/{chainId}/{address}", { kind: "image" })).ok).toBe(true);
+    expect(sources).toEqual(["https://gib.show/image/1/0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"]);
+    stubImage("load", 0);
+    expect((await createProber()("https://img.test/{chainId}/{address}", { kind: "image" })).ok).toBe(false);
+    stubImage("error");
+    expect((await createProber()("https://img.test/{chainId}/{address}", { kind: "image" })).ok).toBe(false);
   });
 });
