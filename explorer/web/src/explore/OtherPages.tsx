@@ -11,9 +11,9 @@ import { useAudit, useDeliveryCost, useFeed, useTokens } from "../app/queries";
 import { useServices } from "../app/services";
 import { relativeTime } from "../bridge/activity-model";
 import { amountText, chainsFor, nativeTokensOf } from "../bridge/bridge-model";
-import { PROOF_COST_MICRO_USD } from "@zk-bridge/shared";
+import { PROOF_COST_USD as PROOF_COST } from "@zk-bridge/shared";
 
-const PROOF_COST_USD = Number(PROOF_COST_MICRO_USD) / 1e6;
+const PROOF_COST_USD = Number(PROOF_COST) / 1e18;
 import { ExternalLink } from "../bridge/icons";
 import { iconSubjectOf } from "../bridge/image-source";
 import { Num } from "../bridge/Num";

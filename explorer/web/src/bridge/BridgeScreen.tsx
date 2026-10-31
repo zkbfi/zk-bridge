@@ -17,7 +17,7 @@ import { useWallet } from "../wallet/wallet-port";
 import { isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
 import { DeliveryMenu, deliverySummary } from "./DeliveryMenu";
-import { ceilingCostMicroUsd, ceilingWeiOf, DEFAULT_CAP_WAD, defaultFee, feeWarnings, GAS_LEVELS, gasLevelOfCeiling, highCapLine, PROOF_COST_MICRO_USD, shareWadOfPercentText, totalCostMicroUsd, usdMicroOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
+import { ceilingCostUsd, ceilingWeiOf, DEFAULT_CAP_WAD, defaultFee, feeWarnings, GAS_LEVELS, gasLevelOfCeiling, highCapLine, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
 import { formatUnits } from "viem";
 import { loadFeeCap, saveFeeCap } from "./fee-cap";
 import { DirectionMenu } from "./DirectionMenu";
@@ -135,29 +135,29 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const max = balance === null || token === null ? null : maxSendable(token, balance, maxFee);
   const amount = token === null ? null : safeParse(form.amount ?? "", token.decimals);
   const prices = usePrices(tokens).data;
-  // Money is integers (shared fee rules): prices as USD × 1e18, values in micro-dollars, shares × 1e18.
+  // Money is integers (shared fee rules): prices and values in USD × 1e18, shares × 1e18.
   const nativeQuote = prices?.get(`native:${destination.chainId}`) ?? null;
   const priceOf = (subject: TokenInfo | null): PriceQuote | null => (subject === null ? null : (prices?.get(`${subject.side}:${subject.address}`) ?? null));
   const tokenQuote = priceOf(token);
-  const micro = (units: bigint | null): bigint | null => (units === null || tokenQuote === null || token === null ? null : usdMicroOf(units, token.decimals, tokenQuote.usdE18));
-  const dollarsText = (value: bigint | null): string => (value === null ? "—" : `$${usdText(Number(value) / 1e6)}`);
-  const usd = (units: bigint | null): string => dollarsText(micro(units));
+  const valueOf = (units: bigint | null): bigint | null => (units === null || tokenQuote === null || token === null ? null : usdOf(units, token.decimals, tokenQuote.usdE18));
+  const dollarsText = (value: bigint | null): string => (value === null ? "—" : `$${usdText(Number(value) / 1e18)}`);
+  const usd = (units: bigint | null): string => dollarsText(valueOf(units));
   const costInputAt = (level: GasLevel): CostInput | null =>
     probe.delivery === null || nativeQuote === null
       ? null
       : { gasUsed: probe.delivery.suggestions.dataSource.gas, baseFeeWei: probe.delivery.suggestions.dataSource.baseFeeWei, priorityFeeWei: probe.delivery.priorityFeeWei, nativePriceE18: nativeQuote.usdE18, level };
   const costAt = (level: GasLevel): bigint | null => {
     const input = costInputAt(level);
-    return input === null ? null : totalCostMicroUsd(input);
+    return input === null ? null : totalCostUsd(input);
   };
   const baseFeeWei = probe.delivery?.suggestions.dataSource.baseFeeWei ?? null;
   const ceilingWeiText = form.tip?.ceilingGweiText === undefined ? null : safeParse(form.tip.ceilingGweiText, 9);
   const gasLevel = gasLevelOfCeiling(ceilingWeiText, baseFeeWei);
-  const costMicro = costAt(gasLevel);
-  const costNormalMicro = costAt(1);
-  const amountMicro = micro(amount);
+  const costUsd = costAt(gasLevel);
+  const costNormalUsd = costAt(1);
+  const amountUsd = valueOf(amount);
   const capWad = shareWadOfPercentText(String(capPercent)) ?? DEFAULT_CAP_WAD;
-  const auto = defaultFee({ amountMicroUsd: amountMicro, costMicroUsd: costMicro, capWad });
+  const auto = defaultFee({ amountUsd: amountUsd, costUsd: costUsd, capWad });
   const options = useMemo(
     () => (automatic ? { ...baseOptions, percentText: formatUnits(auto.shareWad, 16) } : baseOptions),
     [automatic, baseOptions, auto.shareWad],
@@ -183,25 +183,25 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
           ? "unknown"
           : "estimating";
   // The automatic fee is the rule's own figure; a share the draft signs from it rounds down by at most a unit.
-  const feeMicro = automatic && auto.feeMicroUsd !== null && tipUnits !== null ? auto.feeMicroUsd : micro(tipUnits);
+  const feeUsd = automatic && auto.feeUsd !== null && tipUnits !== null ? auto.feeUsd : valueOf(tipUnits);
   const gasBased = options.mode === "gas-multiplier";
-  const expandedMicro = (() => {
+  const expandedUsd = (() => {
     const input = costInputAt(gasLevel);
-    return input === null ? null : ceilingCostMicroUsd(input);
+    return input === null ? null : ceilingCostUsd(input);
   })();
   const shareWithoutPriceWad = options.mode === "percentage" ? shareWadOfPercentText(options.percentText) : amount === null || amount === 0n || tipUnits === null ? null : (tipUnits * WAD) / amount;
   const warnings = feeWarnings({
-    amountMicroUsd: amountMicro,
+    amountUsd: amountUsd,
     capWad,
-    feeMicroUsd: feeMicro,
-    costMicroUsd: costMicro,
-    costNormalMicroUsd: costNormalMicro,
+    feeUsd: feeUsd,
+    costUsd: costUsd,
+    costNormalUsd: costNormalUsd,
     shareWithoutPriceWad,
     belowBreakEven: tipUnits !== null && breakEven !== null && tipUnits < breakEven,
     gasBased,
-    expandedCostMicroUsd: expandedMicro,
+    expandedCostUsd: expandedUsd,
   });
-  const line = highCapLine(amountMicro);
+  const line = highCapLine(amountUsd);
   const linePercent = Number((line.numerator * 10n ** 8n) / line.denominator) / 10 ** 6;
   const thresholdText = `${Number(linePercent.toPrecision(2))}%`;
   const levelName = (level: GasLevel): string => (level === 1 ? "Normal" : level === 2 ? "High" : "Highest");
@@ -224,12 +224,12 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   };
   const capSave = { saved: capPercent === storedCap, onSave: saveCap, label: capPercent === storedCap ? `${capText} is your default cap` : `Save ${capText} as your default cap` };
   const breakdown =
-    feeMicro === null || costMicro === null
+    feeUsd === null || costUsd === null
       ? []
       : [
-          { label: "Delivery gas", value: dollarsText(costMicro - PROOF_COST_MICRO_USD) },
-          { label: "Proof", value: dollarsText(PROOF_COST_MICRO_USD) },
-          { label: "Tip", value: feeMicro > costMicro ? dollarsText(feeMicro - costMicro) : "$0" },
+          { label: "Delivery gas", value: dollarsText(costUsd - PROOF_COST_USD) },
+          { label: "Proof", value: dollarsText(PROOF_COST_USD) },
+          { label: "Tip", value: feeUsd > costUsd ? dollarsText(feeUsd - costUsd) : "$0" },
         ];
   // In gas-based mode the fee can drift after signing, up to the signed limit (the tip at the ceiling).
   const drift = gasBased && delivery !== null && tipUnits !== null ? { now: usd(tipUnits), most: usd(delivery.maximumTip), level: levelName(gasLevel) } : null;
@@ -242,9 +242,9 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     symbol: token?.symbol ?? "",
     paused: gate === "stop" || gate === "sealed" ? { route: `${source.name} → ${destination.name}` } : null,
     tipBelowBreakEven: warnings.lowFee,
-    lowFee: feeMicro === null || costMicro === null ? null : { feeText: dollarsText(feeMicro), costText: dollarsText(costMicro) },
-    highTip: warnings.highCap ? { thresholdText, tipText: feeMicro === null || costNormalMicro === null ? "—" : dollarsText(feeMicro > costNormalMicro ? feeMicro - costNormalMicro : 0n) } : null,
-    smallTransfer: warnings.smallTransfer && amountMicro !== null ? { costText: dollarsText(costMicro), capText, capAmountText: dollarsText((amountMicro * capWad) / WAD) } : null,
+    lowFee: feeUsd === null || costUsd === null ? null : { feeText: dollarsText(feeUsd), costText: dollarsText(costUsd) },
+    highTip: warnings.highCap ? { thresholdText, tipText: feeUsd === null || costNormalUsd === null ? "—" : dollarsText(feeUsd > costNormalUsd ? feeUsd - costNormalUsd : 0n) } : null,
+    smallTransfer: warnings.smallTransfer && amountUsd !== null ? { costText: dollarsText(costUsd), capText, capAmountText: dollarsText((amountUsd * capWad) / WAD) } : null,
     firstBridge: token !== null && !isNativeToken(token) && isFirstBridge(token, known, false),
   });
 
@@ -481,7 +481,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
           <div className="zb-col" style={{ paddingBottom: 18 }}>
             <div className="zb-kv"><span className="zb-k">You send</span><b>{inline(tokenIcon(token, null, 16), amountText(amount, token.decimals), token.symbol)} on {source.name}</b></div>
             <div className="zb-kv"><span className="zb-k">Arrives</span><b>{received === null ? "—" : inline(tokenIcon(token, destination.chainId, 16), amountText(received > 0n ? received : 0n, token.decimals), token.symbol)} on {destination.name}</b></div>
-            <div className="zb-kv"><span className="zb-k">Fee</span><span>{tipUnits === null ? "none" : inline(tokenIcon(token, null, 18), amountText(tipUnits, token.decimals), token.symbol)}{feeMicro === null ? null : <span title={PRICE_NOTE}> (about {usd(tipUnits)})</span>}</span></div>
+            <div className="zb-kv"><span className="zb-k">Fee</span><span>{tipUnits === null ? "none" : inline(tokenIcon(token, null, 18), amountText(tipUnits, token.decimals), token.symbol)}{feeUsd === null ? null : <span title={PRICE_NOTE}> (about {usd(tipUnits)})</span>}</span></div>
             {drift === null ? null : (
               <div className="zb-kv zb-kv-sub"><span className="zb-k">Can drift</span><span title={PRICE_NOTE}>{drift.now} now, up to {drift.most} if gas rises to the {drift.level} ceiling</span></div>
             )}
