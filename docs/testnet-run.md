@@ -57,6 +57,111 @@ script/testnet/preflight.sh                           # valve.city, needs VALVE_
 
 With `ENDPOINTS=public`, the light-client routes of chain 943 print `INFO` and do not count as failures.
 
+## Keeping the light clients alive
+
+Owner: "we need to have setup scripts to march the contracts forward to handle this situation."
+
+### Why a light client strands
+
+A light client with its head in period P stores the committee of P, and of P + 1 once an update proved it. Call the
+highest stored period K. The program verifies an update only with a stored committee: the signature must lie in P, or
+in P + 1 with the next committee stored. So once the source chain signs in period K + 1, the newest update cannot be
+verified by anything the light client holds. Call the first slot of K + 1 the deadline.
+
+- **Before the deadline** one ordinary proof (a keep-alive) moves the head to the newest finalized header. The next
+  committee it proves pushes the deadline one period further.
+- **After the deadline** only committee handoff updates help: the update of period p (attested and signed in p) proves
+  the committee of p + 1. The prover reads them from `/eth/v1/beacon/light_client/updates` and folds each period's
+  handoff and the newest update into **one proof** (up to 64 updates; `prover/src/beacon/http.rs`, "Catching up"). So a
+  single proof does cross period borders, period by period inside the fold, as long as the source node gives every
+  handoff. The program refuses a fold step that skips a period, so there is no shortcut.
+- **Stranded**: the source node gives no handoff for a needed period. The public chain 943 node serves no
+  `light_client/updates` at all; valve.city's chain 943 beacon serves recent periods (it gave 1367 and 1368 on
+  2026-10-31, not 1366). A node that pruned a period strands the light client the same way. Once stranded, no proof
+  can move it: it needs a node with that history, or a new light client from a new checkpoint.
+
+The prover asks for a handoff only from the first period whose next committee the light client lacks (fixed on
+2026-10-31: it used to ask for the head period too, which failed with "no light-client update for sync committee
+period 1366" for the Sepolia light client although it held committee 1367).
+
+The deadline comes about 46 hours after a head update at most (two periods minus the time into the first), and once a
+period (22.75 hours on PulseChain, 27.3 on Sepolia) after the head at least. The backend proves a direction once its
+head is 12 hours old (`limits.keepAliveSeconds`), so a keep-alive every few hours keeps every light client well before
+its deadline, even on a source node without history.
+
+### Status
+
+```sh
+script/testnet/light-client-status.sh              # valve.city when VALVE_KEY is set, else the public servers
+ENDPOINTS=public script/testnet/light-client-status.sh --json
+```
+
+For each light client it prints the head slot and period, the committees it stores, the source chain's slot and
+finalized period, how many periods behind it is, when the deadline comes (or how long ago it passed), and a verdict:
+
+| Verdict | Meaning | Exit code |
+|---|---|---|
+| fresh | The head is recent and the deadline is more than the margin (6 h) away. | 0 |
+| needs keep-alive | One ordinary proof moves it: the head is older than 12 h, or the deadline is inside the margin. | 10 |
+| needs stepping (k steps) | The deadline passed; the source node gives the k handoffs, and one proof folds them. | 11 |
+| STRANDED | The deadline passed and the source node lacks a needed handoff. | 12 |
+
+Exit code 3 means a read failed, 2 a bad argument. The worst light client decides. Use the beacon endpoint the prover
+uses (`EXPLORER_BEACON_URL_<chainId>`): which periods it serves decides between stepping and stranded.
+
+### March
+
+```sh
+script/testnet/march-light-clients.sh                         # plan only: prints what it would request
+script/testnet/march-light-clients.sh --execute               # keep-alive requests through https://prove.zkb.fi
+script/testnet/march-light-clients.sh --execute --via local --prover-config "$RUN_DIR/prover.toml"   # sends transactions
+```
+
+For each light client that is not fresh it prints the steps (each handoff, signed by a committee the light client
+stores by then, then the newest update) and makes one proof at a time. With `--via backend` (default) it posts
+`{pair, direction, reason: "keep-alive"}` to `POST /requests` and follows `GET /requests/:id` until the job is
+`published`; the runner bot then posts `update`. With `--via local` it runs `zk-bridge-prover prove --route <route>
+--to stdout`, checks that the package starts at the stored head and names the right light client, and sends
+`updateCalldata` with `cast send --account $KEYSTORE_NAME`. Either way it then reads `head()` until the head moved
+(`--head-timeout-minutes`, default 90), judges again, and continues up to `--max-proofs` (default 3). Every decision
+comes from the chain as it is, so a second run, or a run after a crash, picks up where the chain stands.
+
+The backend's limits apply to every request: it starts a paid job only when its indexer sees a waiting message or a
+head older than `limits.keepAliveSeconds`, at most one job per direction every `secondsBetweenJobsPerDirection`, and
+`jobsPerDirectionPerDay` in total; a request for a direction with an active job joins that job. The march waits out a
+limit of up to `--max-retry-wait-seconds` (300) and otherwise defers to the next run. A `nothing-to-prove` refusal
+near the deadline (only possible for a light client without a stored next committee) is an alert: use `--via local`.
+
+Exit codes as in the status, plus 13: a proof failed, was refused while the deadline is inside the margin, or the head
+did not move. Each problem prints a line that starts with `ALERT light-client`. The code is
+`explorer/backend/src/keepalive/` (plan, reads, proof paths; tests in `explorer/backend/test/keepalive-*.test.ts`),
+the command `explorer/backend/bin/zk-bridge-keepalive.mjs status|march` (without arguments it prints its options).
+
+### Schedule on the app server
+
+`deploy/app-server/keepalive/zk-bridge-keepalive.{service,timer}` run the status and then the march every three hours
+as the backend's user, with the backend's own settings (`--backend-config /etc/zk-bridge/backend/backend.json`):
+same endpoints, same keep-alive age. `deploy.sh` does not install them:
+
+```sh
+install -m 0644 /opt/zk-bridge/current/deploy/app-server/keepalive/zk-bridge-keepalive.{service,timer} /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now zk-bridge-keepalive.timer
+journalctl -u zk-bridge-keepalive -g 'ALERT light-client' --since -1d     # problems
+systemctl list-units --failed 'zk-bridge-keepalive*'                      # a run that exited non-zero
+```
+
+A run that exits non-zero leaves the unit failed; `OnFailure=` in the unit can point at a mail or webhook unit.
+`deploy/app-server/keepalive/crontab.example` does the same with cron and `flock`. At most one request per direction
+every three hours reaches the backend, and it pays for a proof only when the head is 12 hours old: about two proofs per
+direction per day, far below `jobsPerDirectionPerDay`.
+
+### State on 2026-10-31
+
+| Light client | Head (period) | Stores | Source | Verdict |
+|---|---|---|---|---|
+| chain 943 `0x1dbb...d958` (tracks Sepolia) | 11463040 (1399) | 1399, 1400 | Sepolia in 1401 | needs stepping: handoff 1400 from Sepolia, one proof |
+| Sepolia `0x64dd...7e4e` (tracks chain 943) | 11194368 (1366) | 1366, 1367 | chain 943 in 1368 | stranded on the public 943 node; needs stepping (handoff 1367) on valve.city, with the prover fix |
+
 ## Checks done on 2026-10-26
 
 - Chain 943, `eth_getCode` at `0x70499adEBB11Efd915E3b69E700c331778628707`: 4,119 hex characters of code with the selectors `deposit()` (`d0e30db0`) and `withdraw(uint256)` (`2e1a7d4d`). `symbol()` is `WPLS`, `name()` is `Wrapped Pulse`, `decimals()` is 18, and `totalSupply()` equals the balance of the contract. That is the behaviour of a canonical wrapped native token. I did not find the address in a document of the PulseChain projects, so check it once more against the PulseX testnet documentation before you rely on it for value.
