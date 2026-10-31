@@ -202,7 +202,7 @@ function targets(s) {
     let k = 0, ring = 0;
     while (k < byStep[i].length) {
       const cap = PER * (ring + 1), group = byStep[i].slice(k, k + cap), r = R0 + ring * RING, key = `${i}:${ring}`;
-      if (!(s.frozen === i || paused || reduce)) s.phase[key] = (s.phase[key] ?? Math.random() * 6.28) + 0.0045 / (ring + 1);
+      if (!(s.frozen === i || paused || reduce)) s.phase[key] = (s.phase[key] ?? Math.random() * 6.28) + 0.003 / (ring + 1);
       const base = s.phase[key] ?? 0;
       const o = s.open[i];                       // 0 closed (at rest) … 1 open (hovered)
       const rr = r * (0.72 + 0.28 * o), squash = 0.66 + 0.24 * o;   // tilted ~48° at rest, near face-on when open
@@ -230,7 +230,7 @@ function frame(now) {
     const seen = new Set();
     for (const t of s.items) {
       // Critically damped ease toward the target; a planet changing step arcs up and over the track while it travels.
-      const k = 1 - Math.exp(-dt / (t.moving ? 260 : 120));
+      const k = 1 - Math.exp(-dt / (t.moving ? 420 : 180));
       t.x += (t.tx - t.x) * k; t.y += (t.ty - t.y) * k;
       let lift = 0;
       if (t.moving) { const p = Math.min(1, (now - t.moving.start) / t.moving.span); lift = (s.lane.y < YM ? -1 : 1) * Math.sin(p * Math.PI) * 26; if (p >= 1) t.moving = null; }
@@ -276,8 +276,8 @@ function draw(s, t, x, y, seen) {
 function move(group, now, step) {
   group.forEach((t, j) => setTimeout(() => {
     if (t.leaving) return;
-    if (step > LAST) t.leaving = true; else { t.step = step; t.moving = { start: performance.now(), span: 1100 }; }
-  }, j * 60));
+    if (step > LAST) t.leaving = true; else { t.step = step; t.moving = { start: performance.now(), span: 1800 }; }
+  }, j * 90));
 }
 const EVENTS = ["arrive", "arrive", "finalize", "arrive", "prove", "deliver", "arrive", "deliver"];
 let tick = 0;
@@ -294,13 +294,13 @@ function advance() {
     if (event === "deliver") move(at(2).slice(0, Math.ceil(rnd(2, 6))), now, 3);
     const arrivals = event === "arrive" ? Math.round(rnd(1, 3)) : Math.random() < 0.4 ? 1 : 0;
     // A new transfer emerges from its source chain and glides out along the loop to the Sent orbit.
-    for (let k = 0; k < arrivals; k++) { const t = transfer(s.dir, 0); t.x = s.lane.from.x; t.y = s.lane.from.y; t.moving = { start: performance.now(), span: 1300 }; s.items.push(t); }
+    for (let k = 0; k < arrivals; k++) { const t = transfer(s.dir, 0); t.x = s.lane.from.x; t.y = s.lane.from.y; t.moving = { start: performance.now(), span: 2100 }; s.items.push(t); }
     for (const t of s.items) t.age += 0.05;
   }
 }
-build(); requestAnimationFrame(frame); setInterval(advance, 1400);
+build(); requestAnimationFrame(frame); setInterval(advance, 2000);
 document.getElementById("theme").onclick = () => document.documentElement.classList.toggle("light");
-document.getElementById("burst").onclick = () => { for (const s of state) for (let i = 0; i < 12; i++) setTimeout(() => { const t = transfer(s.dir, 0); t.x = s.lane.from.x; t.y = s.lane.from.y; t.moving = { start: performance.now(), span: 1300 }; s.items.push(t); }, i * 60); };
+document.getElementById("burst").onclick = () => { for (const s of state) for (let i = 0; i < 12; i++) setTimeout(() => { const t = transfer(s.dir, 0); t.x = s.lane.from.x; t.y = s.lane.from.y; t.moving = { start: performance.now(), span: 2100 }; s.items.push(t); }, i * 90); };
 document.getElementById("motion").onclick = (e) => { paused = !paused; e.target.textContent = paused ? "Resume" : "Pause all"; };
 if (location.search.includes("light")) document.documentElement.classList.add("light");
 </script>
