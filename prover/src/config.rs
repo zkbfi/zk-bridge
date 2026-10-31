@@ -120,6 +120,10 @@ pub struct ProverConfig {
     /// The wait before the second attempt. The wait grows by this much for each further attempt.
     #[serde(default = "default_remote_retry_delay_seconds")]
     pub remote_retry_delay_seconds: u64,
+    /// The longest wait for a worker that is not ready yet (a cold endpoint), counted from the first request. Zero
+    /// turns the wait off. The backend's job limit must exceed it plus one proof (`docs/gpu-prover.md`).
+    #[serde(default = "default_remote_cold_start_wait_seconds")]
+    pub remote_cold_start_wait_seconds: u64,
 }
 
 fn default_remote_timeout_seconds() -> u64 {
@@ -132,6 +136,10 @@ fn default_remote_attempts() -> u32 {
 
 fn default_remote_retry_delay_seconds() -> u64 {
     10
+}
+
+fn default_remote_cold_start_wait_seconds() -> u64 {
+    900
 }
 
 /// Where the `prove` command puts its result.
