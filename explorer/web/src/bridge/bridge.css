@@ -23,6 +23,32 @@
   --zb-row-h: 64px;
 }
 
+/*
+ * The components of @zkb/react (icons, sheet, review) read the --zkb-* variables. This is where the dapp maps them to its
+ * own roles, so every theme class below restyles them. Documented in explorer/react/README.md.
+ */
+:root {
+  --zkb-page: var(--zb-page);
+  --zkb-sheet-bg: var(--zb-to);
+  --zkb-sheet-ink: var(--zb-to-ink);
+  --zkb-accent: var(--zb-accent);
+  --zkb-sheet-bare-edge: var(--zb-from);
+  --zkb-muted: var(--zb-muted);
+  --zkb-line: var(--zb-line);
+  --zkb-warn: var(--zb-warn);
+  --zkb-edge: var(--zb-pill-edge);
+  --zkb-plate: var(--zb-plate);
+  --zkb-raised: var(--zb-raised);
+  --zkb-raised-ink: var(--zb-raised-ink);
+  --zkb-raised-edge: var(--zb-raised-edge);
+  --zkb-column-width: var(--zb-col-width);
+  --zkb-touch: var(--zb-touch);
+  --zkb-text-micro: var(--zb-step-micro);
+  --zkb-text-small: var(--zb-step--1);
+  --zkb-text: var(--zb-step-0);
+  --zkb-text-large: var(--zb-step-1);
+}
+
 :root,
 .theme-ember-light {
   /* Ember light: the palette, then every role as one of its colours. Add a colour to the palette only when no existing one will do. */
@@ -223,8 +249,6 @@
 .zb-palette-sub { font-size: var(--zb-step--1); color: var(--zb-muted); overflow-wrap: anywhere; }
 /* The palette is a column: band, list, footer. On desktop it hangs from 12vh and is as tall as its list (up to 78vh), so
    no empty space sits under the rows; on phones it fills the screen and the footer sits on the bottom edge. */
-.zb-sheet.zb-sheet-top { display: flex; flex-direction: column; }
-@media (min-width: 720px) { .zb-sheet.zb-sheet-top { top: 12vh; bottom: auto; max-height: 78vh; overflow: hidden; } }
 .zb-sheet-top .zb-palette { flex: 1; min-height: 0; overflow: auto; padding-bottom: 6px; }
 .zb-palette-foot { flex: none; display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 8px 0 16px; border-top: 1px solid var(--zb-line); font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-palette-keys { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
@@ -368,13 +392,6 @@
 /* A filled icon (take my money): no stroke, the path fills in the current colour. */
 .zb-icon.zb-icon-fill { stroke: none; }
 .zb-chev { width: 12px; height: 12px; }
-.zb-tok-icon { position: relative; display: inline-block; flex: none; }
-.zb-tok-icon img.zb-main { display: block; width: 100%; height: 100%; }
-/* On the accent band an icon sits on a neutral round plate (owner), 2 px around it; a badge keeps its own small plate. */
-.zb-tok-icon.zb-on-accent { border-radius: 50%; background: var(--zb-plate); padding: 2px; }
-.zb-tok-icon.zb-on-accent img.zb-badge { right: -2px; bottom: -1px; }
-.zb-tok-icon img.zb-badge { position: absolute; right: -4px; bottom: -3px; width: 50%; height: 50%; border-radius: 50%; background: var(--zb-page); padding: 1px; }
-.zb-tok-fallback { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; background: var(--zb-raised); color: var(--zb-raised-ink); border: 1px solid var(--zb-raised-edge); font-size: var(--zb-step-micro); font-weight: 700; }
 .zb-ident { width: 18px; height: 18px; border-radius: 50%; flex: none; display: inline-block; }
 .zb-zeros sub { font-size: 0.72em; vertical-align: -0.28em; margin: 0 1px; }
 
@@ -384,21 +401,11 @@
 .zb-pop [aria-checked="true"], .zb-pop [aria-selected="true"] { background: var(--zb-raised); font-weight: 600; }
 .zb-pop [data-active="true"] { outline: 2px solid var(--zb-accent); outline-offset: -2px; }
 .zb-pop-group { font-size: var(--zb-step-micro); letter-spacing: .08em; text-transform: uppercase; color: var(--zb-muted); padding: 8px 14px 4px; }
-.zb-scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, 0.55); }
-.zb-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 41; max-height: 86vh; overflow: auto; background: var(--zb-to); color: var(--zb-to-ink); border-top: 3px solid var(--zb-accent); }
-@media (min-width: 720px) { .zb-sheet { left: 50%; right: auto; width: min(var(--zb-col-width), calc(100vw - 32px)); transform: translateX(-50%); bottom: 10vh; border: 3px solid var(--zb-accent); } }
-.zb-sheet-head { display: flex; align-items: center; padding-block: 14px 8px; }
-.zb-sheet-head h2 { font-size: var(--zb-step-1); margin: 0; }
 .zb-search-field { display: flex; align-items: center; gap: 8px; border: 1.5px solid var(--zb-ink); border-radius: 999px; padding: 8px 14px; }
 .zb-search-field input { flex: 1; min-width: 0; background: none; border: 0; color: inherit; font: inherit; outline: none; }
-.zb-kv { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--zb-line); font-size: var(--zb-step-0); }
-.zb-kv:first-child { border-top: 0; }
-.zb-kv .zb-k { color: var(--zb-muted); }
-.zb-kv-sub { padding: 2px 0 2px 14px; border-top: 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-breakdown { list-style: none; margin: 0 0 10px; padding: 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-breakdown li { display: flex; justify-content: space-between; gap: 12px; padding: 2px 0; font-variant-numeric: tabular-nums; }
 .zb-breakdown li[data-total] { margin-top: 3px; padding-top: 5px; border-top: 1px solid var(--zb-line); color: var(--zb-ink); font-weight: 600; }
-.zb-warnbox { border: 1.5px solid var(--zb-accent); color: var(--zb-warn); padding: 8px 12px; font-size: var(--zb-step--1); margin: 10px 0; }
 
 /* Pulse and steps */
 .zb-steps { list-style: none; margin: 0; padding: 0; }
@@ -415,8 +422,6 @@
 .zb-step a { color: inherit; display: inline-flex; }
 .zb-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-/* Close: an icon-only round button */
-.zb-close { width: var(--zb-touch); height: var(--zb-touch); border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--zb-pill-edge); flex: none; }
 
 /* The direction menu: the current route is lit with a left accent bar that never shifts content */
 .zb-dir-menu { left: 16px; right: 16px; top: calc(100% - 4px); max-width: calc(var(--zb-col-width) - 32px); }
@@ -439,8 +444,6 @@
 
 /* Token picker, rounds 4 to 7: the search is a 52 px orange band (no pill, no top border); the close square is the same
    orange, 52 x 52, set off by a full-height dark rule; tabs are icons only. */
-.zb-sheet-bare { border-top: 0 !important; }
-@media (min-width: 720px) { .zb-sheet-bare { border: 3px solid var(--zb-from) !important; } }
 .zb-picker-search { display: flex; align-items: center; gap: 10px; height: 56px; padding-left: 16px; background: var(--zb-from-bg, var(--zb-from)); color: var(--zb-from-ink); }
 .zb-picker-search input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none; color: inherit; font: inherit; font-size: var(--zb-step-0); }
 .zb-picker-search input::placeholder { color: var(--zb-from-muted); }

@@ -3,30 +3,23 @@
  * there is one, else the image server the user chose in Settings (gib.show by default).
  */
 import type { Address } from "viem";
+import { DEFAULT_IMAGE_SERVER, iconUrl as iconUrlFrom, type IconSubject } from "@zkb/react";
 import type { ChainConfig, PairConfig, TokenInfo } from "@terminal/model/types";
 import lock from "../../public/icons/icons.lock.json";
 
-/** The default image server: `{chainId}` and `{address}` are filled in; a chain icon drops `/{address}`. */
-export const DEFAULT_IMAGE_SERVER = "https://gib.show/image/{chainId}/{address}";
+// The default image server and the subject of an icon live in `@zkb/react`.
+export { DEFAULT_IMAGE_SERVER };
+export type { IconSubject };
 
 const shipped = lock as Readonly<Record<string, { readonly file: string }>>;
 
-/** What an icon shows: a chain (its native coin) or a token on a chain. */
-export type IconSubject = { readonly chainId: number; readonly address?: Address | null };
-
 /**
- * The URL of an icon.
+ * The URL of an icon (the copies the release ships first, else the image server).
  *
  * @param subject The chain, and the token when it is not the chain's own coin.
  * @param imageServer The image server template.
  */
-export const iconUrl = (subject: IconSubject, imageServer: string = DEFAULT_IMAGE_SERVER): string => {
-  const key = subject.address == null ? String(subject.chainId) : `${subject.chainId}/${subject.address.toLowerCase()}`;
-  const local = shipped[key];
-  if (local !== undefined) return `./icons/${local.file}`;
-  const template = subject.address == null ? imageServer.replace(/\/?\{address\}/, "") : imageServer;
-  return template.replace("{chainId}", String(subject.chainId)).replace("{address}", subject.address ?? "");
-};
+export const iconUrl = (subject: IconSubject, imageServer: string = DEFAULT_IMAGE_SERVER): string => iconUrlFrom(subject, { imageServer, shipped });
 
 const chainOf = (pair: PairConfig, side: TokenInfo["side"]): ChainConfig => (side === "first" ? pair.first : pair.second);
 
