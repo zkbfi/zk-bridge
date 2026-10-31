@@ -1,6 +1,7 @@
 import { keccak256, type Hex } from "viem";
 import { ORACLE_PROOF_MESSAGE_VERSION, tryDecodeProofMessage, type ProofDirection, type ProofMessage } from "../proof-message.js";
-import type { ProverBinary } from "./prover-binary.js";
+import { CommandStartError, CommandTimeoutError } from "./execute-command.js";
+import { ProverCommandError, ProverOutputError, type ProverBinary } from "./prover-binary.js";
 import type { VerifyGuard } from "./verify-guard.js";
 
 /** What the proof check needs to know about the light client on the destination chain. */
@@ -27,6 +28,7 @@ export type ProofRefusal =
   | "start-slot-differs-from-head"
   | "start-root-differs-from-head"
   | "verify-budget-exhausted"
+  | "verify-unavailable"
   | "proof-does-not-verify";
 
 /** The verdict on one message. */
@@ -104,8 +106,9 @@ export async function assessProofPayload(input: AssessInput): Promise<ProofAsses
   if (message.version === ORACLE_PROOF_MESSAGE_VERSION) return { accept: true, message };
   const guard = input.verifyGuard;
   const key = payloadKey(input.payload);
+  const source = input.verifySource ?? "unnamed";
   if (guard !== undefined) {
-    const admission = guard.admit({ key, head: state, source: input.verifySource ?? "unnamed" });
+    const admission = guard.admit({ key, head: state, newSlot: message.newSlot, source });
     if (admission.kind === "refused-before") return { accept: false, reason: "proof-does-not-verify", detail: "refused before at this head" };
     if (admission.kind === "dropped") {
       const whose = admission.scope === "all" ? "all sources" : "this source";
@@ -115,10 +118,29 @@ export async function assessProofPayload(input: AssessInput): Promise<ProofAsses
   try {
     await input.prover.verify({ programKey: message.programKey, publicValues: message.publicValues, proof: message.proof });
   } catch (error) {
-    guard?.refused({ key, head: state });
-    return { accept: false, reason: "proof-does-not-verify", detail: error instanceof Error ? error.message : String(error) };
+    const detail = error instanceof Error ? error.message : String(error);
+    // The verifier could not give an answer (it timed out, did not start, crashed or printed junk): nothing is known
+    // about the proof, so the refusal may pass on a later look and is not remembered.
+    if (isVerifierFailure(error)) return { accept: false, reason: "verify-unavailable", detail };
+    // Only a definite refusal of the verifier is remembered for this head.
+    if (isDefiniteRefusal(error)) guard?.refused({ key, head: state, source });
+    return { accept: false, reason: "proof-does-not-verify", detail };
   }
   return { accept: true, message };
+}
+
+/** The exit code of `zk-bridge-prover verify` for a proof that does not verify (or has the wrong shape). */
+export const VERIFY_REFUSED_EXIT_CODE = 1;
+
+/** True when the verifier ran and refused the proof: `verify` exits with code 1 and reads no file or network. */
+function isDefiniteRefusal(error: unknown): boolean {
+  return error instanceof ProverCommandError && error.exitCode === VERIFY_REFUSED_EXIT_CODE;
+}
+
+/** True when the verifier gave no answer about the proof: a timeout, a start failure, a crash or a junk answer. */
+function isVerifierFailure(error: unknown): boolean {
+  if (error instanceof CommandTimeoutError || error instanceof CommandStartError || error instanceof ProverOutputError) return true;
+  return error instanceof ProverCommandError && error.exitCode !== VERIFY_REFUSED_EXIT_CODE;
 }
 
 /** A key for a payload, so that the runner looks at a republished message once. */

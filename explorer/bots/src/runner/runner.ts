@@ -74,6 +74,8 @@ export interface Runner {
 
 /** How long a message that was looked at is not looked at again. The publisher posts it again every few minutes. */
 export const PAYLOAD_MEMORY_MILLISECONDS = 5 * 60 * 1000;
+/** Refusals of a proof that was not really checked: the message is not remembered, so its next copy gets a look. */
+const RETRYABLE_REFUSALS: ReadonlySet<ProofRefusal> = new Set(["verify-budget-exhausted", "verify-unavailable"]);
 /** How long an item waits after a failure that costs time to find again, such as evidence or a revert. */
 export const RETRY_AFTER_MILLISECONDS = 5 * 60 * 1000;
 /** The pages of the feed that one sweep reads. */
@@ -120,8 +122,9 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
       verifySource: dependencies.direction,
     });
     if (!assessment.accept) {
-      // A check that the budget dropped was not made: the message gets a look when it comes again.
-      if (assessment.reason === "verify-budget-exhausted") seenPayloads.delete(payloadKey(payload));
+      // A check that the budget dropped, or whose verifier gave no answer, says nothing about the proof: the message gets
+      // a look when it comes again.
+      if (RETRYABLE_REFUSALS.has(assessment.reason)) seenPayloads.delete(payloadKey(payload));
       logger.debug("proof_refused", { reason: assessment.reason, detail: assessment.detail });
       // A proof that fails verification is worth a warning: someone posted a forgery or a broken proof.
       if (assessment.reason === "proof-does-not-verify") logger.warn("proof_forgery_refused", { detail: assessment.detail });

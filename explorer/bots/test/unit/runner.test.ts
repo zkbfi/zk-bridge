@@ -9,7 +9,7 @@ import { createPrerequisiteLedger } from "../../src/runner/prerequisite-ledger.t
 import type { DeliverySettings } from "../../src/runner/delivery.ts";
 import type { Logger } from "../../src/logging/logger.ts";
 import { createRunner } from "../../src/runner/runner.ts";
-import { createVerifyGuard, type VerifyGuard } from "@zk-bridge/shared/prover";
+import { CommandTimeoutError, createVerifyGuard, type VerifyGuard } from "@zk-bridge/shared/prover";
 import { createSerialQueue } from "../../src/runner/serial-queue.ts";
 import { INITIAL_RUNNER_STATE, type RunnerState } from "../../src/runner/state.ts";
 import {
@@ -236,7 +236,7 @@ describe("proof intake and the update", () => {
   });
 
   it("caps the local checks of a flood of forged proofs, logs the drops, and remembers a refusal at the head (B-4)", async () => {
-    const guard = createVerifyGuard({ now: () => 1_000_000, limits: { perMinute: 10, perSourcePerMinute: 3, refusalsRemembered: 100 } });
+    const guard = createVerifyGuard({ now: () => 1_000_000, limits: { perMinute: 10, perSourcePerMinute: 3, reservePerSourcePerMinute: 0, refusalsRemembered: 100 } });
     const w = world({ verifyGuard: guard });
     w.prover.verify = async () => {
       (w.prover as { verifications: number }).verifications += 1;
@@ -252,7 +252,7 @@ describe("proof intake and the update", () => {
 
   it("looks again at a message that the check budget dropped, once the budget has room (B-4)", async () => {
     let time = 1_000_000;
-    const guard = createVerifyGuard({ now: () => time, limits: { perMinute: 10, perSourcePerMinute: 1, refusalsRemembered: 100 } });
+    const guard = createVerifyGuard({ now: () => time, limits: { perMinute: 10, perSourcePerMinute: 1, reservePerSourcePerMinute: 0, refusalsRemembered: 100 } });
     const w = world({ verifyGuard: guard });
     const verify = w.prover.verify.bind(w.prover);
     w.prover.verify = async (request) => {
@@ -264,6 +264,19 @@ describe("proof intake and the update", () => {
     expect(await w.runner.handleProofPayload(honest)).toMatchObject({ handled: "refused", reason: "verify-budget-exhausted" });
     time += 60_000;
     expect(await w.runner.handleProofPayload(honest)).toMatchObject({ handled: "update-posted" });
+  });
+
+  it("looks again at a message whose check gave no answer (a verifier timeout), and posts it when the check passes", async () => {
+    const w = world({ verifyGuard: createVerifyGuard({ now: () => 1_000_000 }) });
+    const verify = w.prover.verify.bind(w.prover);
+    let failures = 1;
+    w.prover.verify = async (request) => {
+      if (failures-- > 0) throw new CommandTimeoutError("zk-bridge-prover ran longer than its limit");
+      return verify(request);
+    };
+    const payload = proofPayload();
+    expect(await w.runner.handleProofPayload(payload)).toMatchObject({ handled: "refused", reason: "verify-unavailable" });
+    expect(await w.runner.handleProofPayload(payload)).toMatchObject({ handled: "update-posted" });
   });
 
   it("looks at a republished message once", async () => {

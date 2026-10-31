@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, type Hex } from "viem";
 import { encodeProofMessage, proofCategory, type ProofDirection, type ProofMessage } from "@zk-bridge/shared";
 import type { BoardFeed, BoardMessage } from "@zk-bridge/shared/msgboard";
-import { DEFAULT_VERIFY_LIMITS, createVerifyGuard, type LightClientHead } from "@zk-bridge/shared/prover";
+import { DEFAULT_VERIFY_LIMITS, ProverCommandError, createVerifyGuard, type LightClientHead } from "@zk-bridge/shared/prover";
 import { createApp } from "../../src/app.ts";
 import type { BackendModuleContext } from "../../src/module.ts";
 import { MODULES } from "../../src/main.ts";
@@ -119,7 +119,7 @@ describe("malicious board content", () => {
   });
 
   const pollTwice = async (count: number) => {
-    const r = rig({ verify: async () => { throw new Error("does not verify"); } });
+    const r = rig({ verify: async () => { throw new ProverCommandError("verify", 1, "does not verify"); } });
     for (let index = 0; index < count; index += 1) r.post("first-to-second", payloadOf(100n, 101n + BigInt(index)));
     const stop = await r.run(5);
     const first = r.verifyCalls();
@@ -133,7 +133,8 @@ describe("malicious board content", () => {
     return { first, sameMinute, nextMinute: r.verifyCalls(), log: r.log };
   };
 
-  const CAP = DEFAULT_VERIFY_LIMITS.perSourcePerMinute;
+  // The junk proofs claim ever higher slots, so after the general budget each also takes a check from the reserve.
+  const CAP = DEFAULT_VERIFY_LIMITS.perSourcePerMinute + DEFAULT_VERIFY_LIMITS.reservePerSourcePerMinute;
 
   it("ATTACK fewer than SEEN_LIMIT junk proofs are verified at most once each, within the budget of the minute (control)", async () => {
     const { first, sameMinute, nextMinute } = await pollTwice(100);

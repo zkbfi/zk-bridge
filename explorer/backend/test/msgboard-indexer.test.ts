@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeAbiParameters, type Hex } from "viem";
 import { encodeProofMessage, proofCategory, type ProofDirection, type ProofMessage } from "@zk-bridge/shared";
 import type { BoardFeed, BoardMessage } from "@zk-bridge/shared/msgboard";
-import { DEFAULT_VERIFY_LIMITS, createLightClientReader, createVerifyGuard, type LightClientHead, type VerifyLimits } from "@zk-bridge/shared/prover";
+import { CommandTimeoutError, DEFAULT_VERIFY_LIMITS, ProverCommandError, createLightClientReader, createVerifyGuard, type LightClientHead, type VerifyLimits } from "@zk-bridge/shared/prover";
 import { createApp } from "../src/app.ts";
 import { BackendConfigError } from "../src/config.ts";
 import type { BackendModuleContext } from "../src/module.ts";
@@ -130,7 +130,7 @@ function makeRig(options: { storage?: Storage; verify?: () => Promise<void>; hea
   const heads = { "first-to-second": movableHead(options.headSlot ?? 100n, clock.now), "second-to-first": movableHead(options.headSlot ?? 100n, clock.now) };
   const board = fakeBoard();
   // A guard with room for every test that does not test the guard itself.
-  const verifyGuard = createVerifyGuard({ now: clock.now, logger: log.logger, limits: options.limits ?? { perMinute: 10_000, perSourcePerMinute: 10_000, refusalsRemembered: 10_000 } });
+  const verifyGuard = createVerifyGuard({ now: clock.now, logger: log.logger, limits: options.limits ?? { perMinute: 10_000, perSourcePerMinute: 10_000, reservePerSourcePerMinute: 0, refusalsRemembered: 10_000 } });
   const dependencies: IndexerDependencies = { pair: PAIR, feed: board.feed, lightClients: heads, pollMilliseconds: 1_000, acceptOracleProof: options.acceptOracleProof ?? false, verifyGuard };
   return { storage, clock, log, context, app, heads, board, dependencies, verifyCalls };
 }
@@ -354,7 +354,7 @@ describe("the msgboard indexer", () => {
 
   it("caps the checks of junk proofs per minute and direction, logs the drops, and looks at the dropped ones again later (K-5)", async () => {
     vi.useFakeTimers();
-    const rig = makeRig({ verify: async () => Promise.reject(new Error("does not verify")), limits: { perMinute: 10, perSourcePerMinute: 3, refusalsRemembered: 100 } });
+    const rig = makeRig({ verify: async () => Promise.reject(new ProverCommandError("verify", 1, "does not verify")), limits: { perMinute: 10, perSourcePerMinute: 3, reservePerSourcePerMinute: 0, refusalsRemembered: 100 } });
     rig.board.board.recentMessages = Array.from({ length: 10 }, (_, index) => rig.board.message("first-to-second", payloadOf(100n, 101n + BigInt(index))));
     rig.board.board.recentMessages.push(rig.board.message("second-to-first", payloadOf(100n, 130n, { direction: "second-to-first" })));
     await run(rig);
@@ -368,6 +368,22 @@ describe("the msgboard indexer", () => {
     rig.clock.advance(60_000);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(rig.verifyCalls.length).toBe(7);
+  });
+
+  it("looks again at a proof whose check gave no answer (a verifier timeout), and keeps it when the check passes", async () => {
+    vi.useFakeTimers();
+    let failures = 1;
+    const rig = makeRig({
+      verify: async () => {
+        if (failures-- > 0) throw new CommandTimeoutError("zk-bridge-prover ran longer than its limit");
+      },
+    });
+    rig.board.board.recentMessages = [rig.board.message("first-to-second", payloadOf(100n, 130n))];
+    await run(rig);
+    expect(loadStoredProof(rig.storage, "first-to-second")).toBeNull();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(rig.verifyCalls.length).toBe(2);
+    expect(loadStoredProof(rig.storage, "first-to-second")?.newSlot).toBe(130n);
   });
 
   it("looks at a republished message once", async () => {
@@ -565,7 +581,7 @@ describe("the real parts", () => {
   it("builds a guard for the local checks with the default limits (K-5)", () => {
     const { verifyGuard } = buildDependencies(contextWith());
     const head = { headSlot: 100n, headRoot: word("aa") };
-    const answers = Array.from({ length: DEFAULT_VERIFY_LIMITS.perSourcePerMinute + 1 }, (_, index) => verifyGuard.admit({ key: word((index + 16).toString(16)), head, source: "first-to-second" }).kind);
+    const answers = Array.from({ length: DEFAULT_VERIFY_LIMITS.perSourcePerMinute + 1 }, (_, index) => verifyGuard.admit({ key: word((index + 16).toString(16)), head, newSlot: 200n, source: "first-to-second" }).kind);
     expect(answers.filter((kind) => kind === "check")).toHaveLength(DEFAULT_VERIFY_LIMITS.perSourcePerMinute);
     expect(answers.at(-1)).toBe("dropped");
   });

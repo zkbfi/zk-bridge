@@ -4,7 +4,7 @@
  */
 import { decodeFunctionData, toHex, type Hex } from "viem";
 import { encodeProofMessage, messageBridgeAbi, ORACLE_PROOF_MESSAGE_VERSION } from "@zk-bridge/shared";
-import { DEFAULT_VERIFY_LIMITS, assessProofPayload, createVerifyGuard } from "@zk-bridge/shared/prover";
+import { DEFAULT_VERIFY_LIMITS, ProverCommandError, assessProofPayload, createVerifyGuard } from "@zk-bridge/shared/prover";
 import { describe, expect, it } from "vitest";
 import { sendBatch } from "../../src/runner/batch.ts";
 import { prepareItem, quoteFee, type DeliveryDependencies, type ReadyDelivery } from "../../src/runner/delivery.ts";
@@ -177,7 +177,7 @@ describe("red team: proof intake of the runner (malicious msgboard content)", ()
       for (let index = 0; index < 50; index += 1) {
         const prover = fakeProver({
           verify: () => {
-            throw new Error("invalid proof");
+            throw new ProverCommandError("verify", 1, "invalid proof");
           },
         });
         const payload = proofPayload({ proofByte: index.toString(16).padStart(2, "0") });

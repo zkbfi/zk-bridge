@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { decodeFunctionData, encodeFunctionResult, type Hex } from "viem";
 import { beaconLightClientAbi, decodeProofMessage, proofCategory, type ProofDirection } from "@zk-bridge/shared";
 import type { BoardPublisher } from "@zk-bridge/shared/msgboard";
-import type { LightClientHead, ProverBinary } from "@zk-bridge/shared/prover";
+import { CommandTimeoutError, type LightClientHead, type ProverBinary } from "@zk-bridge/shared/prover";
 import { PROGRAM_KEY, publicValuesFor, word } from "../../shared/test/support/prover-builders.ts";
 import { MAXIMUM_BODY_BYTES } from "../src/requests/module.ts";
 import { getJob, insertJob, updateJob } from "../src/requests/jobs.ts";
@@ -239,6 +239,20 @@ describe("the check", () => {
     expect((await send(fixture, jobId, proofPackage())).status).toBe(503);
     expect(getJob(fixture.storage, jobId)?.status).toBe("proving");
     expect(storedCount(fixture)).toBe(0);
+  });
+
+  it("does not blame the proof when the verifier gives no answer (a timeout): the job stays proving and the package may come again", async () => {
+    let failures = 1;
+    const fixture = setup({
+      verify: async () => {
+        if (failures-- > 0) throw new CommandTimeoutError("zk-bridge-prover ran longer than its limit");
+      },
+    });
+    const jobId = createProvingJob(fixture);
+    expect((await send(fixture, jobId, proofPackage())).status).toBe(503);
+    expect(getJob(fixture.storage, jobId)?.status).toBe("proving");
+    expect((await send(fixture, jobId, proofPackage())).status).toBe(202);
+    expect(storedCount(fixture)).toBe(1);
   });
 
   it("reads the light client of the destination chain of the direction", async () => {

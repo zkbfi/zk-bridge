@@ -31,10 +31,10 @@ export const MAXIMUM_QUEUED_MESSAGES = 64;
 const MAXIMUM_PAYLOAD_CHARACTERS = 2 + PROOF_MESSAGE_BYTES * 2;
 
 /**
- * Refusals that may pass later, so the message gets another look: those that depend on the head, and a check that the
- * verify guard dropped because the budget of the minute was used up.
+ * Refusals that may pass later, so the message gets another look: those that depend on the head, a check that the
+ * verify guard dropped because the budget of the minute was used up, and a check whose verifier gave no answer.
  */
-const REFUSALS_THAT_CAN_PASS = new Set(["light-client-unreadable", "start-slot-differs-from-head", "start-root-differs-from-head", "verify-budget-exhausted"]);
+const REFUSALS_THAT_CAN_PASS = new Set(["light-client-unreadable", "start-slot-differs-from-head", "start-root-differs-from-head", "verify-budget-exhausted", "verify-unavailable"]);
 
 /** What the indexer needs from the outside world. A test passes fakes. */
 export type IndexerDependencies = {
