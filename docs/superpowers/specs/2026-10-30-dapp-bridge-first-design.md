@@ -293,6 +293,10 @@ and the time left while in flight or the age once delivered. A row links to the 
   can still move after signing, i.e. a gas-priced fee (base fee × gas level) paid at delivery, up to the limit signed
   in. Then the review warns when that worst case, the most the signed terms allow, would be a "High tip %". A fee that
   is fixed at signing has no cap warning; "High tip %" reads the fee itself.
+- **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
+  of the overall cost (proof + delivery gas) that every percentage is set against: the default fee (the larger of
+  0.1% and 2 × cost), the low-fee line, the tip before gas, and the worst case of a gas-priced fee. A fee signed as a
+  share of the amount carries it inside the share.
 
 - **Determinism (owner):** every fee, warning and price is a pure function of its inputs: same inputs, same answer,
   in any app that uses it. Rules: no clock, randomness or network inside a rule; prices and gas are read **at a named
@@ -475,3 +479,4 @@ q5) for all bridged tokens, for the short term, we need to a) reverse out the to
 don't call it "tip too high", call it "high tip %""
 59. "oh, so the cap only makes sense to warn about if it can shift, as in if the setting is to use the base fee/gas multiplier"
 60. "lets also integrate the 0.025 fixed cost that we have for all bridges"
+61. "well, no it should just be computed as part of the overall cost that we adjust the percentages against"
