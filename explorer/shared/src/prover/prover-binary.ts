@@ -60,7 +60,7 @@ export interface VerifyRequest {
 
 /** The three commands of `zk-bridge-prover` that the bots use. */
 export interface ProverBinary {
-  /** `prove --route <route> --to stdout`. Exit code 3 gives `up-to-date`. */
+  /** `prove --route <route> --to stdout`, plus `--to webhook` with a handoff. Exit code 3 gives `up-to-date`. */
   prove(request: DirectionRequest): Promise<ProveOutcome>;
   /** `evidence --route <route> --tx <hash> --log-index <n>`. */
   evidence(request: EvidenceRequest): Promise<EvidencePackage>;
@@ -145,7 +145,9 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary {
       if (input.backend === null) throw new Error("this prover wrapper has no proving backend");
       const backend = input.backend;
       return withConfigFile(request.direction, backend, async (path, route) => {
-        const output = await run("prove", ["--config", path, "prove", "--route", route, "--to", "stdout"]);
+        // A `--to` flag replaces the targets of the file, so the webhook must be named here too, or it gets no post.
+        const targets = input.handoff === undefined ? ["--to", "stdout"] : ["--to", "stdout", "--to", "webhook"];
+        const output = await run("prove", ["--config", path, "prove", "--route", route, ...targets]);
         if (output.code === EXIT_UP_TO_DATE) return { kind: "up-to-date" } as const;
         if (output.code !== 0) throw new ProverCommandError("prove", output.code, tailOf(output.stderr));
         const parsed = proofPackageSchema.safeParse(parseSingleJsonLine(output.stdout, "prove"));

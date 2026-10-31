@@ -250,6 +250,15 @@ describe("the prover configuration of the sp1 backend and the webhook", () => {
     await binary.prove({ direction: "first-to-second" });
     expect(seen[0]!.configText).toContain('webhook_bearer_env = "PROOF_HANDOFF_TOKEN"');
   });
+
+  // A `--to` flag replaces the targets of the file. A run with a handoff that named only `--to stdout` printed its proof
+  // and never posted it, so the backend kept the job proving until the lost-job check failed it.
+  it("names the webhook as a target on the command line when a handoff is given", async () => {
+    const { binary, seen } = await setup({ code: 3 }, { handoff: { webhookUrl: "https://publisher.example.org/proofs", bearerVariable: "PROOF_HANDOFF_TOKEN" } });
+    await binary.prove({ direction: "first-to-second" });
+    const { args } = seen[0]!.spec;
+    expect(args.slice(args.indexOf("prove"))).toEqual(["prove", "--route", "ethereum_to_pulsechain", "--to", "stdout", "--to", "webhook"]);
+  });
 });
 
 describe("the prover configuration of the oracle backend", () => {
