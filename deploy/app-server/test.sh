@@ -25,11 +25,11 @@ lacks() {
 }
 
 # --- Scripts parse ------------------------------------------------------------------------------------------------
-for script in deploy.sh provision.sh bluegreen.sh test.sh; do
+for script in deploy.sh provision.sh test.sh; do
   if bash -n "$DIR/$script"; then pass "bash -n $script"; else fail "bash -n $script"; fi
 done
 if command -v shellcheck >/dev/null 2>&1; then
-  for script in deploy.sh provision.sh bluegreen.sh test.sh; do
+  for script in deploy.sh provision.sh test.sh; do
     # Warnings and errors only: provision.sh sources /etc/os-release, which only the server has (an info note).
     if shellcheck -S warning "$DIR/$script"; then pass "shellcheck $script"; else fail "shellcheck $script"; fi
   done
@@ -151,31 +151,31 @@ else
   pass "deploy.sh leaves the state directories to their users"
 fi
 
-# --- bluegreen.sh and the Caddy upstream files -----------------------------------------------------------------------
-if [ "$(id -u)" -ne 0 ]; then
-  status=0
-  output=$(bash "$DIR/bluegreen.sh" status 2>&1) || status=$?
-  if [ "$status" -ne 0 ] && [ "$output" = "bluegreen: run as root" ]; then pass "bluegreen.sh refuses to run without root"; else fail "bluegreen.sh without root: status $status, output '$output'"; fi
-fi
-# The Caddyfile imports the upstream files and no longer names a port itself, so the scripts own the routing.
+# --- Caddy upstream files (deploy/ansible) -------------------------------------------------------------------------
+ANSIBLE_DIR="$DIR/../ansible"
+# The Caddyfile imports the upstream files and no longer names a port itself, so the playbooks own the routing.
 for name in backend indexer; do
-  if grep -qxF "import /etc/caddy/upstreams/$name.caddy" "$DIR/Caddyfile"; then pass "Caddyfile imports $name.caddy"; else fail "Caddyfile does not import $name.caddy"; fi
+  if grep -qxF "import /etc/caddy/upstreams/$name.caddy" "$DIR/Caddyfile"; then pass "Caddyfile imports $name.caddy"; else fail "Caddyfile imports $name.caddy"; fi
 done
 lacks Caddyfile '^[[:space:]]*reverse_proxy'
-# The snippets that init writes give the routing the Caddyfile had before: the same ports, and no other behaviour.
-# shellcheck disable=SC1090
-snippets=$(sed '$d' "$DIR/bluegreen.sh" > /tmp/bluegreen-lib.$$ && bash -c ". /tmp/bluegreen-lib.$$; indexer_upstream_normal; backend_upstream_normal"; rm -f /tmp/bluegreen-lib.$$)
-if printf '%s\n' "$snippets" | grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_INDEXER_PORT:42069}' \
-  && printf '%s\n' "$snippets" | grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_BACKEND_PORT:8787}'; then
-  pass "bluegreen.sh init writes the ports the Caddyfile had"
+# The snippets that caddy.yml writes give the routing the Caddyfile had before: the same ports, and no other behaviour.
+if grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_INDEXER_PORT:{{ zkb_default_indexer_port }}}' "$ANSIBLE_DIR/templates/indexer-normal.caddy.j2" \
+  && grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_BACKEND_PORT:{{ zkb_default_backend_port }}}' "$ANSIBLE_DIR/templates/backend-normal.caddy.j2" \
+  && grep -qx 'zkb_default_indexer_port: 42069' "$ANSIBLE_DIR/inventory/group_vars/zkbfi.yml" \
+  && grep -qx 'zkb_default_backend_port: 8787' "$ANSIBLE_DIR/inventory/group_vars/zkbfi.yml"; then
+  pass "the normal upstream templates carry the ports the Caddyfile had"
 else
-  fail "bluegreen.sh init does not write the old ports"
+  fail "the normal upstream templates do not carry the old ports"
 fi
 # The drain answers only POST /requests: the webhook and the job reads must stay up.
-drain=$(sed '$d' "$DIR/bluegreen.sh" > /tmp/bluegreen-lib.$$ && bash -c ". /tmp/bluegreen-lib.$$; backend_upstream_drain"; rm -f /tmp/bluegreen-lib.$$)
-if printf '%s\n' "$drain" | grep -qx '		method POST' && printf '%s\n' "$drain" | grep -qx '		path /requests'; then pass "drain matches POST /requests only"; else fail "drain does not match POST /requests only"; fi
-# Every release-specific setting that a transient copy takes comes from the unit file: no sandbox setting is repeated here.
-if grep -E '^[[:space:]]*-p [A-Za-z]*=' "$DIR/bluegreen.sh" | grep -vE 'Environment=PORT|Restart=no' | grep -q .; then fail "bluegreen.sh sets a unit property by hand"; else pass "bluegreen.sh takes the sandbox from the unit files"; fi
+if grep -qx '		method POST' "$ANSIBLE_DIR/templates/backend-drain.caddy.j2" && grep -qx '		path /requests' "$ANSIBLE_DIR/templates/backend-drain.caddy.j2"; then pass "drain matches POST /requests only"; else fail "drain does not match POST /requests only"; fi
+# A transient copy takes its sandbox from the unit file of the release: no sandbox setting is repeated in the playbooks.
+if grep -rE -- '--property=(Protect|Restrict|NoNewPrivileges|SystemCall|CapabilityBoundingSet)' "$ANSIBLE_DIR/tasks" "$ANSIBLE_DIR"/*.yml | grep -q .; then fail "a playbook sets a sandbox property by hand"; else pass "the playbooks take the sandbox from the unit files"; fi
+# The helpers the playbooks run on the server compile.
+if command -v python3 >/dev/null 2>&1; then
+  if python3 -m py_compile "$ANSIBLE_DIR"/files/*.py; then pass "ansible helpers compile"; else fail "ansible helpers compile"; fi
+  find "$ANSIBLE_DIR/files" -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
+fi
 # deploy.sh moves one service at a time on request.
 if grep -q 'ZKB_SERVICES' "$DIR/deploy.sh"; then pass "deploy.sh honours ZKB_SERVICES"; else fail "deploy.sh lacks ZKB_SERVICES"; fi
 

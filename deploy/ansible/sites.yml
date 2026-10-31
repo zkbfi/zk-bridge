@@ -1,0 +1,59 @@
+---
+# Publishes the hosted sites. Runs on THIS machine (not the app server) with the repository's own scripts and wrangler.
+# Nothing is published unless a variable names it, and each public name asks for confirm_production=yes.
+#
+#   cd deploy/ansible
+#   # Staging: the signed release on next.zkb.fi (Worker zkb-fi-next). Look at it before anything else.
+#   ansible-playbook sites.yml -e publish_next=/path/to/release-dir
+#   # Production landing (Worker zkb-fi on zkb.fi, www.zkb.fi): only a release that was tried on next.zkb.fi.
+#   ansible-playbook sites.yml -e publish_stable=/path/to/promoted-release-dir -e confirm_production=yes
+#   # docs.zkb.fi: the DNSLink TXT record names the new docs CID (pinned first; the old CID stays pinned).
+#   ansible-playbook sites.yml -e docs_cid=<cid> -e confirm_production=yes
+#   # Design UI Worker (zkb-fi-ui, routes zkb.fi/ui* and next.zkb.fi/ui*): upload a version, look at it, then deploy it.
+#   ansible-playbook sites.yml -e design_ui=upload
+#   ansible-playbook sites.yml -e design_ui=deploy -e confirm_production=yes
+#   ansible-playbook sites.yml -e design_ui=rollback -e confirm_production=yes
+#
+# The release itself is built, signed and pinned before this (script/release/release.sh, publish.sh, promote.sh; the
+# keys are never read here). publish-pages.sh verifies the release against the channel's keys and refuses to deploy a
+# release to the wrong channel. The Cloudflare token and account id are read on this machine with `op read` (references in
+# group_vars/control.yml), passed to wrangler through the environment of that one task, and never printed (no_log).
+# Under --check the checks run and nothing is deployed or changed.
+- name: Publish the hosted sites
+  hosts: localhost
+  gather_facts: false
+  vars:
+    confirm_production: "no"
+  tasks:
+    - name: Check that something is named to publish
+      ansible.builtin.assert:
+        that:
+          - publish_next is defined or publish_stable is defined or docs_cid is defined or design_ui is defined
+        fail_msg: "Nothing to publish. Name it: -e publish_next=<dir>, publish_stable=<dir>, docs_cid=<cid>, or design_ui=upload|deploy|rollback."
+        quiet: true
+
+    - name: Check the confirmation for production names
+      ansible.builtin.assert:
+        that:
+          - confirm_production == 'yes'
+        fail_msg: "{{ item }} changes a public name. Add -e confirm_production=yes once next.zkb.fi shows what you mean to ship."
+        quiet: true
+      loop: "{{ ['publish_stable'] * (publish_stable is defined | int) + ['docs_cid'] * (docs_cid is defined | int)
+                + ['design_ui deploy/rollback'] * ((design_ui | default('') in ['deploy', 'rollback']) | int) }}"
+
+    # --- Release Workers --------------------------------------------------------------------------------------------
+    - name: Publish a release to a channel
+      ansible.builtin.include_tasks: tasks/site_release.yml
+      loop: "{{ (['next'] if publish_next is defined else []) + (['stable'] if publish_stable is defined else []) }}"
+      loop_control:
+        loop_var: zkb_channel
+
+    # --- docs.zkb.fi ------------------------------------------------------------------------------------------------
+    - name: Point docs.zkb.fi at a new docs CID
+      ansible.builtin.include_tasks: tasks/site_docs.yml
+      when: docs_cid is defined
+
+    # --- Design UI --------------------------------------------------------------------------------------------------
+    - name: Publish the design UI Worker
+      ansible.builtin.include_tasks: tasks/site_design_ui.yml
+      when: design_ui is defined

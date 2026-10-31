@@ -1,0 +1,73 @@
+---
+# Writes one Caddy upstream file, validates the whole configuration, and reloads Caddy (never a restart: a reload keeps
+# the old configuration when the new one is bad, and keeps open connections). On any failure the previous file is put
+# back and Caddy is reloaded with it.
+#   zkb_upstream       indexer or backend
+#   zkb_upstream_mode  indexer: normal | green      backend: normal | drain
+- name: Look for the upstream directory
+  ansible.builtin.stat:
+    path: "{{ zkb_caddy_upstreams }}/{{ zkb_upstream }}.caddy"
+  register: zkb_upstream_file
+  check_mode: false
+
+- name: Check that caddy.yml has made the upstream files
+  ansible.builtin.assert:
+    that: zkb_upstream_file.stat.exists
+    fail_msg: "{{ zkb_caddy_upstreams }}/{{ zkb_upstream }}.caddy is missing: run caddy.yml first."
+    quiet: true
+
+- name: Change one Caddy upstream
+  block:
+    - name: Write the upstream file, keeping the old one next to it
+      ansible.builtin.template:
+        src: "{{ zkb_upstream }}-{{ zkb_upstream_mode }}.caddy.j2"
+        dest: "{{ zkb_caddy_upstreams }}/{{ zkb_upstream }}.caddy"
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+      register: zkb_upstream_written
+
+    - name: Validate the whole configuration with the new file
+      ansible.builtin.include_tasks: caddy_validate.yml
+
+    - name: Reload Caddy
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: reloaded
+      when: zkb_upstream_written is changed
+  rescue:
+    - name: Put the previous upstream file back
+      ansible.builtin.copy:
+        src: "{{ zkb_upstream_written.backup_file }}"
+        dest: "{{ zkb_caddy_upstreams }}/{{ zkb_upstream }}.caddy"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      when: zkb_upstream_written.backup_file is defined
+
+    - name: Reload Caddy with the previous file
+      ansible.builtin.systemd_service:
+        name: caddy
+        state: reloaded
+      when: zkb_upstream_written.backup_file is defined
+
+    - name: Stop, because the Caddy upstream did not change
+      ansible.builtin.fail:
+        msg: "Caddy rejected the {{ zkb_upstream }} upstream ({{ zkb_upstream_mode }}). The previous file is back and Caddy was reloaded with it."
+
+- name: Remove upstream backups older than the keep time
+  ansible.builtin.find:
+    paths: "{{ zkb_caddy_upstreams }}"
+    patterns: "{{ zkb_upstream }}.caddy.*~"
+    age: "{{ zkb_caddy_backups_kept_days }}d"
+  register: zkb_old_upstream_backups
+
+- name: Delete them
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ zkb_old_upstream_backups.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"

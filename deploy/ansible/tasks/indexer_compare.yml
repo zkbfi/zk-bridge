@@ -1,0 +1,26 @@
+---
+# Compares the API routes of green with blue (live): equal status codes, equal shapes. Sets zkb_compare_warned when
+# some number is more than 2% behind blue. A FAIL line stops the playbook and leaves green running for inspection.
+- name: Compare green with blue on the API routes
+  ansible.builtin.script:
+    cmd: >-
+      {{ playbook_dir }}/files/compare_indexers.py --blue {{ zkb_indexer_port }} --green {{ zkb_indexer_green_port }}
+      {{ zkb_compare_routes | join(' ') }}
+    executable: python3
+  register: zkb_compare
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Show the comparison
+  ansible.builtin.debug:
+    msg: "{{ zkb_compare.stdout_lines }}"
+
+- name: Remember whether any number is behind
+  ansible.builtin.set_fact:
+    zkb_compare_warned: "{{ 'WARN' in zkb_compare.stdout }}"
+
+- name: Stop, because a route differs
+  ansible.builtin.fail:
+    msg: "The comparison failed (see the FAIL lines). Green keeps running for inspection; stop it with: ansible-playbook indexer.yml -e action=rollback"
+  when: zkb_compare.rc != 0

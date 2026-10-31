@@ -1,0 +1,30 @@
+---
+# Sets zkb_live_schema: the DATABASE_SCHEMA of the running indexer process, read from the process (it may have
+# started from an older release.env). Only the schema line is kept.
+- name: Look at the indexer unit
+  ansible.builtin.systemd_service:
+    name: "{{ zkb_indexer_unit }}.service"
+  register: zkb_indexer_status
+  check_mode: false
+
+- name: Check that the indexer is running
+  ansible.builtin.assert:
+    that:
+      - zkb_indexer_status.status.ActiveState == 'active'
+      - zkb_indexer_status.status.MainPID | int > 0
+    fail_msg: "The indexer unit is not running, so there is no live schema to compare with."
+    quiet: true
+
+- name: Read the schema from the process environment
+  ansible.builtin.shell: |
+    set -o pipefail
+    tr '\0' '\n' < /proc/{{ zkb_indexer_status.status.MainPID }}/environ | grep '^DATABASE_SCHEMA=' | tail -n 1 | cut -d= -f2-
+  args:
+    executable: /bin/bash
+  register: zkb_live_schema_read
+  changed_when: false
+  check_mode: false
+
+- name: Remember it
+  ansible.builtin.set_fact:
+    zkb_live_schema: "{{ zkb_live_schema_read.stdout | trim }}"

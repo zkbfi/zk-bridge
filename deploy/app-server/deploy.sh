@@ -14,7 +14,7 @@
 #   5. Point /opt/zk-bridge/current at the release, in one rename.
 #   6. Install the systemd units of the release and the directories that the services write.
 #   7. Restart each service whose configuration exists. A service without its files is skipped, with a log line.
-#      ZKB_SERVICES="backend publisher" restarts only those (default: all four). bluegreen.sh uses it to move one
+#      ZKB_SERVICES="backend publisher" restarts only those (default: all four). the playbooks in deploy/ansible use it to move one
 #      service at a time. The others keep running the process they have; the Vite cache of the indexer is left alone
 #      unless the indexer is restarted.
 #   8. Remove old releases.
@@ -166,7 +166,7 @@ main() {
   # The indexer's user owns its state directory and could plant links in it, so root does no file work there: the
   # indexer's user makes its directories and clears the Vite cache, which belongs to one build of the indexer.
   runuser -u zkb_indexer -- sh -c 'cd /var/lib/zk-bridge-indexer && mkdir -p -m 0700 ponder generated'
-  # Only when the indexer restarts: a second Ponder (bluegreen.sh) may be using the cache now.
+  # Only when the indexer restarts: a second Ponder (indexer.yml, green) may be using the cache now.
   if restart_wanted indexer; then runuser -u zkb_indexer -- rm -rf /var/lib/zk-bridge-indexer/ponder/vite; fi
 
   # Configuration: readable by the service's group only. The deployment file holds no secret.

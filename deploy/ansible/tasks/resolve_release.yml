@@ -1,0 +1,76 @@
+---
+# Finds the complete release that a commit (or a prefix of it) names, and sets
+#   zkb_commit          the full hash
+#   zkb_release         /opt/zk-bridge/releases/<hash>
+#   zkb_release_schema  DATABASE_SCHEMA of the release (release.env, then indexer.env; the later wins)
+# The commit comes from -e commit=<hash>, else from the build of this run (build.yml). Needs a release that
+# deploy.sh built (build.yml). In --check mode, when the build was skipped, the host is left out of the play.
+- name: Take the commit from the command line or from this run's build
+  ansible.builtin.set_fact:
+    zkb_want: "{{ commit | default(zkb_built_commit | default('')) }}"
+
+- name: Check the commit
+  ansible.builtin.assert:
+    that:
+      - zkb_want is match('^[0-9a-f]{7,40}$')
+    fail_msg: "Name the release: -e commit=<hash> (7 to 40 hex digits), or run build.yml in the same run."
+    quiet: true
+
+- name: Find the release directories that start with it
+  ansible.builtin.find:
+    paths: "{{ zkb_releases }}"
+    patterns: "{{ zkb_want }}*"
+    file_type: directory
+  register: zkb_release_dirs
+  check_mode: false
+
+- name: Look for the completion marker of each
+  ansible.builtin.stat:
+    path: "{{ item.path }}/.complete"
+  loop: "{{ zkb_release_dirs.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: zkb_release_marks
+  check_mode: false
+
+- name: Say so when --check has no built release to look at
+  ansible.builtin.debug:
+    msg: "--check: release {{ zkb_want }} is not built (the build step does not run in check mode), so this play has nothing to look at."
+  when:
+    - ansible_check_mode
+    - zkb_release_marks.results | selectattr('stat.exists') | list | length == 0
+
+- name: Leave the host out of this play
+  ansible.builtin.meta: end_host
+  when:
+    - ansible_check_mode
+    - zkb_release_marks.results | selectattr('stat.exists') | list | length == 0
+
+- name: Check that exactly one complete release matches
+  ansible.builtin.assert:
+    that:
+      - zkb_release_marks.results | selectattr('stat.exists') | list | length == 1
+    fail_msg: >-
+      {{ zkb_release_marks.results | selectattr('stat.exists') | list | length }} complete releases match {{ zkb_want }}.
+      Build it first: ansible-playbook build.yml -e ref=<git-ref>
+    quiet: true
+
+- name: Remember the release
+  ansible.builtin.set_fact:
+    zkb_commit: "{{ (zkb_release_marks.results | selectattr('stat.exists') | map(attribute='item.path') | first) | basename }}"
+    zkb_release: "{{ zkb_release_marks.results | selectattr('stat.exists') | map(attribute='item.path') | first }}"
+
+- name: Read the indexer schema of the release
+  ansible.builtin.shell: |
+    set -o pipefail
+    grep -h '^DATABASE_SCHEMA=' {{ zkb_release | quote }}/release.env {{ zkb_etc }}/indexer/indexer.env 2>/dev/null | tail -n 1 | cut -d= -f2-
+  args:
+    executable: /bin/bash
+  register: zkb_schema_read
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Remember the schema
+  ansible.builtin.set_fact:
+    zkb_release_schema: "{{ zkb_schema_read.stdout | trim }}"

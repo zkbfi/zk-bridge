@@ -1,0 +1,47 @@
+---
+# Moves the publisher and the runner to a release. There is no green beside blue: the runner sends transactions from one
+# wallet (two would collide on nonces and deliver twice), and the publisher posts proofs. The new process starts after the
+# old one stopped cleanly.
+#   - A bot whose configuration files do not exist under /etc/zk-bridge is skipped with a message, as deploy.sh does.
+#   - The publisher is not restarted while it is proving (its last journal event of 6 hours is proving_started: a paid
+#     run on the remote prover). Wait for proof_made, then run this again.
+#   - The runner stops after its current step (the unit allows 330 s); systemctl waits for that, so the stop is the drain.
+#   - One bot at a time; 15 seconds later the unit must be active.
+#
+#   cd deploy/ansible
+#   ansible-playbook bots.yml -e commit=<hash>                          # both
+#   ansible-playbook bots.yml -e commit=<hash> -e bots=runner           # one (publisher, runner, or publisher,runner)
+#   ansible-playbook bots.yml -e commit=<previous-hash> -e bots=runner  # rollback: the same step with the old release
+- name: Move the bots to a release
+  hosts: zkbfi
+  gather_facts: false
+  vars:
+    bots: publisher,runner
+  tasks:
+    - name: Check the bots
+      ansible.builtin.assert:
+        that:
+          - bots.split(',') | difference(['publisher', 'runner']) | length == 0
+          - bots.split(',') | length > 0
+        fail_msg: "bots is publisher, runner, or publisher,runner."
+        quiet: true
+
+    - name: Find the release
+      ansible.builtin.include_tasks: tasks/resolve_release.yml
+
+    - name: Look at the publisher journal
+      ansible.builtin.include_tasks: tasks/publisher_idle.yml
+      when: "'publisher' in bots.split(',')"
+
+    - name: Stop, because the publisher is proving
+      ansible.builtin.fail:
+        msg: "The publisher is proving (a paid run on the remote prover). Wait for proof_made, then run this again."
+      when:
+        - "'publisher' in bots.split(',')"
+        - zkb_publisher_proving | default(false)
+
+    - name: Move each bot
+      ansible.builtin.include_tasks: tasks/bot_switch.yml
+      loop: "{{ bots.split(',') }}"
+      loop_control:
+        loop_var: zkb_bot

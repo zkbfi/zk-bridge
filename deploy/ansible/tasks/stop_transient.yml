@@ -1,0 +1,14 @@
+---
+# Stops a transient unit if it exists (a transient unit has a file in /run/systemd/transient while it is loaded).
+#   zkb_unit  the unit name, without .service
+- name: Look for the transient unit {{ zkb_unit }}
+  ansible.builtin.stat:
+    path: "{{ zkb_transient_dir }}/{{ zkb_unit }}.service"
+  register: zkb_transient_stat
+  check_mode: false
+
+- name: Stop {{ zkb_unit }}
+  ansible.builtin.systemd_service:
+    name: "{{ zkb_unit }}.service"
+    state: stopped
+  when: zkb_transient_stat.stat.exists
