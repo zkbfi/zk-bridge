@@ -3,7 +3,8 @@
  * address's balance, nonce and code. A test replaces the module.
  */
 import { beaconLightClientAbi } from "@zk-bridge/shared";
-import { createPublicClient, http, type Address, type Hex } from "viem";
+import { rpcTransport } from "../app/rpc-transport";
+import { createPublicClient, type Address, type Hex } from "viem";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import { useServices } from "../app/services";
 
@@ -16,7 +17,7 @@ export type ChainReader = ReturnType<typeof chainReaderFor>;
  * @param rpcUrl The RPC URL.
  */
 export const chainReaderFor = (rpcUrl: string) => {
-  const client = createPublicClient({ transport: http(rpcUrl) });
+  const client = createPublicClient({ transport: rpcTransport(rpcUrl) });
   return {
     transaction: async (hash: Hex) => {
       const [tx, receipt] = await Promise.all([client.getTransaction({ hash }), client.getTransactionReceipt({ hash })]);

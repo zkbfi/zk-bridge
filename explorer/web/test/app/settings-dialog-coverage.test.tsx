@@ -1,4 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
+import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConnectionStorage } from "../../src/config/connection-storage";
@@ -87,7 +88,7 @@ describe("the settings sheet", () => {
 
   it("shows each RPC and service with its default and a live check with the latency", async () => {
     renderSettings();
-    expect(field("Ethereum RPC")).toHaveValue(`https://one.valve.city/rpc/vk_demo/evm/${FIRST_CHAIN}`);
+    expect(field("Ethereum RPC")).toHaveValue(defaultRpcUrl(FIRST_CHAIN));
     expect(field("Indexer")).toHaveValue("http://localhost:42069");
     expect(field("Prover")).toHaveValue("");
     expect(await screen.findByRole("status", { name: /^Ethereum RPC: ok, \d+ ms$/ })).toBeInTheDocument();

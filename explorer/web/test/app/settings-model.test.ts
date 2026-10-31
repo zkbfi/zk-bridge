@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { EMPTY_CONNECTION_SETTINGS } from "@zk-bridge/shared";
 import { currentValues, defaultValues, fieldProblem, pageProtocolOf, settingFields, settingsFromDrafts, textOf } from "../../src/app/settings-model";
@@ -53,9 +54,9 @@ describe("the msgboard nodes", () => {
 });
 
 describe("the defaults", () => {
-  it("are the valve.city demo RPC, the standard indexer, gib.show and nothing for an unset service on the sample page", () => {
+  it("are the default public RPC, the standard indexer, gib.show and nothing for an unset service on the sample page", () => {
     const defaults = defaultValues({ fields, pair: FIXTURE_PAIR, configuration: fixture });
-    expect(defaults[`rpc:${FIRST_CHAIN}`]).toBe(`https://one.valve.city/rpc/vk_demo/evm/${FIRST_CHAIN}`);
+    expect(defaults[`rpc:${FIRST_CHAIN}`]).toBe(defaultRpcUrl(FIRST_CHAIN));
     expect(defaults.indexer).toBe("http://localhost:42069");
     expect(defaults.images).toBe(GIB);
     expect(defaults.backendUrl).toBe("");
