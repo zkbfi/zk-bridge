@@ -124,6 +124,11 @@ and the time left while in flight or the age once delivered. A row links to the 
 - **Themes apply to the whole app.** Ember light, Ember on black and Monochrome are set at the token level (colours,
   radii: pills full, panels square), so the explorer views take the palette too; their layouts are not redesigned.
   The theme setting offers System, Light, Dark and Monochrome; the default is System (owner).
+- **Header size and search (owner, 2026-10-30):** the mark is 44 px (was 28, "tiny"); the side chevrons by the page
+  name are 22 px in 44 px touch targets. The search pill shows the shortcut (⌘K on Apple keyboards, Ctrl K elsewhere)
+  on desktop; ⌘K, Ctrl K and / open it. The search itself is drawn like the token picker: the orange band edge to
+  edge with the square close flush right, results as plain rows marked by the accent edge, hanging near the top on
+  desktop so the field never moves as results change.
 - **Header on every route:** the mark (home), a search pill (owner: "a generalized shortcut and search hamburger bar"
   that reaches anything: bridging, activity, the explorer and its pages, the indexer's data, docs, settings; it replaces
   a menu, works by tap on phones and by Ctrl/Cmd-K or / on desktop), and the wallet pill (its menu holds the explorer
@@ -520,3 +525,5 @@ don't call it "tip too high", call it "high tip %""
 74. "i guess another layer of the package is simply sourcing the data. going to the msgboard to get the proof, forming the request to the proof queue, getting data from the indexer or the rpc"
 75. "the indexer also needs to serve the per-tx costs"
 76. "use bigints as 1e18"
+77. "the logo should be bigger. its tiny. the chevrons on the sides of the page title can be bigger too. and the search bar is odd. and it should be summonable with cmd+k"
+78. "yes, start with the indexer"

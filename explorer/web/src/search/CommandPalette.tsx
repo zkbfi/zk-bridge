@@ -1,7 +1,6 @@
-import { Box, Flex, Text } from "@chakra-ui/react";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { Modal } from "../ui/Modal";
-import { TextInput } from "../ui/primitives";
+import { Sheet } from "../bridge/Sheet";
+import { SearchIcon } from "../bridge/icons";
 import { usePaletteSearch } from "./use-palette-search";
 import { moveHighlight, type MoveKey, type SearchResult } from "./search-model";
 import type { DocPage } from "../docs/docs-index";
@@ -20,7 +19,8 @@ export type CommandPaletteProps = {
 const MOVE_KEYS: readonly string[] = ["ArrowDown", "ArrowUp", "Home", "End"];
 
 /**
- * The search and quick navigation. One field finds views, pairs, tokens, transfers by identifier or transaction hash,
+ * The search and quick navigation, drawn like the token picker (owner: the search band is a burn streak edge to edge,
+ * with a square close flush right). One field finds views, pairs, tokens, transfers by identifier or transaction hash,
  * addresses, actions and documentation. The arrow keys move through the results, Enter opens one, Escape closes.
  *
  * @param props The recent results, the wallet state and the handlers.
@@ -36,7 +36,7 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
 
   useEffect(() => {
     if (active === null) return;
-    document.getElementById(optionId(active))?.scrollIntoView({ block: "nearest" });
+    document.getElementById(optionId(active))?.scrollIntoView?.({ block: "nearest" });
   }, [active, optionId]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
@@ -51,79 +51,71 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
   };
 
   return (
-    <Modal title="Search and jump" width="42rem" onClose={onClose} initialFocusReference={inputReference}>
-      <TextInput
-        ref={inputReference}
-        role="combobox"
-        aria-label="Search views, pairs, tokens, transfers, addresses, actions and docs"
-        aria-expanded="true"
-        aria-controls={listId}
-        aria-autocomplete="list"
-        aria-activedescendant={active === null ? undefined : optionId(active)}
-        placeholder="Search a view, token, address, transaction hash, action or doc…"
-        autoComplete="off"
-        spellCheck={false}
-        value={query}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          setHighlight(0);
-        }}
-        onKeyDown={onKeyDown}
-      />
-      <Box id={listId} role="listbox" aria-label="Results" marginTop="3" maxHeight="55vh" overflowY="auto">
-        {search.groups.map((group) => (
-          <Box key={group.id} role="group" aria-labelledby={`${listId}-group-${group.id}`} marginBottom="2">
-            <Text id={`${listId}-group-${group.id}`} fontSize="xs" fontWeight="semibold" color="fg.muted" textTransform="uppercase" letterSpacing="wide" paddingX="2">
-              {group.title}
-            </Text>
-            {group.results.map((result) => {
-              const selected = active !== null && active.id === result.id;
-              return (
-                <Flex
+    <Sheet label="Search and jump" showTitle={false} bare top onClose={onClose}>
+      <div className="zb-picker-search">
+        <SearchIcon />
+        <input
+          ref={inputReference}
+          role="combobox"
+          aria-label="Search views, pairs, tokens, transfers, addresses, actions and docs"
+          aria-expanded="true"
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={active === null ? undefined : optionId(active)}
+          placeholder="Search anything"
+          autoComplete="off"
+          spellCheck={false}
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setHighlight(0);
+          }}
+          onKeyDown={onKeyDown}
+        />
+        <button type="button" className="zb-picker-close" aria-label="Close" onClick={onClose}>
+          <svg viewBox="0 0 12 12" className="zb-icon" aria-hidden="true" focusable="false">
+            <path d="M3 3l6 6M9 3 3 9" />
+          </svg>
+        </button>
+      </div>
+      <div className="zb-picker zb-palette">
+        <div id={listId} role="listbox" aria-label="Results" className="zb-palette-list">
+          {search.groups.map((group) => (
+            <div key={group.id} role="group" aria-labelledby={`${listId}-group-${group.id}`}>
+              <div id={`${listId}-group-${group.id}`} className="zb-palette-group">
+                {group.title}
+              </div>
+              {group.results.map((result) => (
+                <div
                   key={result.id}
                   id={optionId(result)}
                   role="option"
-                  aria-selected={selected}
-                  direction="column"
-                  paddingX="2"
-                  paddingY="1.5"
-                  borderRadius="md"
-                  cursor="pointer"
-                  backgroundColor={selected ? "bg.emphasized" : "transparent"}
-                  _hover={{ backgroundColor: "bg.muted" }}
+                  aria-selected={active !== null && active.id === result.id}
+                  className="zb-palette-row"
                   onMouseMove={() => setHighlight(search.flat.findIndex((candidate) => candidate.id === result.id))}
                   onClick={() => onSelect(result)}
                 >
-                  <Text fontSize="sm" fontWeight="medium" wordBreak="break-all">
-                    {result.title}
-                  </Text>
-                  <Text fontSize="xs" color="fg.muted" wordBreak="break-all">
-                    {result.subtitle}
-                  </Text>
-                </Flex>
-              );
-            })}
-          </Box>
-        ))}
-        {search.groups.length === 0 && !search.loading ? (
-          <Text fontSize="sm" color="fg.muted" paddingX="2">
-            {search.problem ?? "Nothing matches. Try a token symbol, an address, a transaction hash or a word from the docs."}
-          </Text>
-        ) : null}
-        {search.loading ? (
-          <Text fontSize="sm" color="fg.muted" paddingX="2" role="status">
-            Asking the indexer…
-          </Text>
-        ) : null}
-        {search.groups.length > 0 && search.problem !== null ? (
-          <Text fontSize="xs" color="fg.muted" paddingX="2" role="status">
-            {search.problem}
-          </Text>
-        ) : null}
-      </Box>
-      <Text fontSize="xs" color="fg.muted" marginTop="2">
-        Up and down move, Enter opens, Escape closes.
-      </Text>
-    </Modal>
+                  <span className="zb-palette-title">{result.title}</span>
+                  <span className="zb-palette-sub">{result.subtitle}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+          {search.groups.length === 0 && !search.loading ? (
+            <p className="zb-palette-note">{search.problem ?? "Nothing matches. Try a token symbol, an address, a transaction hash or a word from the docs."}</p>
+          ) : null}
+          {search.loading ? (
+            <p className="zb-palette-note" role="status">
+              Asking the indexer…
+            </p>
+          ) : null}
+          {search.groups.length > 0 && search.problem !== null ? (
+            <p className="zb-palette-note" role="status">
+              {search.problem}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </Sheet>
   );
 };
