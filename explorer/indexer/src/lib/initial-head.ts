@@ -3,6 +3,7 @@ import type { Address, Hex } from "viem";
 
 /** The part of the Ponder client that reads a contract at a named block. */
 export type ContractReader = {
+  readonly getCode: (call: { address: Address; blockNumber: bigint }) => Promise<Hex | undefined>;
   readonly readContract: (call: {
     abi: typeof beaconLightClientAbi;
     address: Address;
@@ -34,6 +35,10 @@ export const readInitialHead = async (client: ContractReader, address: Address, 
   const read = (functionName: "head" | "genesisTime" | "secondsPerSlot") =>
     client.readContract({ abi: beaconLightClientAbi, address, functionName, blockNumber });
   try {
+    // Ponder retries a read that returns no data, with backoff, for minutes. Before the deployment every tip would do
+    // that, and the backfill would stall, so look for code first: an address with no code answers at once.
+    const code = await client.getCode({ address, blockNumber });
+    if (code === undefined || code === "0x") return null;
     const slot = await read("head");
     if (typeof slot !== "bigint" || slot === 0n) return null;
     const [headerRoot, genesisTime, secondsPerSlot] = await Promise.all([

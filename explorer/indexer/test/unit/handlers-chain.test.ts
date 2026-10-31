@@ -61,13 +61,17 @@ describe("ChainTip:block", () => {
 
   it("stores no head while the light client is not deployed yet, and tries again at the next tip", async () => {
     let code = false;
-    const { database, context } = createContext(369, (call) => {
+    const { database, client, context } = createContext(369, (call) => {
       if (!code) throw new Error('The contract function "head" returned no data ("0x").');
       return deployed(call);
     });
+    client.getCode.mockImplementation(async () => (code ? "0x6080" : undefined));
     database.queueSqlRows([]);
     await callHandler(name, { event: createEvent({}, { block: { number: 7n, timestamp: 70n } }), context });
     expect(database.rows(lightClientHeads)).toEqual([]);
+    // Ponder retries a failed read with backoff for minutes, so a tip before the deployment must not read the contract.
+    expect(client.getCode).toHaveBeenCalledWith({ address: LIGHT_CLIENT_ON_PULSECHAIN, blockNumber: 7n });
+    expect(client.readContract).not.toHaveBeenCalled();
     code = true;
     database.queueSqlRows([]);
     await callHandler(name, { event: createEvent({}, { block: { number: 12n, timestamp: 120n } }), context });
