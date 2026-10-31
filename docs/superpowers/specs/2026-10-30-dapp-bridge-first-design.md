@@ -291,6 +291,18 @@ and the time left while in flight or the age once delivered. A row links to the 
   the finalizing drawer (the review sheet). "Too large" (my reading, owner to confirm): the cap is above the high-tip
   threshold for this amount (1% up to $100, sliding to 0.1% at $1,000).
 
+- **Determinism (owner):** every fee, warning and price is a pure function of its inputs: same inputs, same answer,
+  in any app that uses it. Rules: no clock, randomness or network inside a rule; prices and gas are read **at a named
+  block** and every quote carries that block (the browser may cache, but a quote says what it was read at, never
+  "latest"); money is integers (token base units, wei, and USD as integer micro-dollars) with one stated rounding
+  (down, toward the user) instead of floats and epsilons; ties are broken by a fixed key (pool address) so sorting
+  never depends on input order. Each rule ships with fixed test vectors (inputs → output) that any SDK user can run.
+- **SDK (owner):** the fee rules (cost, default fee, cap, low/high warnings, gas levels), the verdict, the PulseX
+  oracle and the delivery maths move out of `web` into a public package other dapps can embed. It takes its I/O from
+  the caller (a contract reader pinned to a block, the RPC of their choice) and holds no UI. `web` uses it exactly as
+  an outside dapp would. Until it is carved out, new rule code goes in `shared` under these rules so the carve-out is
+  a move, not a rewrite.
+
 - **Fee-drawer motion (owner approved):** open ≈ 0.28 s (height 0.2 s ease-out via grid rows; the 3-unit accent deck
   line draws across the top from under the tapped icon; content fades in and settles 4 px, 0.06 s delay); close 0.12 s
   ease-in, content first; swapping redraws the line from the new icon; no overshoot or springs; reduced motion = none.
@@ -455,3 +467,4 @@ and items in the stes that are actual transactions, we can note the eth/native t
 q3) network base fee? no, we are calculating the full fee of releaseing as if this bridge is the only bridge: so 0.025+any base fee costs - yeah, those multipliers are fine
 q4) we can put a little save button (floppy icon) next to the slider for people who want to save it
 q5) for all bridged tokens, for the short term, we need to a) reverse out the tokens, back through the current omnibridge. that way we can trace on pulsex (v1/2) what they actually cost in usdc/usdt/dai"
+57. "make sure that each piece is deterministic. we are also going to want to bundle a lot of this code into an sdk so that other people can integrate into their own dapps"
