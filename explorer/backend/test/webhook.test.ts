@@ -704,7 +704,7 @@ describe("the real outside world", () => {
   });
 
   it("reads the head, its root and the program key of a light client over JSON-RPC", async () => {
-    const answers: Record<string, unknown> = { head: 123n, programVKey: PROGRAM_KEY, headers: START_ROOT };
+    const answers: Record<string, unknown> = { head: 123n, programVKey: PROGRAM_KEY, headers: START_ROOT, genesisTime: 1_000n, secondsPerSlot: 10n };
     const listening = createServer((request, response) => {
       let text = "";
       request.on("data", (chunk) => (text += chunk));
@@ -723,6 +723,6 @@ describe("the real outside world", () => {
     await new Promise<void>((resolve) => listening.listen(0, "127.0.0.1", resolve));
     const { port } = listening.address() as { port: number };
     const head = await REAL_SOURCE.readLightClient({ rpcUrl: `http://127.0.0.1:${port}`, lightClient: `0x${"b".repeat(40)}` });
-    expect(head).toEqual({ headSlot: 123n, headRoot: START_ROOT, programKey: PROGRAM_KEY });
+    expect(head).toEqual({ headSlot: 123n, headRoot: START_ROOT, programKey: PROGRAM_KEY, clock: { genesisTime: 1_000n, secondsPerSlot: 10n } });
   });
 });

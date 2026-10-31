@@ -581,8 +581,8 @@ describe("the real parts", () => {
   it("builds a guard for the local checks with the default limits (K-5)", () => {
     const { verifyGuard } = buildDependencies(contextWith());
     const head = { headSlot: 100n, headRoot: word("aa") };
-    const answers = Array.from({ length: DEFAULT_VERIFY_LIMITS.perSourcePerMinute + 1 }, (_, index) => verifyGuard.admit({ key: word((index + 16).toString(16)), head, newSlot: 200n, source: "first-to-second" }).kind);
-    expect(answers.filter((kind) => kind === "check")).toHaveLength(DEFAULT_VERIFY_LIMITS.perSourcePerMinute);
+    const answers = Array.from({ length: DEFAULT_VERIFY_LIMITS.perSourcePerMinute + 2 }, (_, index) => verifyGuard.admit({ key: word((index + 16).toString(16)), head, newSlot: 200n, source: "first-to-second" }).kind);
+    expect(answers.filter((kind) => kind === "check")).toHaveLength(DEFAULT_VERIFY_LIMITS.perSourcePerMinute + 1); // the general budget and one reserve place for the claim of slot 200
     expect(answers.at(-1)).toBe("dropped");
   });
 
@@ -625,13 +625,15 @@ describe("the real parts", () => {
           calls.push(`${request.functionName}${request.args === undefined ? "" : `(${String(request.args[0])})`}`);
           if (request.functionName === "head") return 77n;
           if (request.functionName === "programVKey") return PROGRAM_KEY;
+          if (request.functionName === "genesisTime") return 1_000n;
+          if (request.functionName === "secondsPerSlot") return 10n;
           return rootOf(77n);
         }) as never,
         getBlockNumber: async () => 900n,
       },
       `0x${"3".repeat(40)}`,
     );
-    expect(await reader.read()).toEqual({ headSlot: 77n, headRoot: rootOf(77n), programKey: PROGRAM_KEY });
+    expect(await reader.read()).toEqual({ headSlot: 77n, headRoot: rootOf(77n), programKey: PROGRAM_KEY, clock: { genesisTime: 1_000n, secondsPerSlot: 10n } });
     expect(calls).toContain("headers(77)");
   });
 });

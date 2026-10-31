@@ -185,9 +185,11 @@ describe("red team: proof intake of the runner (malicious msgboard content)", ()
         verifications += prover.verifications;
       }
     }
-    expect(verifications).toBe(DEFAULT_VERIFY_LIMITS.perSourcePerMinute);
-    // The first 20 were checked once and are remembered; the other 30 are dropped in each round.
-    expect(guard.dropped().total).toBe(2 * (50 - DEFAULT_VERIFY_LIMITS.perSourcePerMinute));
+    // The general budget of the minute, and one place of the reserve for the one slot that all forgeries claim.
+    const checked = DEFAULT_VERIFY_LIMITS.perSourcePerMinute + 1;
+    expect(verifications).toBe(checked);
+    // The checked ones are remembered as refused; the others are dropped in each round.
+    expect(guard.dropped().total).toBe(2 * (50 - checked));
   });
 });
 

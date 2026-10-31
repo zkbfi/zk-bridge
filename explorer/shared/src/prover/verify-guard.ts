@@ -12,18 +12,21 @@ import type { Hex } from "viem";
  *   repeat without a new check. Each source keeps its own head and memory, so two directions never clear each other's.
  *   A source's memory is cleared when its head moves: a proof is only ever checked against the head it starts at.
  * - It caps the checks per minute: a general budget, first come, for each source and for all sources together.
- * - It keeps a reserve per source that the general budget cannot use: a check from the reserve goes only to a proof
- *   that would move the head further than every proof checked at this head of the source so far. A flood of forgeries
- *   that names the head and a slot it already claimed cannot use the reserve, so an honest proof that reaches further
- *   is still checked in the same minute.
+ * - It keeps a reserve per source that the general budget cannot use. A check from the reserve goes only to a proof
+ *   that would move the head further than every proof that verified at this head of the source, and to each claimed
+ *   new slot at most once a minute. Only a verified proof raises that bar ({@link VerifyGuard.verified}), so a forged
+ *   claim of a far slot cannot shut honest proofs out; and a flood of forgeries of one claim takes one place, so an
+ *   honest proof of another slot is still checked in the same minute.
+ *
+ * Before the guard, the intake refuses a claim that the light client would refuse by its clock (`HeadInFuture`): a new
+ * slot after the current slot of the destination, plus a margin for clock skew. That bounds the slots a forger can claim.
  *
  * A check over the caps is dropped, not queued: the payload is refused as `verify-budget-exhausted`, a refusal that may
  * pass on a later look. The drops are counted, and logged at most once per source and minute.
  *
  * What the guard cannot do: tell a forgery from a valid proof that makes the same claim. Board messages carry no sender,
- * so there is no publisher to trust, and every field a forger needs is public. A forger who claims ever higher new slots
- * also passes the reserve test, once per higher slot; the light client refuses a slot after its own clock
- * (`HeadInFuture`), a check that the intake does not repeat because the head reader does not read the clock settings.
+ * so there is no publisher to trust, and every field a forger needs is public. A forger who spreads forgeries over
+ * many distinct slots up to the current slot can still take the reserve places of a minute, one per slot.
  */
 
 /** The width of the window in which the checks are counted. */
@@ -74,6 +77,8 @@ export interface VerifyRequestKey {
 export interface VerifyGuard {
   /** Asks to run one local check. A `check` answer counts against the budget. */
   admit(input: VerifyRequestKey): VerifyAdmission;
+  /** Records that a proof of this new slot verified at this head of its source. Only this raises the bar of the reserve. */
+  verified(input: { readonly head: GuardHead; readonly newSlot: bigint; readonly source: string }): void;
   /** Remembers that the payload definitely failed the check at this head of its source. */
   refused(input: { readonly key: Hex; readonly head: GuardHead; readonly source: string }): void;
   /** How many checks were dropped since the start, in total and by source. */
@@ -96,12 +101,16 @@ export interface VerifyGuardInput {
 /** What the guard keeps for one source. */
 type SourceState = {
   readonly general: number[];
-  readonly reserve: number[];
+  /** The reserve checks of the window: when, and the new slot that each one claimed. */
+  readonly reserve: Array<{ readonly at: number; readonly newSlot: bigint }>;
   /** The head that the memory below belongs to. */
   head: string | null;
   readonly refusals: Set<Hex>;
-  /** The highest new slot of a proof checked at `head`. */
-  furthestChecked: bigint;
+  /**
+   * The highest new slot of a proof that verified at `head`, or the head slot. Only a verified proof raises it: a claim
+   * that was merely admitted could be a forgery of a far slot that would shut every honest proof out of the reserve.
+   */
+  furthestVerified: bigint;
   dropped: number;
   loggedAt: number | null;
 };
@@ -118,7 +127,7 @@ export function createVerifyGuard(input: VerifyGuardInput): VerifyGuard {
   const stateOf = (source: string): SourceState => {
     const known = sources.get(source);
     if (known !== undefined) return known;
-    const created: SourceState = { general: [], reserve: [], head: null, refusals: new Set(), furthestChecked: 0n, dropped: 0, loggedAt: null };
+    const created: SourceState = { general: [], reserve: [], head: null, refusals: new Set(), furthestVerified: 0n, dropped: 0, loggedAt: null };
     sources.set(source, created);
     return created;
   };
@@ -129,14 +138,16 @@ export function createVerifyGuard(input: VerifyGuardInput): VerifyGuard {
     if (state.head === text) return;
     state.head = text;
     state.refusals.clear();
-    state.furthestChecked = head.headSlot;
+    state.furthestVerified = head.headSlot;
   };
 
-  /** Drops the times that left the window. The arrays are in time order and never longer than their cap. */
-  const recent = (times: number[], since: number): number[] => {
-    while (times.length > 0 && (times[0] as number) <= since) times.shift();
-    return times;
+  /** Drops the entries that left the window. The arrays are in time order and never longer than their cap. */
+  const recent = <Entry>(entries: Entry[], since: number, timeOf: (entry: Entry) => number): Entry[] => {
+    while (entries.length > 0 && timeOf(entries[0] as Entry) <= since) entries.shift();
+    return entries;
   };
+  const timeOfCheck = (time: number): number => time;
+  const timeOfReserve = (entry: { readonly at: number }): number => entry.at;
 
   const drop = (source: string, state: SourceState, scope: "all" | "source", current: number): VerifyAdmission => {
     droppedTotal += 1;
@@ -155,18 +166,27 @@ export function createVerifyGuard(input: VerifyGuardInput): VerifyGuard {
       if (state.refusals.has(key)) return { kind: "refused-before" };
       const current = input.now();
       const since = current - VERIFY_WINDOW_MILLISECONDS;
-      const take = (times: number[], from: "general" | "reserve"): VerifyAdmission => {
-        times.push(current);
-        if (from === "general") allGeneral.push(current);
-        if (newSlot > state.furthestChecked) state.furthestChecked = newSlot;
-        return { kind: "check", from };
-      };
-      const sourceFull = recent(state.general, since).length >= limits.perSourcePerMinute;
-      const allFull = recent(allGeneral, since).length >= limits.perMinute;
-      if (!sourceFull && !allFull) return take(state.general, "general");
-      // The reserve serves only a proof that reaches further than every proof checked at this head.
-      if (newSlot > state.furthestChecked && recent(state.reserve, since).length < limits.reservePerSourcePerMinute) return take(state.reserve, "reserve");
+      const sourceFull = recent(state.general, since, timeOfCheck).length >= limits.perSourcePerMinute;
+      const allFull = recent(allGeneral, since, timeOfCheck).length >= limits.perMinute;
+      if (!sourceFull && !allFull) {
+        state.general.push(current);
+        allGeneral.push(current);
+        return { kind: "check", from: "general" };
+      }
+      // The reserve serves a proof that would move the head further than every proof verified at this head, and each
+      // claimed slot at most once a minute: a flood of forgeries of one claim takes one place, not the whole reserve.
+      const reserve = recent(state.reserve, since, timeOfReserve);
+      const claimServed = reserve.some((entry) => entry.newSlot === newSlot);
+      if (newSlot > state.furthestVerified && !claimServed && reserve.length < limits.reservePerSourcePerMinute) {
+        reserve.push({ at: current, newSlot });
+        return { kind: "check", from: "reserve" };
+      }
       return drop(source, state, sourceFull ? "source" : "all", current);
+    },
+    verified({ head, newSlot, source }) {
+      const state = stateOf(source);
+      atHead(state, head);
+      if (newSlot > state.furthestVerified) state.furthestVerified = newSlot;
     },
     refused({ key, head, source }) {
       const state = stateOf(source);

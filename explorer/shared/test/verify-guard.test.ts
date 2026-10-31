@@ -163,23 +163,86 @@ describe("a flood that arrives before an honest proof (review of B-4)", () => {
     };
     // 100 distinct forgeries that name the head and the slot 164 arrive first and use up the general budget.
     for (let index = 0; index < 100; index += 1) await assess({ payload: forgery(index === 0xab ? 0xac : index), prover, guard, source: "a" });
-    expect(checked).toBe(DEFAULT_VERIFY_LIMITS.perSourcePerMinute);
+    // The general budget, and one place of the reserve for the claim of slot 164.
+    expect(checked).toBe(DEFAULT_VERIFY_LIMITS.perSourcePerMinute + 1);
     // The honest proof reaches slot 200: the reserve checks it at once.
     expect(await assess({ payload: honest, prover, guard, source: "a" })).toMatchObject({ accept: true });
-    expect(checked).toBe(DEFAULT_VERIFY_LIMITS.perSourcePerMinute + 1);
+    expect(checked).toBe(DEFAULT_VERIFY_LIMITS.perSourcePerMinute + 2);
   });
 
-  it("does not spend the reserve on a flood that claims no further slot", async () => {
-    const guard = createVerifyGuard({ now: clock().now, limits: limits({ perSourcePerMinute: 2, reservePerSourcePerMinute: 1 }) });
+  it("spends one place of the reserve on a flood of one claim, whatever its size", async () => {
+    const guard = createVerifyGuard({ now: clock().now, limits: limits({ perSourcePerMinute: 2, reservePerSourcePerMinute: 2 }) });
     const prover = refusingProver();
     for (let index = 0; index < 20; index += 1) await assess({ payload: forgery(index), prover, guard, source: "a" });
-    expect(prover.verifications).toBe(2);
-    // A proof that reaches further takes the reserve; a second one that reaches no further than it does not.
+    expect(prover.verifications).toBe(3);
+    // Another claim takes the last place of the reserve; a second proof of that claim does not.
     await assess({ payload: forgery(50, 180n), prover, guard, source: "a" });
     await assess({ payload: forgery(51, 180n), prover, guard, source: "a" });
-    expect(prover.verifications).toBe(3);
+    expect(prover.verifications).toBe(4);
     // Once the reserve of the minute is used, a further claim waits too.
     expect(await assess({ payload: forgery(52, 190n), prover, guard, source: "a" })).toMatchObject({ reason: "verify-budget-exhausted", detail: "the local proof checks of this minute are used up (this source)" });
+  });
+});
+
+describe("the reserve cannot be poisoned (second review of B-4)", () => {
+  const head = { headSlot: 100n, headRoot: word(101) };
+
+  it("a forged claim of a far slot that was only admitted does not shut an honest further proof out of the reserve", () => {
+    const guard = createVerifyGuard({ now: clock().now, limits: limits({ perSourcePerMinute: 1, reservePerSourcePerMinute: 2 }) });
+    expect(guard.admit({ key: word(1), head, newSlot: 2n ** 60n, source: "a" })).toEqual({ kind: "check", from: "general" });
+    guard.refused({ key: word(1), head, source: "a" });
+    expect(guard.admit({ key: word(2), head, newSlot: 200n, source: "a" })).toEqual({ kind: "check", from: "reserve" });
+  });
+
+  it("raises the bar of the reserve only for a proof that verified", () => {
+    const guard = createVerifyGuard({ now: clock().now, limits: limits({ perSourcePerMinute: 1, reservePerSourcePerMinute: 5 }) });
+    expect(guard.admit({ key: word(1), head, newSlot: 200n, source: "a" })).toMatchObject({ kind: "check" });
+    guard.verified({ head, newSlot: 200n, source: "a" });
+    // A proof that verified and reaches less far does not lower the bar.
+    guard.verified({ head, newSlot: 150n, source: "a" });
+    expect(guard.admit({ key: word(2), head, newSlot: 180n, source: "a" })).toMatchObject({ kind: "dropped" });
+    expect(guard.admit({ key: word(3), head, newSlot: 210n, source: "a" })).toEqual({ kind: "check", from: "reserve" });
+    // A new head starts with no verified proof.
+    const moved = { headSlot: 200n, headRoot: word(77) };
+    expect(guard.admit({ key: word(4), head: moved, newSlot: 201n, source: "a" })).toEqual({ kind: "check", from: "reserve" });
+  });
+
+  it("gives the reserve to one check per claimed slot in a minute, so forgeries of one claim use one place", () => {
+    const guard = createVerifyGuard({ now: clock().now, limits: limits({ perSourcePerMinute: 1, reservePerSourcePerMinute: 3 }) });
+    guard.admit({ key: word(1), head, newSlot: 164n, source: "a" });
+    expect(guard.admit({ key: word(2), head, newSlot: 164n, source: "a" })).toEqual({ kind: "check", from: "reserve" });
+    expect(guard.admit({ key: word(3), head, newSlot: 164n, source: "a" })).toMatchObject({ kind: "dropped" });
+    expect(guard.admit({ key: word(4), head, newSlot: 200n, source: "a" })).toEqual({ kind: "check", from: "reserve" });
+  });
+});
+
+describe("a claim that the light client would refuse by its clock (second review of B-4)", () => {
+  // Genesis at 1,000 seconds, 12 seconds a slot: at 1,000 + 12 * 300 seconds the current slot is 300.
+  const clockHead = { headSlot: 100n, headRoot: word(101), clock: { genesisTime: 1_000n, secondsPerSlot: 12n } };
+  const at = (slot: number) => () => (1_000 + 12 * slot) * 1000;
+  const assessAt = (payload: ReturnType<typeof proofPayload>, prover: ReturnType<typeof fakeProver>, guard: VerifyGuard, now: () => number) =>
+    assessProofPayload({ payload, pairName: "eth-pls", direction: "first-to-second", lightClient: fakeLightClient(clockHead), prover, verifyGuard: guard, verifySource: "a", now });
+
+  it("refuses a proof whose new slot is after the current slot of the destination, before the guard and the verifier", async () => {
+    const guard = createVerifyGuard({ now: clock().now, limits: limits({ perSourcePerMinute: 1, reservePerSourcePerMinute: 1 }) });
+    const prover = refusingProver();
+    expect(await assessAt(forgery(1, 2n ** 40n), prover, guard, at(300))).toEqual({ accept: false, reason: "head-in-future", detail: "slot 1099511627776 is after the current slot 300 of the destination" });
+    expect(await assessAt(forgery(2, 303n), prover, guard, at(300))).toMatchObject({ reason: "head-in-future" });
+    expect(prover.verifications).toBe(0);
+    // The budget is untouched: an honest proof that reaches slot 290 is checked.
+    const honest = fakeProver();
+    expect(await assessAt(proofPayload({ newSlot: 290n }), honest, guard, at(300))).toMatchObject({ accept: true });
+  });
+
+  it("allows a slot up to two slots after the clock, for clock skew, and a clock before genesis reads as slot 0", async () => {
+    const guard = createVerifyGuard({ now: clock().now });
+    expect(await assessAt(proofPayload({ newSlot: 302n }), fakeProver(), guard, at(300))).toMatchObject({ accept: true });
+    expect(await assessAt(proofPayload({ newSlot: 103n }), fakeProver(), guard, () => 0)).toMatchObject({ reason: "head-in-future" });
+  });
+
+  it("reads the time from the system clock when the caller gives none", async () => {
+    const lightClient = fakeLightClient(clockHead);
+    expect(await assessProofPayload({ payload: proofPayload(), pairName: "eth-pls", direction: "first-to-second", lightClient, prover: fakeProver() })).toMatchObject({ accept: true });
   });
 });
 

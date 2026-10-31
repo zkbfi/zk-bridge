@@ -9,6 +9,11 @@ export interface LightClientHead {
   readonly headSlot: bigint;
   readonly headRoot: Hex;
   readonly programKey: Hex;
+  /**
+   * The clock settings of the light client (`genesisTime` in seconds, `secondsPerSlot`). With them the intake refuses a
+   * proof whose new slot the contract would refuse as `HeadInFuture`, before any costly check. A reader may leave them out.
+   */
+  readonly clock?: { readonly genesisTime: bigint; readonly secondsPerSlot: bigint };
 }
 
 /** Reads the light client on the destination chain. */
@@ -27,6 +32,7 @@ export type ProofRefusal =
   | "already-stored"
   | "start-slot-differs-from-head"
   | "start-root-differs-from-head"
+  | "head-in-future"
   | "verify-budget-exhausted"
   | "verify-unavailable"
   | "proof-does-not-verify";
@@ -57,6 +63,17 @@ export interface AssessInput {
   readonly verifyGuard?: VerifyGuard;
   /** The source that the guard counts the check under, such as the board category of a direction. Default `unnamed`. */
   readonly verifySource?: string;
+  /** Milliseconds since 1970, for the clock check of the new slot. Default `Date.now`. */
+  readonly now?: () => number;
+}
+
+/** The slots that a new slot may be after the clock of the destination, for clock skew between hosts. */
+export const FUTURE_SLOT_MARGIN = 2n;
+
+/** The current slot of a light client clock at `nowMilliseconds`, 0 before genesis, as `BeaconClock.slotAt` reads it. */
+function currentSlotOf(clock: NonNullable<LightClientHead["clock"]>, nowMilliseconds: number): bigint {
+  const seconds = BigInt(Math.floor(nowMilliseconds / 1000));
+  return seconds <= clock.genesisTime ? 0n : (seconds - clock.genesisTime) / clock.secondsPerSlot;
 }
 
 /** True when the first byte of the payload is the version of the oracle form. */
@@ -72,7 +89,9 @@ function isOracleVersion(payload: Hex): boolean {
  * 2. The program key equals `programVKey()` of the destination light client.
  * 3. The proof does not end at or before the stored head.
  * 4. The start slot and the start root equal the stored head.
- * 5. The Groth16 proof verifies locally for that key and those public values.
+ * 5. The new slot is not after the clock of the light client (when the reader gives its clock settings).
+ * 6. The verify guard, when given, admits the check (see `verify-guard.ts`).
+ * 7. The Groth16 proof verifies locally for that key and those public values.
  *
  * The chain stays the final check: `update` verifies the proof again.
  */
@@ -103,6 +122,12 @@ export async function assessProofPayload(input: AssessInput): Promise<ProofAsses
   if (state.headSlot >= message.newSlot) return { accept: false, reason: "already-stored" };
   if (message.startSlot !== state.headSlot) return { accept: false, reason: "start-slot-differs-from-head" };
   if (message.startRoot.toLowerCase() !== state.headRoot.toLowerCase()) return { accept: false, reason: "start-root-differs-from-head" };
+  if (state.clock !== undefined) {
+    const currentSlot = currentSlotOf(state.clock, (input.now ?? Date.now)());
+    if (message.newSlot > currentSlot + FUTURE_SLOT_MARGIN) {
+      return { accept: false, reason: "head-in-future", detail: `slot ${message.newSlot} is after the current slot ${currentSlot} of the destination` };
+    }
+  }
   if (message.version === ORACLE_PROOF_MESSAGE_VERSION) return { accept: true, message };
   const guard = input.verifyGuard;
   const key = payloadKey(input.payload);
@@ -126,6 +151,7 @@ export async function assessProofPayload(input: AssessInput): Promise<ProofAsses
     if (isDefiniteRefusal(error)) guard?.refused({ key, head: state, source });
     return { accept: false, reason: "proof-does-not-verify", detail };
   }
+  guard?.verified({ head: state, newSlot: message.newSlot, source });
   return { accept: true, message };
 }
 
