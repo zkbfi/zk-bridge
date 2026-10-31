@@ -1,11 +1,14 @@
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
+import { publicPagesPlugin } from "./public-pages.ts";
+
+const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [publicPagesPlugin({ repositoryRoot }), react()],
   resolve: { alias: { "@web": fileURLToPath(new URL("../web/src", import.meta.url)) } },
-  server: { fs: { allow: [fileURLToPath(new URL("../..", import.meta.url))] } },
+  server: { fs: { allow: [repositoryRoot] } },
   test: {
     maxWorkers: "25%",
     environment: "jsdom",
