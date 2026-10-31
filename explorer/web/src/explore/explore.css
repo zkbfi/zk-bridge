@@ -50,6 +50,7 @@
 .zb-xsvc { display: flex; align-items: center; gap: 10px; min-height: 48px; border-top: 1px solid var(--zb-line); }
 .zb-xsvc-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--zb-track-ahead); flex: none; }
 .zb-xsvc-dot[data-ok="true"] { background: #3fa66b; }
+.zb-xsvc-dot[data-ok="false"] { background: var(--zb-bad, #c8102e); }
 .zb-xsvc-url { margin-left: auto; font-size: var(--zb-step--1); color: var(--zb-muted); overflow: hidden; text-overflow: ellipsis; }
 .zb-xsvc-ms { min-width: 52px; text-align: right; font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-xband { background: var(--zb-from); color: var(--zb-from-ink); }

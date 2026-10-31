@@ -10,6 +10,8 @@ import type { FeedItem, PairConfig } from "@terminal/model/types";
 import { formatRoute, type ExplorePage, type Route } from "../app/route";
 import { useFeed, useHeads, useTokens } from "../app/queries";
 import { useServices } from "../app/services";
+import type { ProbeKind } from "../app/service-probe";
+import { useServiceProbe } from "../app/use-service-probe";
 import { relativeTime } from "../bridge/activity-model";
 import { amountText, chainsFor } from "../bridge/bridge-model";
 import { Chevron, SearchIcon } from "../bridge/icons";
@@ -278,30 +280,30 @@ const LatestTransfers = ({ feed, pair, now }: { readonly feed: readonly FeedItem
   );
 };
 
-/** Times a request to an endpoint (no-cors: only the round trip counts). Null while measuring or on failure. */
-const useLatency = (url: string | null) =>
-  useQuery({
-    queryKey: ["latency", url],
-    enabled: url !== null,
-    refetchInterval: 60_000,
-    queryFn: async () => {
-      const started = performance.now();
-      await fetch(url!, { mode: "no-cors", cache: "no-store", signal: AbortSignal.timeout(8_000) });
-      return Math.round(performance.now() - started);
-    },
-  }).data ?? null;
-
-const ServiceRow = ({ name, url }: { readonly name: string; readonly url: string | null }) => {
-  const ms = useLatency(url);
+/** One outside service: a dot (green up, red down, grey not set or checking), its host and its latency. */
+const ServiceRow = ({ name, url, kind }: { readonly name: string; readonly url: string | null; readonly kind: ProbeKind }) => {
+  const state = useServiceProbe(url, kind);
   return (
     <div className="zb-xsvc">
-      <span className="zb-xsvc-dot" data-ok={ms !== null} aria-hidden="true" />
+      <span className="zb-xsvc-dot" data-ok={state.ok === null ? undefined : state.ok} aria-hidden="true" />
       <b>{name}</b>
-      <span className="zb-mono zb-xsvc-url">{url === null ? "not set" : new URL(url).host}</span>
-      <span className="zb-xsvc-ms">{ms === null ? "—" : `${ms} ms`}</span>
+      <span className="zb-mono zb-xsvc-url">{url === null ? "not set" : hostText(url)}</span>
+      <span className="zb-xsvc-ms" title={state.ok === false ? state.reason : undefined}>
+        {state.ok === null ? "—" : state.ok ? `${state.ms} ms` : "down"}
+      </span>
     </div>
   );
 };
+
+const hostText = (url: string): string => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "not a URL";
+  }
+};
+
+const HEALTH: ProbeKind = { kind: "health" };
 
 const Services = ({ pair }: { readonly pair: PairConfig }) => {
   const { configuration, connection } = useServices();
@@ -311,11 +313,11 @@ const Services = ({ pair }: { readonly pair: PairConfig }) => {
   return (
     <div className="zb-col">
       <XGroup title="Services" right={<a href="#/settings">Change in Settings</a>} />
-      <ServiceRow name="Indexer" url={fixture ? null : (resolved?.indexerUrl?.value ?? configuration.indexerUrl)} />
-      <ServiceRow name="Prover" url={fixture ? null : (resolved?.backendUrl?.value ?? configuration.backendUrl)} />
-      <ServiceRow name="Archive" url={fixture ? null : (resolved?.archiveUrl?.value ?? configuration.archiveUrl)} />
-      <ServiceRow name={`RPC · ${shortName(pair.first.name)}`} url={fixture ? null : rpc(pair.first.chainId)} />
-      <ServiceRow name={`RPC · ${shortName(pair.second.name)}`} url={fixture ? null : rpc(pair.second.chainId)} />
+      <ServiceRow name="Indexer" url={fixture ? null : (resolved?.indexerUrl?.value ?? configuration.indexerUrl)} kind={HEALTH} />
+      <ServiceRow name="Prover" url={fixture ? null : (resolved?.backendUrl?.value ?? configuration.backendUrl)} kind={HEALTH} />
+      <ServiceRow name="Archive" url={fixture ? null : (resolved?.archiveUrl?.value ?? configuration.archiveUrl)} kind={HEALTH} />
+      <ServiceRow name={`RPC · ${shortName(pair.first.name)}`} url={fixture ? null : rpc(pair.first.chainId)} kind={{ kind: "rpc", chainId: pair.first.chainId }} />
+      <ServiceRow name={`RPC · ${shortName(pair.second.name)}`} url={fixture ? null : rpc(pair.second.chainId)} kind={{ kind: "rpc", chainId: pair.second.chainId }} />
     </div>
   );
 };
