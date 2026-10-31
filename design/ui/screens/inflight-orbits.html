@@ -23,7 +23,7 @@
   .labels-unused { display: grid; grid-template-columns: repeat(4, 1fr); text-align: center; font-size: 13px; color: var(--muted); margin-top: 2px; }
   .labels b { display: block; color: var(--ink); font-size: 14px; }
   .tip { position: fixed; pointer-events: none; z-index: 5; background: var(--raised); border: 1.5px solid var(--edge); color: var(--ink);
-    padding: 10px 12px; font-size: 13px; min-width: 210px; opacity: 0; transform: translateY(4px); transition: opacity .12s, transform .12s; }
+    padding: 10px 12px; font-size: 13px; min-width: 210px; max-width: 300px; opacity: 0; transform: translateY(4px); transition: opacity .12s, transform .12s; }
   .tip.on { opacity: 1; transform: none; } .tip b { font-size: 15px; } .tip .r { color: var(--muted); }
   .tip .eta { color: var(--accent-text); }
   .bar { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 28px; }
@@ -34,7 +34,7 @@
 <body>
 <div class="col">
   <h1>Every transfer in flight, at once</h1>
-  <p class="lead">One loop joins the two chains: the top lane runs from the chain on the left to the chain on the right, the bottom lane back. Each lane is the four steps of a transfer. Each planet circling a step is one transfer waiting at it. Each planet is its token's icon; its size is the value it carries. Steps complete in batches, as on chain: a finalized checkpoint moves every transfer sent before it, one proof carries every finalized transfer of its direction, and deliveries come several at a time; each batch glides as a wave. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer; hover a chain for its totals.</p>
+  <p class="lead">One loop joins the two chains: the top lane runs from the chain on the left to the chain on the right, the bottom lane back. Each lane is the four steps of a transfer. Each planet circling a step is one transfer waiting at it. Each planet is its token's icon; its size is the value it carries. Steps complete in batches, as on chain: a finalized checkpoint moves every transfer sent before it, one proof carries every finalized transfer of its direction, and deliveries come several at a time; each batch glides as a wave. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer; hover a step's sun for what waits there, by token, with its fees and what delivering it all would earn; hover a chain for its totals.</p>
   <div id="tracks"></div>
   <div class="bar"><button id="theme">Light / dark</button><button id="burst">Add a burst of transfers</button><button id="motion">Pause all</button></div>
   <ul class="notes">
@@ -49,10 +49,10 @@ const STEPS = ["Sent", "Final", "Proof posted", "Delivering"];
 const IMG = (chain, address) => `https://gib.show/image/${chain}${address ? "/" + address : ""}`;
 // Each direction sends its source chain's tokens; the planet is the token's own icon (a native coin is its chain's icon).
 const DIRS = [
-  { key: "e2p", from: "Ethereum", to: "PulseChain", fromChain: 1, toChain: 369, minutes: [13, 2, 1.5, 0.5], tokens: [
+  { key: "e2p", from: "Ethereum", to: "PulseChain", fromChain: 1, toChain: 369, gasUsd: 0.03, minutes: [13, 2, 1.5, 0.5], tokens: [
     ["USDC", 1, 1, "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"], ["ETH", 3000, 1, null], ["DAI", 1, 1, "0x6B175474E89094C44Da98b954EedeAC495271d0F"],
     ["HEX", 0.004, 1, "0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39"], ["WBTC", 68000, 1, "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"], ["USDT", 1, 1, "0xdAC17F958D2ee523a2206206994597C13D831ec7"]] },
-  { key: "p2e", from: "PulseChain", to: "Ethereum", fromChain: 369, toChain: 1, minutes: [2, 2, 12, 0.5], tokens: [
+  { key: "p2e", from: "PulseChain", to: "Ethereum", fromChain: 369, toChain: 1, gasUsd: 0.6, minutes: [2, 2, 12, 0.5], tokens: [
     ["PLS", 0.00003, 369, null], ["PLSX", 0.00002, 369, "0x95B303987A60C71504D99Aa1b13B4DA07b0790ab"], ["HEX", 0.004, 369, "0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39"],
     ["INC", 0.6, 369, "0x2fa878Ab3F87CC1C9737Fc071108F904c0B0C95d"]] },
 ];
@@ -70,7 +70,11 @@ function transfer(dir, step) {
   const [sym, price, chain, address] = pick(dir.tokens);
   const colour = "--p1", icon = IMG(chain, address), iconKey = `${chain}-${address ?? "native"}`;
   const usd = Math.exp(rnd(Math.log(5), Math.log(20000)));
-  return { id: ++seq, dir, step, sym, colour, icon, iconKey, amount: usd / price, usd, x: 0, y: 0, alpha: 0, moving: null, leaving: false,
+  // The fee as the app sets it by default: the curve (1 % at $10 → 0.1 % at $500), at least twice the cost, at most 1 %.
+  const PROOF = 0.025, cost = dir.gasUsd + PROOF;
+  const share = usd <= 10 ? 0.01 : usd >= 500 ? 0.001 : 0.01 * Math.pow(10 / usd, Math.log(10) / Math.log(50));
+  const fee = Math.min(0.01 * usd, Math.max(share * usd, 2 * cost));
+  return { id: ++seq, dir, step, sym, colour, icon, iconKey, fee, cost, amount: usd / price, usd, x: 0, y: 0, alpha: 0, moving: null, leaving: false,
     age: rnd(0.2, 1) * dir.minutes.slice(0, step + 1).reduce((a, b) => a + b, 0),
     addr: "0x" + Math.random().toString(16).slice(2, 6) + "…" + Math.random().toString(16).slice(2, 6) };
 }
@@ -124,7 +128,16 @@ function build() {
   state.forEach((s, n) => {
     s.guides = el("g", {}); svg.append(s.guides); s.guideEls = {};
     s.layer = el("g", {}); svg.append(s.layer);
-    s.suns = [0, 1, 2, 3].map((i) => { const c = el("circle", { cx: s.lane.x(i), cy: s.lane.y, r: 15, fill: i === 0 ? "var(--accent)" : "var(--ahead)" }); c.dataset.sun = i; return c; });
+    s.suns = [0, 1, 2, 3].map((i) => {
+      const c = el("circle", { cx: s.lane.x(i), cy: s.lane.y, r: 15, fill: i === 0 ? "var(--accent)" : "var(--ahead)", tabindex: 0, style: "cursor:pointer", "aria-label": `${STEPS[i]}: totals` });
+      c.dataset.sun = i;
+      // The sun's tooltip: everything waiting at this step, by token, with the fees it pays and what delivering it all costs.
+      const show = (x, y) => { s.frozen = i; tip.innerHTML = stepSummary(s, i); tip.style.left = Math.min(innerWidth - 300, x + 14) + "px"; tip.style.top = (y + 14) + "px"; tip.classList.add("on"); };
+      c.addEventListener("pointerenter", (e) => show(e.clientX, e.clientY)); c.addEventListener("pointermove", (e) => show(e.clientX, e.clientY));
+      c.addEventListener("pointerleave", () => { s.frozen = -1; hideTip(); });
+      c.addEventListener("focus", () => { const b = c.getBoundingClientRect(); show(b.right, b.bottom); }); c.addEventListener("blur", () => { s.frozen = -1; hideTip(); });
+      return c;
+    });
     // Step labels: above the top lane, below the bottom lane.
     s.labelEls = [0, 1, 2, 3].map((i) => {
       const y = n === 0 ? YT - 78 : YB + 86;
@@ -154,6 +167,21 @@ function showTip(t, x, y) {
   tip.style.left = Math.min(innerWidth - 240, x + 14) + "px"; tip.style.top = (y + 14) + "px"; tip.classList.add("on");
 }
 const hideTip = () => tip.classList.remove("on");
+function stepSummary(s, i) {
+  const here = s.items.filter((t) => t.step === i && !t.leaving);
+  if (here.length === 0) return `<b>${STEPS[i]}</b><br><span class="r">Nothing waiting here.</span>`;
+  const byToken = new Map();
+  for (const t of here) { const g = byToken.get(t.sym) ?? { icon: t.icon, n: 0, amount: 0, usd: 0, fee: 0 }; g.n++; g.amount += t.amount; g.usd += t.usd; g.fee += t.fee; byToken.set(t.sym, g); }
+  const usd = here.reduce((a, t) => a + t.usd, 0), fees = here.reduce((a, t) => a + t.fee, 0);
+  // Delivering everything here: one delivery each on the destination chain; the proof is one posting shared by all.
+  const cost = here.length * s.dir.gasUsd + 0.025, profit = fees - cost;
+  const rows = [...byToken].sort((a, b) => b[1].usd - a[1].usd).map(([sym, g]) =>
+    `<tr><td><img src="${g.icon}" alt="" width="14" height="14" style="vertical-align:-2px;border-radius:50%"> ${g.n}× ${sym}</td><td style="text-align:right">${fmt(g.amount)}</td><td style="text-align:right" class="r">$${fmt(g.usd)}</td><td style="text-align:right">$${fmt(g.fee)}</td></tr>`).join("");
+  return `<b>${STEPS[i]}</b> · ${s.dir.from} → ${s.dir.to}<br>${here.length} transfers · ≈ $${fmt(usd)}
+    <table style="border-collapse:collapse;margin:6px 0;font-size:12px;width:100%"><tr class="r"><td>token</td><td style="text-align:right">amount</td><td style="text-align:right">value</td><td style="text-align:right">fees</td></tr>${rows}</table>
+    <span class="r">Fees paid:</span> $${fmt(fees)} · <span class="r">cost to deliver all:</span> $${fmt(cost)}<br>
+    <b style="color:${profit >= 0 ? "var(--good)" : "var(--accent-text)"}">${profit >= 0 ? "Profit" : "Loss"} for a deliverer: $${fmt(Math.abs(profit))}</b> <span class="r">(${fees > 0 ? Math.round((profit / fees) * 100) : 0} % of fees)</span>`;
+}
 // Where each planet should be now: its slot on its step's rings (or the exit). Planets then ease toward it every frame,
 // so a step change, a ring re-spacing or a departure is always a glide, never a jump.
 let frameNo = 0;
