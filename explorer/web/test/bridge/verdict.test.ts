@@ -34,7 +34,7 @@ describe("the Bridge pill's verdict", () => {
 
   it("warns, overridably, when the tip is high for the amount, naming the threshold", () => {
     const verdict = verdictOf({ ...base, highTip: { thresholdText: "0.32%" } });
-    expect(verdict).toMatchObject({ kind: "warn", label: "High tip for this amount" });
+    expect(verdict).toMatchObject({ kind: "warn", label: "High tip %" });
     expect(verdict.detail).toMatch(/0\.32%/);
     expect(pressable(verdict)).toBe(true);
     // A low fee says so first.
