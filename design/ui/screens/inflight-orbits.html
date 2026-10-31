@@ -34,7 +34,7 @@
 <body>
 <div class="col">
   <h1>Every transfer in flight, at once</h1>
-  <p class="lead">One loop joins the two chains: the top lane runs from the chain on the left to the chain on the right, the bottom lane back. Each lane is the three steps of a transfer: sent, final on its chain, and proof ready (a valid proof is on the board; posting it on chain is part of delivering, which anyone may do). Each planet circling a step is one transfer waiting at it. Each planet is its token's icon; its size is the value it carries. New transfers emerge from their source chain. Steps complete in batches, as on chain: a finalized checkpoint moves every transfer sent before it, one proof makes every finalized transfer of its direction ready, and deliveries come several at a time; each batch glides as a wave. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer; hover a step's sun for what waits there, by token, with its fees and what delivering it all would earn; hover a chain for its totals.</p>
+  <p class="lead">One loop joins the two chains: the top lane runs from the chain on the left to the chain on the right, the bottom lane back. Each lane is the three steps of a transfer: sent, final on its chain, and proof ready (a valid proof is on the board; posting it on chain is part of delivering, which anyone may do). Each planet circling a step is one transfer waiting at it. Each planet is its token's icon; its size is the value it carries. New transfers emerge from their source chain. Steps complete in batches, as on chain: a finalized checkpoint moves every transfer sent before it, one proof makes every finalized transfer of its direction ready, and deliveries come several at a time; each batch glides as a wave. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer; hover a step's sun for what waits there, by token, with its fees and what delivering it all costs; hover a chain for its totals.</p>
   <div id="tracks"></div>
   <div class="bar"><button id="theme">Light / dark</button><button id="burst">Add a burst of transfers</button><button id="motion">Pause all</button></div>
   <ul class="notes">
@@ -194,7 +194,7 @@ function stepSummary(s, i) {
   for (const t of here) { const g = byToken.get(t.sym) ?? { icon: t.icon, n: 0, amount: 0, usd: 0, fee: 0 }; g.n++; g.amount += t.amount; g.usd += t.usd; g.fee += t.fee; byToken.set(t.sym, g); }
   const usd = here.reduce((a, t) => a + t.usd, 0), fees = here.reduce((a, t) => a + t.fee, 0);
   // Delivering everything here: one delivery each on the destination chain; the proof is one posting shared by all.
-  const cost = here.length * s.dir.gasUsd + 0.025, profit = fees - cost;
+  const cost = here.length * s.dir.gasUsd + 0.025;
   const rows = [...byToken].sort((a, b) => b[1].usd - a[1].usd).map(([sym, g]) =>
     `<tr><td><img src="${g.icon}" alt="" width="14" height="14" style="vertical-align:-2px;border-radius:50%"> ${g.n}× ${sym}</td><td style="text-align:right">${fmt(g.amount)}</td><td style="text-align:right" class="r">$${fmt(g.usd)}</td><td style="text-align:right">$${fmt(g.fee)}</td></tr>`).join("");
   const w24 = stepTiming(s.done24, i), w7 = stepTiming(s.done7, i);
@@ -206,8 +206,7 @@ function stepSummary(s, i) {
   const waitLine = `${nowLine}${slow}<br><span class="r">Usual time at this step:</span> median ${mins(w24.med)} · p90 ${mins(w24.p90)} <span class="r">(24 h)</span>; median ${mins(w7.med)} <span class="r">(7 d)</span>`;
   return `<b>${STEPS[i]}</b> · ${s.dir.from} → ${s.dir.to}<br>${here.length} transfers · ≈ $${fmt(usd)}<br>${waitLine}
     <table style="border-collapse:collapse;margin:6px 0;font-size:12px;width:100%"><tr class="r"><td>token</td><td style="text-align:right">amount</td><td style="text-align:right">value</td><td style="text-align:right">fees</td></tr>${rows}</table>
-    <span class="r">Fees paid:</span> $${fmt(fees)} · <span class="r">cost to deliver all:</span> $${fmt(cost)}<br>
-    <b style="color:${profit >= 0 ? "var(--good)" : "var(--accent-text)"}">${profit >= 0 ? "Profit" : "Loss"} for a deliverer: $${fmt(Math.abs(profit))}</b> <span class="r">(${fees > 0 ? Math.round((profit / fees) * 100) : 0} % of fees)</span>`;
+    <span class="r">Fees (paid to the fee address):</span> $${fmt(fees)} · <span class="r">cost to deliver all:</span> $${fmt(cost)}`;
 }
 // Where each planet should be now: its slot on its step's rings (or the exit). Planets then ease toward it every frame,
 // so a step change, a ring re-spacing or a departure is always a glide, never a jump.
