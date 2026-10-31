@@ -1,0 +1,1224 @@
+{
+  "about": "Fixed test vectors for the zkb.fi fee rules (explorer/shared/src/fee-rules.ts). Every number is an integer written as a decimal string: token amounts in base units, gas prices in wei, money in USD micro-dollars (1 USD = 1000000), shares of the amount scaled by 1e18 (1% = 10000000000000000), prices as USD per whole token scaled by 1e18. null means 'no price'. Each list holds { input, output } pairs for the function of the same name; an SDK must give exactly these outputs.",
+  "rounding": "One rule: every division rounds down (truncates), toward the user. Thresholds are compared exactly by cross-multiplying, never rounded. The default curve's power is computed as 1% x exp(-ln(amount/10) x ln10/ln50) in 1e36 fixed point (ln by halving plus the atanh series, exp by ln2 range reduction plus the Taylor series, each term truncated, stopping at the first zero term), then truncated to 1e18.",
+  "constants": {
+    "PROOF_COST_MICRO_USD": "25000",
+    "COST_MARGIN": "2",
+    "DEFAULT_CAP_WAD": "10000000000000000",
+    "NO_PRICE_SHARE_WAD": "1000000000000000",
+    "GAS_LEVELS": {
+      "1": {
+        "ceilingFactor": "2",
+        "expectedHalves": "2"
+      },
+      "2": {
+        "ceilingFactor": "3",
+        "expectedHalves": "3"
+      },
+      "3": {
+        "ceilingFactor": "5",
+        "expectedHalves": "5"
+      }
+    }
+  },
+  "usdMicroOf": [
+    {
+      "input": {
+        "units": "1500000",
+        "decimals": 6,
+        "priceE18": "1000000000000000000"
+      },
+      "output": "1500000"
+    },
+    {
+      "input": {
+        "units": "1000000000000000000",
+        "decimals": 18,
+        "priceE18": "56200000000000"
+      },
+      "output": "56"
+    },
+    {
+      "input": {
+        "units": "123456789000000000000",
+        "decimals": 18,
+        "priceE18": "2243000000000000000000"
+      },
+      "output": "276913577727"
+    },
+    {
+      "input": {
+        "units": "1",
+        "decimals": 18,
+        "priceE18": "1000000000000000000"
+      },
+      "output": "0"
+    }
+  ],
+  "totalCostMicroUsd": [
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 1
+      },
+      "output": "1025000"
+    },
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 2
+      },
+      "output": "1525000"
+    },
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 3
+      },
+      "output": "2525000"
+    },
+    {
+      "input": {
+        "gasUsed": "250000",
+        "baseFeeWei": "1200000000000000",
+        "priorityFeeWei": "10000000000000",
+        "nativePriceE18": "56200000000000",
+        "level": 1
+      },
+      "output": "42000"
+    },
+    {
+      "input": {
+        "gasUsed": "250000",
+        "baseFeeWei": "1200000000000000",
+        "priorityFeeWei": "10000000000000",
+        "nativePriceE18": "56200000000000",
+        "level": 3
+      },
+      "output": "67290"
+    },
+    {
+      "input": {
+        "gasUsed": "180000",
+        "baseFeeWei": "700000000",
+        "priorityFeeWei": "1000000",
+        "nativePriceE18": "3300000000000000000000",
+        "level": 2
+      },
+      "output": "649294"
+    }
+  ],
+  "ceilingWeiOf": [
+    {
+      "input": {
+        "baseFeeWei": "10000000000",
+        "level": 1
+      },
+      "output": "20000000000"
+    },
+    {
+      "input": {
+        "baseFeeWei": "10000000000",
+        "level": 2
+      },
+      "output": "30000000000"
+    },
+    {
+      "input": {
+        "baseFeeWei": "10000000000",
+        "level": 3
+      },
+      "output": "50000000000"
+    },
+    {
+      "input": {
+        "baseFeeWei": "7",
+        "level": 2
+      },
+      "output": "21"
+    }
+  ],
+  "gasLevelOfCeiling": [
+    {
+      "input": {
+        "ceilingWei": null,
+        "baseFeeWei": "10"
+      },
+      "output": 1
+    },
+    {
+      "input": {
+        "ceilingWei": "30",
+        "baseFeeWei": null
+      },
+      "output": 1
+    },
+    {
+      "input": {
+        "ceilingWei": "30",
+        "baseFeeWei": "0"
+      },
+      "output": 1
+    },
+    {
+      "input": {
+        "ceilingWei": "20",
+        "baseFeeWei": "10"
+      },
+      "output": 1
+    },
+    {
+      "input": {
+        "ceilingWei": "25",
+        "baseFeeWei": "10"
+      },
+      "output": 1
+    },
+    {
+      "input": {
+        "ceilingWei": "26",
+        "baseFeeWei": "10"
+      },
+      "output": 2
+    },
+    {
+      "input": {
+        "ceilingWei": "30",
+        "baseFeeWei": "10"
+      },
+      "output": 2
+    },
+    {
+      "input": {
+        "ceilingWei": "40",
+        "baseFeeWei": "10"
+      },
+      "output": 2
+    },
+    {
+      "input": {
+        "ceilingWei": "41",
+        "baseFeeWei": "10"
+      },
+      "output": 3
+    },
+    {
+      "input": {
+        "ceilingWei": "49",
+        "baseFeeWei": "11"
+      },
+      "output": 3
+    },
+    {
+      "input": {
+        "ceilingWei": "500",
+        "baseFeeWei": "10"
+      },
+      "output": 3
+    }
+  ],
+  "defaultCurveShareWad": [
+    {
+      "input": {
+        "amountMicroUsd": "1000000"
+      },
+      "output": "10000000000000000"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "10000000"
+      },
+      "output": "10000000000000000"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "10000001"
+      },
+      "output": "9999999411408136"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "20000000"
+      },
+      "output": "6649916312686608"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "25000000"
+      },
+      "output": "5831438908323935"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "50000000"
+      },
+      "output": "3877858072289872"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "100000000"
+      },
+      "output": "2578743165320386"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "123450000"
+      },
+      "output": "2278018108171648"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "200000000"
+      },
+      "output": "1714842624129314"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "316227766"
+      },
+      "output": "1309519997646771"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "499999999"
+      },
+      "output": "1000000001177183"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "500000000"
+      },
+      "output": "1000000000000000"
+    },
+    {
+      "input": {
+        "amountMicroUsd": "1000000000"
+      },
+      "output": "1000000000000000"
+    }
+  ],
+  "defaultFee": [
+    {
+      "input": {
+        "amountMicroUsd": "10000000",
+        "costMicroUsd": "50000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "10000000000000000",
+        "feeMicroUsd": "100000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "20000000",
+        "costMicroUsd": "50000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "6649916312686608",
+        "feeMicroUsd": "132998"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "50000000",
+        "costMicroUsd": "50000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "3877858072289872",
+        "feeMicroUsd": "193892"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "100000000",
+        "costMicroUsd": "50000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "2578743165320386",
+        "feeMicroUsd": "257874"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "200000000",
+        "costMicroUsd": "50000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "1714842624129314",
+        "feeMicroUsd": "342968"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "500000000",
+        "costMicroUsd": "50000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "1000000000000000",
+        "feeMicroUsd": "500000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "1000000000",
+        "costMicroUsd": "50000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "1000000000000000",
+        "feeMicroUsd": "1000000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "200000000",
+        "costMicroUsd": "525000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cost",
+        "shareWad": "5250000000000000",
+        "feeMicroUsd": "1050000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "500000000",
+        "costMicroUsd": "525000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cost",
+        "shareWad": "2100000000000000",
+        "feeMicroUsd": "1050000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "1000000000",
+        "costMicroUsd": "525000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cost",
+        "shareWad": "1050000000000000",
+        "feeMicroUsd": "1050000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "2000000000",
+        "costMicroUsd": "525000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "1000000000000000",
+        "feeMicroUsd": "2000000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "25000000",
+        "costMicroUsd": "125000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cost",
+        "shareWad": "10000000000000000",
+        "feeMicroUsd": "250000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "50000000",
+        "costMicroUsd": "125000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cost",
+        "shareWad": "5000000000000000",
+        "feeMicroUsd": "250000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "100000000",
+        "costMicroUsd": "125000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "2578743165320386",
+        "feeMicroUsd": "257874"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "5000000",
+        "costMicroUsd": "50000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cap",
+        "shareWad": "10000000000000000",
+        "feeMicroUsd": "50000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "5000000",
+        "costMicroUsd": "100000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "cap",
+        "shareWad": "10000000000000000",
+        "feeMicroUsd": "50000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "25000000",
+        "costMicroUsd": "125000",
+        "capWad": "5000000000000000"
+      },
+      "output": {
+        "binding": "cap",
+        "shareWad": "5000000000000000",
+        "feeMicroUsd": "125000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "100000000",
+        "costMicroUsd": "50000",
+        "capWad": "5000000000000000"
+      },
+      "output": {
+        "binding": "curve",
+        "shareWad": "2578743165320386",
+        "feeMicroUsd": "257874"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "100000000",
+        "costMicroUsd": "50000",
+        "capWad": "1000000000000000"
+      },
+      "output": {
+        "binding": "cap",
+        "shareWad": "1000000000000000",
+        "feeMicroUsd": "100000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "8000000",
+        "costMicroUsd": "50000",
+        "capWad": "5000000000000000"
+      },
+      "output": {
+        "binding": "cap",
+        "shareWad": "5000000000000000",
+        "feeMicroUsd": "40000"
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": null,
+        "costMicroUsd": "50000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "no-price",
+        "shareWad": "1000000000000000",
+        "feeMicroUsd": null
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "100000000",
+        "costMicroUsd": null,
+        "capWad": "500000000000000"
+      },
+      "output": {
+        "binding": "no-price",
+        "shareWad": "500000000000000",
+        "feeMicroUsd": null
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "0",
+        "costMicroUsd": "50000",
+        "capWad": "10000000000000000"
+      },
+      "output": {
+        "binding": "no-price",
+        "shareWad": "1000000000000000",
+        "feeMicroUsd": null
+      }
+    }
+  ],
+  "highCap": [
+    {
+      "input": {
+        "feeMicroUsd": "1525000",
+        "costNormalMicroUsd": "1025000",
+        "amountMicroUsd": "50000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeMicroUsd": "1525001",
+        "costNormalMicroUsd": "1025000",
+        "amountMicroUsd": "50000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeMicroUsd": "100",
+        "costNormalMicroUsd": "1025000",
+        "amountMicroUsd": "50000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeMicroUsd": "2025000",
+        "costNormalMicroUsd": "1025000",
+        "amountMicroUsd": "500000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeMicroUsd": "2025001",
+        "costNormalMicroUsd": "1025000",
+        "amountMicroUsd": "500000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeMicroUsd": "1075000",
+        "costNormalMicroUsd": "75000",
+        "amountMicroUsd": "100000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeMicroUsd": "1075001",
+        "costNormalMicroUsd": "75000",
+        "amountMicroUsd": "100000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeMicroUsd": "1075000",
+        "costNormalMicroUsd": "75000",
+        "amountMicroUsd": "1000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeMicroUsd": "1075001",
+        "costNormalMicroUsd": "75000",
+        "amountMicroUsd": "1000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeMicroUsd": "5075001",
+        "costNormalMicroUsd": "75000",
+        "amountMicroUsd": "5000000000",
+        "shareWithoutPriceWad": null
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeMicroUsd": null,
+        "costNormalMicroUsd": null,
+        "amountMicroUsd": null,
+        "shareWithoutPriceWad": "10000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeMicroUsd": null,
+        "costNormalMicroUsd": null,
+        "amountMicroUsd": null,
+        "shareWithoutPriceWad": "10000000000000001"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeMicroUsd": null,
+        "costNormalMicroUsd": null,
+        "amountMicroUsd": null,
+        "shareWithoutPriceWad": null
+      },
+      "output": false
+    }
+  ],
+  "smallTransfer": [
+    {
+      "input": {
+        "costMicroUsd": "50000",
+        "amountMicroUsd": "5000000",
+        "capWad": "10000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "costMicroUsd": "50001",
+        "amountMicroUsd": "5000000",
+        "capWad": "10000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "costMicroUsd": "75000",
+        "amountMicroUsd": "10000000",
+        "capWad": "10000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "costMicroUsd": "50000",
+        "amountMicroUsd": "8000000",
+        "capWad": "5000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "costMicroUsd": "50000",
+        "amountMicroUsd": "10000000",
+        "capWad": "5000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "costMicroUsd": "50001",
+        "amountMicroUsd": "10000000",
+        "capWad": "5000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "costMicroUsd": "50000",
+        "amountMicroUsd": "8000000",
+        "capWad": "10000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "costMicroUsd": "525000",
+        "amountMicroUsd": "100000000",
+        "capWad": "5000000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "costMicroUsd": "525000",
+        "amountMicroUsd": "200000000",
+        "capWad": "2500000000000000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "costMicroUsd": null,
+        "amountMicroUsd": "8000000",
+        "capWad": "10000000000000000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "costMicroUsd": "1",
+        "amountMicroUsd": null,
+        "capWad": "10000000000000000"
+      },
+      "output": false
+    }
+  ],
+  "lowFee": [
+    {
+      "input": {
+        "feeMicroUsd": "2049999",
+        "costMicroUsd": "1025000",
+        "belowBreakEven": false
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeMicroUsd": "2050000",
+        "costMicroUsd": "1025000",
+        "belowBreakEven": true
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "feeMicroUsd": null,
+        "costMicroUsd": "1",
+        "belowBreakEven": true
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "feeMicroUsd": "1",
+        "costMicroUsd": null,
+        "belowBreakEven": false
+      },
+      "output": false
+    }
+  ],
+  "feeWarnings": [
+    {
+      "input": {
+        "amountMicroUsd": "5000000",
+        "capWad": "10000000000000000",
+        "feeMicroUsd": "50000",
+        "costMicroUsd": "100000",
+        "costNormalMicroUsd": "100000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostMicroUsd": null
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "5000000",
+        "capWad": "10000000000000000",
+        "feeMicroUsd": "2000000",
+        "costMicroUsd": "100000",
+        "costNormalMicroUsd": "100000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostMicroUsd": null
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": false,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "8000000",
+        "capWad": "5000000000000000",
+        "feeMicroUsd": "40000",
+        "costMicroUsd": "50000",
+        "costNormalMicroUsd": "50000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostMicroUsd": null
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "8000000",
+        "capWad": "10000000000000000",
+        "feeMicroUsd": "80000",
+        "costMicroUsd": "50000",
+        "costNormalMicroUsd": "50000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostMicroUsd": null
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "50000000",
+        "capWad": "10000000000000000",
+        "feeMicroUsd": "2000000",
+        "costMicroUsd": "100000",
+        "costNormalMicroUsd": "100000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostMicroUsd": null
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": false,
+        "highCap": true,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "50000000",
+        "capWad": "10000000000000000",
+        "feeMicroUsd": "190000",
+        "costMicroUsd": "50000",
+        "costNormalMicroUsd": "50000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostMicroUsd": null
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": false,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "500000000",
+        "capWad": "10000000000000000",
+        "feeMicroUsd": "500000",
+        "costMicroUsd": "50000",
+        "costNormalMicroUsd": "50000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostMicroUsd": null
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": false,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "50000000",
+        "capWad": "10000000000000000",
+        "feeMicroUsd": "1000000",
+        "costMicroUsd": "600000",
+        "costNormalMicroUsd": "400000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": false,
+        "expandedCostMicroUsd": null
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": null,
+        "capWad": "10000000000000000",
+        "feeMicroUsd": null,
+        "costMicroUsd": null,
+        "costNormalMicroUsd": null,
+        "shareWithoutPriceWad": "20000000000000000",
+        "belowBreakEven": true,
+        "gasBased": false,
+        "expandedCostMicroUsd": null
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": true,
+        "highCap": true,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "500000000",
+        "capWad": "10000000000000000",
+        "feeMicroUsd": "500000",
+        "costMicroUsd": "2025000",
+        "costNormalMicroUsd": "2025000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": true,
+        "expandedCostMicroUsd": "10025000"
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": true
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "500000000",
+        "capWad": "10000000000000000",
+        "feeMicroUsd": "500000",
+        "costMicroUsd": "50000",
+        "costNormalMicroUsd": "50000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": true,
+        "expandedCostMicroUsd": "75000"
+      },
+      "output": {
+        "smallTransfer": false,
+        "lowFee": false,
+        "highCap": false,
+        "capWarning": false
+      }
+    },
+    {
+      "input": {
+        "amountMicroUsd": "5000000",
+        "capWad": "10000000000000000",
+        "feeMicroUsd": "50000",
+        "costMicroUsd": "100000",
+        "costNormalMicroUsd": "100000",
+        "shareWithoutPriceWad": null,
+        "belowBreakEven": false,
+        "gasBased": true,
+        "expandedCostMicroUsd": "3000000"
+      },
+      "output": {
+        "smallTransfer": true,
+        "lowFee": true,
+        "highCap": false,
+        "capWarning": false
+      }
+    }
+  ],
+  "ceilingCostMicroUsd": [
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 1
+      },
+      "output": "2025000"
+    },
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 2
+      },
+      "output": "3025000"
+    },
+    {
+      "input": {
+        "gasUsed": "1000000",
+        "baseFeeWei": "1000000000",
+        "priorityFeeWei": "0",
+        "nativePriceE18": "1000000000000000000000",
+        "level": 3
+      },
+      "output": "5025000"
+    },
+    {
+      "input": {
+        "gasUsed": "250000",
+        "baseFeeWei": "1200000000000000",
+        "priorityFeeWei": "10000000000000",
+        "nativePriceE18": "56200000000000",
+        "level": 1
+      },
+      "output": "58860"
+    },
+    {
+      "input": {
+        "gasUsed": "250000",
+        "baseFeeWei": "1200000000000000",
+        "priorityFeeWei": "10000000000000",
+        "nativePriceE18": "56200000000000",
+        "level": 3
+      },
+      "output": "109440"
+    },
+    {
+      "input": {
+        "gasUsed": "180000",
+        "baseFeeWei": "700000000",
+        "priorityFeeWei": "1000000",
+        "nativePriceE18": "3300000000000000000000",
+        "level": 2
+      },
+      "output": "1272994"
+    }
+  ],
+  "capWarns": [
+    {
+      "input": {
+        "gasBased": true,
+        "amountMicroUsd": "500000000",
+        "capWad": "10000000000000000",
+        "expandedCostMicroUsd": "75000",
+        "costNormalMicroUsd": "50000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountMicroUsd": "500000000",
+        "capWad": "10000000000000000",
+        "expandedCostMicroUsd": "10025000",
+        "costNormalMicroUsd": "2025000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountMicroUsd": "500000000",
+        "capWad": "5000000000000000",
+        "expandedCostMicroUsd": "10025000",
+        "costNormalMicroUsd": "2025000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountMicroUsd": "200000000",
+        "capWad": "10000000000000000",
+        "expandedCostMicroUsd": "1525000",
+        "costNormalMicroUsd": "325000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountMicroUsd": "200000000",
+        "capWad": "20000000000000000",
+        "expandedCostMicroUsd": "2525000",
+        "costNormalMicroUsd": "525000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountMicroUsd": "2000000000",
+        "capWad": "10000000000000000",
+        "expandedCostMicroUsd": "5025000",
+        "costNormalMicroUsd": "1025000"
+      },
+      "output": true
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountMicroUsd": "50000000",
+        "capWad": "10000000000000000",
+        "expandedCostMicroUsd": "125000",
+        "costNormalMicroUsd": "50000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "gasBased": false,
+        "amountMicroUsd": "500000000",
+        "capWad": "10000000000000000",
+        "expandedCostMicroUsd": "10025000",
+        "costNormalMicroUsd": "2025000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "gasBased": false,
+        "amountMicroUsd": "200000000",
+        "capWad": "20000000000000000",
+        "expandedCostMicroUsd": "2525000",
+        "costNormalMicroUsd": "525000"
+      },
+      "output": false
+    },
+    {
+      "input": {
+        "gasBased": true,
+        "amountMicroUsd": null,
+        "capWad": "10000000000000000",
+        "expandedCostMicroUsd": "75000",
+        "costNormalMicroUsd": "50000"
+      },
+      "output": false
+    }
+  ]
+}
