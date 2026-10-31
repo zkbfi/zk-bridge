@@ -17,6 +17,7 @@ import {
   lowFee,
   NO_PRICE_SHARE_WAD,
   PERCENT_WAD,
+  WAD,
   PROOF_COST_USD,
   shareWadOfPercentText,
   smallTransfer,
@@ -86,6 +87,19 @@ describe("the default fee curve: the owner's reference table", () => {
     expect(defaultFee({ amountUsd: 25n * USD, costUsd: micro(125_000n), capWad: PERCENT_WAD / 2n })).toEqual({ binding: "cap", feeUsd: micro(125_000n), shareWad: PERCENT_WAD / 2n });
   });
 
+  it("adds a higher gas level's extra cost on top of the curve, so the fee rises with the level; the floor and the cap still hold", () => {
+    // $50: the curve is about $0.1939; at High the cost is $0.0375 against $0.025 at Normal, an extra $0.0125.
+    const normal = defaultFee({ amountUsd: 50n * USD, costUsd: micro(25_000n), capWad: DEFAULT_CAP_WAD });
+    const high = defaultFee({ amountUsd: 50n * USD, costUsd: micro(37_500n), capWad: DEFAULT_CAP_WAD, levelExtraUsd: micro(12_500n) });
+    expect(high.binding).toBe("curve");
+    expect(high.feeUsd).toBe(normal.feeUsd! + micro(12_500n));
+    expect(high.shareWad).toBe((high.feeUsd! * WAD) / (50n * USD));
+    expect(defaultFee({ amountUsd: 50n * USD, costUsd: micro(25_000n), capWad: DEFAULT_CAP_WAD, levelExtraUsd: 0n })).toEqual(normal);
+    // Twice the cost still wins when it is larger, and the cap still binds.
+    expect(defaultFee({ amountUsd: 2_000n * USD, costUsd: micro(7_500_000n), capWad: DEFAULT_CAP_WAD, levelExtraUsd: micro(2_500_000n) })).toEqual({ binding: "cost", feeUsd: micro(15_000_000n), shareWad: 7_500_000_000_000_000n });
+    expect(defaultFee({ amountUsd: 50n * USD, costUsd: micro(37_500n), capWad: PERCENT_WAD / 4n, levelExtraUsd: micro(12_500n) }).binding).toBe("cap");
+  });
+
   it("is 0.1% (or the cap when lower) without a price or an amount", () => {
     expect(defaultFee({ amountUsd: null, costUsd: micro(50_000n), capWad: DEFAULT_CAP_WAD })).toEqual({ binding: "no-price", feeUsd: null, shareWad: NO_PRICE_SHARE_WAD });
     expect(defaultFee({ amountUsd: 100n * USD, costUsd: null, capWad: PERCENT_WAD / 20n })).toEqual({ binding: "no-price", feeUsd: null, shareWad: PERCENT_WAD / 20n });
@@ -95,14 +109,19 @@ describe("the default fee curve: the owner's reference table", () => {
 
 describe("the total cost", () => {
   const gas = { gasUsed: 1_000_000n, baseFeeWei: 1_000_000_000n, priorityFeeWei: 0n, nativePriceE18: 1_000n * 10n ** 18n };
-  it("is the $0.025 proof plus the delivery gas at the level's expected price (1×, 1.5×, 2.5× the base fee)", () => {
-    // 1e6 gas × 1 gwei = 0.001 coin at $1,000 = $1 at Normal.
-    expect(([1, 2, 3] as GasLevel[]).map((level) => deliveryGasUsd({ ...gas, level }))).toEqual([micro(1_000_000n), micro(1_500_000n), micro(2_500_000n)]);
-    expect(totalCostUsd({ ...gas, level: 1 })).toBe(micro(1_025_000n));
+  it("is the full cost, the $0.025 proof plus the delivery gas, times the level's expected multiple (1×, 1.5×, 2.5×)", () => {
+    // 1e6 gas × 1 gwei = 0.001 coin at $1,000 = $1 of gas; + $0.025 proof = $1.025 at Normal.
+    expect(([1, 2, 3] as GasLevel[]).map((level) => deliveryGasUsd({ ...gas, level }))).toEqual([micro(1_000_000n), micro(1_000_000n), micro(1_000_000n)]);
+    expect(([1, 2, 3] as GasLevel[]).map((level) => totalCostUsd({ ...gas, level }))).toEqual([micro(1_025_000n), micro(1_537_500n), micro(2_562_500n)]);
   });
 
-  it("adds the priority fee once, at every level, and rounds down", () => {
-    expect(deliveryGasUsd({ ...gas, priorityFeeWei: 1_000_000_000n, level: 2 })).toBe(micro(2_500_000n));
+  it("moves with the level even where gas is nearly free: the proof is multiplied too", () => {
+    const free = { ...gas, baseFeeWei: 7n, priorityFeeWei: 0n };
+    expect(([1, 2, 3] as GasLevel[]).map((level) => totalCostUsd({ ...free, level }))).toEqual([micro(25_000n) + 7_000_000_000n, (3n * (micro(25_000n) + 7_000_000_000n)) / 2n, (5n * (micro(25_000n) + 7_000_000_000n)) / 2n]);
+  });
+
+  it("adds the priority fee to the base fee and rounds down", () => {
+    expect(deliveryGasUsd({ ...gas, priorityFeeWei: 1_000_000_000n, level: 2 })).toBe(micro(2_000_000n));
     expect(deliveryGasUsd({ ...gas, gasUsed: 1n, nativePriceE18: 1n, level: 1 })).toBe(0n);
   });
 });
