@@ -116,7 +116,7 @@ describe("the delivery settings menu", () => {
 
   it("sets the gas level from the menu as an anchor with a 15-minute range, and resets it", async () => {
     const menu = await menuOpen();
-    expect(within(menu).getByText(/^Anchored at today's gas · could land between \$[\d.]+ and \$[\d.]+ over 15 min$/)).toBeInTheDocument();
+    expect(within(menu).getByText(/^Anchored at today's gas · could land between \$[\d.]+ and \$[\d.]+ over 15 min \(gas [\d.,]+–[\d.,]+ \w+\)$/)).toBeInTheDocument();
     const bars = screen.getByRole("button", { name: /^Gas level: / });
     await userEvent.click(bars);
     await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: High. Change" })).toBeInTheDocument());

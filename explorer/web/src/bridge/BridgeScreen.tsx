@@ -532,7 +532,12 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     const gwei = (wei: bigint): number => Number(formatUnits(wei, 9));
     const ceilingWei = ceilingWeiText ?? ceilingWeiOf(levelBaseWei, 1);
     const max = gwei((ceilingWeiOf(levelBaseWei, 3) * 6n) / 5n);
-    const words = gasSpan === null ? null : `Anchored at today's gas · could land between ${dollarsText(gasSpan.lowUsd)} and ${dollarsText(gasSpan.highUsd)} over 15 min`;
+    // The range in dollars (the whole cost, the proof included) and in the destination's coin (the delivery gas alone).
+    const gasUsed = probe.delivery?.suggestions.dataSource.gas ?? null;
+    const priority = probe.delivery?.priorityFeeWei ?? 0n;
+    const coin = (wei: bigint): string => (gasUsed === null ? "" : amountText(gasUsed * (wei + priority), 18));
+    const coinRange = gasSpan === null || gasUsed === null ? "" : ` (gas ${coin(gasSpan.lowWei)}–${coin(gasSpan.highWei)} ${destination.nativeSymbol})`;
+    const words = gasSpan === null ? null : `Anchored at today's gas · could land between ${dollarsText(gasSpan.lowUsd)} and ${dollarsText(gasSpan.highUsd)} over 15 min${coinRange}`;
     return {
       label: "Gas level",
       help: "Today's gas is the anchor. Over the next 15 minutes the real price could land lower (left) or higher (right); this sets how high you let it go. The bars beside the gas can step through Normal, High and Highest.",

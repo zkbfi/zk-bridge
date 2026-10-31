@@ -218,7 +218,7 @@
 .zb-settings-pill .zb-chev { margin-left: auto; }
 /* The delivery pill says what happens in full; only a sentence too long for a phone ends in an ellipsis. */
 .zb-settings-pill { min-width: 0; }
-.zb-settings-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zb-settings-text { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.2; text-align: left; white-space: normal; }
 .zb-raise { display: flex; margin: 8px auto 0; }
 
 /* Fee line */
@@ -273,10 +273,11 @@
 .zb-range input { position: absolute; inset: 0; width: 100%; opacity: 0; margin: 0; cursor: pointer; }
 .zb-range-bar { position: absolute; left: 0; right: 0; top: 10px; height: 4px; border-radius: 999px; background: var(--zb-track-ahead); }
 .zb-range-fill { position: absolute; left: 0; top: 10px; height: 4px; border-radius: 999px; background: var(--zb-accent); }
-.zb-range-band { position: absolute; top: 7px; height: 10px; border-radius: 999px; background: color-mix(in srgb, var(--zb-accent) 30%, transparent); pointer-events: none; }
-.zb-range-anchor { position: absolute; top: 2px; width: 2px; height: 20px; background: var(--zb-accent); transform: translateX(-1px); pointer-events: none; }
+/* The band (where the fee or the price could land) sits over the fill, in the ink colour, so it reads on both halves. */
+.zb-range-band { position: absolute; z-index: 1; top: 7px; height: 10px; min-width: 6px; border-radius: 999px; background: color-mix(in srgb, var(--zb-ink) 38%, transparent); outline: 1px solid color-mix(in srgb, var(--zb-ink) 55%, transparent); pointer-events: none; }
+.zb-range-anchor { position: absolute; z-index: 1; top: 2px; width: 2px; height: 20px; background: var(--zb-accent); transform: translateX(-1px); pointer-events: none; }
 .zb-range-tick[data-recommended] { background: var(--zb-accent-text, var(--zb-accent)); }
-.zb-range-knob { position: absolute; top: 4px; width: 28px; height: 16px; border-radius: 999px; background: var(--zb-ink); transform: translateX(-50%); pointer-events: none; }
+.zb-range-knob { position: absolute; z-index: 2; top: 4px; width: 28px; height: 16px; border-radius: 999px; background: var(--zb-ink); transform: translateX(-50%); pointer-events: none; }
 .zb-range-tick { position: absolute; top: 5px; width: 2px; height: 14px; background: var(--zb-ink); pointer-events: none; }
 .zb-ticks { position: relative; min-height: 30px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
 .zb-ticks span { position: absolute; transform: translateX(-50%); text-align: center; line-height: 1.2; white-space: nowrap; }
@@ -385,7 +386,9 @@
 /* The delivery settings menu and pill segments */
 .zb-delivery-menu { position: absolute; left: 16px; right: 16px; top: 20px; padding: 6px 0; }
 .zb-menu-control { padding: 0 14px 4px; border-top: 1px solid var(--zb-line); }
-.zb-delivery-menu .zb-seg { flex-wrap: wrap; justify-content: flex-end; }
+.zb-menu-row.zb-menu-stack { flex-direction: column; align-items: stretch; gap: 6px; }
+.zb-menu-stack .zb-seg { display: flex; }
+.zb .zb-menu-stack .zb-seg [role="radio"] { flex: 1 1 auto; justify-content: center; padding-inline: 2px; white-space: nowrap; font-size: var(--zb-step-micro); }
 .zb-menu-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-top: 1px solid var(--zb-line); font-size: var(--zb-step-0); }
 .zb-menu-row:first-child { border-top: 0; }
 .zb-menu-row > :first-child { flex: 1; }
