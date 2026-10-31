@@ -79,6 +79,7 @@ const urlsOf = (settings: ConnectionSettings): readonly string[] => [
   ...(settings.indexerUrl === null ? [] : [settings.indexerUrl]),
   ...Object.values(settings.rpcUrls),
   ...Object.values(settings.msgboardUrls ?? {}),
+  ...Object.values(settings.beaconUrls ?? {}),
 ];
 
 /** The settings without the URLs that look like they hold a key. */
@@ -88,6 +89,7 @@ const withoutKeyLikeUrls = (settings: ConnectionSettings): ConnectionSettings =>
   indexerUrl: clearIfKeyLike(settings.indexerUrl),
   rpcUrls: Object.fromEntries(Object.entries(settings.rpcUrls).filter(([, url]) => !keyLike(url))),
   ...(settings.msgboardUrls === undefined ? {} : { msgboardUrls: Object.fromEntries(Object.entries(settings.msgboardUrls).filter(([, url]) => !keyLike(url))) }),
+  ...(settings.beaconUrls === undefined ? {} : { beaconUrls: Object.fromEntries(Object.entries(settings.beaconUrls).filter(([, url]) => !keyLike(url))) }),
 });
 
 /**
@@ -110,7 +112,15 @@ export const loadUserConnections = (storage: ConnectionStorage | null, location:
       }),
     );
     const boards = boardUrlsOf(parsed.msgboardUrls);
-    return { ...endpoints, indexerUrl: validUrl(parsed.indexerUrl, "indexer"), rpcUrls: rpcUrlsOf(parsed.rpcUrls), ...(Object.keys(boards).length === 0 ? {} : { msgboardUrls: boards }) };
+    // A beacon API is checked as an endpoint, like a msgboard node: one per chain, a bad entry dropped.
+    const beacons = boardUrlsOf(parsed.beaconUrls);
+    return {
+      ...endpoints,
+      indexerUrl: validUrl(parsed.indexerUrl, "indexer"),
+      rpcUrls: rpcUrlsOf(parsed.rpcUrls),
+      ...(Object.keys(boards).length === 0 ? {} : { msgboardUrls: boards }),
+      ...(Object.keys(beacons).length === 0 ? {} : { beaconUrls: beacons }),
+    };
   } catch {
     return EMPTY_CONNECTION_SETTINGS;
   }

@@ -35,6 +35,7 @@
   --zb-p-ember: #eb6834;
   --zb-p-ember-deep: #c24a14;
   --zb-p-ink: #1d1817;
+  --zb-p-ember-dark: #4a2214;
   --zb-p-good: #21763c;
   --zb-p-bad: #b61537;
   --zb-page: var(--zb-p-paper);
@@ -71,6 +72,10 @@
   --zb-plate: var(--zb-p-white);
   --zb-good: var(--zb-p-good);
   --zb-bad: var(--zb-p-bad);
+  --zb-planet-1: var(--zb-p-clay);
+  --zb-planet-2: var(--zb-p-ember-deep);
+  --zb-planet-3: var(--zb-p-tint-3);
+  --zb-planet-4: var(--zb-p-ember-dark);
 }
 
 .theme-ember-dark {
@@ -85,6 +90,7 @@
   --zb-p-ember-light: #ff9b77;
   --zb-p-tint: #fed5c7;
   --zb-p-dust: #d9a795;
+  --zb-p-tint-3: #eaa48b;
   --zb-p-ember-deep: #8c3a1a;
   --zb-p-ember-dark: #4a2214;
   --zb-p-ember-end: #231915;
@@ -126,6 +132,10 @@
   --zb-plate: var(--zb-p-black);
   --zb-good: var(--zb-p-good);
   --zb-bad: var(--zb-p-bad);
+  --zb-planet-1: var(--zb-p-tint);
+  --zb-planet-2: var(--zb-p-tint-3);
+  --zb-planet-3: var(--zb-p-dust);
+  --zb-planet-4: var(--zb-p-ember-light);
 }
 
 .theme-mono {
@@ -174,6 +184,10 @@
   --zb-plate: var(--zb-p-black);
   --zb-good: var(--zb-p-good);
   --zb-bad: var(--zb-p-bad);
+  --zb-planet-1: var(--zb-p-text);
+  --zb-planet-2: var(--zb-p-tint);
+  --zb-planet-3: var(--zb-p-grey);
+  --zb-planet-4: var(--zb-p-ember-light);
 }
 
 .zb {

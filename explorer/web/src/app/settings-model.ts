@@ -4,6 +4,7 @@
  * draws and the rules have their own tests.
  */
 import { registryLayer } from "@terminal/data/connection-runtime";
+import { defaultBeaconUrl } from "@terminal/config/default-beacon";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import type { PairConfig } from "@terminal/model/types";
 import {
@@ -30,12 +31,12 @@ export type SettingField = {
   readonly label: string;
   /** The name inside the field, when it differs from the label. */
   readonly short?: string;
-  readonly section: "rpc" | "images" | "services" | "boards";
+  readonly section: "rpc" | "beacon" | "images" | "services" | "boards";
   /** What the live check asks. */
   readonly probe: ProbeKind;
   /** The connection setting it writes, or null for the image server (stored on its own). */
   readonly target: ConnectionTarget | null;
-  /** The chain whose icon the field shows (an RPC, a msgboard node). */
+  /** The chain whose icon the field shows (an RPC, a beacon API, a msgboard node). */
   readonly chainId?: number;
 };
 
@@ -52,7 +53,7 @@ const service = (key: EndpointKey, label: string, probe: ProbeKind, short?: stri
 export const IMAGES_FIELD: SettingField = { id: "images", label: "Image server", short: "Images", section: "images", probe: { kind: "image" }, target: null };
 
 /**
- * Every field, in the order of the sheet: an RPC per chain, the image server, then the services.
+ * Every field, in the order of the sheet: an RPC per chain, a beacon API per chain, the image server, then the services.
  *
  * @param pair The pair, for its chains.
  */
@@ -64,6 +65,17 @@ export const settingFields = (pair: PairConfig): readonly SettingField[] => [
       section: "rpc",
       probe: { kind: "rpc", chainId: chain.chainId },
       target: { kind: "rpc", label: `${chain.name} RPC`, chainId: chain.chainId },
+      chainId: chain.chainId,
+    }),
+  ),
+  // A beacon API per chain (owner: "we need to be able to configure different beacon endpoints in the settings").
+  ...[pair.first, pair.second].map(
+    (chain): SettingField => ({
+      id: `beacon:${chain.chainId}`,
+      label: `${chain.name} beacon API`,
+      section: "beacon",
+      probe: { kind: "beacon", chainId: chain.chainId },
+      target: { kind: "beacon", label: `${chain.name} beacon API`, chainId: chain.chainId },
       chainId: chain.chainId,
     }),
   ),
@@ -96,6 +108,7 @@ const environmentLayer = (configuration: WebConfiguration): ConnectionLayer => (
   archiveUrl: configuration.archiveUrl,
   msgboardUrl: configuration.msgboardUrl,
   rpcUrls: configuration.rpcUrls,
+  beaconUrls: configuration.beaconUrls,
 });
 
 /**
@@ -111,7 +124,7 @@ export const textOf = (values: FieldValues, id: string): string => values[id] ??
  * page is named), an RPC or the indexer must be an http(s) URL.
  */
 const checkUrl = (target: ConnectionTarget, text: string, pageProtocol: "https:" | "http:"): { readonly ok: true; readonly url: string; readonly insecure: boolean } | { readonly ok: false; readonly reason: string } => {
-  if (target.kind === "endpoint" || target.kind === "board") {
+  if (target.kind === "endpoint" || target.kind === "board" || target.kind === "beacon") {
     const normalized = normalizeEndpoint({ text, pageProtocol });
     return normalized.ok ? { ok: true, url: normalized.url, insecure: normalized.warning !== null } : { ok: false, reason: normalized.reason };
   }
@@ -121,14 +134,20 @@ const checkUrl = (target: ConnectionTarget, text: string, pageProtocol: "https:"
 
 /**
  * What each field holds when the user sets nothing: the build's value, else the registry's (the deployment's RPC, the
- * valve.city demo RPC, the standard indexer address), else nothing.
+ * public RPC, the standard indexer address, the valve.city beacon route), else nothing.
  *
  * @param input The fields, the pair, the configuration and the pair in its shared form (a live page has it).
  */
 export const defaultValues = (input: { readonly fields: readonly SettingField[]; readonly pair: PairConfig; readonly configuration: WebConfiguration; readonly sharedPair?: Pair | undefined }): FieldValues => {
   const chainIds = [input.pair.first.chainId, input.pair.second.chainId];
   const registry: ConnectionLayer =
-    input.sharedPair === undefined ? { indexerUrl: DEFAULT_INDEXER_URL, rpcUrls: Object.fromEntries(chainIds.map((chainId) => [chainId, defaultRpcUrl(chainId)])) } : registryLayer(input.sharedPair, defaultRpcUrl);
+    input.sharedPair === undefined
+      ? {
+          indexerUrl: DEFAULT_INDEXER_URL,
+          rpcUrls: Object.fromEntries(chainIds.map((chainId) => [chainId, defaultRpcUrl(chainId)])),
+          beaconUrls: Object.fromEntries(chainIds.map((chainId) => [chainId, defaultBeaconUrl(chainId)])),
+        }
+      : registryLayer(input.sharedPair, defaultRpcUrl);
   const resolved = resolveConnection({ chainIds, user: EMPTY_CONNECTION_SETTINGS, environment: environmentLayer(input.configuration), registry });
   return Object.fromEntries(
     input.fields.map((field) => {

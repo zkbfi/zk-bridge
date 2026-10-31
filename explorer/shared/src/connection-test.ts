@@ -111,6 +111,37 @@ export const testRpcChainId = async (http: HttpClient, input: { rpcUrl: string; 
 };
 
 /**
+ * `GET /eth/v1/beacon/genesis` on a beacon API. The answer must carry a genesis validators root, and when the caller
+ * knows the chain's root, it must be that one, so a beacon API of another chain is refused.
+ *
+ * @param http Sends the request.
+ * @param input The base URL of the beacon API and the root of its chain, or null when no root is known.
+ */
+export const testBeaconGenesis = async (
+  http: HttpClient,
+  input: { beaconUrl: string; expectedGenesisValidatorsRoot: string | null },
+): Promise<TestOutcome> => {
+  const secrets = [input.beaconUrl];
+  try {
+    const response = await http({ url: `${input.beaconUrl.replace(/\/+$/, "")}/eth/v1/beacon/genesis`, method: "GET" });
+    if (response.status !== 200) return failOutcome(describeStatus(response, "/eth/v1/beacon/genesis"), secrets);
+    let root: unknown;
+    try {
+      root = (JSON.parse(response.text) as { data?: { genesis_validators_root?: unknown } }).data?.genesis_validators_root;
+    } catch {
+      root = undefined;
+    }
+    if (typeof root !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(root)) return failOutcome("The server answered, but not with a beacon genesis.", secrets);
+    if (input.expectedGenesisValidatorsRoot !== null && root.toLowerCase() !== input.expectedGenesisValidatorsRoot.toLowerCase()) {
+      return failOutcome("The beacon node is on another chain: its genesis validators root differs.", secrets);
+    }
+    return passOutcome("The beacon node serves this chain's genesis.");
+  } catch (error) {
+    return failOutcome(`The beacon node did not answer: ${redactError(error, secrets)}`, secrets);
+  }
+};
+
+/**
  * `GET /api/heads` on an indexer URL. A healthy indexer answers 200 with a list of heads.
  *
  * @param http Sends the request.

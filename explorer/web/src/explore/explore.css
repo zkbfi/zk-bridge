@@ -118,3 +118,50 @@
 .zb-xkg > .zb-xusd { grid-column: 2 / 4; font-size: var(--zb-step--1); }
 .zb-xamt-sm { display: inline-flex; align-items: center; gap: 5px; }
 a.zb-kv.zb-xkv { color: inherit; text-decoration: none; }
+/* In-flight orbits (mockup inflight-orbits.html): one loop for the pair, the first chain at its left end and the second
+   at its right; the top lane goes out, the bottom lane comes back. Each transfer is a planet circling the step it waits
+   at. Planets move in orbit-engine.ts; colours are the planet roles of bridge.css. */
+.zb-orb-box { position: relative; }
+.zb-orb-svg { display: block; width: 100%; height: auto; overflow: visible; touch-action: manipulation; }
+.zb-orb-track { fill: none; stroke: var(--zb-track-ahead); stroke-width: 3; }
+.zb-orb-dir { fill: none; stroke: var(--zb-muted); stroke-width: 2; }
+.zb-orb-node { fill: var(--zb-page); stroke: var(--zb-accent); stroke-width: 3; }
+.zb-orb-node-name { fill: var(--zb-muted); font-size: 12px; }
+.zb-orb-chain { position: absolute; transform: translate(-50%, -50%); display: flex; }
+.zb-orb-stop { fill: var(--zb-stop-ahead); }
+.zb-orb-stop-first { fill: var(--zb-accent); }
+.zb-orb-path { fill: none; stroke: var(--zb-line); stroke-width: 1.2; }
+.zb-orb-label { fill: var(--zb-muted); font-size: 12px; }
+.zb-orb-count { fill: var(--zb-ink); font-size: 14px; font-weight: 700; }
+.zb-orb-planet { cursor: pointer; outline: none; }
+.zb-orb-halo { fill: var(--zb-page); }
+.zb-orb-t1 { fill: var(--zb-planet-1); }
+.zb-orb-t2 { fill: var(--zb-planet-2); }
+.zb-orb-t3 { fill: var(--zb-planet-3); }
+.zb-orb-t4 { fill: var(--zb-planet-4); }
+.zb-orb-letter { fill: var(--zb-page); font-weight: 700; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; pointer-events: none; }
+/* The icon covers the lettered disc once it has loaded; if it cannot load, the disc stays. */
+.zb-orb-planet[data-icon="ok"] .zb-orb-body, .zb-orb-planet[data-icon="ok"] .zb-orb-letter, .zb-orb-planet[data-icon="failed"] .zb-orb-img { display: none; }
+.zb-orb-hot .zb-orb-halo, .zb-orb-planet:focus-visible .zb-orb-halo { stroke: var(--zb-accent); stroke-width: 2.5; }
+.zb-orb-chain { pointer-events: auto; cursor: default; background: none; border: 0; padding: 0; border-radius: 50%; }
+.zb-orb-chain:focus-visible { outline: 2.5px solid var(--zb-accent); outline-offset: 3px; }
+.zb-orb-tip-route { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.zb-orb-tip-steps { color: var(--zb-muted); }
+.zb-orb-empty { margin: 0 0 6px; }
+.zb-orb-toggle { font: inherit; font-weight: 600; color: var(--zb-ink); background: none; border: 1.5px solid var(--zb-pill-edge); border-radius: 999px; padding: 2px 12px; cursor: pointer; }
+.zb-orb-toggle[aria-pressed="true"] { border-color: var(--zb-accent); }
+.zb-orb-list { list-style: none; margin: 0; padding: 0; }
+.zb-orb-list a { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--zb-line); color: inherit; text-decoration: none; font-size: var(--zb-step--1); }
+.zb-orb-tip { position: fixed; z-index: 30; pointer-events: none; min-width: 210px; max-width: min(320px, calc(100vw - 16px)); padding: 9px 11px; background: var(--zb-raised); color: var(--zb-raised-ink); border: 1.5px solid var(--zb-raised-edge); font: var(--zb-step--1)/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.zb-orb-tip-amt { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.zb-orb-tip-amt b { font-size: var(--zb-step-0); }
+.zb-orb-tip-muted { color: var(--zb-muted); }
+.zb-orb-tip-eta { color: var(--zb-accent-text); }
+.zb-orb-sun-tip { width: max-content; max-width: min(460px, calc(100vw - 16px)); }
+.zb-orb-tip-table { border-collapse: collapse; margin: 6px 0; font-variant-numeric: tabular-nums; }
+.zb-orb-tip-table th, .zb-orb-tip-table td { padding: 2px 10px 2px 0; text-align: right; font-weight: 400; white-space: nowrap; }
+.zb-orb-tip-table th:first-child { text-align: left; }
+.zb-orb-tip-table thead th { color: var(--zb-muted); }
+.zb-orb-tip-tok { display: inline-flex; align-items: center; gap: 4px; }
+.zb-orb-stop { cursor: help; outline: none; }
+.zb-orb-stop:focus-visible { stroke: var(--zb-accent); stroke-width: 3; }

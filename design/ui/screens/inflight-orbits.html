@@ -17,13 +17,13 @@
   body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, sans-serif; }
   .col { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
   h1 { font-size: 22px; margin: 0 0 4px; } .lead { color: var(--muted); margin: 0 0 20px; max-width: 64ch; }
-  .dir { margin: 26px 0 8px; display: flex; align-items: baseline; gap: 10px; }
+  .dir { margin: 26px 0 8px; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 18px; color: var(--muted); font-size: 14px; }
   .dir b { font-size: 16px; } .dir span { color: var(--muted); font-size: 14px; margin-left: auto; }
   svg.track { display: block; width: 100%; height: auto; overflow: visible; touch-action: manipulation; }
-  .labels { display: grid; grid-template-columns: repeat(4, 1fr); text-align: center; font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .labels-unused { display: grid; grid-template-columns: repeat(4, 1fr); text-align: center; font-size: 13px; color: var(--muted); margin-top: 2px; }
   .labels b { display: block; color: var(--ink); font-size: 14px; }
   .tip { position: fixed; pointer-events: none; z-index: 5; background: var(--raised); border: 1.5px solid var(--edge); color: var(--ink);
-    padding: 10px 12px; font-size: 13px; min-width: 210px; opacity: 0; transform: translateY(4px); transition: opacity .12s, transform .12s; }
+    padding: 10px 12px; font-size: 13px; min-width: 210px; max-width: 300px; opacity: 0; transform: translateY(4px); transition: opacity .12s, transform .12s; }
   .tip.on { opacity: 1; transform: none; } .tip b { font-size: 15px; } .tip .r { color: var(--muted); }
   .tip .eta { color: var(--accent-text); }
   .bar { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 28px; }
@@ -34,7 +34,7 @@
 <body>
 <div class="col">
   <h1>Every transfer in flight, at once</h1>
-  <p class="lead">The track is the four steps of a transfer. Each planet circling a step is one transfer waiting at it. Its colour is its token; a core marks $1,000 or more and a ring $10,000 or more. When a step completes, its dot travels to the next. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer.</p>
+  <p class="lead">One loop joins the two chains: the top lane runs from the chain on the left to the chain on the right, the bottom lane back. Each lane is the four steps of a transfer. Each planet circling a step is one transfer waiting at it. Each planet is its token's icon; its size is the value it carries. Steps complete in batches, as on chain: a finalized checkpoint moves every transfer sent before it, one proof carries every finalized transfer of its direction, and deliveries come several at a time; each batch glides as a wave. At rest each step's planets crowd into a tilted orbit, seen in depth. Hover a step to open its orbit; hover a planet (tap on a phone) to stop it and read the transfer; hover a step's sun for what waits there, by token, with its fees and what delivering it all would earn; hover a chain for its totals.</p>
   <div id="tracks"></div>
   <div class="bar"><button id="theme">Light / dark</button><button id="burst">Add a burst of transfers</button><button id="motion">Pause all</button></div>
   <ul class="notes">
@@ -46,61 +46,148 @@
 <div class="tip" id="tip" role="tooltip"></div>
 <script>
 const STEPS = ["Sent", "Final", "Proof posted", "Delivering"];
+const IMG = (chain, address) => `https://gib.show/image/${chain}${address ? "/" + address : ""}`;
+// Each direction sends its source chain's tokens; the planet is the token's own icon (a native coin is its chain's icon).
 const DIRS = [
-  { key: "e2p", from: "Ethereum", to: "PulseChain", minutes: [13, 2, 1.5, 0.5] },
-  { key: "p2e", from: "PulseChain", to: "Ethereum", minutes: [2, 2, 12, 0.5] },
+  { key: "e2p", from: "Ethereum", to: "PulseChain", fromChain: 1, toChain: 369, gasUsd: 0.03, minutes: [13, 2, 1.5, 0.5], tokens: [
+    ["USDC", 1, 1, "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"], ["ETH", 3000, 1, null], ["DAI", 1, 1, "0x6B175474E89094C44Da98b954EedeAC495271d0F"],
+    ["HEX", 0.004, 1, "0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39"], ["WBTC", 68000, 1, "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599"], ["USDT", 1, 1, "0xdAC17F958D2ee523a2206206994597C13D831ec7"]] },
+  { key: "p2e", from: "PulseChain", to: "Ethereum", fromChain: 369, toChain: 1, gasUsd: 0.6, minutes: [2, 2, 12, 0.5], tokens: [
+    ["PLS", 0.00003, 369, null], ["PLSX", 0.00002, 369, "0x95B303987A60C71504D99Aa1b13B4DA07b0790ab"], ["HEX", 0.004, 369, "0x2b591e99afE9f32eAA6214f7B7629768c40Eeb39"],
+    ["INC", 0.6, 369, "0x2fa878Ab3F87CC1C9737Fc071108F904c0B0C95d"]] },
 ];
-// Each token has its own planet colour (one of four intensities of the ember hue).
-const TOKENS = [["USDC", 1, "--p1"], ["ETH", 3000, "--p4"], ["DAI", 1, "--p3"], ["PLS", 0.00003, "--p2"], ["HEX", 0.004, "--p3"]];
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 let paused = false;
-const W = 700, H = 230, X0 = 60, X1 = 640, Y = 115, R0 = 30, RING = 20, PER = 6, EXIT = X1 + 46;
-const stepX = (i) => X0 + (i * (X1 - X0)) / 3;
+// One loop: Ethereum's node at the left end, PulseChain's at the right. The top lane runs left to right (first → second
+// chain), the bottom lane right to left (second → first); rounded ends join them, so each chain appears once.
+const W = 780, H = 440, A = 170, B = 610, YT = 130, YB = 310, YM = (YT + YB) / 2, RE = (YB - YT) / 2, R0 = 34, RING = 20, PER = 6;
+const NODES = [{ x: A - RE, y: YM }, { x: B + RE, y: YM }];   // [first chain, second chain]
+const lanes = [{ y: YT, x: (i) => A + (i * (B - A)) / 3, exit: NODES[1] }, { y: YB, x: (i) => B - (i * (B - A)) / 3, exit: NODES[0] }];
 let seq = 0;
 const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = (xs) => xs[Math.floor(Math.random() * xs.length)];
 function transfer(dir, step) {
-  const [sym, price, colour] = pick(TOKENS);
+  const [sym, price, chain, address] = pick(dir.tokens);
+  const colour = "--p1", icon = IMG(chain, address), iconKey = `${chain}-${address ?? "native"}`;
   const usd = Math.exp(rnd(Math.log(5), Math.log(20000)));
-  return { id: ++seq, dir, step, sym, colour, amount: usd / price, usd, x: stepX(0) - 30, y: Y, alpha: 0, moving: null, leaving: false,
+  // The fee as the app sets it by default: the curve (1 % at $10 → 0.1 % at $500), at least twice the cost, at most 1 %.
+  const PROOF = 0.025, cost = dir.gasUsd + PROOF;
+  const share = usd <= 10 ? 0.01 : usd >= 500 ? 0.001 : 0.01 * Math.pow(10 / usd, Math.log(10) / Math.log(50));
+  const fee = Math.min(0.01 * usd, Math.max(share * usd, 2 * cost));
+  return { id: ++seq, dir, step, sym, colour, icon, iconKey, fee, cost, amount: usd / price, usd, x: 0, y: 0, alpha: 0, moving: null, leaving: false,
     age: rnd(0.2, 1) * dir.minutes.slice(0, step + 1).reduce((a, b) => a + b, 0),
     addr: "0x" + Math.random().toString(16).slice(2, 6) + "…" + Math.random().toString(16).slice(2, 6) };
 }
-const state = DIRS.map((dir) => ({ dir, items: [], delivered: Math.floor(rnd(40, 120)), frozen: -1, hover: -1, open: [0, 0, 0, 0], dots: new Map(), phase: {} }));
-for (const s of state) for (let i = 0; i < 26; i++) { const t = transfer(s.dir, Math.min(3, Math.floor(Math.random() * 4))); t.alpha = 1; t.x = stepX(t.step); s.items.push(t); }
+const state = DIRS.map((dir) => ({ dir, items: [], delivered: Math.floor(rnd(40, 120)), week: Math.floor(rnd(500, 900)), frozen: -1, hover: -1, open: [0, 0, 0, 0], dots: new Map(), phase: {} }));
+state.forEach((s, n) => { s.lane = lanes[n]; for (let i = 0; i < 26; i++) { const t = transfer(s.dir, Math.min(3, Math.floor(Math.random() * 4))); t.alpha = 1; t.x = s.lane.x(t.step); t.y = s.lane.y; s.items.push(t); } });
+for (const s of state) for (const t of s.items) if (!t.x) { t.x = s.lane.x(0) - 30; t.y = s.lane.y; }
 const fmt = (n) => n >= 1000 ? Math.round(n).toLocaleString("en-US") : n >= 1 ? n.toFixed(2) : n.toPrecision(3);
 const ns = "http://www.w3.org/2000/svg";
 const el = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); return e; };
-function build() {
-  const root = document.getElementById("tracks"); root.innerHTML = "";
-  for (const s of state) {
-    const head = document.createElement("div"); head.className = "dir";
-    head.innerHTML = `<b>${s.dir.from} → ${s.dir.to}</b><span><span data-k="live">0</span> in flight · <span data-k="done">${s.delivered}</span> delivered today</span>`;
-    root.append(head); s.head = head;
-    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, class: "track", role: "img", "aria-label": `${s.dir.from} to ${s.dir.to}: transfers in flight` });
-    svg.append(el("line", { x1: X0, y1: Y, x2: X1, y2: Y, stroke: "var(--track)", "stroke-width": 3 }));
-    for (let i = 0; i < 4; i++) svg.append(el("circle", { cx: stepX(i), cy: Y, r: 7, fill: i === 0 ? "var(--accent)" : "var(--ahead)" }));
-    svg.append(el("circle", { cx: EXIT, cy: Y, r: 7, fill: "var(--accent)", opacity: 0.35 }));
-    s.guides = el("g", {}); svg.append(s.guides); s.guideEls = {};
-    s.layer = el("g", {}); svg.append(s.layer); root.append(svg);
-    const labels = document.createElement("div"); labels.className = "labels";
-    labels.innerHTML = STEPS.map((t, i) => `<div><b data-step="${i}">0</b>${t}</div>`).join(""); root.append(labels); s.labels = labels;
-    svg.addEventListener("pointerleave", () => { s.frozen = -1; s.hover = -1; hideTip(); });
-    // Hovering near a step opens its orbit so its planets separate; leaving lets them close back into a tilted, overlapping cluster.
-    svg.addEventListener("pointermove", (e) => {
-      const b = svg.getBoundingClientRect(), x = ((e.clientX - b.left) / b.width) * W;
-      let best = -1, d = 70; for (let i = 0; i < 4; i++) { const dd = Math.abs(x - stepX(i)); if (dd < d) { d = dd; best = i; } }
-      s.hover = best;
-    });
+let defs = null; const patterns = new Set();
+function pattern(key, href) {
+  const id = `img-${key}`;
+  if (!patterns.has(id)) {
+    const p = el("pattern", { id, width: 1, height: 1, patternContentUnits: "objectBoundingBox" });
+    p.append(el("rect", { width: 1, height: 1, fill: "var(--raised)" }));
+    p.append(el("image", { href, width: 1, height: 1, preserveAspectRatio: "xMidYMid slice" }));
+    defs.append(p); patterns.add(id);
   }
+  return `url(#${id})`;
+}
+function build() {
+  const nodeHits = [];
+  const root = document.getElementById("tracks"); root.innerHTML = "";
+
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, class: "track", role: "img", "aria-label": "Transfers in flight between the two chains" });
+  // One image pattern per token, reused by every planet of that token (and one per chain for the end nodes).
+  defs = el("defs", {}); svg.append(defs);
+  // The loop: top lane, right end, bottom lane, left end.
+  svg.append(el("path", { d: `M ${A} ${YT} H ${B} A ${RE} ${RE} 0 0 1 ${B} ${YB} H ${A} A ${RE} ${RE} 0 0 1 ${A} ${YT}`, fill: "none", stroke: "var(--track)", "stroke-width": 3 }));
+  // Direction marks on each lane.
+  for (const [x, y, d] of [[(A + B) / 2 - 75, YT, 1], [(A + B) / 2 + 75, YB, -1]]) svg.append(el("path", { d: `M ${x - 5 * d} ${y - 6} L ${x + 5 * d} ${y} L ${x - 5 * d} ${y + 6}`, fill: "none", stroke: "var(--muted)", "stroke-width": 2 }));
+  // The chains at the ends.
+  [state[0].dir.from, state[0].dir.to].forEach((name, k) => {
+    const chain = k === 0 ? state[0].dir.fromChain : state[0].dir.toChain;
+    svg.append(el("circle", { cx: NODES[k].x, cy: NODES[k].y, r: 27, fill: "var(--page)", stroke: "var(--accent)", "stroke-width": 3 }));
+    svg.append(el("circle", { cx: NODES[k].x, cy: NODES[k].y, r: 21, fill: pattern(`chain-${chain}`, IMG(chain)) }));
+    // The totals live on the chain: hover (or tap) it to read what leaves it and what has arrived today.
+    const hit = el("circle", { cx: NODES[k].x, cy: NODES[k].y, r: 30, fill: "transparent", tabindex: 0, style: "cursor:pointer", "aria-label": `${name} totals` });
+    const show = (x, y) => {
+      // Relative to this chain: what leaves it (the lane that starts here) and what is on its way in (the other lane).
+      const out = state[k], into = state[1 - k], ticker = k === 0 ? "ETH" : "PLS";
+      const liveOut = out.items.filter((t) => !t.leaving), liveIn = into.items.filter((t) => !t.leaving);
+      const sum = (xs) => xs.reduce((a, t) => a + t.usd, 0);
+      tip.innerHTML = `<img src="${IMG(chain)}" alt="" width="18" height="18" style="vertical-align:-4px;border-radius:50%;margin-right:6px"><b>${name}</b> <span class="r">${ticker}</span>
+        <table style="border-collapse:collapse;margin-top:6px;font-size:13px;width:100%">
+          <tr class="r"><td></td><td style="text-align:right">in flight</td><td style="text-align:right">value</td><td style="text-align:right">24 h</td><td style="text-align:right">7 d</td></tr>
+          <tr><td>Out</td><td style="text-align:right">${liveOut.length}</td><td style="text-align:right">$${fmt(sum(liveOut))}</td><td style="text-align:right">${out.delivered}</td><td style="text-align:right">${out.week}</td></tr>
+          <tr><td>In</td><td style="text-align:right">${liveIn.length}</td><td style="text-align:right">$${fmt(sum(liveIn))}</td><td style="text-align:right">${into.delivered}</td><td style="text-align:right">${into.week}</td></tr>
+        </table><span class="r">Delivered: ${out.delivered + into.delivered} in the last 24 h · ${out.week + into.week} in the last 7 days</span>`;
+      tip.style.left = Math.min(innerWidth - 300, x + 14) + "px"; tip.style.top = (y + 14) + "px"; tip.classList.add("on");
+    };
+    hit.addEventListener("pointerenter", (e) => show(e.clientX, e.clientY)); hit.addEventListener("pointermove", (e) => show(e.clientX, e.clientY));
+    hit.addEventListener("pointerleave", hideTip); hit.addEventListener("focus", () => { const b = hit.getBoundingClientRect(); show(b.right, b.bottom); }); hit.addEventListener("blur", hideTip);
+    nodeHits.push(hit);
+    const l = el("text", { x: NODES[k].x, y: NODES[k].y + 44, "text-anchor": "middle", "font-size": 12, fill: "var(--muted)" }); l.textContent = name; svg.append(l);
+  });
+  state.forEach((s, n) => {
+    s.guides = el("g", {}); svg.append(s.guides); s.guideEls = {};
+    s.layer = el("g", {}); svg.append(s.layer);
+    s.suns = [0, 1, 2, 3].map((i) => {
+      const c = el("circle", { cx: s.lane.x(i), cy: s.lane.y, r: 15, fill: i === 0 ? "var(--accent)" : "var(--ahead)", tabindex: 0, style: "cursor:pointer", "aria-label": `${STEPS[i]}: totals` });
+      c.dataset.sun = i;
+      // The sun's tooltip: everything waiting at this step, by token, with the fees it pays and what delivering it all costs.
+      const show = (x, y) => { s.frozen = i; tip.innerHTML = stepSummary(s, i); tip.style.left = Math.min(innerWidth - 300, x + 14) + "px"; tip.style.top = (y + 14) + "px"; tip.classList.add("on"); };
+      c.addEventListener("pointerenter", (e) => show(e.clientX, e.clientY)); c.addEventListener("pointermove", (e) => show(e.clientX, e.clientY));
+      c.addEventListener("pointerleave", () => { s.frozen = -1; hideTip(); });
+      c.addEventListener("focus", () => { const b = c.getBoundingClientRect(); show(b.right, b.bottom); }); c.addEventListener("blur", () => { s.frozen = -1; hideTip(); });
+      return c;
+    });
+    // Step labels: above the top lane, below the bottom lane.
+    s.labelEls = [0, 1, 2, 3].map((i) => {
+      const y = n === 0 ? YT - 78 : YB + 86;
+      const g = el("text", { x: s.lane.x(i), y, "text-anchor": "middle", "font-size": 12, fill: "var(--muted)" });
+      const c = el("tspan", { x: s.lane.x(i), dy: 0, "font-weight": 700, fill: "var(--ink)", "font-size": 14 }); c.textContent = "0";
+      const w = el("tspan", { x: s.lane.x(i), dy: 15 }); w.textContent = STEPS[i];
+      g.append(c, w); svg.append(g); return c;
+    });
+  });
+  for (const h of nodeHits) svg.append(h);   // on top, so the chain takes the pointer over passing planets
+  root.append(svg);
+  svg.addEventListener("pointerleave", () => { for (const s of state) { s.frozen = -1; s.hover = -1; } hideTip(); });
+  // Hovering near a step opens its orbit so its planets separate.
+  svg.addEventListener("pointermove", (e) => {
+    const b = svg.getBoundingClientRect(), x = ((e.clientX - b.left) / b.width) * W, y = ((e.clientY - b.top) / b.height) * H;
+    const s = Math.abs(y - YT) < Math.abs(y - YB) ? state[0] : state[1];
+    // Only the lane under the pointer may be open or frozen; the other closes as soon as the pointer leaves it.
+    state.forEach((other) => { other.hover = -1; if (other !== s) other.frozen = -1; });
+    let best = -1, d = 70; for (let i = 0; i < 4; i++) { const dd = Math.abs(x - s.lane.x(i)); if (dd < d) { d = dd; best = i; } }
+    s.hover = best;
+  });
 }
 const tip = document.getElementById("tip");
 function showTip(t, x, y) {
   const left = t.dir.minutes.slice(t.step).reduce((a, b) => a + b, 0);
-  tip.innerHTML = `<b>${fmt(t.amount)} ${t.sym}</b> <span class="r">≈ $${fmt(t.usd)}</span><br>${t.dir.from} → ${t.dir.to} · to ${t.addr}<br><span class="r">At:</span> ${STEPS[t.step]} · ${Math.round(t.age)} min since sent<br><span class="eta">~${Math.max(1, Math.round(left))} min left</span>`;
+  tip.innerHTML = `<img src="${t.icon}" alt="" width="18" height="18" style="vertical-align:-4px;border-radius:50%;margin-right:6px"><b>${fmt(t.amount)} ${t.sym}</b> <span class="r">≈ $${fmt(t.usd)}</span><br>${t.dir.from} → ${t.dir.to} · to ${t.addr}<br><span class="r">At:</span> ${STEPS[t.step]} · ${Math.round(t.age)} min since sent<br><span class="eta">~${Math.max(1, Math.round(left))} min left</span>`;
   tip.style.left = Math.min(innerWidth - 240, x + 14) + "px"; tip.style.top = (y + 14) + "px"; tip.classList.add("on");
 }
 const hideTip = () => tip.classList.remove("on");
+function stepSummary(s, i) {
+  const here = s.items.filter((t) => t.step === i && !t.leaving);
+  if (here.length === 0) return `<b>${STEPS[i]}</b><br><span class="r">Nothing waiting here.</span>`;
+  const byToken = new Map();
+  for (const t of here) { const g = byToken.get(t.sym) ?? { icon: t.icon, n: 0, amount: 0, usd: 0, fee: 0 }; g.n++; g.amount += t.amount; g.usd += t.usd; g.fee += t.fee; byToken.set(t.sym, g); }
+  const usd = here.reduce((a, t) => a + t.usd, 0), fees = here.reduce((a, t) => a + t.fee, 0);
+  // Delivering everything here: one delivery each on the destination chain; the proof is one posting shared by all.
+  const cost = here.length * s.dir.gasUsd + 0.025, profit = fees - cost;
+  const rows = [...byToken].sort((a, b) => b[1].usd - a[1].usd).map(([sym, g]) =>
+    `<tr><td><img src="${g.icon}" alt="" width="14" height="14" style="vertical-align:-2px;border-radius:50%"> ${g.n}× ${sym}</td><td style="text-align:right">${fmt(g.amount)}</td><td style="text-align:right" class="r">$${fmt(g.usd)}</td><td style="text-align:right">$${fmt(g.fee)}</td></tr>`).join("");
+  return `<b>${STEPS[i]}</b> · ${s.dir.from} → ${s.dir.to}<br>${here.length} transfers · ≈ $${fmt(usd)}
+    <table style="border-collapse:collapse;margin:6px 0;font-size:12px;width:100%"><tr class="r"><td>token</td><td style="text-align:right">amount</td><td style="text-align:right">value</td><td style="text-align:right">fees</td></tr>${rows}</table>
+    <span class="r">Fees paid:</span> $${fmt(fees)} · <span class="r">cost to deliver all:</span> $${fmt(cost)}<br>
+    <b style="color:${profit >= 0 ? "var(--good)" : "var(--accent-text)"}">${profit >= 0 ? "Profit" : "Loss"} for a deliverer: $${fmt(Math.abs(profit))}</b> <span class="r">(${fees > 0 ? Math.round((profit / fees) * 100) : 0} % of fees)</span>`;
+}
 // Where each planet should be now: its slot on its step's rings (or the exit). Planets then ease toward it every frame,
 // so a step change, a ring re-spacing or a departure is always a glide, never a jump.
 let frameNo = 0;
@@ -115,21 +202,21 @@ function targets(s) {
       if (!(s.frozen === i || paused || reduce)) s.phase[key] = (s.phase[key] ?? Math.random() * 6.28) + 0.0045 / (ring + 1);
       const base = s.phase[key] ?? 0;
       const o = s.open[i];                       // 0 closed (at rest) … 1 open (hovered)
-      const rr = r * (0.66 + 0.34 * o), squash = 0.5 + 0.32 * o;   // tilted ~60° at rest, near face-on when open
+      const rr = r * (0.72 + 0.28 * o), squash = 0.66 + 0.24 * o;   // tilted ~48° at rest, near face-on when open
       // The orbit's path, faint, behind the planets: it is what makes the tilt read as an orbit.
       let gEl = s.guideEls[key];
       if (!gEl) { gEl = el("ellipse", { fill: "none", stroke: "var(--line)", "stroke-width": 1.2 }); s.guides.append(gEl); s.guideEls[key] = gEl; }
-      gEl.setAttribute("cx", stepX(i)); gEl.setAttribute("cy", Y); gEl.setAttribute("rx", rr.toFixed(1)); gEl.setAttribute("ry", (rr * squash).toFixed(1));
+      gEl.setAttribute("cx", s.lane.x(i)); gEl.setAttribute("cy", s.lane.y); gEl.setAttribute("rx", rr.toFixed(1)); gEl.setAttribute("ry", (rr * squash).toFixed(1));
       gEl.dataset.seen = frameNo;
       group.forEach((t, j) => {
         const a = base + (j * Math.PI * 2) / group.length, z = Math.sin(a);   // z: +1 front, −1 back
-        t.tx = stepX(i) + Math.cos(a) * rr; t.ty = Y + z * rr * squash;
+        t.tx = s.lane.x(i) + Math.cos(a) * rr; t.ty = s.lane.y + z * rr * squash;
         t.tz = z * (1 - 0.6 * o);                 // depth fades as the orbit opens toward face-on
       });
       k += cap; ring++;
     }
   }
-  for (const t of s.items) if (t.leaving) { t.tx = EXIT; t.ty = Y; }
+  for (const t of s.items) if (t.leaving) { t.tx = s.lane.exit.x; t.ty = s.lane.exit.y; }
   for (const [key, gEl] of Object.entries(s.guideEls)) if (gEl.dataset.seen !== String(frameNo)) { gEl.remove(); delete s.guideEls[key]; }
 }
 function frame(now) {
@@ -143,37 +230,35 @@ function frame(now) {
       const k = 1 - Math.exp(-dt / (t.moving ? 260 : 120));
       t.x += (t.tx - t.x) * k; t.y += (t.ty - t.y) * k;
       let lift = 0;
-      if (t.moving) { const p = Math.min(1, (now - t.moving.start) / t.moving.span); lift = -Math.sin(p * Math.PI) * 26; if (p >= 1) t.moving = null; }
+      if (t.moving) { const p = Math.min(1, (now - t.moving.start) / t.moving.span); lift = (s.lane.y < YM ? -1 : 1) * Math.sin(p * Math.PI) * 26; if (p >= 1) t.moving = null; }
       t.alpha += ((t.leaving ? 0 : 1) - t.alpha) * (1 - Math.exp(-dt / (t.leaving ? 500 : 250)));
-      if (t.leaving && Math.abs(t.x - EXIT) < 2 && t.alpha < 0.05) { t.gone = true; s.delivered++; continue; }
+      if (t.leaving && Math.hypot(t.x - s.lane.exit.x, t.y - s.lane.exit.y) < 3 && t.alpha < 0.05) { t.gone = true; s.delivered++; s.week++; continue; }
       t.z = (t.z ?? 0) + ((t.moving || t.leaving ? 0 : (t.tz ?? 0)) - (t.z ?? 0)) * (1 - Math.exp(-dt / 120));
       draw(s, t, t.x, t.y + lift, seen);
     }
     // Back to front: planets behind the step are drawn first, so the front ones overlap them.
-    [...s.items].filter((t) => s.dots.has(t.id)).sort((a, b) => (a.z ?? 0) - (b.z ?? 0)).forEach((t) => s.layer.append(s.dots.get(t.id)));
+    const order = [...s.items].filter((t) => s.dots.has(t.id)).map((t) => [t.z ?? 0, s.dots.get(t.id)]);
+    for (const sun of s.suns) order.push([0, sun]);   // the sun sits at depth 0: behind the front half, over the back half
+    order.sort((a, b) => a[0] - b[0]).forEach(([, node]) => s.layer.append(node));
     s.items = s.items.filter((t) => !t.gone);
     for (const [id, g] of s.dots) if (!seen.has(id)) { g.remove(); s.dots.delete(id); }
-    s.head.querySelector('[data-k="live"]').textContent = s.items.filter((t) => !t.leaving).length;
-    s.head.querySelector('[data-k="done"]').textContent = s.delivered;
-    for (let i = 0; i < 4; i++) s.labels.querySelector(`[data-step="${i}"]`).textContent = s.items.filter((t) => t.step === i && !t.leaving).length;
+    for (let i = 0; i < 4; i++) s.labelEls[i].textContent = s.items.filter((t) => t.step === i && !t.leaving).length;
   }
   requestAnimationFrame(frame);
 }
-// A planet: a disc in its token's colour (size varies a little with value), an inner core for $1k+, a ring for $10k+.
+// A planet: the token's icon, clipped to a circle, sized by value (about 7 at $10 to 16 at $100k, on a log scale).
 function draw(s, t, x, y, seen) {
   seen.add(t.id);
   let g = s.dots.get(t.id);
   if (!g) {
-    const r = 7 + Math.min(2.5, Math.max(0, Math.log10(t.usd) - 1) * 0.8);
+    const r = 7 + 9 * Math.min(1, Math.max(0, (Math.log10(t.usd) - 1) / 4));
     g = el("g", { tabindex: 0, style: "cursor:pointer" });
-    g.append(el("circle", { r: r + 1.5, fill: "var(--page)" }));
-    g.append(el("circle", { r, fill: `var(${t.colour})`, class: "body" }));
-    if (t.usd >= 1000) g.append(el("circle", { r: r * 0.38, fill: "var(--core)" }));
-    if (t.usd >= 10000) g.append(el("ellipse", { rx: r + 5, ry: (r + 5) * 0.35, fill: "none", stroke: "var(--ringc)", "stroke-width": 1.4, transform: "rotate(-18)" }));
-    const body = g.querySelector(".body");
-    g.addEventListener("pointerenter", (e) => { s.frozen = t.step; body.setAttribute("fill", "var(--accent)"); showTip(t, e.clientX, e.clientY); });
+    g.append(el("circle", { r: r + 1.5, fill: "var(--page)", class: "edge" }));
+    g.append(el("circle", { r, fill: pattern(t.iconKey, t.icon), class: "body" }));
+    const edge = g.querySelector(".edge");
+    g.addEventListener("pointerenter", (e) => { s.frozen = t.step; edge.setAttribute("fill", "var(--accent)"); edge.setAttribute("r", r + 3); showTip(t, e.clientX, e.clientY); });
     g.addEventListener("pointermove", (e) => showTip(t, e.clientX, e.clientY));
-    g.addEventListener("pointerleave", () => { body.setAttribute("fill", `var(${t.colour})`); hideTip(); });
+    g.addEventListener("pointerleave", () => { edge.setAttribute("fill", "var(--page)"); edge.setAttribute("r", r + 1.5); s.frozen = -1; hideTip(); });
     g.addEventListener("focus", () => { s.frozen = t.step; const b = g.getBoundingClientRect(); showTip(t, b.right, b.bottom); });
     g.addEventListener("blur", () => { s.frozen = -1; hideTip(); });
     s.layer.append(g); s.dots.set(t.id, g);
@@ -182,22 +267,36 @@ function draw(s, t, x, y, seen) {
   g.setAttribute("transform", `translate(${x.toFixed(1)} ${y.toFixed(1)}) scale(${scale.toFixed(3)})`);
   g.setAttribute("opacity", (t.alpha * (0.62 + 0.38 * (z + 1) / 2)).toFixed(2));   // … and brighter
 }
+// How a bridge really moves: in batches. Finality takes everything sent before a finalized checkpoint at once; one proof
+// posting covers every finalized transfer of its direction; deliveries come several at a time. Each batch starts with a
+// short stagger, so it reads as a wave rather than a jump.
+function move(group, now, step) {
+  group.forEach((t, j) => setTimeout(() => {
+    if (t.leaving) return;
+    if (step > 3) t.leaving = true; else { t.step = step; t.moving = { start: performance.now(), span: 1100 }; }
+  }, j * 60));
+}
+const EVENTS = ["arrive", "arrive", "finalize", "arrive", "prove", "deliver", "arrive", "deliver"];
+let tick = 0;
 function advance() {
   if (paused) return;
   const now = performance.now();
+  tick++;
   for (const s of state) {
-    const waiting = s.items.filter((t) => !t.leaving && !t.moving && s.frozen !== t.step);
-    for (let n = 0; n < 2; n++) {
-      const t = pick(waiting); if (!t || t.moving) continue;
-      if (t.step === 3) t.leaving = true; else { t.step += 1; t.moving = { start: now, span: 1100 }; }
-    }
-    if (Math.random() < 0.7) s.items.push(transfer(s.dir, 0));
+    const at = (i) => s.items.filter((t) => t.step === i && !t.leaving && !t.moving && s.frozen !== i);
+    // Each direction runs its own clock, offset so the two lanes don't move in lockstep.
+    const event = EVENTS[(tick + (s === state[1] ? 3 : 0)) % EVENTS.length];
+    if (event === "finalize") move(at(0).slice(0, Math.max(1, Math.round(at(0).length * rnd(0.6, 1)))), now, 1);
+    if (event === "prove") move(at(1), now, 2);
+    if (event === "deliver") { move(at(3).slice(0, Math.ceil(rnd(2, 6))), now, 4); move(at(2).slice(0, Math.ceil(rnd(3, 8))), now, 3); }
+    const arrivals = event === "arrive" ? Math.round(rnd(1, 3)) : Math.random() < 0.4 ? 1 : 0;
+    for (let k = 0; k < arrivals; k++) { const t = transfer(s.dir, 0); t.x = s.lane.x(0) + (s === state[0] ? -30 : 30); t.y = s.lane.y; s.items.push(t); }
     for (const t of s.items) t.age += 0.05;
   }
 }
-build(); requestAnimationFrame(frame); setInterval(advance, 1600);
+build(); requestAnimationFrame(frame); setInterval(advance, 1400);
 document.getElementById("theme").onclick = () => document.documentElement.classList.toggle("light");
-document.getElementById("burst").onclick = () => { for (const s of state) for (let i = 0; i < 12; i++) s.items.push(transfer(s.dir, 0)); };
+document.getElementById("burst").onclick = () => { for (const s of state) for (let i = 0; i < 12; i++) { const t = transfer(s.dir, 0); t.x = s.lane.x(0); t.y = s.lane.y; s.items.push(t); } };
 document.getElementById("motion").onclick = (e) => { paused = !paused; e.target.textContent = paused ? "Resume" : "Pause all"; };
 if (location.search.includes("light")) document.documentElement.classList.add("light");
 </script>

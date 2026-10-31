@@ -59,10 +59,15 @@ describe("loadHeads", () => {
       lightClient: LIGHT_CLIENT_ON_PULSECHAIN,
       trackedChainId: 1,
       storedHeadSlot: 1_000,
+      storedHeadSource: "update",
       storedHeadExecutionBlock: Number(head.executionBlockNumber),
       storedHeadExecutionTimestamp: 60_000,
+      storedHeadSlotTimestamp: null,
       lastUpdateTimestamp: 9_000,
       updateCount: 4,
+      initialized: true,
+      initializedAtSlot: null,
+      initializedAtBlock: null,
       finalizedSlot: 1_200,
       lagSlots: 200,
       lagSeconds: 1_000,
@@ -94,6 +99,42 @@ describe("loadHeads", () => {
     expect(getBlock).toHaveBeenCalledWith({ blockNumber: head.executionBlockNumber });
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://127.0.0.1:5052/eth/v1/beacon/headers/finalized");
+  });
+
+  it("shows the head of the deployment as the stored head, and measures its lag from the start time of its slot", async () => {
+    // Slot 4_000 at 12 seconds from genesis 10_000 starts at 58_000; the tracked tip is at 61_000.
+    const deployment = {
+      chainId: 369,
+      slot: 4_000n,
+      headerRoot: hashOf("cc"),
+      executionBlockNumber: null,
+      updatedTimestamp: null,
+      updateCount: 0,
+      initialSlot: 4_000n,
+      initialHeadBlockNumber: 70n,
+      genesisTime: 10_000n,
+      secondsPerSlot: 12n,
+    };
+    respondByChain({ head: [deployment], tip: [ethereumTip, pulseTip] });
+    const getBlock = vi.fn(async () => ({ timestamp: 1n }));
+    publicClients.ethereum = { getBlock };
+    stubBeacon("4300");
+    const [, pulseSide] = await loadHeads();
+    expect(getBlock).not.toHaveBeenCalled();
+    expect(pulseSide).toMatchObject({
+      storedHeadSlot: 4_000,
+      storedHeadSource: "deployment",
+      storedHeadExecutionBlock: null,
+      storedHeadExecutionTimestamp: null,
+      storedHeadSlotTimestamp: 58_000,
+      lastUpdateTimestamp: null,
+      updateCount: 0,
+      initialized: true,
+      initializedAtSlot: 4_000,
+      initializedAtBlock: 70,
+      lagSlots: 300,
+      lagSeconds: 3_000,
+    });
   });
 
   it("answers a lag of zero, not a negative lag, when the head is ahead of the finalized slot", async () => {

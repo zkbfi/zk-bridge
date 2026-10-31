@@ -125,6 +125,12 @@ ROLES = [
         ("Stop ahead", "stop-ahead", None, None),
         ("The pill's core", "core", None, None),
     ]),
+    ("In-flight orbits (Explore)", [
+        ("Planet without its icon, tone 1", "planet-1", None, None),
+        ("Planet without its icon, tone 2", "planet-2", None, None),
+        ("Planet without its icon, tone 3", "planet-3", None, None),
+        ("Planet without its icon, tone 4", "planet-4", None, None),
+    ]),
 ]
 
 

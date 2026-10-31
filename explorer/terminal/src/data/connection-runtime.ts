@@ -28,6 +28,7 @@ import {
   type TestOutcome,
 } from '@zk-bridge/shared'
 import { createRpcChainAccess, type ChainAccess } from '../chain/chain-access'
+import { defaultBeaconUrl } from '../config/default-beacon'
 import type { PairConfig } from '../model/types'
 import type { DataSource } from './data-source'
 import { createIndexerDataSource } from './indexer-data-source'
@@ -103,6 +104,8 @@ export function registryLayer(sharedPair: Pair, fallbackRpcUrl: (chainId: number
   return {
     indexerUrl: DEFAULT_INDEXER_URL,
     rpcUrls: Object.fromEntries(sharedPair.sides.map((side) => [side.chainId, side.rpcUrl === '' ? fallbackRpcUrl(side.chainId) : side.rpcUrl])),
+    // The pair's own beacon endpoint when it names one, else the chain's default (valve.city first).
+    beaconUrls: Object.fromEntries(sharedPair.sides.map((side) => [side.chainId, side.beaconUrl ?? defaultBeaconUrl(side.chainId)])),
   }
 }
 

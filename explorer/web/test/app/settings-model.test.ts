@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { defaultBeaconUrl } from "@terminal/config/default-beacon";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { EMPTY_CONNECTION_SETTINGS } from "@zk-bridge/shared";
@@ -13,8 +14,25 @@ const GIB = "https://gib.show/image/{chainId}/{address}";
 
 describe("the fields of the settings", () => {
   it("lists an RPC per chain, the image server, then every other service, each with its own check", () => {
-    expect(fields.map((candidate) => candidate.id)).toEqual([`rpc:${FIRST_CHAIN}`, `rpc:${SECOND_CHAIN}`, "images", "indexer", "backendUrl", "archiveUrl", "msgboardIndexerUrl", `board:${FIRST_CHAIN}`, `board:${SECOND_CHAIN}`]);
-    expect(fields.map((candidate) => candidate.probe.kind)).toEqual(["rpc", "rpc", "image", "health", "health", "health", "health", "jsonrpc", "jsonrpc"]);
+    expect(fields.map((candidate) => candidate.id)).toEqual([
+      `rpc:${FIRST_CHAIN}`,
+      `rpc:${SECOND_CHAIN}`,
+      `beacon:${FIRST_CHAIN}`,
+      `beacon:${SECOND_CHAIN}`,
+      "images",
+      "indexer",
+      "backendUrl",
+      "archiveUrl",
+      "msgboardIndexerUrl",
+      `board:${FIRST_CHAIN}`,
+      `board:${SECOND_CHAIN}`,
+    ]);
+    expect(fields.map((candidate) => candidate.probe.kind)).toEqual(["rpc", "rpc", "beacon", "beacon", "image", "health", "health", "health", "health", "jsonrpc", "jsonrpc"]);
+  });
+
+  it("gives a beacon API to each chain (owner: 'configure different beacon endpoints in the settings'), with its icon and a genesis check of that chain", () => {
+    expect(field(`beacon:${FIRST_CHAIN}`)).toMatchObject({ section: "beacon", chainId: FIRST_CHAIN, probe: { kind: "beacon", chainId: FIRST_CHAIN }, target: { kind: "beacon", chainId: FIRST_CHAIN } });
+    expect(field(`beacon:${SECOND_CHAIN}`).probe).toEqual({ kind: "beacon", chainId: SECOND_CHAIN });
   });
 
   it("gives a msgboard node to each chain (owner, quote 87), with its icon and a check that names the chain", () => {
@@ -50,6 +68,38 @@ describe("the msgboard nodes", () => {
     const drafts = { ...currentValues(fields, defaults, EMPTY_CONNECTION_SETTINGS, GIB), [`board:${FIRST_CHAIN}`]: "https://same.example.org", [`board:${SECOND_CHAIN}`]: "https://same.example.org" };
     const outcome = settingsFromDrafts({ fields, drafts, defaults, user: EMPTY_CONNECTION_SETTINGS, pageProtocol: "https:" });
     expect(outcome.user.msgboardUrls).toEqual({ [FIRST_CHAIN]: "https://same.example.org", [SECOND_CHAIN]: "https://same.example.org" });
+  });
+});
+
+describe("the beacon APIs", () => {
+  it("default to each chain's first default beacon API, on the sample page and on a live page", () => {
+    const sample = defaultValues({ fields, pair: FIXTURE_PAIR, configuration: fixture });
+    expect(sample[`beacon:${FIRST_CHAIN}`]).toBe(defaultBeaconUrl(FIRST_CHAIN));
+    expect(sample[`beacon:${FIRST_CHAIN}`]).toBe(defaultBeaconUrl(FIRST_CHAIN));
+    const live = defaultValues({ fields, pair: FIXTURE_PAIR, configuration: liveConfiguration({}), sharedPair: sharedPairForTests() });
+    expect(live[`beacon:${SECOND_CHAIN}`]).toBe(defaultBeaconUrl(SECOND_CHAIN));
+  });
+
+  it("take the build's beacon API over the default", () => {
+    const configuration = liveConfiguration({ [`VITE_EXPLORER_BEACON_URL_${SECOND_CHAIN}`]: "https://beacon.build.example.org" });
+    const defaults = defaultValues({ fields, pair: FIXTURE_PAIR, configuration, sharedPair: sharedPairForTests() });
+    expect(defaults[`beacon:${SECOND_CHAIN}`]).toBe("https://beacon.build.example.org");
+  });
+
+  it("show the user's beacon API, keep a changed one, and drop one set back to the default", () => {
+    const defaults = defaultValues({ fields, pair: FIXTURE_PAIR, configuration: fixture });
+    const user = { ...EMPTY_CONNECTION_SETTINGS, beaconUrls: { [FIRST_CHAIN]: "https://old-beacon.example.org" } };
+    const shown = currentValues(fields, defaults, user, GIB);
+    expect(shown[`beacon:${FIRST_CHAIN}`]).toBe("https://old-beacon.example.org");
+    const drafts = { ...shown, [`beacon:${FIRST_CHAIN}`]: defaults[`beacon:${FIRST_CHAIN}`]!, [`beacon:${SECOND_CHAIN}`]: "https://rpc-pulsechain.g4mm4.io/beacon-api/" };
+    const outcome = settingsFromDrafts({ fields, drafts, defaults, user, pageProtocol: "https:" });
+    expect(outcome.problems).toEqual({});
+    expect(outcome.user.beaconUrls).toEqual({ [SECOND_CHAIN]: "https://rpc-pulsechain.g4mm4.io/beacon-api" });
+  });
+
+  it("refuse a beacon API that is not a URL, and an empty one while a default exists", () => {
+    expect(fieldProblem(field(`beacon:${FIRST_CHAIN}`), "beacon", "https://d.example.org")).toMatch(/not a URL/);
+    expect(fieldProblem(field(`beacon:${FIRST_CHAIN}`), "", "https://d.example.org")).toBe("Enter a URL, or reset to the default.");
   });
 });
 
