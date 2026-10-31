@@ -296,7 +296,7 @@ zk-bridge-prover deployment-file --output deployment.json --chain-a chain_id=111
 
 One update moves a light client across at most one sync committee period. The beacon source therefore builds a fold. It reads the committee handoff update of each period from the head period of the light client to the present (`/eth/v1/beacon/light_client/updates?start_period=&count=`, paged, because a node returns at most a count of its own choice). It adds the latest finality update and proves all of them as one fold. When the light client already holds a next committee, the store of the proof carries it, read from the beacon state of the head. The contract compares its hash.
 
-A node that pruned the update of a needed period cannot serve the catch-up. The error names the period and asks for a node with a longer history of light-client updates.
+A node that pruned the update of a needed period cannot serve the catch-up. The error names the period and asks for a node with a longer history of light-client updates. When the light client already stores the next committee, the handoff of its head period is not asked for, so a node that serves no `light_client/updates` (chain 943) still moves a light client across one period border. Such a light client must get a proof in every period: once the source signs in the period after the stored next committee, only handoff updates can move it, and that node has none (see `docs/testnet-run.md`, "Keeping the light clients alive").
 
 ## Old messages
 
