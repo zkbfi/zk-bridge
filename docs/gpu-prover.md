@@ -328,7 +328,9 @@ The image holds the rebuilt ELFs (testnet chain selectors and Gloas). The ELF ha
 
 The Groth16 step needs more host memory than a MIG slice gives. A first attempt ran with the pools `ADA_24` and `AMPERE_24`. Two workers landed on `NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb`, a 24 GB slice of a larger card. Its host memory share is 28.87 GiB. The container hit that limit during the Groth16 proof (system log: "high memory utilization 27.67GiB / 28.87GiB", then "triggered memory limits (OOM)"). The GPU server child process died. The worker kept answering `/ping` with 200 and failed every later job at once with `CudaClientError ... Broken pipe`. Four runs (with 4 and 10 attempts) failed this way, and the client never reached a good worker.
 
-The endpoint now uses pool `ADA_24` only (RTX 4090, $1.10 per hour serverless). Keep it that way. Do not add a pool that can hand out a MIG slice.
+The endpoint used pool `ADA_24` only (RTX 4090, $1.10 per hour serverless). Do not add a pool or a GPU type that can hand out a MIG slice.
+
+On 2026-10-31 RTX 4090 stock ran low and jobs sat at "Waiting for GPU to become available". The endpoint now names whole GPUs with 24 GB or more by type (not by pool), in priority order: RTX 4090, L4, RTX 3090, RTX 5090, RTX 6000 Ada, L40S, A100 SXM4 80 GB, RTX PRO 6000 Blackwell Server Edition, H100 80 GB HBM3. A proof takes one to three minutes, so even the dearest type costs about $0.20 per proof. No `MIG` type is listed. RunPod's REST API dropped the RTX PRO 4000, 4500 and 5000 Blackwell types from the list it stored.
 
 ### Results on RTX 4090 (pool `ADA_24`)
 
