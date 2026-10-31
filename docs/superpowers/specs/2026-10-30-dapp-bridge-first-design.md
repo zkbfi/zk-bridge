@@ -474,3 +474,4 @@ q5) for all bridged tokens, for the short term, we need to a) reverse out the to
 58. "sorry, why would a bridge over $100 warn at the default?
 don't call it "tip too high", call it "high tip %""
 59. "oh, so the cap only makes sense to warn about if it can shift, as in if the setting is to use the base fee/gas multiplier"
+60. "lets also integrate the 0.025 fixed cost that we have for all bridges"
