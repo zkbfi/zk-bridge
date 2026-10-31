@@ -54,7 +54,7 @@ const DIRS = [
 const TOKENS = [["USDC", 1, "--p1"], ["ETH", 3000, "--p4"], ["DAI", 1, "--p3"], ["PLS", 0.00003, "--p2"], ["HEX", 0.004, "--p3"]];
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 let paused = false;
-const W = 700, H = 190, X0 = 60, X1 = 640, Y = 95, R0 = 30, RING = 20, PER = 6, EXIT = X1 + 46;
+const W = 700, H = 230, X0 = 60, X1 = 640, Y = 115, R0 = 30, RING = 20, PER = 6, EXIT = X1 + 46;
 const stepX = (i) => X0 + (i * (X1 - X0)) / 3;
 let seq = 0;
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -81,6 +81,7 @@ function build() {
     svg.append(el("line", { x1: X0, y1: Y, x2: X1, y2: Y, stroke: "var(--track)", "stroke-width": 3 }));
     for (let i = 0; i < 4; i++) svg.append(el("circle", { cx: stepX(i), cy: Y, r: 7, fill: i === 0 ? "var(--accent)" : "var(--ahead)" }));
     svg.append(el("circle", { cx: EXIT, cy: Y, r: 7, fill: "var(--accent)", opacity: 0.35 }));
+    s.guides = el("g", {}); svg.append(s.guides); s.guideEls = {};
     s.layer = el("g", {}); svg.append(s.layer); root.append(svg);
     const labels = document.createElement("div"); labels.className = "labels";
     labels.innerHTML = STEPS.map((t, i) => `<div><b data-step="${i}">0</b>${t}</div>`).join(""); root.append(labels); s.labels = labels;
@@ -102,6 +103,7 @@ function showTip(t, x, y) {
 const hideTip = () => tip.classList.remove("on");
 // Where each planet should be now: its slot on its step's rings (or the exit). Planets then ease toward it every frame,
 // so a step change, a ring re-spacing or a departure is always a glide, never a jump.
+let frameNo = 0;
 function targets(s) {
   const byStep = [[], [], [], []];
   for (const t of s.items) if (!t.leaving) byStep[t.step].push(t);
@@ -113,19 +115,25 @@ function targets(s) {
       if (!(s.frozen === i || paused || reduce)) s.phase[key] = (s.phase[key] ?? Math.random() * 6.28) + 0.0045 / (ring + 1);
       const base = s.phase[key] ?? 0;
       const o = s.open[i];                       // 0 closed (at rest) … 1 open (hovered)
-      const rr = r * (0.52 + 0.48 * o), squash = 0.26 + 0.38 * o;
+      const rr = r * (0.66 + 0.34 * o), squash = 0.5 + 0.32 * o;   // tilted ~60° at rest, near face-on when open
+      // The orbit's path, faint, behind the planets: it is what makes the tilt read as an orbit.
+      let gEl = s.guideEls[key];
+      if (!gEl) { gEl = el("ellipse", { fill: "none", stroke: "var(--line)", "stroke-width": 1.2 }); s.guides.append(gEl); s.guideEls[key] = gEl; }
+      gEl.setAttribute("cx", stepX(i)); gEl.setAttribute("cy", Y); gEl.setAttribute("rx", rr.toFixed(1)); gEl.setAttribute("ry", (rr * squash).toFixed(1));
+      gEl.dataset.seen = frameNo;
       group.forEach((t, j) => {
         const a = base + (j * Math.PI * 2) / group.length, z = Math.sin(a);   // z: +1 front, −1 back
         t.tx = stepX(i) + Math.cos(a) * rr; t.ty = Y + z * rr * squash;
-        t.tz = z * (1 - 0.7 * o);                 // depth fades as the orbit opens toward face-on
+        t.tz = z * (1 - 0.6 * o);                 // depth fades as the orbit opens toward face-on
       });
       k += cap; ring++;
     }
   }
   for (const t of s.items) if (t.leaving) { t.tx = EXIT; t.ty = Y; }
+  for (const [key, gEl] of Object.entries(s.guideEls)) if (gEl.dataset.seen !== String(frameNo)) { gEl.remove(); delete s.guideEls[key]; }
 }
 function frame(now) {
-  const dt = Math.min(48, now - (frame.last ?? now)); frame.last = now;
+  const dt = Math.min(48, now - (frame.last ?? now)); frame.last = now; frameNo++;
   for (const s of state) {
     for (let i = 0; i < 4; i++) s.open[i] += ((s.hover === i || s.frozen === i ? 1 : 0) - s.open[i]) * (1 - Math.exp(-dt / 160));
     targets(s);
@@ -170,7 +178,7 @@ function draw(s, t, x, y, seen) {
     g.addEventListener("blur", () => { s.frozen = -1; hideTip(); });
     s.layer.append(g); s.dots.set(t.id, g);
   }
-  const z = t.z ?? 0, scale = 1 + 0.32 * z;               // nearer is bigger …
+  const z = t.z ?? 0, scale = 1 + 0.38 * z;               // nearer is bigger …
   g.setAttribute("transform", `translate(${x.toFixed(1)} ${y.toFixed(1)}) scale(${scale.toFixed(3)})`);
   g.setAttribute("opacity", (t.alpha * (0.62 + 0.38 * (z + 1) / 2)).toFixed(2));   // … and brighter
 }
