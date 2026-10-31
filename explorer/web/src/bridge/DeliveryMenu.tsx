@@ -1,25 +1,68 @@
 import type { BridgeQuery, TipQuery } from "../app/route";
+import { FeeControl, type FeeSlider } from "./FeeLine";
 
-/** The speeds the menu offers: a share of the amount as the tip. Custom keeps whatever the tip drawer sets. */
-export const SPEEDS = [
-  { key: "standard", label: "Standard", percent: "0.1" },
-  { key: "fast", label: "Fast", percent: "0.3" },
-] as const;
+/** The tip modes the menu offers: the automatic fee, or a share, a fixed amount or a gas-based fee the user sets, or none. */
+export type TipChoiceKey = "automatic" | "percentage" | "fixed" | "gas-multiplier" | "none";
 
-/** The pill's summary: "Standard delivery", or what differs, such as "Fast · tip 0.3%". */
-export const deliverySummary = (form: BridgeQuery): string => {
+const TIP_CHOICES: readonly { readonly value: TipChoiceKey; readonly label: string }[] = [
+  { value: "automatic", label: "Automatic" },
+  { value: "percentage", label: "Share" },
+  { value: "fixed", label: "Fixed" },
+  { value: "gas-multiplier", label: "Gas-based" },
+  { value: "none", label: "None" },
+];
+
+/** The numbers the pill's sentence reads, worked out by the bridge screen from the draft. */
+export type DeliveryFacts = {
+  /** The destination chain's name. */
+  readonly destination: string;
+  /** The fee as a share of the amount, such as "0.39%", or null before it is known. */
+  readonly feeShareText: string | null;
+  /** A gas-based fee's worst case, the most the signed terms allow, such as "$0.60", or null. */
+  readonly worstCaseText: string | null;
+  /** A fixed fee in tokens, such as "0.50 USDC", or null. */
+  readonly fixedText: string | null;
+};
+
+/** The pill's sentence: `text` for the pill (addresses shortened), `full` for its label and title. */
+export type DeliverySummary = { readonly text: string; readonly full: string };
+
+const shortAddress = (address: string): string => (/^0x[0-9a-fA-F]{40}$/.test(address) ? `${address.slice(0, 4)}…${address.slice(-2)}` : address);
+
+const gasLimitText = (text: string): string => {
+  const trimmed = text.trim();
+  return /^\d+$/.test(trimmed) ? BigInt(trimmed).toLocaleString("en-US") : trimmed;
+};
+
+/**
+ * What the delivery pill says (owner, quote 88): the arrangement in plain words, from the actual settings and numbers.
+ * "A bot delivers it on PulseChain · fee 0.39%", "A bot delivers it · fee follows gas, up to $0.60", "A bot delivers it
+ * for 0.50 USDC", "You deliver it yourself on PulseChain"; then a call, a router or a gas limit that is set.
+ *
+ * @param form The bridge form.
+ * @param facts The destination and the fee's numbers.
+ */
+export const deliverySummary = (form: BridgeQuery, facts: DeliveryFacts): DeliverySummary => {
   const tip = form.tip ?? {};
-  const speed = SPEEDS.find((candidate) => (tip.mode === undefined || tip.mode === "percentage") && (tip.percentText ?? "0.1") === candidate.percent);
-  const parts: string[] = [];
-  if (tip.mode === "fixed") parts.push("fixed tip");
-  else if (tip.mode === "gas-multiplier") parts.push("gas-based tip");
-  else if (tip.mode === "none") parts.push("no tip");
-  // A share set in the tip drawer is the whole fee's (tip and cost together), shown short.
-  else if (speed === undefined) parts.push(tip.percentText === undefined || !Number.isFinite(Number(tip.percentText)) ? "custom fee" : `fee ${Number(Number(tip.percentText).toPrecision(3))}%`);
-  else if (speed.key !== "standard") parts.push(`${speed.label} · tip ${speed.percent}%`);
-  if (form.gasLimit !== undefined) parts.push(`gas ${form.gasLimit}`);
-  if (tip.routerText !== undefined) parts.push("custom router");
-  return parts.length === 0 ? "Standard delivery" : parts.join(" · ");
+  const mode = tip.mode ?? "percentage";
+  const main =
+    mode === "none"
+      ? `You deliver it yourself on ${facts.destination}`
+      : mode === "gas-multiplier"
+        ? `A bot delivers it · fee follows gas${facts.worstCaseText === null ? "" : `, up to ${facts.worstCaseText}`}`
+        : mode === "fixed"
+          ? `A bot delivers it for ${facts.fixedText ?? "a fixed fee"}`
+          : `A bot delivers it on ${facts.destination}${facts.feeShareText === null ? "" : ` · fee ${facts.feeShareText}`}`;
+  const call = form.mode === "call" && form.callTarget !== undefined && form.callTarget !== "" ? form.callTarget : null;
+  const router = tip.routerText !== undefined && tip.routerText.trim() !== "" ? tip.routerText.trim() : null;
+  const gasLimit = form.gasLimit !== undefined && form.gasLimit.trim() !== "" ? form.gasLimit : null;
+  const sentence = (address: (text: string) => string): string =>
+    [
+      `${main}${call === null ? "" : `, then calls ${address(call)}`}`,
+      ...(router === null ? [] : [`via router ${address(router)}`]),
+      ...(gasLimit === null ? [] : [`gas limit ${gasLimitText(gasLimit)}`]),
+    ].join(" · ");
+  return { text: sentence(shortAddress), full: sentence((text) => text) };
 };
 
 type Segment<T extends string> = { readonly value: T; readonly label: string };
@@ -43,47 +86,36 @@ export type DeliveryMenuProps = {
   readonly defaultRouter: string | null;
   readonly onChange: (next: BridgeQuery) => void;
   readonly onReceiver: () => void;
+  /** The tip mode in force, and what choosing another does (the bridge screen keeps the fee where it is). */
+  readonly tipChoice: TipChoiceKey;
+  readonly onTipChoice: (next: TipChoiceKey) => void;
+  /**
+   * The values of the mode in force (the tip's value, the gas level, the gas limit), the same controls the tip drawer
+   * draws, so typing here moves the drawer's slider and every number, and the other way round.
+   */
+  readonly controls: readonly FeeSlider[];
 };
 
 /**
- * The delivery settings behind the "Standard delivery" pill: speed, how the tip is computed, the gas limit, the relay
- * router and sending to another address, each a row of pill segments or a field. Every choice writes the address.
+ * The delivery settings behind the delivery pill: how the fee is set, the value of that mode, the gas level, the gas
+ * limit, the relay router and sending to another address. Every value is a slider with a recommended tick, an exact
+ * input and a reset (owner, quote 90); every choice writes the address.
  *
- * @param props The form, the default router and the handlers.
+ * @param props The form, the default router, the controls and the handlers.
  */
-export const DeliveryMenu = ({ form, defaultRouter, onChange, onReceiver }: DeliveryMenuProps) => {
+export const DeliveryMenu = ({ form, defaultRouter, onChange, onReceiver, tipChoice, onTipChoice, controls }: DeliveryMenuProps) => {
   const tip: TipQuery = form.tip ?? {};
-  const mode = tip.mode ?? "percentage";
-  const speed = mode === "percentage" ? (SPEEDS.find((candidate) => (tip.percentText ?? "0.1") === candidate.percent)?.key ?? "custom") : "custom";
-  const setTip = (next: TipQuery): void => onChange({ ...form, tip: { ...tip, ...next } });
   return (
     <div className="zb-pop zb-delivery-menu" role="group" aria-label="Delivery settings">
-      <Segments
-        label="Speed"
-        value={speed}
-        options={[...SPEEDS.map((candidate) => ({ value: candidate.key, label: candidate.label })), { value: "custom" as const, label: "Custom" }]}
-        onChange={(next) => {
-          const preset = SPEEDS.find((candidate) => candidate.key === next);
-          if (preset !== undefined) setTip({ mode: "percentage", percentText: preset.percent });
-        }}
-      />
-      <Segments
-        label="Tip"
-        value={mode}
-        options={[
-          { value: "percentage", label: "Share" },
-          { value: "fixed", label: "Fixed" },
-          { value: "gas-multiplier", label: "Gas-based" },
-        ]}
-        onChange={(next) => setTip({ mode: next })}
-      />
-      <label className="zb-menu-row">
-        <span>Gas limit</span>
-        <input className="zb-menu-field" inputMode="numeric" placeholder="auto" value={form.gasLimit ?? ""} onChange={(event) => onChange({ ...form, gasLimit: event.target.value === "" ? undefined : event.target.value })} />
-      </label>
+      <Segments label="Fee" value={tipChoice} options={TIP_CHOICES} onChange={onTipChoice} />
+      {controls.map((control) => (
+        <div key={control.label} className="zb-menu-control">
+          <FeeControl slider={control} />
+        </div>
+      ))}
       <label className="zb-menu-row">
         <span>Relay router</span>
-        <input className="zb-menu-field zb-mono" spellCheck={false} placeholder={defaultRouter ?? "default"} value={tip.routerText ?? ""} onChange={(event) => setTip({ routerText: event.target.value === "" ? undefined : event.target.value })} />
+        <input className="zb-menu-field zb-mono" spellCheck={false} placeholder={defaultRouter ?? "default"} value={tip.routerText ?? ""} onChange={(event) => onChange({ ...form, tip: { ...tip, routerText: event.target.value === "" ? undefined : event.target.value } })} />
       </label>
       <div className="zb-menu-row">
         <span>Send to another address</span>

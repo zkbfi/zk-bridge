@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { FeeLine, tickRows, type FeeLineProps } from "../../src/bridge/FeeLine";
+import { FeeControl, FeeLine, tickRows, type FeeLineProps, type FeeSlider } from "../../src/bridge/FeeLine";
 
 const props = (overrides: Partial<FeeLineProps> = {}): FeeLineProps => ({
   tip: <span>0.0012 ETH</span>,
@@ -124,6 +124,47 @@ describe("the fee line", () => {
     expect(onSave).toHaveBeenCalledOnce();
     rerender(<FeeLine {...props({ sliders: [{ ...cap, save: { saved: true, onSave, label: "0.5% is your default cap" } }] })} />);
     expect(screen.getByRole("button", { name: "0.5% is your default cap" })).toBeDisabled();
+  });
+});
+
+describe("one control for every fee value (owner, quote 90)", () => {
+  const base = (overrides: Partial<FeeSlider> = {}): FeeSlider => ({ label: "Hard fee cap", help: "The most the fee may be.", value: 2, min: 0, max: 5, step: 0.05, ticks: [], onChange: vi.fn(), ...overrides });
+
+  it("has a recommended tick, and a reset only while the value differs", async () => {
+    const onReset = vi.fn();
+    const { rerender } = render(<FeeControl slider={base({ recommended: { at: 2, differs: false, onReset } })} />);
+    expect(screen.getByText("recommended")).toBeInTheDocument();
+    expect(document.querySelector(".zb-range-tick[data-recommended]")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Reset to recommended" })).toBeNull();
+    rerender(<FeeControl slider={base({ value: 3, recommended: { at: 2, differs: true, onReset } })} />);
+    await userEvent.click(screen.getByRole("button", { name: "Reset to recommended" }));
+    expect(onReset).toHaveBeenCalledOnce();
+  });
+
+  it("takes an exact value against its unit, writes it once it passes, names a problem inline, and shows the value in force after", async () => {
+    const onText = vi.fn();
+    const check = (text: string) => (Number.isFinite(Number(text)) && text !== "" ? null : "Enter a number.");
+    render(<FeeControl slider={base({ input: { text: "2", unit: "%", check, onText } })} />);
+    const field = screen.getByRole("textbox", { name: "Hard fee cap, exact" });
+    expect(field.nextElementSibling).toHaveTextContent("%");
+    await userEvent.clear(field);
+    await userEvent.type(field, "2.5");
+    expect(onText).toHaveBeenLastCalledWith("2.5");
+    await userEvent.type(field, "x");
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter a number.");
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    fireEvent.blur(field);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(field).toHaveValue("2");
+  });
+
+  it("shades a band on the track with its anchor, and a note under it", () => {
+    render(<FeeControl slider={base({ band: { from: 1, to: 4, mark: 2, label: "Could land between $1 and $4" }, note: "Anchored at today's gas" })} />);
+    const band = screen.getByRole("img", { name: "Could land between $1 and $4" });
+    expect(band.style.left).toBe("20%");
+    expect(band.style.width).toBe("60%");
+    expect((document.querySelector(".zb-range-anchor") as HTMLElement).style.left).toBe("40%");
+    expect(screen.getByText("Anchored at today's gas")).toBeInTheDocument();
   });
 });
 

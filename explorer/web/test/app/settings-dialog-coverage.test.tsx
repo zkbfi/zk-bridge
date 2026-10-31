@@ -6,7 +6,7 @@ import { CONNECTION_STORAGE_KEY } from "../../src/config/connection-storage";
 import { SettingsDialog, hostOf, keptNotice } from "../../src/app/SettingsDialog";
 import type { Prober } from "../../src/app/service-probe";
 import type { Services } from "../../src/app/services";
-import { loadFeeCap } from "../../src/bridge/fee-cap";
+import { loadFeeCap, loadHardCap } from "../../src/bridge/fee-cap";
 import { FIRST_CHAIN, SECOND_CHAIN, liveServices } from "../support/live";
 import { disconnectedWallet, renderWithWallet } from "./support";
 
@@ -112,7 +112,10 @@ describe("the settings sheet", () => {
     await userEvent.type(field("Prover"), "https://prove.example.org");
     await userEvent.clear(field("Automatic fee cap (%)"));
     await userEvent.type(field("Automatic fee cap (%)"), "3");
+    await userEvent.clear(field("Hard fee cap (%)"));
+    await userEvent.type(field("Hard fee cap (%)"), "4");
     await userEvent.click(screen.getByRole("button", { name: "Reset to defaults" }));
+    expect(field("Hard fee cap (%)")).toHaveValue("2");
     expect(field("Prover")).toHaveValue("");
     expect(field("Automatic fee cap (%)")).toHaveValue("1");
     expect(screen.getByText("Defaults filled in. Save to keep them.")).toBeInTheDocument();
@@ -134,10 +137,31 @@ describe("the settings sheet", () => {
     await save();
     expect(screen.getByRole("alert")).toHaveTextContent("Use a number above 0 and at most 100.");
     expect(loadFeeCap()).toBe(1);
+    // Above the 2% hard cap it is refused; with the hard cap raised beside it, both save.
     await userEvent.clear(field("Automatic fee cap (%)"));
     await userEvent.type(field("Automatic fee cap (%)"), "2.5");
     await save();
+    expect(screen.getByRole("alert")).toHaveTextContent("The automatic cap can't be above the 2% hard cap.");
+    expect(loadFeeCap()).toBe(1);
+    await userEvent.clear(field("Hard fee cap (%)"));
+    await userEvent.type(field("Hard fee cap (%)"), "3");
+    await save();
     await waitFor(() => expect(loadFeeCap()).toBe(2.5));
+    expect(loadHardCap()).toBe(3);
+  });
+
+  it("shows each cap's number right-justified against its unit, and refuses a hard cap out of range", async () => {
+    renderSettings();
+    for (const name of ["Automatic fee cap (%)", "Hard fee cap (%)"]) {
+      expect(field(name).nextElementSibling).toHaveTextContent(/^% of the amount$/);
+      expect(field(name).closest(".zb-fld")).toHaveClass("zb-fld-cap");
+    }
+    expect(field("Hard fee cap (%)")).toHaveValue("2");
+    await userEvent.clear(field("Hard fee cap (%)"));
+    await userEvent.type(field("Hard fee cap (%)"), "0");
+    await save();
+    expect(screen.getByRole("alert")).toHaveTextContent("Use a number above 0 and at most 100.");
+    expect(loadHardCap()).toBe(2);
   });
 
   it("clears the recent searches, and links to the connections page", async () => {

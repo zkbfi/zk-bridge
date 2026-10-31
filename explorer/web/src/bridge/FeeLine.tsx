@@ -2,7 +2,12 @@ import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEv
 import { ClockIcon, FloppyIcon, GasCan, MoneyHand } from "./icons";
 import type { TransferStep } from "./bridge-model";
 
-/** A slider of the tip drawer: a value, its range, and tick marks with labels. */
+/**
+ * One fee value (owner, quote 90: "a slider to them with a recommended tick and a reset to receommended button but they
+ * need to be able to control everything"): a slider with tick marks, an exact input right-justified against its unit, a
+ * "recommended" tick with a reset shown only when the value differs, and optionally a shaded band (a range the value or
+ * the fee could land in). The tip drawer and the delivery menu draw every value with this one control.
+ */
 export type FeeSlider = {
   readonly label: string;
   readonly help: string;
@@ -10,9 +15,21 @@ export type FeeSlider = {
   readonly min: number;
   readonly max: number;
   readonly step: number;
-  readonly valueText: ReactNode;
+  /** A short reading beside the input, such as the value in dollars or the level's name. */
+  readonly valueText?: ReactNode;
   readonly ticks: readonly { readonly at: number; readonly label: string }[];
   readonly onChange: (value: number) => void;
+  /**
+   * The exact value as text, typed against its unit: `check` names a problem (shown inline) or returns null, and
+   * `onText` writes a text that passed.
+   */
+  readonly input?: { readonly text: string; readonly unit: ReactNode; readonly check: (text: string) => string | null; readonly onText: (text: string) => void };
+  /** The value automatic mode would use: a "recommended" tick, and "Reset to recommended" while the value differs. */
+  readonly recommended?: { readonly at: number; readonly differs: boolean; readonly onReset: () => void };
+  /** A shaded band on the track, in the slider's units, with a mark inside it (the anchor) when given. */
+  readonly band?: { readonly from: number; readonly to: number; readonly label: string; readonly mark?: number };
+  /** A line under the track, such as the range in words. */
+  readonly note?: ReactNode;
   /** A small save button beside the value (a floppy disk) that makes it the default; `label` names what it does. */
   readonly save?: { readonly saved: boolean; readonly onSave: () => void; readonly label: string };
   /** A line under the label row saying who sets the value (automatic or you), with a way back when there is one. */
@@ -235,7 +252,7 @@ export const FeeLine = ({ tip, tipHelp, breakdown, gasHelp, gasLevel, onGasLevel
                   </ul>
                 )}
                 {sliders.map((slider) => (
-                  <Slider key={slider.label} slider={slider} />
+                  <FeeControl key={slider.label} slider={slider} />
                 ))}
                 {sliderNote === null ? null : <p className="zb-slider-note">{sliderNote}</p>}
               </>
@@ -247,9 +264,53 @@ export const FeeLine = ({ tip, tipHelp, breakdown, gasHelp, gasLevel, onGasLevel
   );
 };
 
-const Slider = ({ slider }: { readonly slider: FeeSlider }) => {
-  const share = (value: number): number => Math.min(100, Math.max(0, ((value - slider.min) / (slider.max - slider.min)) * 100));
-  const labelRows = tickRows(slider.ticks.map((tick) => ({ label: tick.label, left: share(tick.at) })));
+const ExactInput = ({ label, input }: { readonly label: string; readonly input: NonNullable<FeeSlider["input"]> }) => {
+  // While the user types, the field shows their text; a text that passes is written at once, so the slider and every
+  // number follow. Leaving the field shows the value in force again.
+  const [draft, setDraft] = useState<string | null>(null);
+  const problem = draft === null ? null : input.check(draft);
+  const text = draft ?? input.text;
+  return (
+    <>
+      <span className="zb-exact" data-problem={problem === null ? undefined : "true"}>
+        <input
+          aria-label={`${label}, exact`}
+          aria-invalid={problem === null ? undefined : true}
+          inputMode="decimal"
+          autoComplete="off"
+          spellCheck={false}
+          size={Math.max(2, Math.min(14, text.length))}
+          value={text}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            if (input.check(event.target.value) === null) input.onText(event.target.value.trim());
+          }}
+          onBlur={() => setDraft(null)}
+        />
+        <span className="zb-exact-unit">{input.unit}</span>
+      </span>
+      {problem === null ? null : (
+        <span className="zb-exact-err" role="alert">
+          {problem}
+        </span>
+      )}
+    </>
+  );
+};
+
+/**
+ * One fee value: the label and its ?, the reading, the exact input against its unit and the save button on one row;
+ * who sets it and the reset under it; the track with its ticks, the band and the knob.
+ *
+ * @param props The value.
+ */
+export const FeeControl = ({ slider }: { readonly slider: FeeSlider }) => {
+  const share = (value: number): number => (slider.max === slider.min ? 0 : Math.min(100, Math.max(0, ((value - slider.min) / (slider.max - slider.min)) * 100)));
+  const ticks = [...slider.ticks, ...(slider.recommended === undefined ? [] : [{ at: slider.recommended.at, label: "recommended" }])];
+  const labelRows = tickRows(ticks.map((tick) => ({ label: tick.label, left: share(tick.at) })));
+  const reset = slider.recommended !== undefined && slider.recommended.differs ? slider.recommended : null;
+  const action = reset === null ? (slider.status?.action ?? null) : { label: "Reset to recommended", onClick: reset.onReset };
+  const errors = slider.input === undefined ? null : <ExactInput label={slider.label} input={slider.input} />;
   return (
     <div className="zb-slider">
       <div className="zb-slider-top">
@@ -258,7 +319,8 @@ const Slider = ({ slider }: { readonly slider: FeeSlider }) => {
           <HelpButton label={slider.label} text={slider.help} />
         </span>
         <span className="zb-slider-value">
-          <b>{slider.valueText}</b>
+          {slider.valueText === undefined ? null : slider.input === undefined ? <b>{slider.valueText}</b> : <span className="zb-slider-read">{slider.valueText}</span>}
+          {errors}
           {slider.save === undefined ? null : (
             <button type="button" className="zb-save" aria-label={slider.save.label} title={slider.save.label} disabled={slider.save.saved} onClick={slider.save.onSave}>
               <FloppyIcon />
@@ -266,21 +328,25 @@ const Slider = ({ slider }: { readonly slider: FeeSlider }) => {
           )}
         </span>
       </div>
-      {slider.status === undefined ? null : (
+      {slider.status === undefined && action === null ? null : (
         <div className="zb-slider-mode" aria-live="polite">
-          <span>{slider.status.text}</span>
-          {slider.status.action === undefined ? null : (
-            <button type="button" className="zb-link" onClick={slider.status.action.onClick}>
-              {slider.status.action.label}
+          {slider.status === undefined ? null : <span>{slider.status.text}</span>}
+          {action === null ? null : (
+            <button type="button" className="zb-link" onClick={action.onClick}>
+              {action.label}
             </button>
           )}
         </div>
       )}
       <div className="zb-range">
         <span className="zb-range-bar" />
+        {slider.band === undefined ? null : (
+          <span className="zb-range-band" title={slider.band.label} aria-label={slider.band.label} role="img" style={{ left: `${share(Math.min(slider.band.from, slider.band.to))}%`, width: `${Math.max(1, share(Math.max(slider.band.from, slider.band.to)) - share(Math.min(slider.band.from, slider.band.to)))}%` }} />
+        )}
+        {slider.band?.mark === undefined ? null : <span className="zb-range-anchor" style={{ left: `${share(slider.band.mark)}%` }} />}
         <span className="zb-range-fill" style={{ width: `${share(slider.value)}%` }} />
-        {slider.ticks.map((tick) => (
-          <span key={tick.label} className="zb-range-tick" style={{ left: `${share(tick.at)}%` }} />
+        {ticks.map((tick) => (
+          <span key={tick.label} className="zb-range-tick" data-recommended={tick.label === "recommended" ? "" : undefined} style={{ left: `${share(tick.at)}%` }} />
         ))}
         <span className="zb-range-knob" style={{ left: `${share(slider.value)}%` }} />
         <input type="range" aria-label={slider.label} min={slider.min} max={slider.max} step={slider.step} value={slider.value} onChange={(event) => slider.onChange(Number(event.target.value))} />
@@ -293,6 +359,7 @@ const Slider = ({ slider }: { readonly slider: FeeSlider }) => {
           </span>
         ))}
       </div>
+      {slider.note === undefined ? null : <p className="zb-slider-band-note">{slider.note}</p>}
     </div>
   );
 };

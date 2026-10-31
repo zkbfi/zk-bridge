@@ -216,6 +216,10 @@
 .zb-flip { width: var(--zb-touch); height: var(--zb-touch); border-radius: 50%; display: grid; place-items: center; background: var(--zb-pill); color: var(--zb-pill-ink); border: 1.5px solid var(--zb-pill-edge); flex: none; }
 .zb-settings-pill { flex: 1; justify-content: flex-start; }
 .zb-settings-pill .zb-chev { margin-left: auto; }
+/* The delivery pill says what happens in full; only a sentence too long for a phone ends in an ellipsis. */
+.zb-settings-pill { min-width: 0; }
+.zb-settings-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zb-raise { display: flex; margin: 8px auto 0; }
 
 /* Fee line */
 .zb-fees { display: flex; gap: 18px; flex-wrap: wrap; font-size: var(--zb-step-fee); color: var(--zb-soft); margin-bottom: 6px; }
@@ -251,8 +255,17 @@
 .zb-slider-top { position: relative; display: flex; align-items: center; gap: 8px; min-height: 24px; font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-slider-top .zb-tooltip { width: min(280px, 100%); top: calc(100% + 4px); }
 .zb-label { display: inline-flex; align-items: center; gap: 3px; }
-.zb-slider-value { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; text-align: right; }
+.zb-slider-value { margin-left: auto; display: inline-flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 2px 8px; text-align: right; }
 .zb-slider-value b { color: var(--zb-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.zb-slider-read { font-variant-numeric: tabular-nums; }
+/* The exact value, right-justified against its unit ("1 %"), at the right edge like the other values. */
+.zb-exact { display: inline-flex; align-items: baseline; gap: 3px; border-bottom: 1.5px solid var(--zb-pill-edge); color: var(--zb-ink); font-weight: 600; }
+.zb-exact:focus-within { border-bottom-color: var(--zb-accent); }
+.zb-exact[data-problem="true"] { border-bottom-color: var(--zb-bad, #c8102e); }
+.zb-exact input { width: auto; min-width: 2ch; padding: 0; border: 0; outline: none; background: none; color: inherit; font: inherit; font-variant-numeric: tabular-nums; text-align: right; }
+.zb-exact-unit { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.zb-exact-err { flex-basis: 100%; order: 9; text-align: right; font-size: var(--zb-step-micro); color: var(--zb-bad, #c8102e); }
+.zb-slider-band-note { margin: 2px 0 0; font-size: var(--zb-step-micro); color: var(--zb-muted); }
 .zb-slider-mode { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 2px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
 .zb-slider-mode .zb-link { font-size: inherit; }
 .zb-slider-note { margin: 10px 0 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
@@ -260,6 +273,9 @@
 .zb-range input { position: absolute; inset: 0; width: 100%; opacity: 0; margin: 0; cursor: pointer; }
 .zb-range-bar { position: absolute; left: 0; right: 0; top: 10px; height: 4px; border-radius: 999px; background: var(--zb-track-ahead); }
 .zb-range-fill { position: absolute; left: 0; top: 10px; height: 4px; border-radius: 999px; background: var(--zb-accent); }
+.zb-range-band { position: absolute; top: 7px; height: 10px; border-radius: 999px; background: color-mix(in srgb, var(--zb-accent) 30%, transparent); pointer-events: none; }
+.zb-range-anchor { position: absolute; top: 2px; width: 2px; height: 20px; background: var(--zb-accent); transform: translateX(-1px); pointer-events: none; }
+.zb-range-tick[data-recommended] { background: var(--zb-accent-text, var(--zb-accent)); }
 .zb-range-knob { position: absolute; top: 4px; width: 28px; height: 16px; border-radius: 999px; background: var(--zb-ink); transform: translateX(-50%); pointer-events: none; }
 .zb-range-tick { position: absolute; top: 5px; width: 2px; height: 14px; background: var(--zb-ink); pointer-events: none; }
 .zb-ticks { position: relative; min-height: 30px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
@@ -368,6 +384,8 @@
 
 /* The delivery settings menu and pill segments */
 .zb-delivery-menu { position: absolute; left: 16px; right: 16px; top: 20px; padding: 6px 0; }
+.zb-menu-control { padding: 0 14px 4px; border-top: 1px solid var(--zb-line); }
+.zb-delivery-menu .zb-seg { flex-wrap: wrap; justify-content: flex-end; }
 .zb-menu-row { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-top: 1px solid var(--zb-line); font-size: var(--zb-step-0); }
 .zb-menu-row:first-child { border-top: 0; }
 .zb-menu-row > :first-child { flex: 1; }
@@ -452,6 +470,8 @@ a.zb-go[aria-disabled="true"] { cursor: not-allowed; }
 .zb-fld:focus-within { border-color: var(--zb-accent); }
 .zb-fld-k { flex: none; width: 7.5em; font-size: var(--zb-step--1); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .zb-fld-k-wide { width: auto; }
+.zb-fld-cap input { text-align: right; font-variant-numeric: tabular-nums; }
+.zb-fld-unit { flex: none; padding-right: 14px; margin-left: -4px; font-size: var(--zb-step--1); color: var(--zb-muted); white-space: nowrap; }
 .zb-fld-static { padding-right: 14px; font-size: var(--zb-step--1); color: var(--zb-muted); }
 .zb-fld-static > span:last-child { min-width: 0; }
 .zb-ok { flex: none; display: inline-flex; align-items: center; gap: 5px; padding-right: 8px; font-size: var(--zb-step-micro); color: var(--zb-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }

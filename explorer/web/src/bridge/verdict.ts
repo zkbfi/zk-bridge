@@ -37,6 +37,11 @@ export type VerdictInput = {
    * allows, as text; or null.
    */
   readonly smallTransfer?: { readonly costText: string; readonly capText: string; readonly capAmountText: string } | null;
+  /**
+   * The fee is above the user's hard fee cap (owner, quote 86: "disallows movement forward until the cap is adjusted"):
+   * the cap, the fee (or its worst case), what the cap allows and the smallest cap that admits the fee, as text; or null.
+   */
+  readonly hardCap?: { readonly capText: string; readonly feeText: string; readonly capAmountText: string; readonly raiseText: string; readonly worstCase: boolean } | null;
   /** zkb.fi has never bridged this token (owner: custom tokens). */
   readonly firstBridge?: boolean;
   /** The token is an Omnibridge copy (bridging it wraps it twice). */
@@ -44,8 +49,8 @@ export type VerdictInput = {
 };
 
 /**
- * The pill's verdict, in priority order: no wallet, paused, nothing typed, over balance, a blocked draft; then one
- * warning at most: a small transfer, a low fee, "High cap %", an Omnibridge copy, a first bridge; then an incomplete
+ * The pill's verdict, in priority order: no wallet, paused, nothing typed, over balance, a blocked draft, a fee above
+ * the hard cap (a block, never a warning to override); then one warning at most: a small transfer, a low fee, "High cap %", an Omnibridge copy, a first bridge; then an incomplete
  * draft, go.
  *
  * @param input The state.
@@ -56,6 +61,11 @@ export const verdictOf = (input: VerdictInput): Verdict => {
   if (!input.amountEntered) return { kind: "blocked", label: "Enter an amount", detail: null };
   if (input.overBalance) return { kind: "blocked", label: `Not enough ${input.symbol}`, detail: null };
   if (input.draft.status === "blocked") return { kind: "blocked", label: "Check the transfer", detail: input.draft.reason };
+  if (input.hardCap != null) {
+    const cap = input.hardCap;
+    const fee = cap.worstCase ? `The fee could reach ${cap.feeText} if gas rises` : `The fee is ${cap.feeText}`;
+    return { kind: "blocked", label: `Fee above your ${cap.capText} cap`, detail: `${fee}, more than your ${cap.capText} hard cap (${cap.capAmountText}). Raise the cap to ${cap.raiseText} to go on, or lower the fee.` };
+  }
   if (input.draft.status === "ready") {
     if (input.smallTransfer != null) {
       const small = input.smallTransfer;

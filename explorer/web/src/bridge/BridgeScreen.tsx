@@ -10,16 +10,16 @@ import { useDeliveryCost, useHeads, useMaxFee, usePairHealth, usePriorityFee, us
 import { formatRoute, type BridgeQuery, type Route, type TipQuery } from "../app/route";
 import { useServices } from "../app/services";
 import { TransactionDialog } from "../actions/TransactionDialog";
-import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, type DeliveryOptions } from "../tx/bridge-draft";
+import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, DEFAULT_GAS_MARGIN_TEXT, type DeliveryOptions } from "../tx/bridge-draft";
 import type { WebStep } from "../tx/bridge-steps";
 import { parseUnits } from "../ui/format";
 import { useWallet } from "../wallet/wallet-port";
 import { isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
-import { DeliveryMenu, deliverySummary } from "./DeliveryMenu";
-import { ceilingCostUsd, ceilingWeiOf, DEFAULT_CAP_WAD, defaultFee, feeWarnings, GAS_LEVELS, gasLevelOfCeiling, highCapLine, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
+import { DeliveryMenu, deliverySummary, type TipChoiceKey } from "./DeliveryMenu";
+import { ceilingCostUsd, ceilingWeiOf, DEFAULT_CAP_WAD, DEFAULT_HARD_CAP_WAD, defaultFee, deliveryGasUsd, feeSpanUsd, feeWarnings, GAS_LEVELS, gasLevelOfCeiling, gasRange, hardCapCheck, highCapLine, PERCENT_WAD, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
 import { formatUnits } from "viem";
-import { loadFeeCap, saveFeeCap } from "./fee-cap";
+import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, loadFeeCap, loadHardCap, saveFeeCap, saveHardCap } from "./fee-cap";
 import { DirectionMenu } from "./DirectionMenu";
 import { FeeLine, GAS_LEVEL_NAMES, nextGasLevel, type FeeSlider } from "./FeeLine";
 import { Chevron, FlipIcon, FloppyIcon, Identicon, SlidersIcon } from "./icons";
@@ -66,6 +66,16 @@ const TIP_GRAIN = 10n ** 12n;
 /** The grain of a share the tip slider and the gas bars sign: 0.000001% of the amount. */
 const SIGNED_GRAIN = 10n ** 10n;
 
+/** A number as short text, at most `digits` decimals, no trailing zeros. */
+const plain = (value: number, digits = 4): string => String(Number(value.toFixed(digits)));
+
+/** Why a typed percentage cannot be used, or null. */
+const percentProblem = (text: string): string | null => {
+  const value = Number(text.trim().replace(/%$/, ""));
+  if (text.trim() === "" || !Number.isFinite(value)) return "Enter a number, such as 0.5.";
+  return value < 0 || value > 100 ? "Use a number from 0 to 100." : null;
+};
+
 const safeParse = (text: string, decimals: number): bigint | null => {
   try {
     return text.trim() === "" ? null : parseUnits(text.trim(), decimals);
@@ -109,7 +119,11 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const token = tokenFor(form.token, tokens, side);
   const baseOptions = useMemo(() => optionsOf(form.tip), [form.tip]);
   const [storedCap, setStoredCap] = useState(() => loadFeeCap());
-  const capPercent = form.tip?.capPercentText === undefined ? storedCap : Number(form.tip.capPercentText) || storedCap;
+  // The hard cap lives in this browser only: a link never raises it (owner, quote 86: the absolute most the fee may be).
+  const [storedHardCap, setStoredHardCap] = useState(() => loadHardCap());
+  const [hardCapPercent, setHardCapPercent] = useState(storedHardCap);
+  // The automatic cap never goes above the hard cap, whatever a link or the store says.
+  const capPercent = Math.min(form.tip?.capPercentText === undefined ? storedCap : Number(form.tip.capPercentText) || storedCap, hardCapPercent);
   // The fee is automatic until the user picks a share: the larger of the default curve and twice the cost, capped.
   const automatic = baseOptions.mode === "percentage" && form.tip?.percentText === undefined;
   const report = useDeliveryCost(destination.chainId, { enabled: token !== null });
@@ -171,7 +185,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const costUsd = costAt(gasLevel);
   const costNormalUsd = costAt(1);
   const amountUsd = valueOf(amount);
-  const capWad = shareWadOfPercentText(String(capPercent)) ?? DEFAULT_CAP_WAD;
+  const capWad = shareWadOfPercentText(plain(capPercent, 6)) ?? DEFAULT_CAP_WAD;
+  const hardCapWad = shareWadOfPercentText(plain(hardCapPercent, 6)) ?? DEFAULT_HARD_CAP_WAD;
   // A higher gas level adds its extra expected cost on top of the curve, so the automatic fee rises with the bars too.
   const auto = defaultFee({ amountUsd: amountUsd, costUsd: costUsd, capWad, ...(costUsd === null || costNormalUsd === null ? {} : { levelExtraUsd: costUsd - costNormalUsd }) });
   // The automatic fee signs the default share; a gas-based fee signs a limit no higher than the cap's share (owner,
@@ -253,11 +268,36 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     const percentText = rebasedPercentText(costAt(gasLevel), costAt(level));
     write({ ...form, tip: { ...rest, ...(percentText === undefined ? {} : { percentText }), ...(ceiling === undefined ? {} : { ceilingGweiText: ceiling }) } });
   };
-  const capText = `${Number(capPercent.toPrecision(3))}%`;
-  const setCap = (value: number): void => {
-    const { capPercentText: _drop, ...rest } = form.tip ?? {};
-    write({ ...form, tip: { ...rest, ...(value === storedCap ? {} : { capPercentText: String(value) }) } });
+  // A ceiling typed or dragged in the delivery menu: the level it stands for moves the cost, and a share the user set
+  // is rebased as the bars do.
+  const setCeiling = (wei: bigint): void => {
+    if (levelBaseWei === null || wei <= 0n) return;
+    const level = gasLevelOfCeiling(wei, levelBaseWei);
+    const { ceilingGweiText: _drop, ...rest } = form.tip ?? {};
+    const percentText = rebasedPercentText(costAt(gasLevel), costAt(level));
+    write({ ...form, tip: { ...rest, ...(percentText === undefined ? {} : { percentText }), ceilingGweiText: formatUnits(wei, 9) } });
   };
+  const capText = `${Number(capPercent.toPrecision(3))}%`;
+  const hardCapText = `${Number(hardCapPercent.toPrecision(3))}%`;
+  const setCap = (value: number): void => {
+    const next = Math.min(value, hardCapPercent);
+    const { capPercentText: _drop, ...rest } = form.tip ?? {};
+    write({ ...form, tip: { ...rest, ...(next === storedCap ? {} : { capPercentText: String(next) }) } });
+  };
+  // Lowering the hard cap under the automatic cap takes the automatic cap down with it.
+  const setHardCap = (value: number): void => {
+    setHardCapPercent(value);
+    if (form.tip?.capPercentText !== undefined && Number(form.tip.capPercentText) > value) {
+      const { capPercentText: _drop, ...rest } = form.tip;
+      write({ ...form, tip: { ...rest, ...(value === storedCap ? {} : { capPercentText: String(value) }) } });
+    }
+  };
+  const saveHard = (): void => {
+    if (saveHardCap(String(hardCapPercent)) !== null) return;
+    setStoredHardCap(loadHardCap());
+    setStoredCap(loadFeeCap());
+  };
+  const hardSave = { saved: hardCapPercent === storedHardCap, onSave: saveHard, label: hardCapPercent === storedHardCap ? `${hardCapText} is your hard cap` : `Save ${hardCapText} as your hard cap` };
   // The save button makes this bridge's cap the default (owner: "a little save button (floppy icon) next to the slider").
   const saveCap = (): void => {
     if (saveFeeCap(String(capPercent)) !== null) return;
@@ -278,12 +318,22 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
       : [
           { label: "Delivery gas", value: dollarsText(costNormalUsd - PROOF_COST_USD) },
           { label: "Proof", value: dollarsText(PROOF_COST_USD) },
-          ...(gasLevel === 1 ? [] : [{ label: `${levelName(gasLevel)} gas level, ${expectedText(gasLevel)} the cost`, value: `+${dollarsText(costUsd - costNormalUsd)}` }]),
+          ...(gasLevel === 1 ? [] : [{ label: `${levelName(gasLevel)} gas level`, value: `+${dollarsText(costUsd - costNormalUsd)}` }]),
           { label: "Tip", value: dollarsText(tipUsd) },
           { label: "Fee", value: dollarsText(feeUsd), total: true },
         ];
   // In gas-based mode the fee can drift after signing, up to the signed limit (the tip at the ceiling).
   const drift = gasBased && delivery !== null && tipUnits !== null ? { now: usd(tipUnits), most: usd(delivery.maximumTip), level: levelName(gasLevel) } : null;
+
+  // The hard cap (owner, quote 86): the fee now, or for a gas-based fee the most the signed terms allow, against the
+  // cap's share of the amount, in base units. Above it the Bridge button is blocked until the cap is raised.
+  const hard = delivery !== null && amount !== null && amount > 0n && tipUnits !== null ? hardCapCheck({ amountUnits: amount, feeUnits: tipUnits, worstFeeUnits: gasBased ? delivery.maximumTip : 0n, hardCapWad }) : null;
+  const hardOver = hard !== null && hard.over;
+  const raisePercent = hard === null ? null : Number((hard.raiseToWad * 10_000n) / PERCENT_WAD) / 10_000;
+  const raiseHardCap = (): void => {
+    if (raisePercent !== null) setHardCap(raisePercent);
+  };
+  const unitsText = (units: bigint): string => (token === null ? "" : `${amountText(units, token.decimals)} ${token.symbol}${valueOf(units) === null ? "" : ` (${usd(units)})`}`);
 
   const verdict = verdictOf({
     connected: account !== null,
@@ -297,6 +347,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     highTip: warnings.highCap ? { thresholdText, tipText: dollarsText(tipUsd) } : null,
     smallTransfer: warnings.smallTransfer && amountUsd !== null ? { costText: dollarsText(costUsd), capText, capAmountText: dollarsText((amountUsd * capWad) / WAD) } : null,
     firstBridge: token !== null && !isNativeToken(token) && isFirstBridge(token, known, false),
+    hardCap: hard !== null && hard.over ? { capText: hardCapText, feeText: unitsText(hard.feeUnits), capAmountText: unitsText(hard.capUnits), raiseText: `${raisePercent}%`, worstCase: hard.feeUnits !== tipUnits } : null,
   });
 
   const tokenIcon = (subjectToken: TokenInfo, badge: number | null, size = 32, surface: "accent" | "plain" = "plain"): ReactNode => <TokenIcon subject={iconSubjectOf(subjectToken, pair)} badgeChainId={badge} symbol={subjectToken.symbol} size={size} surface={surface} />;
@@ -324,74 +375,268 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     const signed = withCost && costUsd !== null ? signedShareFor(tipWad, costUsd) : null;
     write({ ...form, tip: { ...form.tip, mode: "percentage", percentText: percentTextOfWad(signed ?? tipWad) } });
   };
+  const COST_TWICE = 2n;
   const backToAutomatic = (): void => {
     const { percentText: _percent, mode: _mode, ...rest } = form.tip ?? {};
     write({ ...form, tip: rest });
   };
   const tipStatus: FeeSlider["status"] = automatic
     ? { text: auto.binding === "cap" ? "Automatic · held at your cap" : "Automatic · follows the amount and the gas level" }
-    : {
-        text: options.mode === "percentage" ? "Set by you · the automatic fee is off" : options.mode === "fixed" ? "A fixed tip from the delivery settings" : options.mode === "gas-multiplier" ? "A gas-based tip from the delivery settings" : "No tip",
-        action: { label: "Back to automatic", onClick: backToAutomatic },
+    : { text: options.mode === "percentage" ? "Set by you · the automatic fee is off" : options.mode === "fixed" ? "A fixed fee you set" : options.mode === "gas-multiplier" ? "A gas-based fee you set" : "No tip" };
+  const tokenUnit: ReactNode = token === null ? null : (
+    <>
+      {tokenIcon(token, null, 16)}
+      {token.symbol}
+    </>
+  );
+  // Token units for a USD value at the token's price, rounded down; null without a price.
+  const unitsOfUsd = (value: bigint | null): bigint | null => (value === null || tokenQuote === null || token === null || tokenQuote.usdE18 === 0n ? null : (value * 10n ** BigInt(token.decimals)) / tokenQuote.usdE18);
+  const tokenNumber = (units: bigint): number => (token === null ? 0 : Number(formatUnits(units, token.decimals)));
+  const writeTip = (next: TipQuery): void => write({ ...form, tip: { ...form.tip, ...next } });
+
+  // The fee's span over the next 15 minutes (owner, quote 92: "present their caps as ranges"): a point for a fee fixed at
+  // signing, the cost's range for a gas-based fee (up to the signed limit). As shares of the amount, in percent.
+  const gasSpan = (() => {
+    const input = costInputAt(gasLevel);
+    return input === null ? null : gasRange(input);
+  })();
+  const spanPercent: { readonly low: number; readonly high: number } | null = (() => {
+    if (feeUsd !== null && pricedAmount !== null) {
+      const span = feeSpanUsd({ feeUsd, gasBased, range: gasSpan, worstFeeUsd: gasBased && delivery !== null ? valueOf(delivery.maximumTip) : null });
+      const low = usdPercent(span.lowUsd);
+      const high = usdPercent(span.highUsd);
+      return low === null || high === null ? null : { low, high };
+    }
+    const now = share(tipUnits);
+    if (now === null) return null;
+    return { low: now, high: gasBased && delivery !== null ? (share(delivery.maximumTip) ?? now) : now };
+  })();
+  const spanBand = spanPercent === null ? undefined : { from: spanPercent.low, to: spanPercent.high, label: spanPercent.low === spanPercent.high ? `The fee: ${plain(spanPercent.low, 3)}% of the amount` : `Where the fee could land over 15 min: ${plain(spanPercent.low, 3)}% to ${plain(spanPercent.high, 3)}% of the amount` };
+  const spanNote = spanPercent === null ? undefined : spanPercent.low === spanPercent.high ? `The fee is ${plain(spanPercent.low, 3)}% of the amount, fixed when you sign.` : `The fee could land between ${plain(spanPercent.low, 3)}% and ${plain(spanPercent.high, 3)}% over 15 min.`;
+
+  // The tip control of the mode in force (owner, quotes 89–90): one value, shared by the drawer and the delivery menu.
+  const tipControl: FeeSlider | null = (() => {
+    if (options.mode === "none") return null;
+    if (options.mode === "fixed") {
+      if (token === null) return null;
+      const decimals = token.decimals;
+      const recommendedUnits = amount === null ? null : (amount * auto.shareWad) / WAD;
+      const recommendedText = recommendedUnits === null ? null : formatUnits(recommendedUnits, decimals);
+      const fixedText = form.tip?.fixedText;
+      const nowUnits = fixedText === undefined ? tipUnits : safeParse(fixedText, decimals);
+      const value = nowUnits === null ? 0 : tokenNumber(nowUnits);
+      const twiceCost = costUsd === null ? null : unitsOfUsd(COST_TWICE * costUsd);
+      const max = Math.max(value * 1.5, recommendedUnits === null ? 0 : tokenNumber(recommendedUnits) * 3, twiceCost === null ? 0 : tokenNumber(twiceCost) * 2, 10 ** -Math.min(6, decimals));
+      return {
+        label: "Fixed fee",
+        help: `The fee in ${token.symbol}, the same whatever gas costs: it pays the deliverer's gas, the proof and their tip. Under twice the cost, bots may skip it.`,
+        value,
+        min: 0,
+        max: Number(max.toPrecision(3)),
+        step: Number((max / 1000).toPrecision(2)),
+        valueText: usd(nowUnits),
+        ticks: twiceCost === null ? [] : [{ at: tokenNumber(twiceCost), label: "2× cost" }],
+        onChange: (next) => writeTip({ mode: "fixed", fixedText: plain(next, Math.min(decimals, 8)) }),
+        input: {
+          text: fixedText ?? (nowUnits === null ? "" : formatUnits(nowUnits, decimals)),
+          unit: tokenUnit,
+          check: (text) => {
+            const units = safeParse(text, decimals);
+            if (units === null || !/^\d*\.?\d*$/.test(text.trim())) return `Enter an amount of ${token.symbol} with at most ${decimals} decimals.`;
+            return amount !== null && units > amount ? "The fee can't be more than the amount." : null;
+          },
+          onText: (text) => writeTip({ mode: "fixed", fixedText: text }),
+        },
+        ...(recommendedText === null || recommendedUnits === null ? {} : { recommended: { at: tokenNumber(recommendedUnits), differs: nowUnits !== recommendedUnits, onReset: () => writeTip({ mode: "fixed", fixedText: recommendedText }) } }),
+        status: tipStatus,
       };
-  const tipSlider: FeeSlider =
-    tipPercent !== null && costPercent !== null
-      ? (() => {
-          const max = Math.min(100, Math.max(1, costPercent * 1.5, linePercent * 1.5, (autoTipPercent ?? 0) * 1.5, tipPercent * 1.25));
-          return {
-            label: "Tip",
-            help: "What the deliverer keeps once the delivery gas and the proof are paid, as a share of the amount. Your fee is the cost at your gas level plus this tip. Left of the 2× cost tick bots may skip it; right of the high cap line it reads as a High cap %.",
-            value: tipPercent,
-            min: 0,
-            max: Number(max.toFixed(2)),
-            step: 0.01,
-            valueText: `${percentText(tipPercent)} · ${dollarsText(tipUsd)}`,
-            ticks: [
-              { at: costPercent, label: "2× cost" },
-              { at: linePercent, label: "high cap line" },
-              ...(automatic || autoTipPercent === null ? [] : [{ at: autoTipPercent, label: "automatic" }]),
-            ],
-            onChange: (value) => setTip(value, true),
-            status: tipStatus,
-          };
-        })()
-      : (() => {
-          const breakEvenPercent = share(breakEven);
-          const typicalPercent = share(typical);
-          return {
-            label: "Fee",
-            help: "The share of the amount that pays whoever delivers your transfer, their gas and the proof included. Without a price the tip can't be told apart from the cost. Left of the break-even tick a delivery bot loses money at today's gas price.",
-            value: percent,
-            min: 0,
-            max: Number(Math.max(1, (typicalPercent ?? 0.1) * 3, percent * 1.5).toFixed(2)),
-            step: 0.01,
-            valueText: percentText(percent),
-            ticks: [
-              ...(breakEvenPercent === null ? [] : [{ at: breakEvenPercent, label: "break-even for bots" }]),
-              ...(typicalPercent === null ? [] : [{ at: typicalPercent, label: "typical" }]),
-            ],
-            onChange: (value) => setTip(value, false),
-            status: tipStatus,
-          };
-        })();
-  const sliders: FeeSlider[] = [
-    tipSlider,
-    {
-      label: "Automatic fee cap",
-      help: "The most the automatic fee may take, as a share of the amount. Changing it here applies to this bridge; the save button makes it your default.",
-      value: capPercent,
-      min: 0.05,
-      max: Math.max(2, capPercent),
-      step: 0.05,
-      valueText: `${capText}${auto.binding === "cap" && automatic ? " · reached" : ""}`,
-      ticks: [{ at: Number(linePercent.toFixed(3)), label: "high cap line" }],
-      onChange: setCap,
-      save: capSave,
-      ...(automatic ? {} : { status: { text: "Applies to the automatic fee only" } }),
-    },
-  ];
+    }
+    if (options.mode === "gas-multiplier") {
+      const text = form.tip?.gasMultiplierText ?? DEFAULT_GAS_MARGIN_TEXT;
+      const value = Number(text) || 0;
+      const normal = costInputAt(1);
+      const gasNow = normal === null ? null : deliveryGasUsd(normal);
+      // Recommended: the factor whose fee meets the automatic fee at today's gas; 2 (twice the cost) without prices.
+      const recommended = auto.feeUsd !== null && gasNow !== null && gasNow > 0n ? Number((auto.feeUsd * 100n) / gasNow) / 100 : 2;
+      const max = Math.max(5, recommended * 2, value * 1.5);
+      return {
+        label: "Fee on gas",
+        help: "A gas-based fee is paid at delivery from the gas actually spent: this many times the gas cost, so it follows gas up and down, never past the limit you sign.",
+        value,
+        min: 0,
+        max: Number(max.toPrecision(3)),
+        step: 0.05,
+        valueText: usd(tipUnits),
+        ticks: [{ at: 2, label: "2× cost" }],
+        onChange: (next) => writeTip({ mode: "gas-multiplier", gasMultiplierText: plain(next, 2) }),
+        input: {
+          text,
+          unit: "× gas cost",
+          check: (typed) => {
+            const number = Number(typed);
+            if (typed.trim() === "" || !Number.isFinite(number)) return "Enter a number, such as 2.";
+            return number <= 0 || number > 1000 ? "Use a number above 0 and at most 1000." : null;
+          },
+          onText: (typed) => writeTip({ mode: "gas-multiplier", gasMultiplierText: typed }),
+        },
+        recommended: { at: recommended, differs: Math.abs(value - recommended) >= 0.005, onReset: () => writeTip({ mode: "gas-multiplier", gasMultiplierText: String(recommended) }) },
+        ...(spanNote === undefined ? {} : { note: spanNote }),
+        status: tipStatus,
+      };
+    }
+    if (tipPercent !== null && costPercent !== null) {
+      const max = Math.min(100, Math.max(1, costPercent * 1.5, linePercent * 1.5, (autoTipPercent ?? 0) * 1.5, tipPercent * 1.25));
+      return {
+        label: "Tip",
+        help: "What the deliverer keeps once the delivery gas and the proof are paid, as a share of the amount. Your fee is the cost at your gas level plus this tip. Left of the 2× cost tick bots may skip it; right of the high cap line it reads as a High cap %.",
+        value: tipPercent,
+        min: 0,
+        max: Number(max.toFixed(2)),
+        step: 0.01,
+        valueText: dollarsText(tipUsd),
+        ticks: [
+          { at: costPercent, label: "2× cost" },
+          { at: linePercent, label: "high cap line" },
+        ],
+        onChange: (value) => setTip(value, true),
+        input: { text: plain(tipPercent), unit: "%", check: percentProblem, onText: (text) => setTip(Number(text.replace(/%$/, "")), true) },
+        ...(autoTipPercent === null ? {} : { recommended: { at: autoTipPercent, differs: !automatic, onReset: backToAutomatic } }),
+        status: tipStatus,
+      };
+    }
+    const breakEvenPercent = share(breakEven);
+    const typicalPercent = share(typical);
+    const autoPercent = Number(formatUnits(auto.shareWad, 16));
+    return {
+      label: "Fee",
+      help: "The share of the amount that pays whoever delivers your transfer, their gas and the proof included. Without a price the tip can't be told apart from the cost. Left of the break-even tick a delivery bot loses money at today's gas price.",
+      value: percent,
+      min: 0,
+      max: Number(Math.max(1, (typicalPercent ?? 0.1) * 3, percent * 1.5).toFixed(2)),
+      step: 0.01,
+      ticks: [
+        ...(breakEvenPercent === null ? [] : [{ at: breakEvenPercent, label: "break-even for bots" }]),
+        ...(typicalPercent === null ? [] : [{ at: typicalPercent, label: "typical" }]),
+      ],
+      onChange: (value) => setTip(value, false),
+      input: { text: plain(percent), unit: "%", check: percentProblem, onText: (text) => setTip(Number(text.replace(/%$/, "")), false) },
+      recommended: { at: autoPercent, differs: !automatic, onReset: backToAutomatic },
+      status: tipStatus,
+    };
+  })();
+
+  // The gas level as an anchor (owner, quote 91): the ceiling the deliverer may pay, with today's gas marked and the
+  // range the price could land in over 15 minutes shaded; never explained as a multiplier.
+  const gasControl: FeeSlider | null = (() => {
+    if (levelBaseWei === null) return null;
+    const gwei = (wei: bigint): number => Number(formatUnits(wei, 9));
+    const ceilingWei = ceilingWeiText ?? ceilingWeiOf(levelBaseWei, 1);
+    const max = gwei((ceilingWeiOf(levelBaseWei, 3) * 6n) / 5n);
+    const words = gasSpan === null ? null : `Anchored at today's gas · could land between ${dollarsText(gasSpan.lowUsd)} and ${dollarsText(gasSpan.highUsd)} over 15 min`;
+    return {
+      label: "Gas level",
+      help: "Today's gas is the anchor. Over the next 15 minutes the real price could land lower (left) or higher (right); this sets how high you let it go. The bars beside the gas can step through Normal, High and Highest.",
+      value: gwei(ceilingWei),
+      min: 0,
+      max,
+      step: max / 300,
+      valueText: levelName(gasLevel),
+      ticks: ([1, 2, 3] as const).map((level) => ({ at: gwei(ceilingWeiOf(levelBaseWei, level)), label: levelName(level) })).filter((tick) => tick.label !== "Normal"),
+      onChange: (next) => setCeiling(parseUnits(next.toFixed(9), 9)),
+      input: {
+        text: formatUnits(ceilingWei, 9),
+        unit: "gwei",
+        check: (text) => {
+          const wei = safeParse(text, 9);
+          return wei === null || wei <= 0n ? "Enter a gas price above 0 in gwei, at most 9 decimals." : null;
+        },
+        onText: (text) => setCeiling(safeParse(text, 9) ?? 0n),
+      },
+      recommended: { at: gwei(ceilingWeiOf(levelBaseWei, 1)), differs: form.tip?.ceilingGweiText !== undefined, onReset: () => setGasLevel(1) },
+      ...(gasSpan === null ? {} : { band: { from: gwei(gasSpan.lowWei), to: gwei(gasSpan.highWei), mark: gwei(gasSpan.anchorWei), label: words ?? "" } }),
+      ...(words === null ? {} : { note: words }),
+    };
+  })();
+
+  // The gas limit of the message (recommended: the delivery gas the cost is estimated at; empty sends the default).
+  const gasEstimate = probe.delivery?.suggestions.dataSource.gas ?? null;
+  const gasLimitControl: FeeSlider = (() => {
+    const text = form.gasLimit ?? "";
+    const estimate = gasEstimate === null ? null : Number(gasEstimate);
+    const value = text !== "" ? Number(text) || 0 : (estimate ?? 0);
+    const max = Math.max((estimate ?? 500_000) * 3, value * 1.5);
+    return {
+      label: "Gas limit",
+      help: "The gas the message may use on the destination. Leave it at the recommendation unless the receiver runs code that needs more.",
+      value,
+      min: 0,
+      max: Math.round(max),
+      step: 1_000,
+      ticks: [],
+      onChange: (next) => write({ ...form, gasLimit: String(Math.round(next)) }),
+      input: {
+        text: text !== "" ? text : (estimate === null ? "" : String(estimate)),
+        unit: "gas",
+        check: (typed) => (/^\d+$/.test(typed.trim()) && Number(typed) > 0 && Number(typed) <= 30_000_000 ? null : "Enter a whole number of gas above 0, at most 30,000,000."),
+        onText: (typed) => write({ ...form, gasLimit: typed }),
+      },
+      ...(estimate === null ? {} : { recommended: { at: estimate, differs: text !== "", onReset: () => write({ ...form, gasLimit: undefined }) } }),
+    };
+  })();
+
+  const autoCapRecommended = Math.min(DEFAULT_AUTO_CAP_PERCENT, hardCapPercent);
+  const capControl: FeeSlider = {
+    label: "Automatic fee cap",
+    help: "The most the automatic fee may take, as a share of the amount. It can't be above your hard cap. Changing it here applies to this bridge; the save button makes it your default.",
+    value: capPercent,
+    min: 0.05,
+    max: Math.max(0.05, hardCapPercent),
+    step: 0.05,
+    ...(auto.binding === "cap" && automatic ? { valueText: "reached" } : {}),
+    ticks: [{ at: Number(linePercent.toFixed(3)), label: "high cap line" }],
+    onChange: setCap,
+    input: { text: plain(capPercent), unit: "%", check: (text) => feeCapProblem(text) ?? (Number(text.replace(/%$/, "")) > hardCapPercent ? `At most your ${hardCapText} hard cap.` : null), onText: (text) => setCap(Number(text.replace(/%$/, ""))) },
+    recommended: { at: autoCapRecommended, differs: capPercent !== autoCapRecommended, onReset: () => setCap(autoCapRecommended) },
+    ...(spanBand === undefined ? {} : { band: spanBand }),
+    save: capSave,
+    ...(automatic ? {} : { status: { text: "Applies to the automatic fee only" } }),
+  };
+  const hardCapControl: FeeSlider = {
+    label: "Hard fee cap",
+    help: "The absolute most the fee may be, in every tip mode. A fee above it, or a gas-based fee that could rise above it, stops the Bridge button until you raise this cap.",
+    value: hardCapPercent,
+    min: 0.05,
+    max: Number(Math.max(5, hardCapPercent * 1.5, (spanPercent?.high ?? 0) * 1.2).toFixed(2)),
+    step: 0.05,
+    ...(hardOver ? { valueText: "below the fee" } : {}),
+    ticks: [{ at: capPercent, label: "automatic cap" }],
+    onChange: setHardCap,
+    input: { text: plain(hardCapPercent), unit: "%", check: feeCapProblem, onText: (text) => setHardCap(Number(text.replace(/%$/, ""))) },
+    recommended: { at: DEFAULT_HARD_CAP_PERCENT, differs: hardCapPercent !== DEFAULT_HARD_CAP_PERCENT, onReset: () => setHardCap(DEFAULT_HARD_CAP_PERCENT) },
+    ...(spanBand === undefined ? {} : { band: spanBand }),
+    ...(spanNote === undefined ? {} : { note: spanNote }),
+    save: hardSave,
+  };
+  const sliders: FeeSlider[] = [...(tipControl === null ? [] : [tipControl]), capControl, hardCapControl];
   const nextLevel = nextGasLevel(gasLevel);
-  const gasHelp = `${levelName(gasLevel)} gas: up to ${GAS_LEVELS[gasLevel].ceilingFactor}× today's base fee, cost ${expectedText(gasLevel)}${costUsd === null ? "" : ` (${dollarsText(costUsd)})`}. Tap for ${levelName(nextLevel)}.`;
+  const gasHelp = `${levelName(gasLevel)} gas: anchored at today's gas${gasSpan === null ? "" : `, the cost could land between ${dollarsText(gasSpan.lowUsd)} and ${dollarsText(gasSpan.highUsd)} over 15 min`}. Tap for ${levelName(nextLevel)}.`;
+
+  // The tip modes of the delivery menu. Choosing one keeps the fee where it is when it can (the share or the amount
+  // in force now), so switching never jumps the numbers; Automatic hands the fee back to the rule.
+  const chooseTip = (next: TipChoiceKey): void => {
+    const { percentText: _percent, fixedText: _fixed, ...rest } = form.tip ?? {};
+    if (next === "automatic") return write({ ...form, tip: { ...rest, mode: "percentage" } });
+    if (next === "percentage") return write({ ...form, tip: { ...rest, mode: "percentage", percentText: form.tip?.percentText ?? options.percentText } });
+    if (next === "fixed") return write({ ...form, tip: { ...rest, mode: "fixed", ...(tipUnits === null || token === null ? {} : { fixedText: formatUnits(tipUnits, token.decimals) }) } });
+    write({ ...form, tip: { ...rest, mode: next } });
+  };
+  const tipChoice: TipChoiceKey = automatic ? "automatic" : options.mode;
+  const summary = deliverySummary(form, {
+    destination: destination.name,
+    feeShareText: tipUnits === null || amount === null || amount === 0n ? null : `${Number((Number((tipUnits * 1_000_000n) / amount) / 10_000).toPrecision(2))}%`,
+    worstCaseText: gasBased && delivery !== null ? (valueOf(delivery.maximumTip) === null ? `${amountText(delivery.maximumTip, token?.decimals ?? 18)} ${token?.symbol ?? ""}` : usd(delivery.maximumTip)) : null,
+    fixedText: options.mode === "fixed" && tipUnits !== null && token !== null ? `${amountText(tipUnits, token.decimals)} ${token.symbol}` : null,
+  });
 
   const flip = (): void => {
     const next = token === null ? null : counterpartOf(token, tokens);
@@ -476,9 +721,9 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
           <button type="button" className="zb-flip" onClick={flip} aria-label={`Flip: send from ${destination.name} instead`}>
             <FlipIcon />
           </button>
-          <button type="button" className="zb-pill zb-settings-pill" aria-haspopup="true" aria-expanded={menu === "delivery"} onClick={() => setMenu(menu === "delivery" ? null : "delivery")} aria-label={`Delivery settings: ${deliverySummary(form)}`}>
+          <button type="button" className="zb-pill zb-settings-pill" aria-haspopup="true" aria-expanded={menu === "delivery"} onClick={() => setMenu(menu === "delivery" ? null : "delivery")} aria-label={`Delivery settings: ${summary.full}`} title={summary.full}>
             <SlidersIcon />
-            <span>{deliverySummary(form)}</span>
+            <span className="zb-settings-text">{summary.text}</span>
             <Chevron dir={menu === "delivery" ? "up" : "down"} />
           </button>
         </div>
@@ -486,7 +731,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
 
       {menu === "delivery" ? (
         <div className="zb-col" style={{ position: "relative", zIndex: 5 }}>
-          <DeliveryMenu form={form} defaultRouter={destination.contracts.deliveryRouter} onChange={(next) => write(next)} onReceiver={() => setMenu("receiver")} />
+          <DeliveryMenu form={form} defaultRouter={destination.contracts.deliveryRouter} onChange={(next) => write(next)} onReceiver={() => setMenu("receiver")} tipChoice={tipChoice} onTipChoice={chooseTip} controls={[...(tipControl === null ? [] : [tipControl]), ...(gasControl === null ? [] : [gasControl]), gasLimitControl]} />
         </div>
       ) : null}
       <section className="zb-band-to" aria-label={`You receive on ${destination.name}`}>
@@ -505,7 +750,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
               })()}
               steps={transferSteps(source, destination)}
               sliders={sliders}
-              sliderNote={tipSlider.label === "Tip" ? null : share(breakEven) === null ? null : "Left of break-even a delivery bot loses money at today's gas price, so expect to deliver it yourself."}
+              sliderNote={tipControl?.label !== "Fee" ? null : share(breakEven) === null ? null : "Left of break-even a delivery bot loses money at today's gas price, so expect to deliver it yourself."}
             />
           )}
           <div className="zb-amount-row" style={{ marginTop: 6 }}>
@@ -556,6 +801,11 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             {verdict.label}
           </button>
           {verdict.detail === null ? null : <p className="zb-verdict">{verdict.detail}</p>}
+          {hardOver && raisePercent !== null ? (
+            <button type="button" className="zb-pill zb-pill-outline zb-raise" onClick={raiseHardCap}>
+              Raise cap to {raisePercent}%
+            </button>
+          ) : null}
         </div>
       </section>
 
@@ -580,6 +830,16 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             {delivery === null || routerWarningOf(delivery) === null ? null : <div className="zb-warnbox" role="alert">{routerWarningOf(delivery)}</div>}
             {linked.length === 0 ? null : <LinkedWarning fields={linked} />}
             {verdict.kind === "warn" ? <div className="zb-warnbox">{verdict.detail}</div> : null}
+            {hardOver && raisePercent !== null ? (
+              <div className="zb-warnbox" role="group" aria-label="Hard fee cap">
+                <p style={{ margin: "0 0 8px" }}>
+                  <b>{verdict.label}</b> · {verdict.detail}
+                </p>
+                <button type="button" className="zb-pill zb-pill-outline" onClick={raiseHardCap}>
+                  Raise cap to {raisePercent}%
+                </button>
+              </div>
+            ) : null}
             {warnings.capWarning ? (
               <div className="zb-warnbox" role="group" aria-label="Fee cap">
                 <p style={{ margin: "0 0 8px" }}>
@@ -597,7 +857,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
                 </button>
               </div>
             ) : null}
-            <button type="button" className="zb-go" data-kind="go" disabled={draft.status !== "ready"} onClick={() => { setReview(false); setSigning(draft.steps); }}>
+            <button type="button" className="zb-go" data-kind="go" disabled={draft.status !== "ready" || hardOver} onClick={() => { if (hardOver) return; setReview(false); setSigning(draft.steps); }}>
               Confirm in wallet
             </button>
             {draft.status === "ready" ? null : <p className="zb-verdict">{draft.reason}</p>}
