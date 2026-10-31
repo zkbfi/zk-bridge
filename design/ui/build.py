@@ -114,6 +114,8 @@ ROLES = [
         ("Accent (rules, marks, the selected edge)", "accent", None, None),
         ("Accent as text", None, "accent-text", None),
         ("Warning text and outline", None, "warn", None),
+        ("Good (checks that pass)", None, "good", None),
+        ("Bad (errors, failed checks)", None, "bad", None),
         ("The mark", "mark", None, None),
         ("Plate behind icons on the band", "plate", None, None),
     ]),
@@ -126,13 +128,29 @@ ROLES = [
 ]
 
 
+def _resolve(tokens: dict, value: str) -> str:
+    """A value with its var(--zb-…) references replaced by what they name in the same theme."""
+    import re
+    return re.sub(r"var\((--zb-[\w-]+)\)", lambda m: _resolve(tokens, tokens.get(m.group(1), "").strip()), value)
+
+
 def _pick(tokens: dict, names) -> str:
     if names is None:
         return ""
     for name in names.split("|"):
         value = tokens.get(f"--zb-{name}", "").strip()
         if value:
-            return value
+            return _resolve(tokens, value)
+    return ""
+
+
+def _source(tokens: dict, names) -> str:
+    """The palette colour a role points at (e.g. "tint"), or "" when the role is not a single palette colour."""
+    import re
+    for name in (names or "").split("|"):
+        m = re.fullmatch(r"var\(--zb-p-([\w-]+)\)", tokens.get(f"--zb-{name}", "").strip())
+        if m:
+            return m.group(1)
     return ""
 
 
@@ -145,7 +163,7 @@ def system_fragment() -> str:
         for _, bg, ink, edge in rows:
             for names in (bg, ink, edge):
                 used.update(f"--zb-{n}" for n in (names or "").split("|") if n)
-    missing = sorted({k for _, t in themes for k in t} - used)
+    missing = sorted({k for _, t in themes for k in t if not k.startswith("--zb-p-")} - used)
     if missing:
         raise SystemExit("bridge.css tokens with no role on the UI page: " + ", ".join(missing))
 
@@ -153,11 +171,11 @@ def system_fragment() -> str:
         b, i, e = _pick(tokens, bg), _pick(tokens, ink), _pick(tokens, edge)
         if b and i:
             border = f"1.5px solid {e}" if e else "1px solid #0002"
-            label = " / ".join(v for v in (b if not b.startswith("linear") else "gradient", i) if v)
+            label = " / ".join(x for x in (_source(tokens, bg) or ("gradient" if b.startswith("linear") else b), _source(tokens, ink) or i) if x)
             return f'<div class="s pair" style="background:{html.escape(b)};color:{html.escape(i)};border:{border}">Aa</div><code>{html.escape(label)}</code>'
         v = b or i
         shape = "dot" if i and not b else "sq"
-        return f'<div class="s {shape}" style="background:{html.escape(v)}"></div><code>{html.escape(v if not v.startswith("linear") else "gradient")}</code>'
+        return f'<div class="s {shape}" style="background:{html.escape(v)}"></div><code>{html.escape(_source(tokens, bg or ink) or (v if not v.startswith("linear") else "gradient"))}</code>'
 
     groups = []
     for title, rows in ROLES:
@@ -170,6 +188,16 @@ def system_fragment() -> str:
                      if same else "".join(f"<td>{sample(t, bg, ink, edge)}</td>" for _, t in themes))
             trs.append(f'<tr><th>{html.escape(label)}<small>{html.escape(names)}</small></th>{cells}</tr>')
         groups.append(f"<h4>{html.escape(title)}</h4><table>{''.join(trs)}</table>")
+    import sys as _sys
+    _sys.path.insert(0, str(HERE))
+    from colour import oklch_of
+    palettes = []
+    for name, t in themes:
+        chips = "".join(
+            f'<div class="pc"><span style="background:{html.escape(v)}"></span><b>{html.escape(k[7:])}</b><code>{html.escape(v)}</code>'
+            f'<small>L {oklch_of(v)[0]:.2f} · C {oklch_of(v)[1]:.3f} · H {oklch_of(v)[2]:.0f}°</small></div>'
+            for k, v in t.items() if k.startswith("--zb-p-"))
+        palettes.append(f"<h4>{html.escape(name)}</h4><div class='pal'>{chips}</div>")
     head = "".join(f"<th>{html.escape(name)}</th>" for name, _ in themes)
     bands = "".join(
         f'<div class="band" style="background:{html.escape(_pick(t, "from-bg|from"))};color:{html.escape(_pick(t, "from-ink"))}">'
@@ -200,10 +228,13 @@ def system_fragment() -> str:
   .pair {{ width: 46px; height: 28px; border-radius: 999px; font-weight: 700; }}
   .sq {{ width: 28px; height: 28px; border: 1px solid #0002; }} .dot {{ width: 16px; height: 16px; border-radius: 50%; border: 1px solid #0002; margin-left: 6px; margin-right: 14px; }}
   .sys code {{ font-size: 11px; color: #55524d; }} .same {{ color: #9a948b; font-size: 11px; margin-left: 6px; }}
-  .head th {{ font-weight: 600; }} .ty {{ white-space: nowrap; overflow: hidden; }}
+  .head th {{ font-weight: 600; }} .lead {{ color: #55524d; max-width: 70ch; }}
+  .pal {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }}
+  .pc {{ display: grid; grid-template-columns: 34px 1fr; column-gap: 8px; align-items: center; }} .pc span {{ grid-row: span 3; width: 34px; height: 34px; border: 1px solid #0002; }} .pc b {{ font-size: 12px; }} .pc code {{ font-size: 11px; }} .pc small {{ font-size: 10px; color: #9a948b; }} .ty {{ white-space: nowrap; overflow: hidden; }}
 </style>
 <div class="sys">
   <h3>The band</h3><div class="bands">{bands}</div>
+  <h3>The palette</h3><p class="lead">Every colour the app uses. In Ember light and Ember on black each one sits on the ember's hue (about 41°) with even steps of lightness; Mono's are neutral. Good and bad are the only other hues: green at 150° and red at 18°. Roles below use only these.</p>{''.join(palettes)}
   <h3>Colours by role</h3>
   <table class="head"><tr><th></th>{head}</tr></table>
   {''.join(groups)}
