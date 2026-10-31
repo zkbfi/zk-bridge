@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { FeeControl, FeeLine, tickRows, type FeeLineProps, type FeeSlider } from "../../src/bridge/FeeLine";
+import { FeeControl, FeeLine, tickLabels, type FeeLineProps, type FeeSlider } from "../../src/bridge/FeeLine";
 
 const props = (overrides: Partial<FeeLineProps> = {}): FeeLineProps => ({
   tip: <span>0.0012 ETH</span>,
@@ -168,16 +168,43 @@ describe("one control for every fee value (owner, quote 90)", () => {
   });
 });
 
-describe("tickRows", () => {
-  it("keeps far-apart labels on one row and drops close ones to the next", () => {
-    expect(tickRows([{ label: "typical", left: 33 }, { label: "break-even", left: 16 }, { label: "high", left: 90 }])).toEqual([
-      { label: "break-even", left: 16, row: 0 },
-      { label: "typical", left: 33, row: 1 },
-      { label: "high", left: 90, row: 0 },
-    ]);
+describe("tickLabels", () => {
+  it("keeps labels on one row, the most important first, and leaves out one that would touch another", () => {
+    const placed = tickLabels(
+      [
+        { label: "recommended", left: 30 },
+        { label: "2× cost", left: 33 },
+        { label: "high cap", left: 90 },
+      ],
+      320,
+    );
+    expect(placed.shown.map((tick) => tick.label)).toEqual(["recommended", "high cap"]);
+    expect(placed.hidden).toEqual(["2× cost"]);
+  });
+
+  it("shows every label on a track wide enough for them", () => {
+    const placed = tickLabels(
+      [
+        { label: "recommended", left: 10 },
+        { label: "2× cost", left: 40 },
+        { label: "high cap", left: 90 },
+      ],
+      600,
+    );
+    expect(placed.shown.map((tick) => tick.label)).toEqual(["recommended", "2× cost", "high cap"]);
+    expect(placed.hidden).toEqual([]);
+  });
+
+  it("names a left-out label in the control's help, and keeps its mark", async () => {
+    render(<FeeControl slider={{ label: "Tip", help: "The tip.", value: 0.1, min: 0, max: 1, step: 0.01, ticks: [{ at: 0.31, label: "2× cost" }], recommended: { at: 0.3, differs: false, onReset: vi.fn() }, onChange: vi.fn() }} />);
+    expect(screen.getByText("recommended")).toBeInTheDocument();
+    expect(screen.queryByText("2× cost")).toBeNull();
+    expect(document.querySelectorAll(".zb-range-tick")).toHaveLength(2);
+    await userEvent.hover(screen.getByRole("button", { name: "About Tip" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("The tip. Also marked on the track: 2× cost.");
   });
 
   it("returns nothing for no ticks", () => {
-    expect(tickRows([])).toEqual([]);
+    expect(tickLabels([], 320)).toEqual({ shown: [], hidden: [] });
   });
 });

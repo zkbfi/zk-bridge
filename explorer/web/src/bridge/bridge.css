@@ -279,8 +279,9 @@
 .zb-range-tick[data-recommended] { background: var(--zb-accent-text, var(--zb-accent)); }
 .zb-range-knob { position: absolute; z-index: 2; top: 4px; width: 28px; height: 16px; border-radius: 999px; background: var(--zb-ink); transform: translateX(-50%); pointer-events: none; }
 .zb-range-tick { position: absolute; top: 5px; width: 2px; height: 14px; background: var(--zb-ink); pointer-events: none; }
-.zb-ticks { position: relative; min-height: 30px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
-.zb-ticks span { position: absolute; transform: translateX(-50%); text-align: center; line-height: 1.2; white-space: nowrap; }
+/* One row of tick labels: a label that would touch another is left out (its name goes into the control's help). */
+.zb-ticks { position: relative; height: 1.5em; font-size: var(--zb-step-micro); color: var(--zb-muted); }
+.zb-ticks span { position: absolute; top: 0; transform: translateX(-50%); text-align: center; line-height: 1.2; white-space: nowrap; }
 /* The ? help button, one size everywhere: an 18 px ring drawn inside a 24 px hit area, pulled into the line by negative
    block margins so it never makes its row taller, centred with its label. */
 .zb .zb-q { position: relative; flex: none; display: inline-grid; place-items: center; width: 24px; height: 24px; margin-block: -4px; vertical-align: middle; color: var(--zb-muted); font-size: var(--zb-step-micro); font-weight: 700; line-height: 1; cursor: help; }

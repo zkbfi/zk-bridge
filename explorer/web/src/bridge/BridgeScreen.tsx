@@ -317,7 +317,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
       ? []
       : [
           { label: "Delivery gas", value: dollarsText(costNormalUsd - PROOF_COST_USD) },
-          { label: "Proof", value: dollarsText(PROOF_COST_USD) },
+          // The proof cost is a set figure ($0.025), shown exactly rather than cut to the cent.
+          { label: "Proof", value: `$${formatUnits(PROOF_COST_USD, 18)}` },
           ...(gasLevel === 1 ? [] : [{ label: `${levelName(gasLevel)} gas level`, value: `+${dollarsText(costUsd - costNormalUsd)}` }]),
           { label: "Tip", value: dollarsText(tipUsd) },
           { label: "Fee", value: dollarsText(feeUsd), total: true },
@@ -488,7 +489,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
       const max = Math.min(100, Math.max(1, costPercent * 1.5, linePercent * 1.5, (autoTipPercent ?? 0) * 1.5, tipPercent * 1.25));
       return {
         label: "Tip",
-        help: "What the deliverer keeps once the delivery gas and the proof are paid, as a share of the amount. Your fee is the cost at your gas level plus this tip. Left of the 2× cost tick bots may skip it; right of the high cap line it reads as a High cap %.",
+        help: "What the deliverer keeps once the delivery gas and the proof are paid, as a share of the amount. Your fee is the cost at your gas level plus this tip. Left of the 2× cost tick bots may skip it; right of the high cap tick it reads as a High cap %.",
         value: tipPercent,
         min: 0,
         max: Number(max.toFixed(2)),
@@ -496,7 +497,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         valueText: dollarsText(tipUsd),
         ticks: [
           { at: costPercent, label: "2× cost" },
-          { at: linePercent, label: "high cap line" },
+          { at: linePercent, label: "high cap" },
         ],
         onChange: (value) => setTip(value, true),
         input: { text: plain(tipPercent), unit: "%", check: percentProblem, onText: (text) => setTip(Number(text.replace(/%$/, "")), true) },
@@ -515,7 +516,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
       max: Number(Math.max(1, (typicalPercent ?? 0.1) * 3, percent * 1.5).toFixed(2)),
       step: 0.01,
       ticks: [
-        ...(breakEvenPercent === null ? [] : [{ at: breakEvenPercent, label: "break-even for bots" }]),
+        ...(breakEvenPercent === null ? [] : [{ at: breakEvenPercent, label: "break-even" }]),
         ...(typicalPercent === null ? [] : [{ at: typicalPercent, label: "typical" }]),
       ],
       onChange: (value) => setTip(value, false),
@@ -598,7 +599,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     max: Math.max(0.05, hardCapPercent),
     step: 0.05,
     ...(auto.binding === "cap" && automatic ? { valueText: "reached" } : {}),
-    ticks: [{ at: Number(linePercent.toFixed(3)), label: "high cap line" }],
+    ticks: [{ at: Number(linePercent.toFixed(3)), label: "high cap" }],
     onChange: setCap,
     input: { text: plain(capPercent), unit: "%", check: (text) => feeCapProblem(text) ?? (Number(text.replace(/%$/, "")) > hardCapPercent ? `At most your ${hardCapText} hard cap.` : null), onText: (text) => setCap(Number(text.replace(/%$/, ""))) },
     recommended: { at: autoCapRecommended, differs: capPercent !== autoCapRecommended, onReset: () => setCap(autoCapRecommended) },
@@ -614,7 +615,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     max: Number(Math.max(5, hardCapPercent * 1.5, (spanPercent?.high ?? 0) * 1.2).toFixed(2)),
     step: 0.05,
     ...(hardOver ? { valueText: "below the fee" } : {}),
-    ticks: [{ at: capPercent, label: "automatic cap" }],
+    ticks: [{ at: capPercent, label: "auto cap" }],
     onChange: setHardCap,
     input: { text: plain(hardCapPercent), unit: "%", check: feeCapProblem, onText: (text) => setHardCap(Number(text.replace(/%$/, ""))) },
     recommended: { at: DEFAULT_HARD_CAP_PERCENT, differs: hardCapPercent !== DEFAULT_HARD_CAP_PERCENT, onReset: () => setHardCap(DEFAULT_HARD_CAP_PERCENT) },
