@@ -300,7 +300,8 @@ and the time left while in flight or the age once delivered. A row links to the 
   2 × cost floor holds the fee flat. The total cost is read live, so a higher cost raises the floor on its own; the
   $0.025 proof cost is a constant that changes in one place. Computed in integer maths with a stated rounding and
   fixed test vectors.
-- **Small transfers (owner):** when the total cost is more than 1% of the amount, the Bridge pill takes the
+- **Small transfers (owner):** when the total cost is more than the share the user is willing to pay (their cap,
+  1% by default, so the line moves when they change the cap), the Bridge pill takes the
   overridable warning state and tells the user the bridge **may not be delivered in a timely manner**; "High cap %"
   does not show there (any fee that covers the cost would read as a high share).
 - **The $0.025 proof cost (owner):** it is not a separate on-chain payment and needs no contract change. It is part
@@ -497,3 +498,4 @@ don't call it "tip too high", call it "high tip %""
 66. "or some other multiple"
 67. "these numbers seem fine. and if the total cost ends up being closer to 0.125, then the system will simply adjust to that?"
 68. "when the cost is more than 1% of the amount, then we should be informing the user that their bridge may not be delivered in a timely manner"
+69. "rather, i should say, if the cost is higher than the percent that the user is willing to pay for it. because that is the real line"
