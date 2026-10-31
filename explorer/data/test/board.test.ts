@@ -4,9 +4,9 @@ import { fromRLP } from "@msgboard/sdk";
 import { keccak256, stringToBytes, type Hex } from "viem";
 import { WebSocketServer, type WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
-import { MessageTooLargeError, createBoardFeed, createBoardPublisher, toHttpUrl, toWebSocketUrl } from "../src/msgboard/board.js";
-import { grindInWorker } from "../src/msgboard/grind.js";
-import { memoryLogger, word } from "./support/prover-builders.js";
+import { MessageTooLargeError, createBoardFeed, createBoardPublisher, toHttpUrl, toWebSocketUrl } from "../src/index.js";
+import { grindInProcess } from "./support/grind-in-process.js";
+import { memoryLogger, word } from "./support/builders.js";
 import { startFakeBoard } from "./support/fake-board.js";
 
 const closers: Array<() => Promise<void> | void> = [];
@@ -26,7 +26,7 @@ describe("publishing on the board", () => {
   it("grinds in a worker thread and posts the message with msgboard_addMessage", async () => {
     const node = await fakeNode();
     const { logger } = memoryLogger();
-    const board = createBoardPublisher({ boardUrl: node.url, maximumMessageBytes: 8192, grind: grindInWorker, grindTimeoutMilliseconds: 60_000, logger });
+    const board = createBoardPublisher({ boardUrl: node.url, maximumMessageBytes: 8192, grind: grindInProcess, grindTimeoutMilliseconds: 60_000, logger });
     const payload: Hex = `0x${"ab".repeat(823)}`;
     const posted = await board.post({ category, payload });
     const add = node.requests.find((request) => request.method === "msgboard_addMessage");
@@ -43,7 +43,7 @@ describe("publishing on the board", () => {
   it("refuses a payload over the size limit before it does any work", async () => {
     const node = await fakeNode();
     const { logger } = memoryLogger();
-    const board = createBoardPublisher({ boardUrl: node.url, maximumMessageBytes: 822, grind: grindInWorker, grindTimeoutMilliseconds: 60_000, logger });
+    const board = createBoardPublisher({ boardUrl: node.url, maximumMessageBytes: 822, grind: grindInProcess, grindTimeoutMilliseconds: 60_000, logger });
     await expect(board.post({ category, payload: `0x${"ab".repeat(823)}` })).rejects.toBeInstanceOf(MessageTooLargeError);
     expect(node.requests).toEqual([]);
   });
@@ -63,7 +63,7 @@ describe("publishing on the board", () => {
     const board = createBoardPublisher({
       boardUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
       maximumMessageBytes: 8192,
-      grind: grindInWorker,
+      grind: grindInProcess,
       grindTimeoutMilliseconds: 20_000,
       logger,
     });
@@ -176,5 +176,34 @@ describe("reading the board", () => {
     const feed = createBoardFeed({ boardUrl: node.url, reconnectDelayMilliseconds: 20, logger });
     closers.push(() => feed.close());
     expect((await feed.recent(category)).map((message) => message.data)).toEqual(["0xaa"]);
+  });
+});
+
+describe("a socket that the caller passes", () => {
+  it("is used instead of the global WebSocket, with the socket form of the address", async () => {
+    const opened: Array<{ url: string; reconnectDelayMs: number }> = [];
+    const message = { category: word(1), data: "0xbb" as Hex, hash: word(2) };
+    const feed = createBoardFeed({
+      boardUrl: "https://board.example/rpc",
+      reconnectDelayMilliseconds: 5,
+      logger: memoryLogger().logger,
+      createSocket: (url, options) => {
+        opened.push({ url, ...options });
+        return {
+          subscribeMessages: async (onMessage: (next: { category: Hex; data: Hex; hash: Hex }) => void) => {
+            onMessage(message);
+            return { unsubscribe: async () => undefined };
+          },
+          content: async () => ({ [message.category]: [message] }),
+          close: async () => undefined,
+        } as never;
+      },
+    });
+    const received: Hex[] = [];
+    await feed.subscribe(message.category, (next) => received.push(next.data));
+    expect(received).toEqual(["0xbb"]);
+    expect(await feed.recent(message.category)).toEqual([message]);
+    expect(opened).toEqual([{ url: "wss://board.example/rpc", reconnectDelayMs: 5 }]);
+    await feed.close();
   });
 });

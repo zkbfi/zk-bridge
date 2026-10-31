@@ -14,7 +14,6 @@
     "./msgboard-http": "./src/msgboard/board-http.ts"
   },
   "scripts": {
-    "abis": "node scripts/generate-abis.mjs",
     "test": "vitest run --coverage",
     "test:unit": "vitest run",
     "typecheck": "tsc --noEmit"
@@ -22,6 +21,7 @@
   "dependencies": {
     "@msgboard/sdk": "0.4.0",
     "@zkb/core": "workspace:*",
+    "@zkb/data": "workspace:*",
     "viem": "2.56.9",
     "zod": "4.6.5"
   },

@@ -2,7 +2,7 @@ import { encodeAbiParameters, encodeFunctionData, type Address, type Hex } from 
 import { encodeProofMessage, type ProofDirection, type ProofMessage } from "../../src/proof-message.js";
 import { messageBridgeAbi } from "../../src/abis/index.js";
 import type { EvidencePackage } from "../../src/prover/packages.js";
-import type { LightClientHead, LightClientReader } from "../../src/prover/proof-intake.js";
+import type { LightClientHead, LightClientReader } from "../../src/prover/light-client.js";
 import type { ProveOutcome, ProverBinary } from "../../src/prover/prover-binary.js";
 
 /** A 32 byte word with every byte set to `seed`. */

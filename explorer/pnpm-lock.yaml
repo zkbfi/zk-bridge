@@ -256,6 +256,40 @@ importers:
         specifier: 4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.6)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@24.13.6)(esbuild@0.28.2)(tsx@4.23.15))
 
+  data:
+    dependencies:
+      '@msgboard/sdk':
+        specifier: 0.4.0
+        version: 0.4.0(supports-color@7.2.0)(typescript@5.9.3)(zod@4.6.5)
+      '@zkb/core':
+        specifier: workspace:*
+        version: link:../core
+      viem:
+        specifier: 2.56.9
+        version: 2.56.9(typescript@5.9.3)(zod@4.6.5)
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.6
+        version: 24.13.6
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
+      '@vitest/coverage-v8':
+        specifier: 4.1.11
+        version: 4.1.11(vitest@4.1.11)
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.6)(@vitest/coverage-v8@4.1.11)(jsdom@30.1.1(@noble/hashes@2.4.0))(vite@8.3.1(@types/node@24.13.6)(esbuild@0.28.2)(tsx@4.23.15))
+      ws:
+        specifier: 8.21.3
+        version: 8.21.3
+
   docs:
     dependencies:
       react:
@@ -388,6 +422,9 @@ importers:
       '@zkb/core':
         specifier: workspace:*
         version: link:../core
+      '@zkb/data':
+        specifier: workspace:*
+        version: link:../data
       viem:
         specifier: 2.56.9
         version: 2.56.9(typescript@5.9.3)(zod@4.6.5)

@@ -6,7 +6,7 @@
   "engines": { "node": ">=22" },
   "packageManager": "pnpm@12.6.0",
   "scripts": {
-    "abis": "pnpm --filter @zk-bridge/shared run abis",
+    "abis": "pnpm --filter @zkb/data run abis",
     "test": "pnpm -r --if-present run test",
     "typecheck": "pnpm -r --if-present run typecheck",
     "indexer:dev": "pnpm --filter @zk-bridge/indexer run dev",

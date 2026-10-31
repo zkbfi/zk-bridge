@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BoardReadError, postJsonResponse, readBoardMessages, type BoardJsonFetcher } from "../src/msgboard/board-http.js";
-import { word } from "./support/prover-builders.js";
+import { word } from "./support/builders.js";
 
 const category = word(0x31);
 const other = word(0x32);
