@@ -29,10 +29,10 @@ contract DeliveryFeeProbe {
 /// settings flag and gas overhead, and the call gas reserve), the encoding of a `FeeDirector`, the encoding of a
 /// director followed by a call target and call data (`CALLVECTOR`), and the answer of `feeInfo`, one JSON object per
 /// line. Run from the repository root:
-///   forge script explorer/shared/vectors/GenerateDeliveryFeeVectors.s.sol --tc GenerateDeliveryFeeVectors --root . > /tmp/vectors.log 2>&1
-///   grep '^  VECTOR ' /tmp/vectors.log | sed 's/^  VECTOR //' > explorer/shared/test/fixtures/delivery-fee-vectors.jsonl
-///   grep '^  CALLVECTOR ' /tmp/vectors.log | sed 's/^  CALLVECTOR //' > explorer/shared/test/fixtures/delivery-call-vectors.jsonl
-///   grep '^  CONSTANTS ' /tmp/vectors.log | sed 's/^  CONSTANTS //' > explorer/shared/test/fixtures/delivery-router-constants.json
+///   forge script explorer/core/vectors/GenerateDeliveryFeeVectors.s.sol --tc GenerateDeliveryFeeVectors --root . > /tmp/vectors.log 2>&1
+///   grep '^  VECTOR ' /tmp/vectors.log | sed 's/^  VECTOR //' > explorer/core/test/fixtures/delivery-fee-vectors.jsonl
+///   grep '^  CALLVECTOR ' /tmp/vectors.log | sed 's/^  CALLVECTOR //' > explorer/core/test/fixtures/delivery-call-vectors.jsonl
+///   grep '^  CONSTANTS ' /tmp/vectors.log | sed 's/^  CONSTANTS //' > explorer/core/test/fixtures/delivery-router-constants.json
 /// (Add `--skip <test contract>` flags to the `forge script` command when a test file does not compile.)
 /// The test in explorer/shared/test/delivery-terms.test.ts reads the saved lines, so the TypeScript copy and the router
 /// cannot drift. A line with `"reverts":true` is a case where the router reverts on an overflow.

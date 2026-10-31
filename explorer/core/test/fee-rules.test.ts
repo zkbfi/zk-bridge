@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import vectors from "./fixtures/fee-rules-vectors.json" with { type: "json" };
+import vectors from "../vectors/fee-rules-vectors.json" with { type: "json" };
 import {
   capWarns,
   clampAutoCap,
