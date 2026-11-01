@@ -6,6 +6,7 @@
  * registry and map its `Pair` to {@link PairConfig}.
  */
 import { getAddress, isAddress, type Address } from 'viem'
+import { nativeSymbolOfChain } from './chain-metadata'
 import type { ChainConfig, ChainSide, PairConfig } from '../model/types'
 
 /** The default pair. */
@@ -15,13 +16,13 @@ export const DEFAULT_PAIR_ID = 'eth-pls'
 const KNOWN_PAIRS: Readonly<Record<string, { label: string; first: ChainDefinition; second: ChainDefinition }>> = {
   'eth-pls': {
     label: 'Ethereum and PulseChain',
-    first: { name: 'Ethereum', chainId: 1, nativeSymbol: 'ETH' },
-    second: { name: 'PulseChain', chainId: 369, nativeSymbol: 'PLS' },
+    first: { name: 'Ethereum', chainId: 1, nativeSymbol: nativeSymbolOfChain(1) ?? 'ETH' },
+    second: { name: 'PulseChain', chainId: 369, nativeSymbol: nativeSymbolOfChain(369) ?? 'PLS' },
   },
   'sepolia-pls943': {
     label: 'Sepolia and PulseChain testnet v4',
-    first: { name: 'Sepolia', chainId: 11155111, nativeSymbol: 'ETH' },
-    second: { name: 'PulseChain testnet v4', chainId: 943, nativeSymbol: 'tPLS' },
+    first: { name: 'Sepolia', chainId: 11155111, nativeSymbol: nativeSymbolOfChain(11155111) ?? 'SepETH' },
+    second: { name: 'PulseChain testnet v4', chainId: 943, nativeSymbol: nativeSymbolOfChain(943) ?? 'v4tPLS' },
   },
 }
 

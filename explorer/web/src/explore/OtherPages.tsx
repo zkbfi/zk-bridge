@@ -4,6 +4,7 @@
  * hover.
  */
 import { useQuery } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import type { Address } from "viem";
 import type { ChainConfig, PairConfig, TokenInfo } from "@terminal/model/types";
 import { formatRoute, type ExplorePage } from "../app/route";
@@ -11,14 +12,16 @@ import { useAudit, useDeliveryCost, useFeed, useTokens } from "../app/queries";
 import { useServices } from "../app/services";
 import { relativeTime } from "../bridge/activity-model";
 import { amountText, chainsFor, nativeTokensOf } from "../bridge/bridge-model";
-import { PROOF_COST_USD as PROOF_COST } from "@zk-bridge/shared";
+import { PROOF_COST_USD as PROOF_COST, WAD } from "@zk-bridge/shared";
+import { usePrices } from "../bridge/use-prices";
+import { dollarsText } from "../bridge/number";
 
 const PROOF_COST_USD = Number(PROOF_COST) / 1e18;
 import { ExternalLink } from "../bridge/icons";
 import { iconSubjectOf } from "../bridge/image-source";
 import { Num } from "../bridge/Num";
 import { TokenIcon } from "../bridge/TokenIcon";
-import { explorerUrl, useChainReader } from "./chain-reader";
+import { explorerLinksOf, explorerUrl, useChainReader } from "./chain-reader";
 import { chainNamer } from "./ExploreScreen";
 import { statusWord } from "./explore-model";
 import { KV, RouteIcons, shortHex, XBand, XGroup, XRow } from "./parts";
@@ -36,6 +39,27 @@ const External = ({ url, label }: { readonly url: string | undefined; readonly l
     </a>
   );
 
+/** "2026-09-23 08:13:36 UTC" for a unix time. */
+const utcText = (seconds: number): string => `${new Date(seconds * 1000).toISOString().slice(0, 19).replace("T", " ")} UTC`;
+
+/**
+ * A line of the proof page: the value, optionally linking onward inside Explore (`internal`) and out to each of the
+ * chain's block explorers (`outside`, one small link per explorer, named for it).
+ */
+const Row = ({ k, children, internal, outside = [], what = "" }: { readonly k: string; readonly children: ReactNode; readonly internal?: string; readonly outside?: readonly { readonly name: string; readonly url: string }[]; readonly what?: string }) => (
+  <div className="zb-kv zb-xkv">
+    <span className="zb-k">{k}</span>
+    <span className="zb-xv">
+      {internal === undefined ? children : <a href={internal}>{children}</a>}
+      {outside.map((link) => (
+        <a key={link.url} href={link.url} target="_blank" rel="noreferrer" aria-label={`${what} on ${link.name}`} title={link.name}>
+          <ExternalLink />
+        </a>
+      ))}
+    </span>
+  </div>
+);
+
 const useProofs = () => {
   const { explore: source } = useServices();
   return useQuery({ queryKey: ["explore", "proofs"], queryFn: () => source.proofs() }).data ?? [];
@@ -50,6 +74,9 @@ export const ProofPage = ({ chainId, number }: { readonly chainId: number; reado
   const holder = chainOf(pair, chainId);
   const tracked = otherOf(pair, chainId);
   const reader = useChainReader()(chainId);
+  const { explore: source } = useServices();
+  const clock = useQuery({ queryKey: ["explore", "beacon-clocks"], queryFn: () => source.beaconClocks() }).data?.find((entry) => entry.trackedChainId === tracked.chainId);
+  const prices = usePrices([]).data;
   const verifier = useQuery({ queryKey: ["verifier", chainId], enabled: reader !== null, queryFn: () => reader!.verifier(holder.contracts.lightClient) }).data;
   const label = (
     <>
@@ -59,22 +86,43 @@ export const ProofPage = ({ chainId, number }: { readonly chainId: number; reado
   if (proof === undefined) return <XBand label={label} big={`Proof #${number}`} sub={proofs.length === 0 ? "Reading…" : "The indexer has no such proof."} />;
   const previous = proofs.find((row) => row.chainId === chainId && row.number === number - 1);
   const next = proofs.find((row) => row.chainId === chainId && row.number === number + 1);
+  const slotTime = (slot: bigint): number | null => (clock === undefined ? null : clock.genesisTime + Number(slot) * clock.secondsPerSlot);
+  const toTime = slotTime(proof.slot);
+  const price = prices?.get(`native:${chainId}`) ?? null;
+  const costUsd = price === null ? null : (proof.costWei * price.usdE18) / WAD;
+  const slotLink = (slot: bigint) => <a href={explore({ kind: "slot", id: slot.toString() })}>{slot.toLocaleString("en-US")}</a>;
   return (
     <>
       <XBand label={label} big={`Proof #${number}`} sub={`slot ${proof.slot.toLocaleString("en-US")}`} />
       <div className="zb-col zb-xpage">
-        <KV k="Finalized slot" href={explore({ kind: "slot", id: proof.slot.toString() })}>{proof.slot.toLocaleString("en-US")}</KV>
+        <XGroup title="On chain" />
+        <Row k="Slots">{previous === undefined ? "first update" : slotLink(previous.slot)} → {slotLink(proof.slot)}</Row>
+        <Row k="Slot time">{toTime === null ? <Missing why="The indexer has not read the beacon chain's clock" /> : `${utcText(toTime)}`}</Row>
+        <Row k="Light client" internal={explore({ kind: "contract", chainId, id: holder.contracts.lightClient })} outside={explorerLinksOf(chainId, "address", holder.contracts.lightClient)} what="light client">
+          <span className="zb-mono">{shortHex(holder.contracts.lightClient)}</span>
+        </Row>
+        <Row k="Transaction" internal={explore({ kind: "tx", chainId, id: proof.transactionHash })} outside={explorerLinksOf(chainId, "tx", proof.transactionHash)} what="transaction">
+          <span className="zb-mono">{shortHex(proof.transactionHash)}</span>
+        </Row>
+        <Row k="Block" internal={explore({ kind: "block", chainId, id: proof.blockNumber.toString() })} outside={explorerLinksOf(chainId, "block", proof.blockNumber.toString())} what="block">
+          {proof.blockNumber.toLocaleString("en-US")}
+        </Row>
+        <Row k="Time">{utcText(proof.timestamp)} · {relativeTime(proof.timestamp, Math.floor(Date.now() / 1000))}</Row>
+        <Row k="Sender" internal={explore({ kind: "address", id: proof.poster })} outside={explorerLinksOf(chainId, "address", proof.poster)} what="sender">
+          <span className="zb-mono">{shortHex(proof.poster)}</span>
+        </Row>
+        <Row k="Gas used">{proof.gasUsed.toLocaleString("en-US")}</Row>
+        <Row k="Cost">
+          <Num text={amountText(proof.costWei, 18)} /> {holder.nativeSymbol}
+          {costUsd === null ? null : <> · {dollarsText(costUsd)}</>}
+        </Row>
+        <XGroup title="The proof" />
         <KV k="Execution block" href={explore({ kind: "block", chainId: tracked.chainId, id: proof.executionBlockNumber.toString() })}>{proof.executionBlockNumber.toLocaleString("en-US")}</KV>
         <KV k="Sync committee">period {(proof.slot / SLOTS_PER_PERIOD).toLocaleString("en-US")} · <Missing why="The indexer does not record which of the 512 seats signed" /> signed</KV>
         <KV k="Header root"><span className="zb-mono">{shortHex(proof.headerRoot)}</span></KV>
-        <KV k="Posted in" href={explore({ kind: "tx", chainId, id: proof.transactionHash })}><span className="zb-mono">{shortHex(proof.transactionHash)}</span></KV>
-        <KV k="Posted by" href={explore({ kind: "address", id: proof.poster })}><span className="zb-mono">{shortHex(proof.poster)}</span></KV>
         {verifier === undefined ? <KV k="Verifier"><Missing why="Read from the light client on the chain" /></KV> : <KV k="Verifier" href={explore({ kind: "contract", chainId, id: verifier })}><span className="zb-mono">{shortHex(verifier)}</span></KV>}
         <KV k="Proving time"><Missing why="The prover does not publish its timings" /></KV>
-        <KV k="Gas">{proof.gasUsed.toLocaleString("en-US")}</KV>
-        <KV k="Cost"><Num text={amountText(proof.costWei, 18)} /> {holder.nativeSymbol}</KV>
-        <KV k="Proof generation">${PROOF_COST_USD} (assumed)</KV>
-        <KV k="Posted">{relativeTime(proof.timestamp, Math.floor(Date.now() / 1000))}</KV>
+        <KV k="Proof generation">${PROOF_COST} (assumed)</KV>
         <KV k="Previous" {...(previous === undefined ? {} : { href: explore({ kind: "proof", chainId, id: String(previous.number) }) })}>{previous === undefined ? "none" : `Proof #${previous.number}`}</KV>
         <KV k="Next" {...(next === undefined ? {} : { href: explore({ kind: "proof", chainId, id: String(next.number) }) })}>{next === undefined ? "waiting" : `Proof #${next.number}`}</KV>
         <XGroup title="Transfers it proved" />
