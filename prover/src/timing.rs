@@ -110,6 +110,32 @@ impl HostInfo {
     }
 }
 
+/// The device UUID and the MIG mode of the first GPU, from `nvidia-smi --query-gpu=uuid,mig.mode.current`.
+/// A MIG slice has a UUID that starts with `MIG-`. Either part is `None` when the tool does not say (a card without
+/// MIG support answers `[N/A]` for the mode).
+pub fn query_gpu_mig() -> (Option<String>, Option<String>) {
+    let output = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=uuid,mig.mode.current", "--format=csv,noheader"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success());
+    output.map_or((None, None), |output| {
+        parse_gpu_uuid_and_mig(&String::from_utf8_lossy(&output.stdout))
+    })
+}
+
+/// Reads the first line of `uuid, mig.mode.current` output.
+pub fn parse_gpu_uuid_and_mig(output: &str) -> (Option<String>, Option<String>) {
+    let Some(line) = output.lines().map(str::trim).find(|line| !line.is_empty()) else {
+        return (None, None);
+    };
+    let mut parts = line.splitn(2, ',').map(|part| clean_name(part.trim()));
+    let known =
+        |part: Option<String>| part.filter(|text| !text.is_empty() && !text.starts_with('['));
+    (known(parts.next()), known(parts.next()))
+}
+
 /// The first line of the `nvidia-smi` answer (one line per GPU; the worker uses the first).
 pub fn parse_gpu_name(output: &str) -> Option<String> {
     let line = output

@@ -15,8 +15,12 @@
 //! - `GET /ping`: 204 while the SP1 setup runs, then 200 with `{"status":"ready"}`. After a proof has failed inside the
 //!   proving client it answers 503, because the GPU server child process may be dead and does not restart. RunPod then
 //!   removes the worker and starts a new one.
+//!   A worker that refused its host (see [`decide_host`]) answers 503 from the start and never loads the proving client.
 //! - `POST /prove`: the body is a [`ProveRequestBody`]. The answer is a [`ProveResponseBody`] with status 200, or
 //!   `{"error": "..."}` with the status that [`Worker::handle`] documents.
+//!
+//! A worker that starts on a MIG slice, or on a host with too little memory, refuses to work: see [`HostReadings`].
+//! It answers `/ping` and `/prove` with 503 for good, so RunPod replaces it and the client retries elsewhere.
 //!
 //! The worker holds no secret and does no authentication: the platform proxy checks the API key before it forwards a
 //! request. It proves one statement at a time, because one GPU runs one proof. A second request waits for the first.
@@ -134,6 +138,8 @@ pub struct Worker {
     one_proof_at_a_time: Mutex<()>,
     /// Set when the proving client failed a proof. It never resets: only a new worker is known to be sound.
     proving_client_failed: AtomicBool,
+    /// Set when the worker refused its host at the start (MIG slice, too little memory). It never resets.
+    refusal: OnceLock<HostRefusal>,
     /// The host description for the timings, detected when the worker becomes ready.
     host: OnceLock<HostInfo>,
     logger: Logger,
@@ -146,9 +152,15 @@ impl Worker {
             prover: OnceLock::new(),
             one_proof_at_a_time: Mutex::new(()),
             proving_client_failed: AtomicBool::new(false),
+            refusal: OnceLock::new(),
             host: OnceLock::new(),
             logger,
         }
+    }
+
+    /// Marks the worker as one that refuses its host: `/ping` and `/prove` answer 503 from now on.
+    pub fn refuse_host(&self, refusal: HostRefusal) {
+        let _ = self.refusal.set(refusal);
     }
 
     /// Gives the worker its proving client. From now on `/ping` answers 200 and `/prove` proves.
@@ -162,7 +174,8 @@ impl Worker {
     ///
     /// | Request | Answer |
     /// |---|---|
-    /// | `GET /ping` | 204 while starting, 200 when ready, 503 after the proving client failed a proof |
+    /// | `GET /ping` | 204 while starting, 200 when ready, 503 after the proving client failed a proof or when the host was refused |
+    /// | `POST /prove`, host refused | 503 |
     /// | `POST /prove`, worker not ready | 503 |
     /// | `POST /prove`, body is not a valid request | 400 |
     /// | `POST /prove`, key not held, or held for the other statement kind | 400 |
@@ -182,6 +195,9 @@ impl Worker {
     }
 
     fn ping(&self) -> Answer {
+        if let Some(refusal) = self.refusal.get() {
+            return Answer::error(503, refusal.message());
+        }
         if self.proving_client_failed.load(Ordering::SeqCst) {
             return Answer::error(
                 503,
@@ -196,6 +212,9 @@ impl Worker {
 
     fn prove(&self, body: &[u8]) -> Answer {
         let received = Instant::now();
+        if let Some(refusal) = self.refusal.get() {
+            return Answer::error(503, refusal.message());
+        }
         let Some(prover) = self.prover.get() else {
             return Answer::error(503, "the worker is still starting");
         };
@@ -332,6 +351,147 @@ pub fn serve(worker: Arc<Worker>, server: &tiny_http::Server) {
     }
 }
 
+/// The default floor for the host memory, in GiB. The CPU run of the Groth16 step peaked near 56 GiB, the RTX 4090 and
+/// 5090 hosts had 128 GiB or more, and a MIG 1g.24gb slice had 28.87 GiB, which ended in an out-of-memory kill.
+pub const DEFAULT_MIN_HOST_MEMORY_GIB: u64 = 48;
+
+const GIB: u64 = 1024 * 1024 * 1024;
+
+/// What the worker could read about its host at the start. Every part may be missing; a missing part never refuses.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostReadings {
+    /// The GPU name from `nvidia-smi`.
+    pub gpu_name: Option<String>,
+    /// The device UUID. A MIG slice has one that starts with `MIG-`.
+    pub gpu_uuid: Option<String>,
+    /// `mig.mode.current` of the first GPU (`Enabled` or `Disabled`).
+    pub mig_mode: Option<String>,
+    /// The host memory available to the container in bytes: the smaller of the cgroup limit and `MemTotal`.
+    pub host_memory_bytes: Option<u64>,
+}
+
+impl HostReadings {
+    /// Asks the machine (`nvidia-smi`, cgroup files, `/proc/meminfo`).
+    pub fn detect() -> Self {
+        let (gpu_uuid, mig_mode) = crate::timing::query_gpu_mig();
+        let read = |path: &str| std::fs::read_to_string(path).ok();
+        let cgroup_limit = read("/sys/fs/cgroup/memory.max")
+            .or_else(|| read("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
+            .and_then(|text| parse_cgroup_limit(&text));
+        let total = read("/proc/meminfo").and_then(|text| parse_mem_total(&text));
+        Self {
+            gpu_name: HostInfo::detect().gpu,
+            gpu_uuid,
+            mig_mode,
+            host_memory_bytes: match (cgroup_limit, total) {
+                (Some(limit), Some(total)) => Some(limit.min(total)),
+                (limit, total) => limit.or(total),
+            },
+        }
+    }
+
+    /// Whether the GPU is a MIG slice: "MIG" as a word in its name, a UUID that starts with `MIG-`, or MIG mode on.
+    pub fn is_mig(&self) -> bool {
+        let named = self.gpu_name.as_deref().is_some_and(|name| {
+            name.split(|character: char| !character.is_ascii_alphanumeric())
+                .any(|word| word.eq_ignore_ascii_case("mig"))
+        });
+        let uuid = self
+            .gpu_uuid
+            .as_deref()
+            .is_some_and(|uuid| uuid.starts_with("MIG-"));
+        let mode = self
+            .mig_mode
+            .as_deref()
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("enabled"));
+        named || uuid || mode
+    }
+
+    /// The memory in GiB with two decimals for the log, or `unknown`.
+    pub fn memory_text(&self) -> String {
+        #[allow(clippy::cast_precision_loss)]
+        self.host_memory_bytes.map_or_else(
+            || "unknown".to_string(),
+            |bytes| format!("{:.2}", bytes as f64 / GIB as f64),
+        )
+    }
+}
+
+/// Why a worker refuses its host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefusalReason {
+    /// The GPU is a MIG slice.
+    Mig,
+    /// The host memory is below the floor.
+    HostMemory,
+}
+
+impl RefusalReason {
+    /// The word in the log line.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Mig => "mig",
+            Self::HostMemory => "host_memory",
+        }
+    }
+}
+
+/// The decision to refuse, with what the answers say.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostRefusal {
+    /// Why.
+    pub reason: RefusalReason,
+    message: String,
+}
+
+impl HostRefusal {
+    /// The text for the `error` field of a 503 answer.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+/// Decides whether the host is fit for a proof. `None` means go on. A MIG slice is refused first, then low memory.
+/// A reading that is missing never refuses: a host without `nvidia-smi` or cgroup files is not known to be bad.
+pub fn decide_host(readings: &HostReadings, min_host_memory_gib: u64) -> Option<HostRefusal> {
+    let gpu = readings.gpu_name.as_deref().unwrap_or("unknown");
+    if readings.is_mig() {
+        return Some(HostRefusal {
+            reason: RefusalReason::Mig,
+            message: format!(
+                "this worker runs on a MIG GPU slice ({gpu}); its host memory share is too small for the Groth16 step, so it refuses to prove"
+            ),
+        });
+    }
+    let bytes = readings.host_memory_bytes?;
+    if min_host_memory_gib > 0 && bytes < min_host_memory_gib.saturating_mul(GIB) {
+        return Some(HostRefusal {
+            reason: RefusalReason::HostMemory,
+            message: format!(
+                "this worker has {} GiB of host memory, below the floor of {min_host_memory_gib} GiB, so it refuses to prove",
+                readings.memory_text()
+            ),
+        });
+    }
+    None
+}
+
+/// The memory limit in a cgroup file: a number of bytes. `max` (cgroup v2) and values of 2^60 or more (cgroup v1
+/// writes a huge number for "no limit") mean no limit, so `None`.
+pub fn parse_cgroup_limit(text: &str) -> Option<u64> {
+    let value: u64 = text.trim().parse().ok()?;
+    (value < (1 << 60)).then_some(value)
+}
+
+/// `MemTotal` of `/proc/meminfo` in bytes.
+pub fn parse_mem_total(text: &str) -> Option<u64> {
+    let rest = text
+        .lines()
+        .find_map(|line| line.strip_prefix("MemTotal:"))?;
+    let kib: u64 = rest.trim().trim_end_matches("kB").trim().parse().ok()?;
+    kib.checked_mul(1024)
+}
+
 /// The settings of the binary, read from the environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkerSettings {
@@ -343,6 +503,9 @@ pub struct WorkerSettings {
     pub light_client_elf: PathBuf,
     /// The fork observation ELF (`ZK_BRIDGE_WORKER_OBSERVATION_ELF`).
     pub observation_elf: PathBuf,
+    /// The least host memory in GiB that the worker accepts (`ZK_BRIDGE_WORKER_MIN_HOST_MEMORY_GIB`, default
+    /// [`DEFAULT_MIN_HOST_MEMORY_GIB`]). 0 switches the memory check off.
+    pub min_host_memory_gib: u64,
 }
 
 impl WorkerSettings {
@@ -372,6 +535,15 @@ impl WorkerSettings {
             health_port: port_of("PORT_HEALTH", Some(port))?,
             light_client_elf: required_path("ZK_BRIDGE_WORKER_LIGHT_CLIENT_ELF")?,
             observation_elf: required_path("ZK_BRIDGE_WORKER_OBSERVATION_ELF")?,
+            min_host_memory_gib: match lookup("ZK_BRIDGE_WORKER_MIN_HOST_MEMORY_GIB") {
+                Some(text) => text.trim().parse().map_err(|_| {
+                    Error::Config(
+                        "ZK_BRIDGE_WORKER_MIN_HOST_MEMORY_GIB: expected a whole number of GiB"
+                            .into(),
+                    )
+                })?,
+                None => DEFAULT_MIN_HOST_MEMORY_GIB,
+            },
         })
     }
 }
@@ -399,6 +571,24 @@ pub fn run(
         let health_server = bind(settings.health_port)?;
         let health_worker = Arc::clone(&worker);
         std::thread::spawn(move || serve(health_worker, &health_server));
+    }
+    let readings = HostReadings::detect();
+    if let Some(refusal) = decide_host(&readings, settings.min_host_memory_gib) {
+        logger.error(
+            "worker_refused",
+            &[
+                ("reason", refusal.reason.label().to_string()),
+                (
+                    "gpu",
+                    format!("\"{}\"", readings.gpu_name.as_deref().unwrap_or("unknown")),
+                ),
+                ("host_memory_gib", readings.memory_text()),
+            ],
+        );
+        worker.refuse_host(refusal);
+        logger.info("worker_listening", &[("port", settings.port.to_string())]);
+        serve(worker, &server);
+        return Ok(());
     }
     let loading_worker = Arc::clone(&worker);
     let loading_settings = settings.clone();
@@ -589,6 +779,125 @@ mod tests {
         );
         assert_eq!(answer.status, 400);
         assert_eq!(worker.handle("GET", "/ping", b"").status, 200);
+    }
+
+    fn readings(name: &str, uuid: &str, mode: &str, gib: f64) -> HostReadings {
+        let text = |value: &str| (!value.is_empty()).then(|| value.to_string());
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        HostReadings {
+            gpu_name: text(name),
+            gpu_uuid: text(uuid),
+            mig_mode: text(mode),
+            host_memory_bytes: Some((gib * GIB as f64) as u64),
+        }
+    }
+
+    /// Claim: a MIG slice is refused by its name, its UUID or its MIG mode; low memory is refused; a whole GPU with
+    /// enough memory and a host without readings are accepted.
+    /// Why it matters: a MIG 1g.24gb slice (28.87 GiB) ran out of memory in the Groth16 step and the worker kept
+    /// answering `/ping` with 200 while it failed every job.
+    #[test]
+    fn host_decision_follows_the_readings() {
+        let by_name = readings(
+            "NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb",
+            "",
+            "",
+            200.0,
+        );
+        assert_eq!(
+            decide_host(&by_name, 48).map(|r| r.reason),
+            Some(RefusalReason::Mig)
+        );
+        let by_uuid = readings("NVIDIA RTX PRO 6000", "MIG-1b2c3d4e", "[N/A]", 200.0);
+        assert_eq!(
+            decide_host(&by_uuid, 48).map(|r| r.reason),
+            Some(RefusalReason::Mig)
+        );
+        let by_mode = readings("NVIDIA RTX PRO 6000", "GPU-abc", "Enabled", 200.0);
+        assert_eq!(
+            decide_host(&by_mode, 48).map(|r| r.reason),
+            Some(RefusalReason::Mig)
+        );
+        let low = readings("NVIDIA GeForce RTX 4090", "GPU-abc", "Disabled", 28.87);
+        let refusal = decide_host(&low, 48).expect("refused");
+        assert_eq!(refusal.reason, RefusalReason::HostMemory);
+        assert!(refusal.message().contains("28.87"));
+        let good = readings("NVIDIA GeForce RTX 4090", "GPU-abc", "Disabled", 128.0);
+        assert_eq!(decide_host(&good, 48), None);
+        assert_eq!(decide_host(&low, 0), None, "floor 0 switches the check off");
+        assert_eq!(decide_host(&low, 16), None, "the floor is configurable");
+        assert_eq!(decide_host(&HostReadings::default(), 48), None);
+        let gigabyte = readings("NVIDIA GeForce RTX 4090", "", "", 128.0);
+        assert!(!gigabyte.is_mig(), "no word MIG in the name");
+        let migraine = readings("Acme MIGHTY 9000", "", "", 128.0);
+        assert!(!migraine.is_mig(), "MIG must be a whole word");
+    }
+
+    /// Claim: the memory files are read as the container sees them.
+    #[test]
+    fn memory_readings_are_parsed() {
+        assert_eq!(parse_cgroup_limit("max\n"), None);
+        assert_eq!(parse_cgroup_limit("9223372036854771712\n"), None);
+        assert_eq!(parse_cgroup_limit("31002828800\n"), Some(31_002_828_800));
+        assert_eq!(
+            parse_mem_total("MemTotal:       32768 kB\nMemFree: 1 kB\n"),
+            Some(32_768 * 1024)
+        );
+        assert_eq!(parse_mem_total("nothing"), None);
+        assert_eq!(
+            crate::timing::parse_gpu_uuid_and_mig("MIG-abc-123, [N/A]\n"),
+            (Some("MIG-abc-123".into()), None)
+        );
+        assert_eq!(
+            crate::timing::parse_gpu_uuid_and_mig("GPU-abc, Disabled\n"),
+            (Some("GPU-abc".into()), Some("Disabled".into()))
+        );
+    }
+
+    /// Claim: a worker that refused its host answers 503 on `/ping` and on `/prove`, with a JSON error, even when a
+    /// proving client is set, and the log line carries no secret.
+    /// Why it matters: RunPod removes a worker that answers `/ping` with anything but 200 or 204, and the client
+    /// retries a 503 on another worker.
+    #[test]
+    fn a_refused_worker_answers_503() {
+        let (logger, _lines) = Logger::in_memory();
+        let worker = Worker::new(logger);
+        let refusal = decide_host(
+            &readings("NVIDIA A MIG 1g.24gb", "MIG-x", "Enabled", 28.0),
+            48,
+        )
+        .expect("refused");
+        worker.refuse_host(refusal);
+        worker.set_ready(Box::new(Arc::new(StubProver::new(Outcome::Proof))));
+        let ping = worker.handle("GET", "/ping", b"");
+        assert_eq!(ping.status, 503);
+        assert!(error_of(&ping).contains("MIG"));
+        let input = light_client_input(400);
+        let prove = worker.handle(
+            "POST",
+            "/prove",
+            &request_body(LIGHT_CLIENT_KEY, "lightClient", &input),
+        );
+        assert_eq!(prove.status, 503);
+        assert!(error_of(&prove).contains("refuses to prove"));
+        assert_eq!(worker.handle("GET", "/ping", b"").status, 503);
+    }
+
+    /// Claim: the memory floor comes from the environment, and a bad value is an error.
+    #[test]
+    fn the_memory_floor_is_a_setting() {
+        let with = |floor: Option<&'static str>| {
+            WorkerSettings::from_lookup(&move |name: &str| match name {
+                "ZK_BRIDGE_WORKER_LIGHT_CLIENT_ELF" | "ZK_BRIDGE_WORKER_OBSERVATION_ELF" => {
+                    Some("/x.elf".to_string())
+                }
+                "ZK_BRIDGE_WORKER_MIN_HOST_MEMORY_GIB" => floor.map(str::to_string),
+                _ => None,
+            })
+        };
+        assert_eq!(with(None).unwrap().min_host_memory_gib, 48);
+        assert_eq!(with(Some("64")).unwrap().min_host_memory_gib, 64);
+        assert!(with(Some("lots")).is_err());
     }
 
     /// Claim: a proof job before the setup ends gets 503, which the client retries.
