@@ -162,6 +162,14 @@ describe("decideProof", () => {
       expect(decide({ facts: facts(head, true), nowSeconds: at(nowSlot), finalizedSlot: head + 32 })).toMatchObject({ due: false, why: "nothing-due" });
     });
 
+    it("waits while the source signs in 1369 and finality is still in 1368, which the prover refuses (2026-11-01 03:47)", () => {
+      // The planner calls this needs-stepping, but the prover and the contract need a finalized header inside the new
+      // period: "the signature period is after the stored head period but the finalized header does not cross into it".
+      const nowSlot = nextPeriod + 20;
+      const decision = decide({ facts: facts(head, false), nowSeconds: at(nowSlot), finalizedSlot: nextPeriod - 40, history: { kind: "serves" } });
+      expect(decision).toMatchObject({ due: false, why: "wait-for-finality" });
+    });
+
     it("is due once when the source crosses into period 1369, then not again in it", () => {
       const nowSlot = nextPeriod + 200;
       const crossed = decide({ facts: facts(head, false), nowSeconds: at(nowSlot), finalizedSlot: nextPeriod + 100, history: { kind: "serves" } });

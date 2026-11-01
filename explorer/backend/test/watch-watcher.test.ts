@@ -211,28 +211,22 @@ describe("the direction watcher, on finality", () => {
   });
 
   it("starts at most one keep-alive per period of finality unless the head ages past the keep-alive age", async () => {
-    // The source signs in period 1001, finality is still in 1000, the head in 1000 holds only its own committee:
-    // handoff steps are due. The light-client reading lags after the job, so the planner would ask again.
+    // Finality has crossed into period 1001, the head in 1000 holds only its own committee: a handoff is due. The
+    // light-client reading lags after the job, so the planner would ask again at the next finality in 1001.
     const head = 1000 * PERIOD + 8000;
     const run = setup({ facts: facts(head, false) });
-    const first = observation(1001 * PERIOD - 60);
+    const first = observation(1001 * PERIOD + 4);
     arrive(first);
     run.watcher.observe(first);
     await run.watcher.settled();
     expect(run.submitted).toMatchObject([{ plannedHandoff: true }]);
     run.state.active = null;
-    const second = observation(1001 * PERIOD - 28);
+    const second = observation(1001 * PERIOD + 36);
     arrive(second);
     run.watcher.observe(second);
     await run.watcher.settled();
     expect(run.submitted).toHaveLength(1);
     expect(run.named("proof_not_due").at(-1)).toMatchObject({ level: "info", why: "keep-alive-this-period" });
-    // Finality crosses into period 1001: a new period, so the keep-alive may go again.
-    const crossed = observation(1001 * PERIOD + 4);
-    arrive(crossed);
-    run.watcher.observe(crossed);
-    await run.watcher.settled();
-    expect(run.submitted).toHaveLength(2);
     // In the same period again, but the head has aged past the keep-alive age: allowed.
     run.state.active = null;
     run.state.facts = facts(1001 * PERIOD + 4, false);
@@ -240,7 +234,7 @@ describe("the direction watcher, on finality", () => {
     arrive(aged);
     run.watcher.observe(aged);
     await run.watcher.settled();
-    expect(run.submitted).toHaveLength(3);
+    expect(run.submitted).toHaveLength(2);
   });
 
   it("warns about a stranded light client and starts nothing", async () => {

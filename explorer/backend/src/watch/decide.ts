@@ -117,7 +117,9 @@ export function decideProof(input: DecisionInput): ProofDecision {
   }
   const assessment = assess({ facts, source: { finalizedSlot }, history: input.history, policy, nowSeconds });
   if (assessment.verdict === "stranded") return { due: false, why: "stranded", detail: assessment.reason };
-  if (assessment.waitForFinality && assessment.verdict !== "needs-stepping") return { due: false, why: "wait-for-finality", detail: `the source signs in period ${assessment.currentPeriod} and finality is still in period ${assessment.finalizedPeriod}` };
+  // Stepping waits too: the prover and the contract refuse an update signed in a period the finalized header does not
+  // reach ("the finalized header does not cross into it"), and finality crosses about two epochs after the border.
+  if (assessment.waitForFinality) return { due: false, why: "wait-for-finality", detail: `the source signs in period ${assessment.currentPeriod} and finality is still in period ${assessment.finalizedPeriod}` };
   const ready = input.messages.filter((message) => message.slot > covered && message.slot <= finalizedSlot);
   if (ready.length > 0) {
     return { due: true, why: "message", messageIds: ready.map((message) => message.messageId), detail: `${ready.length} waiting ${ready.length === 1 ? "message is" : "messages are"} final at slot ${finalizedSlot}` };
