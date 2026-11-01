@@ -50,7 +50,7 @@ describe("selectDelivery", () => {
   });
 
   it("needs no price for a percentage tip, and leaves the cost lines out when no price is known", () => {
-    const selection = available({ tokenValueInWei: null, senderPrice: null, token: { symbol: "zkbUSDC", decimals: 6 } });
+    const selection = available({ tokenValueInWei: null, senderPrice: null, token: { symbol: "zUSDC", decimals: 6 } });
     expect(feeModeOf(selection.director.settings)).toBe("share");
     expect(selection.description.breakdown).toEqual([]);
   });
@@ -80,7 +80,7 @@ describe("selectDelivery", () => {
   it("works for any token: the price of the sender is folded into the multiplier", () => {
     // 3,000 USDC (6 decimals) for one native coin: one wei is worth 3,000 * 10^6 / 10^18 base units.
     const price = { numerator: 3_000n * 10n ** 6n, denominator: 10n ** 18n };
-    const selection = available({ mode: "gas-multiplier", token: { symbol: "zkbUSDC", decimals: 6 }, tokenValueInWei: 10n ** 18n / 3_000n, senderPrice: price, transferValue: 249_000_000n, transferValueAtMost: 249_750_000n });
+    const selection = available({ mode: "gas-multiplier", token: { symbol: "zUSDC", decimals: 6 }, tokenValueInWei: 10n ** 18n / 3_000n, senderPrice: price, transferValue: 249_000_000n, transferValueAtMost: 249_750_000n });
     expect(selection.director.multiplier).toBe((price.numerator * DEFAULT_GAS_MARGIN + price.denominator - 1n) / price.denominator);
     expect(selection.description.certainty).toBe("estimate");
   });
@@ -93,7 +93,7 @@ describe("selectDelivery", () => {
   });
 
   it("asks for the price of the sender when a gas multiplier has none", () => {
-    const selection = selectDelivery(input({ mode: "gas-multiplier", tokenValueInWei: null, senderPrice: null, token: { symbol: "zkbUSDC", decimals: 6 } }), ROUTERS);
+    const selection = selectDelivery(input({ mode: "gas-multiplier", tokenValueInWei: null, senderPrice: null, token: { symbol: "zUSDC", decimals: 6 } }), ROUTERS);
     expect(selection).toEqual({ kind: "unavailable", reason: expect.stringContaining("Enter your price of the native coin") });
   });
 
@@ -182,13 +182,13 @@ describe("selectDelivery: the default gas based tip", () => {
   });
 
   it("asks for a price when neither the sender nor the valuation gives one, with no fixed fallback", () => {
-    const selection = selectDelivery(input({ mode: "gas-multiplier", tokenValueInWei: null, senderPrice: null, token: { symbol: "zkbUSDC", decimals: 6 } }), ROUTERS);
+    const selection = selectDelivery(input({ mode: "gas-multiplier", tokenValueInWei: null, senderPrice: null, token: { symbol: "zUSDC", decimals: 6 } }), ROUTERS);
     expect(selection).toEqual({ kind: "unavailable", reason: expect.stringContaining("Enter your price of the native coin in this token") });
   });
 
   it("sets the multiplier to the price times 1e18, rounded up: the tip equals the measured cost", () => {
     const price = { numerator: 3_001n * 10n ** 6n + 1n, denominator: 10n ** 18n };
-    const selection = gas({ token: { symbol: "zkbUSDC", decimals: 6 }, tokenValueInWei: 10n ** 18n / 3_000n, senderPrice: price });
+    const selection = gas({ token: { symbol: "zUSDC", decimals: 6 }, tokenValueInWei: 10n ** 18n / 3_000n, senderPrice: price });
     const expected = (price.numerator * 10n ** 18n + price.denominator - 1n) / price.denominator;
     expect(selection.director.multiplier).toBe(expected);
   });

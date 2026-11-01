@@ -14,6 +14,7 @@
  */
 import type { Direction, FeedItem, PairConfig, TokenInfo } from "@terminal/model/types";
 import type { Hex } from "viem";
+import { nativeSymbolOf } from "@zk-bridge/shared";
 
 /** Seconds per event. */
 export const SAMPLE_TICK = 2;
@@ -102,7 +103,7 @@ export class OrbitSampleStream {
     const side = lane.direction === "first-to-second" ? "first" : "second";
     const own = this.tokens.filter((token) => token.side === side);
     const token = own.length === 0 ? null : own[Math.floor(lane.random() * own.length)]!;
-    const price = token === null ? null : (SAMPLE_USD[token.symbol.replace(/^zkb/i, "")] ?? 1);
+    const price = token === null ? null : (SAMPLE_USD[nativeSymbolOf(token)] ?? 1);
     // A dollar size spread from $5 to $150,000, most of them small.
     const usd = Math.exp(Math.log(5) + lane.random() ** 1.6 * (Math.log(150_000) - Math.log(5)));
     const amount = token === null || price === null ? null : BigInt(Math.max(1, Math.round((usd / price) * 1e6))) * 10n ** BigInt(Math.max(0, token.decimals - 6));

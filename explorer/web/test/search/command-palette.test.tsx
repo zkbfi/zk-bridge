@@ -58,7 +58,7 @@ describe("the command palette", () => {
     await waitFor(() => expect(within(screen.getAllByRole("group").find((group) => group.textContent?.startsWith("Tokens"))!).getAllByRole("option")).toHaveLength(2));
     await userEvent.clear(input);
     await userEvent.paste(FIXTURE_TOKENS[1]!.address.toLowerCase().slice(0, 12));
-    await waitFor(() => expect(screen.getAllByRole("option").some((option) => option.textContent?.startsWith("zkbUSDC"))).toBe(true));
+    await waitFor(() => expect(screen.getAllByRole("option").some((option) => option.textContent?.startsWith("zUSDC"))).toBe(true));
   });
 
   it("moves the highlight with the arrow keys and wraps, and keeps aria-activedescendant in step", async () => {

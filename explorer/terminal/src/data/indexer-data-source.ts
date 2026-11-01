@@ -282,6 +282,7 @@ function tokenOf(row: Record<string, unknown>, rows: readonly Record<string, unk
     decimals: typeof row.decimals === 'number' ? row.decimals : 18,
     side: sideOf(integer(row.chainId, 'chainId')),
     counterpart: typeof counterpart === 'string' ? getAddress(counterpart) : null,
+    isBridgedCopy: row.isBridgedCopy === true,
   }
 }
 
@@ -337,6 +338,7 @@ function viewToken(view: unknown, sideOf: (chainId: number) => ChainSide): Token
     decimals: typeof row.decimals === 'number' ? row.decimals : 18,
     side: sideOf(integer(row.chainId, 'token.chainId')),
     counterpart: null,
+    isBridgedCopy: row.isBridgedCopy === true,
   }
 }
 

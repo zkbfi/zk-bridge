@@ -47,7 +47,7 @@ describe("the tip fields of each mode", () => {
     await userEvent.type(margin, "25");
     expect(fixed).toHaveValue("0.5");
     expect(margin).toHaveValue("25");
-    await waitFor(() => expect(screen.getByTestId("delivery-summary")).toHaveTextContent("0.5 zkbUSDC (exact)"));
+    await waitFor(() => expect(screen.getByTestId("delivery-summary")).toHaveTextContent("0.5 zUSDC (exact)"));
   });
 
   it("edits the gas multiplier", async () => {
@@ -230,7 +230,7 @@ describe("the labels of the token choices", () => {
     await renderForm({ context: { ...context, snapshots } });
     const texts = optionTexts("Token");
     expect(texts.find((text) => text?.startsWith("USDC on Ethereum"))).toBe("USDC on Ethereum");
-    expect(texts.find((text) => text?.startsWith("zkbUSDC on PulseChain"))).toMatch(/you hold /);
+    expect(texts.find((text) => text?.startsWith("zUSDC on PulseChain"))).toMatch(/you hold /);
   });
 
   it("shows no coin balance in the wrap variant for a chain whose snapshot failed", async () => {

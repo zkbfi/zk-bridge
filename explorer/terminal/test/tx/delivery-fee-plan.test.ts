@@ -55,7 +55,7 @@ describe('relay that pays for delivery', () => {
   test('a typed fixed fee and the wrapped native payout are encoded as the flags of the router', async () => {
     const plan = await relayOf({ feeMode: 'fixed', feeFixed: '1.5', feePayout: 'native' })
     const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
-    // zkbUSDC is not the wrapped native token of the fixture pair, so the native payout is ignored.
+    // zUSDC is not the wrapped native token of the fixture pair, so the native payout is ignored.
     expect(decodeFeeDirector(data).settings).toBe(settingsOf({ mode: 'fixed' }))
     expect(decodeFeeDirector(data).limit).toBe(1_500_000n)
   })
@@ -68,7 +68,7 @@ describe('relay that pays for delivery', () => {
   })
 
   test('the maximum on the review is the most the router can take', async () => {
-    // A gas based fee fits only the wrapped native token: WETH bridges to zkbWETH, the wrapped native token of this pair.
+    // A gas based fee fits only the wrapped native token: WETH bridges to zWETH, the wrapped native token of this pair.
     const pair = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, contracts: { ...FIXTURE_PAIR.second.contracts, wrappedNative: FIXTURE_TOKENS[3]!.address } } }
     const plan = await relayOf({ token: `first:${FIXTURE_TOKENS[2]!.address}`, feeMode: 'gas', feeMultiplier: '1.2' }, { pair, tokenValuationsWei: {} })
     const review = plan.deliveryFee!
@@ -87,8 +87,8 @@ describe('relay that pays for delivery', () => {
     expect(text).toContain(`Recipient     ${getAddress(receiver)}`)
     expect(text).toContain('Flags         share of the value')
     expect(text).toContain('Multiplier    0.5% of the transfer')
-    expect(text).toContain('Tip now       0.5 zkbUSDC (exact)')
-    expect(text).toContain('Most the tip  0.5 zkbUSDC')
+    expect(text).toContain('Tip now       0.5 zUSDC (exact)')
+    expect(text).toContain('Most the tip  0.5 zUSDC')
     expect(text).toContain('Data source   measured from 40 recent deliveries, p90, 210000 gas')
     expect(text).toContain('on PulseChain. The tokens go to')
     expect(text).toContain('The tip goes to the reward address of the delivery router.')
@@ -161,7 +161,7 @@ describe('relay that pays for delivery', () => {
     const plan = await relayOf({ feeMode: 'percentage', feePercent: '' })
     const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
     expect(decodeFeeDirector(data)).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 10n ** 15n })
-    expect(plan.deliveryFee?.description.summary).toBe('0.1 zkbUSDC (exact)')
+    expect(plan.deliveryFee?.description.summary).toBe('0.1 zUSDC (exact)')
   })
 
   test('the router is chosen in the extra data: the relay targets the router of the form, and the review marks it', async () => {
@@ -179,7 +179,7 @@ describe('relay that pays for delivery', () => {
   })
 
   test('the gas multiplier works for a token that is not the native coin: the sender price is folded into the multiplier', async () => {
-    // The sender says one native coin of PulseChain is worth 0.003 zkbUSDC: 3,000 base units for 1e18 wei.
+    // The sender says one native coin of PulseChain is worth 0.003 zUSDC: 3,000 base units for 1e18 wei.
     // multiplier = 3,000 / 1e18 * 1.2 * 1e18 = 3,600.
     const plan = await relayOf({ feeMode: 'gas', feeMultiplier: '1.2', feeSenderPrice: '0.003', feeCeilingGwei: '10' })
     const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
@@ -212,7 +212,7 @@ describe('planRelay refuses a delivery fee that the data does not carry', () => 
   const director = { recipient: getAddress(receiver), settings: settingsOf({ mode: 'fixed' }), limit: 1n, multiplier: 0n }
   const router = FIXTURE_PAIR.second.contracts.deliveryRouter!
   const base = { chain: FIXTURE_PAIR.first, token: usdc, amount: 5n }
-  const review = { router, defaultRouter: router, routerChainName: 'PulseChain', director, token: { symbol: 'zkbUSDC', decimals: 6 }, description: undefined as never, dataSource: undefined as never, routerAddresses: { kind: 'read' as const, rewardAddress: router, failedDeliveryAddress: router } }
+  const review = { router, defaultRouter: router, routerChainName: 'PulseChain', director, token: { symbol: 'zUSDC', decimals: 6 }, description: undefined as never, dataSource: undefined as never, routerAddresses: { kind: 'read' as const, rewardAddress: router, failedDeliveryAddress: router } }
 
   test('a plain mode, another receiver and other data are each refused', () => {
     expect(() => planRelay({ ...base, receiver: router, mode: { kind: 'plain' }, deliveryFee: review })).toThrow('needs relayTokensAndCall')

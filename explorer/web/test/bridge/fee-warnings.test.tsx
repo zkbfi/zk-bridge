@@ -57,7 +57,7 @@ describe("the fee warnings on the Bridge pill, at the sample prices", () => {
 describe("the sample prices", () => {
   it("price USDC at $1, ETH at $3,000 and PLS at $0.00003, zkb copies by their origin, at block 0", () => {
     const prices = samplePrices(FIXTURE_TOKENS, FIXTURE_PAIR);
-    const usdc = FIXTURE_TOKENS.find((token) => token.symbol === "zkbUSDC")!;
+    const usdc = FIXTURE_TOKENS.find((token) => token.symbol === "zUSDC")!;
     expect(prices.get(`${usdc.side}:${usdc.address}`)).toEqual({ usdE18: 10n ** 18n, block: 0n, pool: null });
     expect(prices.get("native:1")?.usdE18).toBe(3_000n * 10n ** 18n);
     expect(prices.get("native:369")?.usdE18).toBe(30_000_000_000_000n);

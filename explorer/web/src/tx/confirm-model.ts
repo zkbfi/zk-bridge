@@ -37,7 +37,7 @@ export type DeliveryView = {
   readonly routerAddressesWarning: string | null;
   /** The tip mode in words: `percentage of the transfer`, `fixed amount` or `gas based, up to the limit`. */
   readonly tipMode: string;
-  /** The tip now, with its label: `0.25 zkbUSDC (exact)` or `about 1 WPLS now (estimate, at most 2 WPLS)`. */
+  /** The tip now, with its label: `0.25 zUSDC (exact)` or `about 1 WPLS now (estimate, at most 2 WPLS)`. */
   readonly tipNow: string;
   /** `exact` or `estimate, at most 2 USDC`. */
   readonly certaintyLabel: string;

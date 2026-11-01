@@ -35,7 +35,7 @@ export const TESTNETS: ReadonlySet<number> = new Set([11155111, 943]);
 
 /**
  * Known PulseChain copies of Ethereum tokens, used when a reader cannot ask the Omnibridge. A zkb.fi token whose origin
- * is on Ethereum maps through this (zkbWETH to WETH from Ethereum). Keys are lowercase Ethereum addresses.
+ * is on Ethereum maps through this (zWETH to WETH from Ethereum). Keys are lowercase Ethereum addresses.
  */
 export const PULSECHAIN_COPY_OF: Readonly<Record<string, Address>> = {
   "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2": "0x02DcdD04e3F455D838cd1249292C58f3B79e3C3C", // WETH

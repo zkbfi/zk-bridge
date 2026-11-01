@@ -39,7 +39,7 @@ describe("the address view", () => {
     renderWithServices(<AddressView address={FIXTURE_ACCOUNT} />, { chainAccess: chainAccessOf(async () => results) });
     expect(await screen.findByText("Ethereum: rpc down")).toBeInTheDocument();
     expect(screen.getByText("5 PLS")).toBeInTheDocument();
-    expect(screen.getByText("1.5 zkbUSDC")).toBeInTheDocument();
+    expect(screen.getByText("1.5 zUSDC")).toBeInTheDocument();
   });
 
   it("shows the error when the balances do not load or the feed does not load", async () => {

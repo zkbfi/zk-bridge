@@ -71,6 +71,14 @@ contract OnlySymbolToken is BareToken {
     uint8 public decimals = 18;
 }
 
+/// @notice A token whose own symbol starts with the copy prefix: `ZRX`. Its copy is `zZRX`, and the prefix is never
+/// stripped or skipped because the native symbol already starts with a Z.
+contract ZrxToken is BareToken {
+    string public name = "0x Protocol";
+    string public symbol = "ZRX";
+    uint8 public decimals = 18;
+}
+
 /// @notice A token of the old style: the name and the symbol are `bytes32` values padded with zero bytes, as the first
 /// stablecoin and Maker tokens have them.
 contract Bytes32MetadataToken is BareToken {

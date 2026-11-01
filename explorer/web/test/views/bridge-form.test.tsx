@@ -66,8 +66,8 @@ describe("the bridge form: the tip before any signature", () => {
     expect(screen.getByLabelText("Ceiling base fee (gwei)")).toHaveValue("");
     expect(screen.getByTestId("gas-mode-help")).toHaveTextContent(GAS_MODE_HELP);
     const quote = await screen.findByTestId("delivery-quote");
-    await waitFor(() => expect(within(quote).getByTestId("delivery-summary")).toHaveTextContent(/^about [\d.]+ zkbUSDC now \(estimate, at most [\d.]+ zkbUSDC\)$/));
-    expect(within(quote).getByTestId("tip-maximum")).toHaveTextContent(/^The limit is [\d.]+ zkbUSDC\. It is the price ceiling\. Expect the tip to reach it\.$/);
+    await waitFor(() => expect(within(quote).getByTestId("delivery-summary")).toHaveTextContent(/^about [\d.]+ zUSDC now \(estimate, at most [\d.]+ zUSDC\)$/));
+    expect(within(quote).getByTestId("tip-maximum")).toHaveTextContent(/^The limit is [\d.]+ zUSDC\. It is the price ceiling\. Expect the tip to reach it\.$/);
     expect(screen.queryByTestId("tip-notice")).toBeNull();
     await waitFor(() => expect(screen.getByRole("button", { name: "Review transaction" })).toBeEnabled());
   });
@@ -97,7 +97,7 @@ describe("the bridge form: the tip before any signature", () => {
     await choosePercentage();
     await typeAmount("250");
     expect(await screen.findByTestId("no-cost-lines")).toHaveTextContent("Enter your coin price");
-    await userEvent.type(screen.getByLabelText(/^Your coin price \(zkbUSDC for one PLS\)/), "3000");
+    await userEvent.type(screen.getByLabelText(/^Your coin price \(zUSDC for one PLS\)/), "3000");
     const quote = await screen.findByTestId("delivery-quote");
     const table = await within(quote).findByRole("table", { name: "Cost breakdown of the delivery" });
     for (const line of ["Gas cost", "Margin"]) expect(within(table).getByText(new RegExp(line))).toBeInTheDocument();
@@ -155,7 +155,7 @@ describe("the bridge form: the tip before any signature", () => {
     const percentage = screen.getByLabelText("Percentage of the amount");
     await userEvent.clear(percentage);
     await userEvent.type(percentage, "0.5");
-    await waitFor(() => expect(screen.getByTestId("delivery-summary")).toHaveTextContent("1.25 zkbUSDC (exact)"));
+    await waitFor(() => expect(screen.getByTestId("delivery-summary")).toHaveTextContent("1.25 zUSDC (exact)"));
   });
 
   it("labels the price field as the user's own, and fills it from the valuation of a wrapped native token", async () => {
@@ -177,7 +177,7 @@ describe("the bridge form: the tip before any signature", () => {
     expect(screen.getByRole("button", { name: "Review transaction" })).toBeDisabled();
     await userEvent.type(screen.getByLabelText(/^Your coin price/), "3000");
     const summary = await screen.findByTestId("delivery-summary");
-    await waitFor(() => expect(summary).toHaveTextContent(/estimate, at most [\d.]+ zkbUSDC\)$/));
+    await waitFor(() => expect(summary).toHaveTextContent(/estimate, at most [\d.]+ zUSDC\)$/));
     expect(screen.getByText(/This is an estimate: the real tip follows the gas that the deliverer's transaction makes available/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review transaction" })).toBeEnabled();
   });

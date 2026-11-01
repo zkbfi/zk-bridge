@@ -18,11 +18,18 @@ describe("iconUrl", () => {
 });
 
 describe("iconSubjectOf", () => {
-  it("shows a bridged zkb token with its original's icon", () => {
+  it("shows a bridged token with its original's icon", () => {
     const original = { address: "0x1111111111111111111111111111111111111111", symbol: "USDC", decimals: 6, side: "first", counterpart: "0x2222222222222222222222222222222222222222" } as const;
-    const bridged = { address: "0x2222222222222222222222222222222222222222", symbol: "zkbUSDC", decimals: 6, side: "second", counterpart: original.address } as const;
+    const bridged = { address: "0x2222222222222222222222222222222222222222", symbol: "zUSDC", decimals: 6, side: "second", counterpart: original.address, isBridgedCopy: true } as const;
     expect(iconSubjectOf(bridged, FIXTURE_PAIR)).toEqual({ chainId: FIXTURE_PAIR.first.chainId, address: original.address });
     expect(iconSubjectOf(original, FIXTURE_PAIR)).toEqual({ chainId: FIXTURE_PAIR.first.chainId, address: original.address });
+  });
+
+  it("keeps a native token whose symbol starts with Z as its own icon, and its copy shows the original's", () => {
+    const zrx = { address: "0x3333333333333333333333333333333333333333", symbol: "ZRX", decimals: 18, side: "second", counterpart: "0x4444444444444444444444444444444444444444" } as const;
+    const copy = { address: "0x4444444444444444444444444444444444444444", symbol: "zZRX", decimals: 18, side: "first", counterpart: zrx.address, isBridgedCopy: true } as const;
+    expect(iconSubjectOf(zrx, FIXTURE_PAIR)).toEqual({ chainId: FIXTURE_PAIR.second.chainId, address: zrx.address });
+    expect(iconSubjectOf(copy, FIXTURE_PAIR)).toEqual({ chainId: FIXTURE_PAIR.second.chainId, address: zrx.address });
   });
 });
 
@@ -41,8 +48,14 @@ describe("TokenIcon", () => {
   });
 
   it("falls back to a lettered disc when the image fails", () => {
-    render(<TokenIcon subject={{ chainId: 1, address: "0x1111111111111111111111111111111111111111" }} symbol="zkbUSDC" />);
-    fireEvent.error(screen.getByRole("img", { name: "zkbUSDC" }));
-    expect(screen.getByRole("img", { name: "zkbUSDC" }).textContent).toBe("USD");
+    render(<TokenIcon subject={{ chainId: 1, address: "0x1111111111111111111111111111111111111111" }} symbol="zUSDC" isBridgedCopy />);
+    fireEvent.error(screen.getByRole("img", { name: "zUSDC" }));
+    expect(screen.getByRole("img", { name: "zUSDC" }).textContent).toBe("USD");
+  });
+
+  it("keeps the first letters of a native token that starts with Z", () => {
+    render(<TokenIcon subject={{ chainId: 1, address: "0x1111111111111111111111111111111111111111" }} symbol="ZRX" />);
+    fireEvent.error(screen.getByRole("img", { name: "ZRX" }));
+    expect(screen.getByRole("img", { name: "ZRX" }).textContent).toBe("ZRX");
   });
 });

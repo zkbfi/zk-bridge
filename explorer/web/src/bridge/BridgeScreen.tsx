@@ -14,10 +14,10 @@ import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, DEFAULT_GAS_MARGIN_TEXT, 
 import type { WebStep } from "../tx/bridge-steps";
 import { parseUnits } from "../ui/format";
 import { useWallet } from "../wallet/wallet-port";
-import { isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
+import { arrivesAsSymbol, isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
 import { DeliveryMenu, deliverySummary, type TipChoiceKey } from "./DeliveryMenu";
-import { ceilingCostUsd, ceilingWeiOf, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
+import { nativeSymbolOf, ceilingCostUsd, ceilingWeiOf, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
 import { formatUnits } from "viem";
 import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, ReviewNotice, ReviewRow, ReviewSheet, useDefaultFee, useFeeCaps, useFeeWarnings, useHardCap, useVerdict } from "@zkb/react";
 import { DirectionMenu } from "./DirectionMenu";
@@ -345,7 +345,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     hardCap: hard !== null && hard.over ? { capText: hardCapText, feeText: unitsText(hard.feeUnits), capAmountText: unitsText(hard.capUnits), raiseText: `${raisePercent}%`, worstCase: hard.feeUnits !== tipUnits } : null,
   });
 
-  const tokenIcon = (subjectToken: TokenInfo, badge: number | null, size = 32, surface: "accent" | "plain" = "plain"): ReactNode => <TokenIcon subject={iconSubjectOf(subjectToken, pair)} badgeChainId={badge} symbol={subjectToken.symbol} size={size} surface={surface} />;
+  const tokenIcon = (subjectToken: TokenInfo, badge: number | null, size = 32, surface: "accent" | "plain" = "plain"): ReactNode => <TokenIcon subject={iconSubjectOf(subjectToken, pair)} badgeChainId={badge} symbol={subjectToken.symbol} isBridgedCopy={subjectToken.isBridgedCopy} size={size} surface={surface} />;
   const inline = (icon: ReactNode, text: string, symbol: string): ReactNode => (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
       {icon}
@@ -782,13 +782,13 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             {token === null ? null : (
               <span className="zb-token">
                 {tokenIcon(token, destination.chainId)}
-                {token.symbol.replace(/^zkb/i, "")}
+                {nativeSymbolOf(token)}
               </span>
             )}
           </div>
           <div className="zb-balance">
             <span title={PRICE_NOTE}>{usd(received)}</span>
-            {token === null ? null : <span className="zb-right">arrives as {/^zkb/i.test(token.symbol) ? token.symbol.replace(/^zkb/i, "") : `zkb${token.symbol}`} on {destination.name}</span>}
+            {token === null ? null : <span className="zb-right">arrives as {arrivesAsSymbol(token)} on {destination.name}</span>}
           </div>
         </div>
       </section>

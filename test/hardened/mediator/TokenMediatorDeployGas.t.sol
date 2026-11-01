@@ -70,7 +70,7 @@ contract TokenMediatorDeployGasTest is WorldSupport {
         address copy = mediatorB.bridgedTokenAddress(address(token));
         assertGt(copy.code.length, 0, "the copy exists");
         assertEq(BridgedToken(copy).name(), string.concat(_text(5_000, "n"), " from Chain A"), "the whole name");
-        assertEq(BridgedToken(copy).symbol(), string.concat("zkb", _text(3, "s")), "the symbol");
+        assertEq(BridgedToken(copy).symbol(), string.concat("z", _text(3, "s")), "the symbol");
         assertEq(BridgedToken(copy).balanceOf(bob), AMOUNT, "the receiver holds the first amount");
 
         Transit memory secondTransit = _deliverToB(_relay(token));

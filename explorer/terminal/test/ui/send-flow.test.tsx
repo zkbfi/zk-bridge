@@ -18,7 +18,7 @@ afterEach(() => {
 
 const signer = () => signerFromPrivateKeyText(TEST_KEY)
 
-/** The default tip is gas based and needs a price: one zkbUSDC is worth 4e14 wei. */
+/** The default tip is gas based and needs a price: one zUSDC is worth 4e14 wei. */
 const tokenValuationsWei = { [FIXTURE_TOKENS[1]!.address.toLowerCase()]: 400_000_000_000_000n }
 
 async function openAction(target: App, downs: number) {

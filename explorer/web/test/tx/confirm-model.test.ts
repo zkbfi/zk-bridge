@@ -41,7 +41,7 @@ describe("buildConfirmView", () => {
     const step = await relayStep({ mode: "percentage" });
     const view = buildConfirmView(step);
     expect(view.delivery?.certaintyLabel).toBe("exact");
-    expect(view.delivery?.tipMaximum).toMatch(/^The tip can take at most [\d.]+ zkbUSDC\./);
+    expect(view.delivery?.tipMaximum).toMatch(/^The tip can take at most [\d.]+ zUSDC\./);
     expect(view.delivery?.costLines.map((line) => line.label)).toEqual(["Gas cost", "Margin"]);
     // The delivery runs on PulseChain, so its cost is in PLS, not in the ETH of the chain that the transfer leaves.
     for (const line of view.delivery?.costLines ?? []) expect(line.text).toMatch(/ PLS \(estimate: /);
@@ -60,8 +60,8 @@ describe("buildConfirmView", () => {
     expect(delivery.routerWarning).toBeNull();
     expect(delivery.tipMode).toBe("percentage of the transfer");
     // The mediator takes no fee, so the router receives all 250. The tip is 0.1 percent of that.
-    expect(delivery.tipNow).toBe("0.25 zkbUSDC (exact)");
-    expect(delivery.tipMaximum).toBe("The tip can take at most 0.25 zkbUSDC. Everything else goes to the recipient.");
+    expect(delivery.tipNow).toBe("0.25 zUSDC (exact)");
+    expect(delivery.tipMaximum).toBe("The tip can take at most 0.25 zUSDC. Everything else goes to the recipient.");
     expect(delivery.tipNotes.join(" ")).toMatch(/Anyone can deliver through the delivery router.*reward address.*copied delivery gains the copier nothing/);
     expect(delivery.tipNotes.join(" ")).toMatch(/anyone calls the bridge directly to deliver, without the router, no tip is paid.*recipient then gets the whole amount/);
   });
@@ -69,12 +69,12 @@ describe("buildConfirmView", () => {
   it("names the tip now as an estimate, with its maximum, for a gas multiplier", async () => {
     const view = buildConfirmView(await relayStep({ mode: "gas-multiplier", senderPriceText: "3000" }));
     expect(view.delivery?.tipMode).toBe("gas based, up to the limit");
-    expect(view.delivery?.tipNow).toMatch(/^about [\d.]+ zkbUSDC now \(estimate, at most [\d.]+ zkbUSDC\)$/);
+    expect(view.delivery?.tipNow).toMatch(/^about [\d.]+ zUSDC now \(estimate, at most [\d.]+ zUSDC\)$/);
   });
 
   it("names the limit of a gas based tip as the price ceiling, and says that the deliverer's gas choice decides", async () => {
     const delivery = buildConfirmView(await relayStep({ mode: "gas-multiplier", senderPriceText: "3000" })).delivery!;
-    expect(delivery.tipMaximum).toMatch(/^The limit is [\d.]+ zkbUSDC\. It is the price ceiling.*Expect the tip to reach it\./);
+    expect(delivery.tipMaximum).toMatch(/^The limit is [\d.]+ zUSDC\. It is the price ceiling.*Expect the tip to reach it\./);
     expect(delivery.gasModeHelp).toBe(GAS_MODE_HELP);
     expect(delivery.gasNotice).toBeNull();
   });

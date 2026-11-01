@@ -150,7 +150,7 @@ const sendBotMessages = async (context: Context): Promise<void> => {
   const coveringTip = await coveringTipOf(context);
   const { terminalTokens } = await import("../tokens.ts");
   for (const item of BOT_CASES) {
-    const tokens = (await terminalTokens(context)).filter((token) => token.side === "first" || token.symbol.startsWith("zkb"));
+    const tokens = (await terminalTokens(context)).filter((token) => token.side === "first" || token.isBridgedCopy);
     const live = [];
     for (const token of tokens) {
       const chain = token.side === "first" ? context.a : context.b;

@@ -17,11 +17,11 @@ const ZKB_WETH = "0x00000000000000000000000000000000000000a2";
 const ZKB_WPLS = "0x00000000000000000000000000000000000000a1";
 const tokens: readonly TokenInfo[] = [
   { address: "0x0000000000000000000000000000000000001001", symbol: "USDC", decimals: 6, side: "first", counterpart: "0x0000000000000000000000000000000000002001" },
-  { address: "0x0000000000000000000000000000000000002001", symbol: "zkbUSDC", decimals: 6, side: "second", counterpart: "0x0000000000000000000000000000000000001001" },
+  { address: "0x0000000000000000000000000000000000002001", symbol: "zUSDC", decimals: 6, side: "second", counterpart: "0x0000000000000000000000000000000000001001" },
   { address: WETH, symbol: "WETH", decimals: 18, side: "first", counterpart: ZKB_WETH },
-  { address: ZKB_WETH, symbol: "zkbWETH", decimals: 18, side: "second", counterpart: WETH },
+  { address: ZKB_WETH, symbol: "zWETH", decimals: 18, side: "second", counterpart: WETH },
   { address: WPLS, symbol: "WPLS", decimals: 18, side: "second", counterpart: ZKB_WPLS },
-  { address: ZKB_WPLS, symbol: "zkbWPLS", decimals: 18, side: "first", counterpart: WPLS },
+  { address: ZKB_WPLS, symbol: "zWPLS", decimals: 18, side: "first", counterpart: WPLS },
   ...nativeTokensOf(FIXTURE_PAIR as PairConfig),
 ];
 const bySymbol = (symbol: string): TokenInfo => tokens.find((token) => token.symbol === symbol)!;
@@ -50,25 +50,25 @@ describe("the native coin in a link", () => {
 });
 
 describe("a flip keeps the asset", () => {
-  it("native ETH on Ethereum flips to zkbWETH, and zkbWETH flips back to ETH", () => {
+  it("native ETH on Ethereum flips to zWETH, and zWETH flips back to ETH", () => {
     const eth = tokens.find((token) => token.symbol === "ETH")!;
-    expect(counterpartOf(eth, tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("zkbWETH");
-    expect(counterpartOf(bySymbol("zkbWETH"), tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("ETH");
+    expect(counterpartOf(eth, tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("zWETH");
+    expect(counterpartOf(bySymbol("zWETH"), tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("ETH");
     expect(choiceOf(eth)).toBe("first:native");
   });
 
-  it("native PLS flips to zkbWPLS, never to Ethereum's own coin", () => {
+  it("native PLS flips to zWPLS, never to Ethereum's own coin", () => {
     const pls = tokens.find((token) => token.symbol === "PLS")!;
-    expect(counterpartOf(pls, tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("zkbWPLS");
+    expect(counterpartOf(pls, tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("zWPLS");
   });
 
   it("a plain token flips to its counterpart and back", () => {
-    expect(counterpartOf(bySymbol("USDC"), tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("zkbUSDC");
-    expect(counterpartOf(bySymbol("zkbUSDC"), tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("USDC");
+    expect(counterpartOf(bySymbol("USDC"), tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("zUSDC");
+    expect(counterpartOf(bySymbol("zUSDC"), tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("USDC");
   });
 
   it("a token with no counterpart in the list falls back to the other chain's first token, not its native coin", () => {
     const lone: TokenInfo = { address: "0x0000000000000000000000000000000000009999", symbol: "LONE", decimals: 18, side: "first", counterpart: null };
-    expect(counterpartOf(lone, [...FIXTURE_TOKENS, ...nativeTokensOf(FIXTURE_PAIR as PairConfig)], FIXTURE_PAIR as PairConfig)?.symbol).toBe("zkbUSDC");
+    expect(counterpartOf(lone, [...FIXTURE_TOKENS, ...nativeTokensOf(FIXTURE_PAIR as PairConfig)], FIXTURE_PAIR as PairConfig)?.symbol).toBe("zUSDC");
   });
 });

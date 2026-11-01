@@ -43,3 +43,4 @@ export * from "./call-display.js";
 export * from "./tip-coverage.js";
 export * from "./transfer-timing.js";
 export * from "./pulsex-oracle.js";
+export * from "./bridged-symbol.js";
