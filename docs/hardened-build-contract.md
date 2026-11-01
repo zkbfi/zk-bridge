@@ -1068,6 +1068,8 @@ A general multicall works, with one rule. Inside a multicall, `msg.sender` of th
 
 Costs, measured with `forge test` (gas of the call, without the base cost and the calldata): `confirm` with a proof costs 42,748 gas at state depth 6 and 40,069 at depth 5. About 8,000 gas of that is the second branch, the one of `genesis_validators_root`; the version branch alone cost 34,738 and 33,034. A send in a confirmed epoch pays 3,022 gas more than a send through a gate that admits everything. A send in detection mode, before the beacon roots contract exists, pays about 745 gas for the probe.
 
+Tooling (2026-11-01): `ensureGateConfirmed` and `buildGateEvidence` of `@zkb/data`, over the pure checks of `@zkb/core` (`checkConfirmEvidence`, a port of the checks of `confirm` and of `ForkShape.judge`), build the evidence from the parent beacon block root of the latest block and a compact multiproof of its state, and return the `confirm` call for any sender. The traffic bot uses them; the web app is to use them. See `explorer/data/README.md`, "Gate evidence", and `docs/testnet-run.md`, step 9. `test/hardened/GateEvidenceSepolia.t.sol` feeds evidence that they built for a real Sepolia epoch to the real gate.
+
 Tests: `test/hardened/BridgeWorld.t.sol` shows the whole pattern on an enforcing gate with the real `MessageBridge`. A send in an unconfirmed epoch is refused, the first poster confirms and sends, a second sender in the same epoch sends with no `confirm`, the next epoch is refused again, and a message from the epoch is delivered on the other chain. It also shows a multicall (the receiver sees the multicall as the sender). `test/hardened/BeaconForkGate.t.sol` holds the gate rules and the unit level version of the pattern.
 
 ### As built (2026-10-24)

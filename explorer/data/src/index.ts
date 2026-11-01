@@ -488,3 +488,23 @@ export {
   type ExplorerConnection,
   createExplorerConnection,
 } from "./connection.js";
+
+// The fork evidence of the deposit gate: the confirmation that a send needs first on a chain whose gate enforces
+export {
+  type GateEvidenceErrorCode,
+  GateEvidenceError,
+  type GateChainClient,
+  GATE_MODES,
+  type GateMode,
+  type GateStatus,
+  readGateStatus,
+  type BeaconProofSource,
+  createBeaconProofSource,
+  SHAPE_REQUEST_ORDER,
+  type ReadyGateEvidence,
+  type WaitForGateHeader,
+  buildGateEvidence,
+  describeRevert,
+  type GateConfirmation,
+  ensureGateConfirmed,
+} from "./gate-evidence.js";

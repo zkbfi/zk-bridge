@@ -75,6 +75,20 @@ PulseX price maths (`pulsex-pricing`; the pool reading stays with the host):
 | `weightedMedian`, `weightedMedianEntry`, `pricingAddress` | The median and the pricing address of a token. |
 | `PULSEX_FACTORIES`, `WPLS`, `STABLES`, `MINIMUM_DEPTH_USD`, ... | The constants. |
 
+Fork evidence of the deposit gate (`gate-evidence`; the reads are `buildGateEvidence` and `ensureGateConfirmed` of `@zkb/data`):
+
+| Export | What it does |
+| --- | --- |
+| `checkConfirmEvidence({ evidence, beaconRoot, epoch, slotsPerEpoch, genesisValidatorsRoot })` | The checks of `BeaconForkGate.confirm`, in the contract's order. Gives `{ ok: true, shape }` or the contract's error name (`BeaconRootUnavailable`, `HeaderRootMismatch`, `HeaderNotInCurrentEpoch`, `GenesisValidatorsRootBranchInvalid`, `ForkProofInvalid`, `ShapeNotAllowed`). |
+| `judgeForkEvidence`, `isValidBranch`, `beaconHeaderRoot`, `versionLeaf` | Ports of `ForkShape.judge`, `SSZ.isValidBranchMemory` and `SSZ.hashTreeRootMemory`. |
+| `ALLOWED_SHAPES`, `PROGRESSIVE_SHAPE`, `versionGindex`, `genesisValidatorsRootGindex`, `plainVersionGindex`, `versionBranchLength`, `genesisValidatorsRootBranchLength`, `depthOfVersionBranch`, `isAllowedShape`, `forkProofGindices` | The positions of `ForkShape`: depths 5, 6 and 7, and 255 for the progressive state of Gloas (version at 169, `genesis_validators_root` at 40). |
+| `compactMultiproofDescriptor`, `compactMultiproofNodes`, `branchFromNodes`, `forkEvidenceFromMultiproof` | The compact multiproof that Lodestar serves (`/eth/v0/beacon/proof/state/{id}?format=<descriptor>`): its descriptor, the tree it gives, the branches in it, and the evidence of a shape from it. |
+| `encodeForkEvidence`, `decodeForkEvidence`, `confirmCalldata`, `FORK_EVIDENCE_ABI` | `abi.encode(ForkEvidence)` and the calldata of `confirm`. |
+| `gateEpochAt`, `gateEpochEnd`, `BEACON_ROOTS_ADDRESS` | The epoch of a block time as the gate counts it, the first second of the next epoch, the EIP-4788 address. |
+
+The tests run on one real Sepolia epoch (`test/hardened/fixtures/gate_evidence_sepolia.json` at the repository root), and
+the forge test `test/hardened/GateEvidenceSepolia.t.sol` feeds the same calldata to the real gate.
+
 ### Examples
 
 ```ts

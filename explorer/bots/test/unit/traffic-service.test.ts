@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { signerFromPrivateKeyText } from "../../../terminal/src/signing/key-sources.ts";
 import { BotConfigError, parseBotConfig } from "../../src/config/bot-config.ts";
 import { LockHeldError } from "../../src/runtime/lock-file.ts";
-import { ignoredScheduleSettings, newCopyGasLimitOf, startTraffic, tipRateOf, type TrafficOverrides } from "../../src/traffic/service.ts";
+import { gateBeaconUrlOf, ignoredScheduleSettings, newCopyGasLimitOf, startTraffic, tipRateOf, type TrafficOverrides } from "../../src/traffic/service.ts";
 import { HOUR_MILLISECONDS } from "../../src/traffic/schedule.ts";
 import { seeded } from "../support/seeded.ts";
 import { createServiceWorld, type ServiceWorld } from "../support/service-world.ts";
@@ -106,6 +106,7 @@ function overridesFor(extra: TrafficOverrides = {}) {
       return (rpcUrl.endsWith(":1") ? nodes[1] : nodes[369]).client;
     },
     reader: (chainId) => fakeReader(chainId, states[chainId] as FakeReaderState),
+    gate: () => null,
     random: () => 0,
     now: () => NOW,
     ...extra,
@@ -219,6 +220,34 @@ describe("startTraffic", () => {
     expect(state.directions["second-to-first"]).toEqual({ plan: null, lastAttemptAtMilliseconds: NOW });
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(existsSync(`${statePath(created)}.lock`)).toBe(false);
+  });
+
+  it("looks at the gate of the source chain before each send, and sends no confirmation to a gate that does not enforce", async () => {
+    const created = await prepare();
+    const sleep = vi.fn(async () => undefined);
+    const { overrides, nodes } = overridesFor({ gate: undefined, sleep });
+    const gateReads: Record<string, unknown> = { mode: 1, enforcing: false, isSealed: false, confirmedEpoch: [0n, false], genesisTime: 1n, secondsPerSlot: 12n, slotsPerEpoch: 32n, genesisValidatorsRoot: `0x${"ab".repeat(32)}`, beaconRoots: "0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02" };
+    for (const [chainId, gate] of [[1, `0x${"16".repeat(20)}`], [369, `0x${"26".repeat(20)}`]] as const) {
+      const client = nodes[chainId].client as unknown as { readContract: ReturnType<typeof vi.fn>; getBlock: ReturnType<typeof vi.fn> };
+      const plain = client.readContract.getMockImplementation() as (call: unknown) => Promise<unknown>;
+      client.readContract.mockImplementation(async (call: { address: Address; functionName: string }) => (call.address.toLowerCase() === gate ? gateReads[call.functionName] : plain(call)));
+      client.getBlock.mockImplementation(async () => ({ number: 9n, timestamp: 1_000n, baseFeePerGas: 10n }));
+    }
+    await run(created, overrides);
+    expect(nodes[1].sent.map((sent) => sent.to)).toEqual([DOLLAR, MEDIATOR[1]]);
+    expect(named(created, "traffic_sent")).toHaveLength(2);
+    expect(named(created, "gate_confirmed")).toEqual([]);
+    const gateCalls = (nodes[1].client.readContract as ReturnType<typeof vi.fn>).mock.calls.filter(([call]) => (call as { address: string }).address.toLowerCase() === `0x${"16".repeat(20)}`);
+    expect(gateCalls.map(([call]) => (call as { functionName: string }).functionName)).toContain("enforcing");
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("takes the beacon API of the gate from its setting, else from the pair", () => {
+    const parsed = parseBotConfig({ schemaVersion: 1, stateDirectory: "/s", ...trafficSection({ directory: "/d" }, { gateBeaconUrls: { "1": "https://lodestar.example" } }) }).traffic!;
+    expect(gateBeaconUrlOf(parsed, { chainId: 1, beaconUrl: "http://pair" })).toBe("https://lodestar.example");
+    expect(gateBeaconUrlOf(parsed, { chainId: 369, beaconUrl: "http://pair" })).toBe("http://pair");
+    expect(gateBeaconUrlOf(parsed, { chainId: 369, beaconUrl: null })).toBeNull();
+    expect(() => parseBotConfig({ schemaVersion: 1, stateDirectory: "/s", ...trafficSection({ directory: "/d" }, { gateBeaconUrls: { "1": "not a url" } }) })).toThrow();
   });
 
   it("reads the gas limit for a new copy by destination chain", () => {

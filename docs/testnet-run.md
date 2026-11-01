@@ -422,7 +422,24 @@ Every header is checked against the block hash that the own light client stored,
 
 ## Step 9: confirm the gate on Sepolia
 
-The gate of Sepolia is enforcing. The first sender of each epoch calls `BeaconForkGate.confirm(evidence)` before a send. See "Gate evidence" in `docs/hardened-build-contract.md`.
+Owner, 2026-11-01: "sounds like we need to finish the initial inputs to enable deposits, right?", then "yes, build the gate evidence tool", and: "more toolING - functions that can be used by other parts of the codebase such as the frontend".
+
+The gate of Sepolia is enforcing. The first sender of each epoch (6.4 minutes) calls `BeaconForkGate.confirm(evidence)` before a send; later senders in that epoch just send. See "Gate evidence" in `docs/hardened-build-contract.md`. Nobody needs to confirm by hand: every sender confirms when it needs to, with the same functions of `@zkb/data` (`explorer/data/README.md`, "Gate evidence"):
+
+- `ensureGateConfirmed({ client, gate, beacon, account })` reads the gate. When the epoch of the next block is not confirmed, it builds the evidence, checks it with the contract's rules (`checkConfirmEvidence` of `@zkb/core`) against the root that the EIP-4788 contract holds, simulates `confirm` from the sender, and returns the call to send first. It sends nothing.
+- The traffic bot calls it before each send from Sepolia and logs `gate_confirmed` with the epoch and the transaction (`traffic.gateBeaconUrls`, step "Start the traffic bot"). The runner never needs it: the bridge calls the gate on a send only, not on a delivery or an update.
+- The web app's send flow needs the same step on Sepolia (not built yet; see the note in `explorer/data/README.md`).
+
+**How the evidence is bound.** The latest Sepolia block names its `parentBeaconBlockRoot`, which EIP-4788 stores under the block's time. The evidence is that time, the beacon header of that root, and two branches under its state root: `fork.current_version` (index 169, 7 siblings, Gloas `0x90000076`) and `genesis_validators_root` (index 40, 5 siblings). The branches come from a compact multiproof of the state (`/eth/v0/beacon/proof/state/<state root>?format=0x231f80`), which the public Lodestar node `https://lodestar-sepolia.chainsafe.io` serves; the proof is checked against the on-chain root, so that node need not be trusted. Whether the valve.city beacon endpoint serves this Lodestar endpoint was not checked. The confirmation must land in the epoch of the header, so the evidence is good until the start of the next epoch. In the first slot of an epoch (and after missed slots) the newest header is from the epoch before: wait a slot.
+
+**Cost.** `eth_estimateGas` of `confirm` on Sepolia on 2026-11-01 (read only, from the address `0x...dEaD`): 79,050 gas for the whole transaction, 836 bytes of calldata. It runs once per epoch that has a send.
+
+To look at one confirmation without sending it, record a fixture from public endpoints (read only):
+
+```sh
+(cd explorer && pnpm --filter @zkb/data build && node data/scripts/capture-gate-fixture.mjs)
+# writes test/hardened/fixtures/gate_evidence_sepolia.json: the reads, the header, the proof, the calldata and the gas estimate
+```
 
 ## Step 10: start the bots
 
@@ -481,7 +498,7 @@ Two test tokens on each chain: `zkb Test Dollar` (`tUSD`, 6 decimals) and `zkb T
 1. **The traffic wallet.** A new account, used for nothing else. Create a 1Password item **"testnet traffic wallet"** in the vault **zkb.fi** with two fields: `address` and `private-key`. Generate it where you keep keys (for example `cast wallet new`, in a shell whose history you do not keep), store both fields, and close the shell. Nothing in this repository generates it.
 2. **Gas for the traffic wallet**, from the faucets (estimates below): about 2 Sepolia ETH and 10 tPLS to start.
 3. **Open bridges.** On 2026-11-01 `depositsOpen()` is `false` on both bridges (`0xb018...fb21` on Sepolia, `0xf59d...1fd1` on chain 943). Until the runner opens them (step 8), every send skips with `deposits-not-open`.
-4. **A confirmed gate on Sepolia, each epoch.** Sepolia's gate enforces (`confirmedEpoch()` is `(0, false)` on 2026-11-01). A send from Sepolia in an epoch that nobody confirmed reverts with `ForkNotConfirmed`, and the traffic bot logs `traffic_skipped` with `gate-not-confirmed`. No tool confirms it on a live chain yet (step 9): the evidence builder is `light-client/crates/lc-core/src/gate.rs`, with no command of the prover around it. Until a keeper confirms each epoch (6.4 minutes), only the direction 943 to Sepolia moves. The gate of chain 943 detects and admits.
+4. **A confirmed gate on Sepolia, each epoch.** Sepolia's gate enforces (`confirmedEpoch()` is `(0, false)` on 2026-11-01). A send from Sepolia in an epoch that nobody confirmed reverts with `ForkNotConfirmed`. The traffic bot confirms the epoch first when it needs to (step 9) and logs `gate_confirmed`; it needs `traffic.gateBeaconUrls` for chain 11155111 (the template names the public Lodestar node). The gate of chain 943 detects and admits, so sends from 943 need nothing.
 
 ### Deploy and mint (sends transactions)
 
@@ -513,7 +530,7 @@ op read 'op://zkb.fi/testnet traffic wallet/private-key' | ssh zkbfi-app 'umask 
 
 `deploy.sh` then starts `zk-bridge-traffic.service` with the others; it skips it while a file is missing. `ansible-playbook bots.yml -e commit=<hash> -e bots=traffic` moves it alone. Logs: `journalctl -u zk-bridge-traffic -g '"traffic_sent"\|"traffic_skipped"'`. At start the bot logs `traffic_tokens`: every test token with the address of its copy on the other chain.
 
-The settings of the template: amounts from 5 to 50 whole tokens, a home balance band from 100,000 to 990,000, the default tip of 0.1 percent, `newCopyGasLimit` 9,000,000 for sends to Sepolia, and native reserves of 0.05 ETH (Sepolia) and 1 tPLS (943).
+The settings of the template: amounts from 5 to 50 whole tokens, a home balance band from 100,000 to 990,000, the default tip of 0.1 percent, `newCopyGasLimit` 9,000,000 for sends to Sepolia, `gateBeaconUrls` with the public Lodestar node for Sepolia (the gate evidence, step 9), and native reserves of 0.05 ETH (Sepolia) and 1 tPLS (943).
 
 **Sepolia needs `newCopyGasLimit`.** The first send of a chain 943 token to Sepolia deploys its copy there. With the state of Sepolia overridden for an estimate, `TokenFactory.deploy` of a copy took 6,971,380 gas on 2026-11-01 (989,775 on a local chain). The mediator's default gas limit for that message is 2,750,000 (2,000,000 plus the callback to the router), and a delivery that runs out of gas is final: the tokens stay locked on chain 943 and the copy does not exist. The traffic bot asks for 9,000,000 (below the bridge's `maxGasPerTx` of 10,000,000) while the copy has no code. Anyone else who sends a new token to Sepolia meets the same limit.
 

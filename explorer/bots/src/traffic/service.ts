@@ -9,6 +9,7 @@ import { runLoop } from "../runtime/loop.ts";
 import { createStateFile } from "../runtime/state-file.ts";
 import { openSigner, type Signer } from "../signing/open-signer.ts";
 import { createTrafficReader, type TrafficReader } from "./chain.ts";
+import { createTrafficGate, type TrafficGate } from "./gate.ts";
 import { boundsOf, type Random } from "./plan.ts";
 import { drawPlan, dueIndex, hourOf, unsentIn, type Cadence, type HourPlan } from "./schedule.ts";
 import { INITIAL_TRAFFIC_STATE, trafficStateSchema, type TrafficDirectionState } from "./state.ts";
@@ -24,6 +25,10 @@ export interface TrafficOverrides {
   readonly publicClient?: (rpcUrl: string) => PublicClient;
   /** Replaces the reader of a chain, by chain id. */
   readonly reader?: (chainId: number, client: PublicClient) => TrafficReader;
+  /** Replaces the gate of a chain, by chain id. */
+  readonly gate?: (chainId: number, client: PublicClient) => TrafficGate | null;
+  /** Replaces the timer between two looks at a gate. */
+  readonly sleep?: (milliseconds: number) => Promise<void>;
   readonly random?: Random;
   readonly now?: () => number;
 }
@@ -54,6 +59,14 @@ export function tipRateOf(percentText: string): bigint {
 export function newCopyGasLimitOf(traffic: TrafficConfig, chainId: number): bigint | null {
   const text = traffic.newCopyGasLimit[String(chainId)];
   return text === undefined ? null : BigInt(text);
+}
+
+/**
+ * The beacon API whose state proofs confirm the gate of a chain: `traffic.gateBeaconUrls` of the chain, else the beacon
+ * URL of the pair (`EXPLORER_BEACON_URL_<chain id>`), else null.
+ */
+export function gateBeaconUrlOf(traffic: TrafficConfig, side: { readonly chainId: number; readonly beaconUrl: string | null }): string | null {
+  return traffic.gateBeaconUrls[String(side.chainId)] ?? side.beaconUrl;
 }
 
 /** The settings of the removed fixed interval that a configuration still names, as dotted paths. */
@@ -128,6 +141,10 @@ async function runTraffic(input: StartTrafficInput, statePath: string): Promise<
         },
         minimumNativeWei: BigInt(traffic.minimumNativeWei[String(side.chainId)] as string),
         newCopyGasLimit: newCopyGasLimitOf(traffic, side.chainId),
+        gate:
+          overrides.gate === undefined
+            ? createTrafficGate({ client, gate: side.contracts.gate, chainId: side.chainId, beaconUrl: gateBeaconUrlOf(traffic, side) })
+            : overrides.gate(side.chainId, client),
       };
     }) as unknown as readonly [TrafficSide, TrafficSide];
     const random = overrides.random ?? Math.random;
@@ -142,6 +159,7 @@ async function runTraffic(input: StartTrafficInput, statePath: string): Promise<
       ),
       random,
       logger,
+      ...(overrides.sleep === undefined ? {} : { sleep: overrides.sleep }),
     });
     const state = createStateFile({ path: statePath, schema: trafficStateSchema, initial: INITIAL_TRAFFIC_STATE });
     const now = overrides.now ?? Date.now;

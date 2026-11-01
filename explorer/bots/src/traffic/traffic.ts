@@ -1,8 +1,9 @@
 import { formatUnits, type Address, type Hex } from "viem";
-import { bridgedSymbolOf, defaultTip, encodeFeeDirector, type FeeDirector, type ProtectedAddress, type ProofDirection } from "@zk-bridge/shared";
+import { bridgedSymbolOf, defaultTip, encodeFeeDirector, GateEvidenceError, type FeeDirector, type GateConfirmation, type ProtectedAddress, type ProofDirection } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type TransactionPort } from "../chain/transactions.ts";
 import type { Logger } from "../logging/logger.ts";
 import { approvalData, messageIdOf, relayData, relayRefusalOf, type TrafficReader } from "./chain.ts";
+import type { TrafficGate } from "./gate.ts";
 import { pickTransfer, type Candidate, type Random, type TokenBounds } from "./plan.ts";
 import type { TestToken } from "./tokens-file.ts";
 
@@ -24,6 +25,11 @@ export interface TrafficSide {
   readonly minimumNativeWei: bigint;
   /** The gas limit that a send to this chain asks for when it deploys a bridged copy here, or null for the mediator's default. */
   readonly newCopyGasLimit: bigint | null;
+  /**
+   * The deposit gate of this chain. Before a send from here, the bot confirms the epoch when the gate enforces and nobody
+   * confirmed it yet. Null: never look (tests, or a chain without a gate).
+   */
+  readonly gate: TrafficGate | null;
 }
 
 /** Input of {@link createTraffic}. */
@@ -40,7 +46,15 @@ export interface TrafficInput {
   readonly protectedAddresses: readonly ProtectedAddress[];
   readonly random: Random;
   readonly logger: Logger;
+  /** Waits, between two looks at the gate when the epoch has no header yet. Default: a timer. */
+  readonly sleep?: (milliseconds: number) => Promise<void>;
 }
+
+/**
+ * How many times an attempt waits for a header of the new epoch (a slot each) before it gives up. A header is missing in
+ * the first slot of an epoch and after missed slots.
+ */
+export const GATE_WAITS = 3;
 
 /** What one attempt did. */
 export type TrafficOutcome =
@@ -54,6 +68,9 @@ export type TrafficOutcome =
       readonly messageId: Hex | null;
     }
   | { readonly kind: "skipped"; readonly direction: ProofDirection; readonly reason: string };
+
+/** An attempt that sent nothing more. */
+type SkippedOutcome = Extract<TrafficOutcome, { readonly kind: "skipped" }>;
 
 /** Input of one attempt. */
 export interface AttemptInput {
@@ -82,6 +99,7 @@ function sidesOf(sides: readonly [TrafficSide, TrafficSide], direction: ProofDir
 export function createTraffic(input: TrafficInput): Traffic {
   const { sides, logger } = input;
   const wallet = sides[0].port.account;
+  const sleep = input.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
 
   /** The candidates of a direction: the native tokens of the source, and the copies on the source of the destination's tokens. */
   async function candidatesOf(source: TrafficSide, destination: TrafficSide): Promise<Candidate[]> {
@@ -105,7 +123,7 @@ export function createTraffic(input: TrafficInput): Traffic {
     return candidates;
   }
 
-  function skip(direction: ProofDirection, reason: string, fields: Record<string, unknown> = {}): TrafficOutcome {
+  function skip(direction: ProofDirection, reason: string, fields: Record<string, unknown> = {}): SkippedOutcome {
     logger.warn("traffic_skipped", { direction, reason, ...fields });
     return { kind: "skipped", direction, reason };
   }
@@ -157,6 +175,14 @@ export function createTraffic(input: TrafficInput): Traffic {
       native -= receipt.gasUsed * receipt.effectiveGasPrice;
     }
 
+    // The gate of the source chain: the first send of an epoch confirms it first (see "Gate evidence: confirm, then send"
+    // in docs/hardened-build-contract.md). A gate that does not enforce, or a confirmed epoch, needs nothing.
+    if (source.gate !== null) {
+      const confirmed = await confirmGate(source, direction, described, native, announce);
+      if (confirmed.kind === "skipped") return confirmed;
+      native -= confirmed.spentWei;
+    }
+
     // The first send of a native token deploys its copy on the destination: ask for the gas the destination needs for that.
     // A send whose copy has no code yet deploys it. With `deployMessage` (no copy came home yet) the runner cannot price
     // the send: the indexer names no destination token for a deploy message. Both are logged, so the operator delivers it
@@ -192,6 +218,52 @@ export function createTraffic(input: TrafficInput): Traffic {
       priority: pick.priority,
     });
     return { kind: "sent", direction, symbol: described.symbol, token: candidate.sourceToken, amount, transactionHash: receipt.hash, messageId };
+  }
+
+  /** Confirms the gate of the source when the epoch needs it: the confirmation goes as its own transaction, before the send. */
+  async function confirmGate(
+    source: TrafficSide,
+    direction: ProofDirection,
+    described: Record<string, unknown>,
+    native: bigint,
+    announce: () => Promise<void>,
+  ): Promise<{ readonly kind: "ready"; readonly spentWei: bigint } | SkippedOutcome> {
+    const gate = source.gate as TrafficGate;
+    let confirmation: GateConfirmation;
+    for (let waited = 0; ; waited += 1) {
+      try {
+        confirmation = await gate.ensure(wallet);
+      } catch (error) {
+        const code = error instanceof GateEvidenceError ? error.code : null;
+        return skip(direction, "gate-evidence-failed", { ...described, chain: source.name, code, detail: (error as Error).message });
+      }
+      if (confirmation.kind !== "wait" || waited >= GATE_WAITS) break;
+      await sleep(confirmation.retryAfterSeconds * 1000);
+    }
+    if (confirmation.kind === "not-needed") return { kind: "ready", spentWei: 0n };
+    const skipped = (reason: string, fields: Record<string, unknown>) => skip(direction, reason, { ...described, chain: source.name, ...fields });
+    if (confirmation.kind === "sealed") return skipped("gate-sealed", { epoch: confirmation.epoch });
+    if (confirmation.kind === "wait") return skipped("gate-epoch-has-no-header", { epoch: confirmation.epoch, headerEpoch: confirmation.headerEpoch });
+    const terms = sendTerms(await source.port.feeQuote(), confirmation.gas);
+    const worst = worstCaseCostWei(terms);
+    if (native < worst + source.minimumNativeWei) {
+      return skipped("native-below-reserve", { step: "gate-confirm", nativeWei: native, worstCaseWei: worst, reserveWei: source.minimumNativeWei });
+    }
+    await announce();
+    const receipt = await source.port.send({ ...confirmation.call, ...terms });
+    if (!receipt.success) return skipped("gate-confirm-reverted", { epoch: confirmation.epoch, transactionHash: receipt.hash });
+    logger.info("gate_confirmed", {
+      direction,
+      chain: source.name,
+      gate: confirmation.call.to,
+      epoch: confirmation.epoch,
+      forkVersion: confirmation.forkVersion,
+      transactionHash: receipt.hash,
+      gasUsed: receipt.gasUsed,
+      gasCostWei: receipt.gasUsed * receipt.effectiveGasPrice,
+      validUntil: new Date(Number(confirmation.validUntil) * 1000).toISOString(),
+    });
+    return { kind: "ready", spentWei: receipt.gasUsed * receipt.effectiveGasPrice };
   }
 
   async function describeTokens() {
