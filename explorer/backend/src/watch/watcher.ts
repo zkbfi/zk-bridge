@@ -84,6 +84,14 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
   let known: { facts: LightClientFacts; at: number; finalizedSlot: number; history: SourceHistory } | null = null;
   let warm: WarmupState = NO_WARMUP;
   let scanFailing = false;
+  /** Whether a warm-up ping waits for its answer: never more than one per direction. */
+  let pingOutstanding = false;
+  /**
+   * The sync-committee period of the source's finality when this watcher last started a keep-alive. Another keep-alive
+   * in the same period starts only once the head is older than the keep-alive age: a guard against a planner that keeps
+   * calling for proofs that cannot hand off.
+   */
+  let keepAlivePeriod: number | null = null;
 
   const toWaiting = (messages: readonly ListedMessage[], facts: LightClientFacts): WaitingMessage[] =>
     messages.map((message) => ({ messageId: message.messageId, slot: slotAtTime(message.timestamp, facts) }));
@@ -144,6 +152,14 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       logger[level]("proof_not_due", { direction, finalizedSlot: observation.finalizedSlot, why: decision.why, detail: decision.detail });
       return;
     }
+    const finalizedPeriod = Math.floor(observation.finalizedSlot / facts.slotsPerPeriod);
+    if (decision.why === "keep-alive" && keepAlivePeriod === finalizedPeriod) {
+      const headAge = nowSeconds - (facts.genesisTime + facts.headSlot * facts.secondsPerSlot);
+      if (headAge <= input.policy.keepAliveSeconds) {
+        logger.info("proof_not_due", { direction, finalizedSlot: observation.finalizedSlot, why: "keep-alive-this-period", detail: `a keep-alive already started while the source's finality was in period ${finalizedPeriod}, and the head is younger than the keep-alive age` });
+        return;
+      }
+    }
     logger.info("proof_due", { direction, finalizedSlot: observation.finalizedSlot, why: decision.why, detail: decision.detail, attempt });
     const active = input.findActiveJob();
     if (active !== null) {
@@ -156,11 +172,12 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       direction,
       reason: "finality",
       caller: WATCH_CALLER,
-      ...(decision.why === "message" ? { messageId: decision.messageIds[0] as Hex } : { plannedKeepAlive: true }),
+      ...(decision.why === "message" ? { messageId: decision.messageIds[0] as Hex } : decision.handoff ? { plannedHandoff: true } : {}),
       since: observation.receivedAt,
     });
     if (!("refused" in result)) {
       doneSlot = observation.finalizedSlot;
+      if (decision.why === "keep-alive") keepAlivePeriod = finalizedPeriod;
       return;
     }
     if (result.refused === "nothing-to-prove") {
@@ -211,17 +228,32 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
         const messages = toWaiting(await input.readMessages(), facts);
         const nowSeconds = now() / 1000;
         const targets = warmupTargets({ facts, finalizedSlot: known.finalizedSlot, messages, pendingProof: pendingProofOf(input.findLatestJob()), history: known.history, policy: input.policy, nowSeconds });
-        const step = warmupStep({ nowSeconds, targets, state: warm, config: input.warmup, jobActive: input.findActiveJob() !== null });
+        const step = warmupStep({ nowSeconds, targets, state: warm, config: input.warmup, jobActive: input.findActiveJob() !== null, pingOutstanding });
         scanFailing = false;
         if (!step.ping) return;
         warm = step.state;
-        let status: number | null = null;
+        const why = step.target.why;
+        const secondsToStart = Math.round(step.target.at - nowSeconds);
+        pingOutstanding = true;
         try {
-          status = await input.ping();
+          const status = await input.ping();
+          const answeredAt = now() / 1000;
+          // 200: a worker is up. The session is over; the next one waits out the minimum gap.
+          warm = status === 200 ? { ...warm, sessionEndsAt: answeredAt, lastPingAt: answeredAt } : { ...warm, lastPingAt: answeredAt };
+          logger.info("warmup_ping", { direction, why, session: step.newSession ? "new" : "repeat", secondsToStart, status });
         } catch (error) {
-          logger.warn("warmup_ping_failed", { direction, error });
+          const answeredAt = now() / 1000;
+          if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+            // The endpoint held the ping longer than we waited (a cold worker). Not a failure; no new session for the gap.
+            warm = { sessionStartedAt: answeredAt, sessionEndsAt: answeredAt, lastPingAt: answeredAt };
+            logger.info("warmup_ping_timeout", { direction, why, secondsToStart, waitedSeconds: Math.round(answeredAt - nowSeconds) });
+          } else {
+            warm = { ...warm, lastPingAt: answeredAt };
+            logger.warn("warmup_ping_failed", { direction, why, error });
+          }
+        } finally {
+          pingOutstanding = false;
         }
-        logger.info("warmup_ping", { direction, why: step.target.why, session: step.newSession ? "new" : "repeat", secondsToStart: Math.round(step.target.at - nowSeconds), status });
       } catch (error) {
         if (!scanFailing) logger.warn("watch_scan_failed", { direction, error });
         scanFailing = true;

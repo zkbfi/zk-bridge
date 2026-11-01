@@ -127,6 +127,54 @@ describe("decideProof", () => {
     expect(decision).toMatchObject({ due: false, why: "wait-for-finality" });
   });
 
+  it("a keep-alive the age rule calls for goes through the indexer's own gate, not as a planned handoff", () => {
+    const head = 100 * PERIOD + 10;
+    const nowSlot = head + 13 * 360;
+    expect(decide({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64 })).toMatchObject({ due: true, why: "keep-alive", handoff: false });
+  });
+
+  it("a period handoff is a planned handoff", () => {
+    const head = 100 * PERIOD + 8000;
+    const nowSlot = 102 * PERIOD - 1000;
+    expect(decide({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64 })).toMatchObject({ due: true, why: "keep-alive", handoff: true });
+  });
+
+  it("a light client without a head is due, through the indexer's gate", () => {
+    const nowSlot = 100 * PERIOD + 400;
+    expect(decide({ facts: facts(0, false), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64, history: { kind: "serves" } })).toMatchObject({ due: true, why: "keep-alive", handoff: false });
+  });
+
+  describe("the keep-alive loop of 2026-10-31 (PulseChain v4 to Sepolia, period 1368)", () => {
+    // The head in period 1368, only its own committee stored, 544 slots (1.5 h) before period 1369 begins: the
+    // deadline is inside the six hour margin, and a proof every finality moved the head inside the same period.
+    const P = 1368;
+    const head = 11_214_304;
+    const nextPeriod = (P + 1) * PERIOD;
+
+    it("a young head in the period of the source's finality is not due, however close the deadline", () => {
+      const nowSlot = head + 40;
+      const decision = decide({ facts: facts(head, false), nowSeconds: at(nowSlot), finalizedSlot: head + 32 });
+      expect(decision).toMatchObject({ due: false, why: "nothing-due" });
+      expect(decision.detail).toContain(`both in period ${P}`);
+      expect(decision.detail).toContain(`period ${P + 1} begins at ${new Date(at(nextPeriod) * 1000).toISOString()}`);
+      expect(decision.detail).toContain("in 1.4 h");
+      // With the next committee stored it is the same: nothing to hand off before the source finalizes in P + 1.
+      expect(decide({ facts: facts(head, true), nowSeconds: at(nowSlot), finalizedSlot: head + 32 })).toMatchObject({ due: false, why: "nothing-due" });
+    });
+
+    it("is due once when the source crosses into period 1369, then not again in it", () => {
+      const nowSlot = nextPeriod + 200;
+      const crossed = decide({ facts: facts(head, false), nowSeconds: at(nowSlot), finalizedSlot: nextPeriod + 100, history: { kind: "serves" } });
+      expect(crossed).toMatchObject({ due: true, why: "keep-alive", handoff: true });
+      // The job moved the head into period 1369 with its committee: the next finality in 1369 is not due.
+      const moved = nextPeriod + 100;
+      expect(decide({ facts: facts(moved, false), nowSeconds: at(nowSlot + 32), finalizedSlot: moved + 32 })).toMatchObject({ due: false, why: "nothing-due" });
+      // Even late in 1369, inside the margin of its own deadline, a young head in the period of finality is not due.
+      const late = (P + 2) * PERIOD - 600;
+      expect(decide({ facts: facts(late, false), nowSeconds: at(late + 40), finalizedSlot: late + 32 })).toMatchObject({ due: false, why: "nothing-due" });
+    });
+  });
+
   it("a light client that needs handoff steps the source serves is due; a stranded one is not", () => {
     const head = 100 * PERIOD + 8000;
     const nowSlot = 103 * PERIOD + 500;
@@ -168,12 +216,12 @@ describe("warmupTargets", () => {
     ]);
   });
 
-  it("a keep-alive that the next finality makes due asks for a warm worker then", () => {
-    // The head turns 12 hours old during the current epoch.
-    const head = 100 * PERIOD + 10;
-    const nowSlot = head + 12 * 360 - 5;
+  it("a period handoff that the next finality makes due asks for a warm worker then", () => {
+    // The head in period 100 with only its own committee; the clock crosses into period 101 during the current epoch.
+    const head = 100 * PERIOD + 8000;
+    const nowSlot = 101 * PERIOD - 5;
     const targets = warmupTargets({
-      facts: facts(head),
+      facts: facts(head, false),
       finalizedSlot: nowSlot - 70,
       messages: [],
       pendingProof: null,
@@ -183,6 +231,19 @@ describe("warmupTargets", () => {
     });
     const nextEpochStart = (Math.floor(nowSlot / 32) + 1) * 32;
     expect(targets).toEqual([{ at: at(nextEpochStart + 1), why: "keep-alive" }]);
+    // A source known to lack the handoff leaves the light client stranded: nothing to warm up for.
+    expect(warmupTargets({ facts: facts(head, false), finalizedSlot: nowSlot - 70, messages: [], pendingProof: null, history: { kind: "missing", period: 100 }, policy: DEFAULT_POLICY, nowSeconds: at(nowSlot) })).toEqual([]);
+  });
+
+  it("a keep-alive the age rule makes due, or one inside the period of finality, asks for no warm worker", () => {
+    // The head turns 12 hours old during the current epoch: the indexer's gate takes it, no warm-up.
+    const head = 100 * PERIOD + 10;
+    const nowSlot = head + 12 * 360 - 5;
+    const input = { facts: facts(head), finalizedSlot: nowSlot - 70, messages: [], pendingProof: null, history: { kind: "not-needed" } as const, policy: DEFAULT_POLICY };
+    expect(warmupTargets({ ...input, nowSeconds: at(nowSlot) })).toEqual([]);
+    // Today's loop: a young head in period 1368, 1.5 h before its deadline.
+    const young = 11_214_304;
+    expect(warmupTargets({ ...input, facts: facts(young, false), finalizedSlot: young + 32, nowSeconds: at(young + 40) })).toEqual([]);
   });
 
   it("a keep-alive that is due already, or a pending proof, asks for nothing", () => {
@@ -214,8 +275,8 @@ describe("warmupStep", () => {
   const empty = { sessionStartedAt: null, sessionEndsAt: null, lastPingAt: null };
 
   it("pings when the lead time before a target begins, and not before", () => {
-    expect(warmupStep({ nowSeconds: target.at - config.leadSeconds - 1, targets: [target], state: empty, config, jobActive: false })).toEqual({ ping: false });
-    const step = warmupStep({ nowSeconds: target.at - config.leadSeconds, targets: [target], state: empty, config, jobActive: false });
+    expect(warmupStep({ nowSeconds: target.at - config.leadSeconds - 1, targets: [target], state: empty, config, jobActive: false, pingOutstanding: false })).toEqual({ ping: false });
+    const step = warmupStep({ nowSeconds: target.at - config.leadSeconds, targets: [target], state: empty, config, jobActive: false, pingOutstanding: false });
     expect(step).toEqual({
       ping: true,
       newSession: true,
@@ -227,22 +288,35 @@ describe("warmupStep", () => {
   it("repeats the ping every interval inside the session, then stops at its end", () => {
     const start = target.at - config.leadSeconds;
     const state = { sessionStartedAt: start, sessionEndsAt: target.at + config.graceSeconds, lastPingAt: start };
-    expect(warmupStep({ nowSeconds: start + config.intervalSeconds - 1, targets: [target], state, config, jobActive: false })).toEqual({ ping: false });
-    const again = warmupStep({ nowSeconds: start + config.intervalSeconds, targets: [target], state, config, jobActive: false });
+    expect(warmupStep({ nowSeconds: start + config.intervalSeconds - 1, targets: [target], state, config, jobActive: false, pingOutstanding: false })).toEqual({ ping: false });
+    const again = warmupStep({ nowSeconds: start + config.intervalSeconds, targets: [target], state, config, jobActive: false, pingOutstanding: false });
     expect(again).toMatchObject({ ping: true, newSession: false, state: { sessionStartedAt: start, lastPingAt: start + config.intervalSeconds } });
-    expect(warmupStep({ nowSeconds: target.at + config.graceSeconds + 1, targets: [target], state, config, jobActive: false })).toEqual({ ping: false });
+    expect(warmupStep({ nowSeconds: target.at + config.graceSeconds + 1, targets: [target], state, config, jobActive: false, pingOutstanding: false })).toEqual({ ping: false });
   });
 
   it("opens no new session within the minimum gap of the last one", () => {
     const start = target.at - config.leadSeconds;
     const state = { sessionStartedAt: start, sessionEndsAt: start + 10, lastPingAt: start };
     const later = { at: start + 60, why: "message" as const };
-    expect(warmupStep({ nowSeconds: start + 30, targets: [later], state, config, jobActive: false })).toEqual({ ping: false });
+    expect(warmupStep({ nowSeconds: start + 30, targets: [later], state, config, jobActive: false, pingOutstanding: false })).toEqual({ ping: false });
     const farLater = { at: start + config.minGapSeconds + config.leadSeconds, why: "keep-alive" as const };
-    expect(warmupStep({ nowSeconds: start + config.minGapSeconds, targets: [farLater], state, config, jobActive: false })).toMatchObject({ ping: true, newSession: true, target: farLater });
+    expect(warmupStep({ nowSeconds: start + config.minGapSeconds, targets: [farLater], state, config, jobActive: false, pingOutstanding: false })).toMatchObject({ ping: true, newSession: true, target: farLater });
+  });
+
+  it("never sends a second ping while one is outstanding", () => {
+    expect(warmupStep({ nowSeconds: target.at, targets: [target], state: empty, config, jobActive: false, pingOutstanding: true })).toEqual({ ping: false });
+  });
+
+  it("pings once before a handoff: no repeat inside its session", () => {
+    const handoff = { at: 10_000, why: "keep-alive" as const };
+    const start = handoff.at - config.leadSeconds;
+    const first = warmupStep({ nowSeconds: start, targets: [handoff], state: empty, config, jobActive: false, pingOutstanding: false });
+    expect(first).toMatchObject({ ping: true, newSession: true });
+    const state = (first as { state: typeof empty }).state;
+    expect(warmupStep({ nowSeconds: start + config.intervalSeconds * 2, targets: [handoff], state, config, jobActive: false, pingOutstanding: false })).toEqual({ ping: false });
   });
 
   it("does not ping while a job of the direction runs: the prover holds the worker", () => {
-    expect(warmupStep({ nowSeconds: target.at, targets: [target], state: empty, config, jobActive: true })).toEqual({ ping: false });
+    expect(warmupStep({ nowSeconds: target.at, targets: [target], state: empty, config, jobActive: true, pingOutstanding: false })).toEqual({ ping: false });
   });
 });

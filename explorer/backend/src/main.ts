@@ -94,7 +94,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     path: input.environment.PATH ?? "/usr/bin:/bin",
     logger,
   });
-  const pingProver = createProverPing({ endpoint: config.remote.endpoint, apiKey: secrets.runpodApiKey });
+  const pingProver = createProverPing({ endpoint: config.remote.endpoint, apiKey: secrets.runpodApiKey, timeoutMilliseconds: config.watch.warmup.pingTimeoutSeconds * 1000 });
   const context: BackendModuleContext = { storage, config, pair: input.pair, prover: provers.utilityProver, proverForJob: provers.proverForJob, readProofNeed, now, logger, pingProver };
   const app = createApp({ context, modules: MODULES, enabled: input.enabled });
   const stoppers = await Promise.all(input.enabled.map((name) => MODULES[name].start(context)));

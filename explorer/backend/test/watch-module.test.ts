@@ -242,7 +242,7 @@ describe("the request service, for the watcher", () => {
     backend.prover.settleAll({ kind: "up-to-date" });
     await service.settled();
   });
-  it("takes the watcher's planned keep-alive when the indexer's age rule says nothing is due, and only from the watcher", async () => {
+  it("takes the watcher's planned handoff when the indexer's age rule says nothing is due, and only from the watcher", async () => {
     // The planner reads the light client and the beacon chain; the indexer only knows the head's age. A head 2 h old
     // can still be 5.9 h from its committee deadline, and the age rule (12 h) would refuse it until it strands.
     const proofNeed = fakeProofNeed({ needed: false });
@@ -257,8 +257,10 @@ describe("the request service, for the watcher", () => {
       logger: backend.log.logger,
     });
     const base = { pair: "eth-pls", direction: "second-to-first" as const };
-    expect(await service.submit({ ...base, caller: "203.0.113.9", reason: "keep-alive", plannedKeepAlive: true })).toEqual({ refused: "nothing-to-prove" });
-    const started = await service.submit({ ...base, caller: "watch", reason: "finality", plannedKeepAlive: true });
+    expect(await service.submit({ ...base, caller: "203.0.113.9", reason: "keep-alive", plannedHandoff: true })).toEqual({ refused: "nothing-to-prove" });
+    // A keep-alive of the age rule comes without the flag and meets the indexer's rule like any request.
+    expect(await service.submit({ ...base, caller: "watch", reason: "finality" })).toEqual({ refused: "nothing-to-prove" });
+    const started = await service.submit({ ...base, caller: "watch", reason: "finality", plannedHandoff: true });
     expect(started).toMatchObject({ jobId: expect.any(String) });
     const line = backend.log.lines.map((entry) => JSON.parse(entry) as Record<string, unknown>).find((entry) => entry.event === "job_started");
     expect(line).toMatchObject({ reason: "finality", why: "keep-alive" });
