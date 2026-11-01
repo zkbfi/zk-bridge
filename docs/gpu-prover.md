@@ -52,7 +52,7 @@ The page "Load balancing endpoints" (https://docs.runpod.io/serverless/load-bala
 | Authentication | `Authorization: Bearer <RunPod API key>`, checked by the RunPod proxy. The worker checks nothing. |
 | Port of the API | Environment variable `PORT`. The default is 80. The image sets 8000, because the worker does not run as the superuser. |
 | Port of the health check | Environment variable `PORT_HEALTH`. The default is the value of `PORT`. |
-| Health path | `/ping` (variable `HEALTH_CHECK_PATH`, default `/ping`). 200 means ready. 204 means starting. Any other status marks the worker unhealthy, and RunPod removes it from the pool. |
+| Health path | `/ping` (variable `HEALTH_CHECK_PATH`, default `/ping`). 200 means ready. 204 means starting. Any other status marks the worker unhealthy, and RunPod removes it from the pool. The worker answers 503 for good when it refuses its host (MIG slice or too little host memory, see "GPU type requirement") and after a failed proof. |
 | Wait when no worker is free | 2 minutes. |
 | Processing time of one request | 5.5 minutes. |
 | Size of a request or an answer | 30 MB. |
@@ -66,8 +66,8 @@ The routes of the worker:
 
 | Route | Answer |
 |---|---|
-| `GET /ping` | 204 while the SP1 setup runs. 200 with `{"status":"ready"}` afterwards. |
-| `POST /prove` | 200 with `{"proof":"0x...","publicValues":"0x...","timings":{...}}`. `timings` is optional (see "Timing logs"). |
+| `GET /ping` | 204 while the SP1 setup runs. 200 with `{"status":"ready"}` afterwards. 503 with `{"error":"..."}` for good when the worker refused its host or a proof failed. |
+| `POST /prove` | 200 with `{"proof":"0x...","publicValues":"0x...","timings":{...}}`. `timings` is optional (see "Timing logs"). 503 with `{"error":"..."}` when the worker refused its host. |
 
 The body of `POST /prove`:
 
@@ -474,6 +474,15 @@ The Groth16 step needs more host memory than a MIG slice gives. A first attempt 
 The endpoint used pool `ADA_24` only (RTX 4090, $1.10 per hour serverless). Do not add a pool or a GPU type that can hand out a MIG slice.
 
 On 2026-10-31 RTX 4090 stock ran low and jobs sat at "Waiting for GPU to become available". The endpoint now names whole GPUs with 24 GB or more by type (not by pool), in priority order: RTX 4090, L4, RTX 3090, RTX 5090, RTX 6000 Ada, L40S, A100 SXM4 80 GB, RTX PRO 6000 Blackwell Server Edition, H100 80 GB HBM3. A proof takes one to three minutes, so even the dearest type costs about $0.20 per proof. No `MIG` type is listed. RunPod's REST API dropped the RTX PRO 4000, 4500 and 5000 Blackwell types from the list it stored.
+
+The type list does not stop RunPod from handing out a MIG slice. On 2026-11-01 the endpoint `43nsvfb8svkosr` (load balancing) assigned `NVIDIA RTX PRO 6000 Blackwell Server Edition MIG 1g.24gb` and `MIG 2g.48gb` twice, although the list names only whole GPUs. So the worker checks its host itself, once at the start (`prover/src/worker.rs`):
+
+- It reads the GPU name, the device UUID and the MIG mode from `nvidia-smi`, and the host memory it may use: the smaller of the cgroup limit (`memory.max`, or the v1 `memory.limit_in_bytes`) and `MemTotal`.
+- It refuses when the GPU is a MIG slice (the word `MIG` in the name, a UUID that starts with `MIG-`, or `mig.mode.current` is `Enabled`), or when the host memory is below the floor. The floor is `ZK_BRIDGE_WORKER_MIN_HOST_MEMORY_GIB`, default 48 (the CPU run peaked near 56 GiB, the RTX 4090 and 5090 hosts had 128 GiB or more, the MIG slice had 28.87 GiB). 0 switches the memory check off.
+- A reading that is missing (no `nvidia-smi`, no cgroup file) never refuses.
+- A refusing worker logs one line, `event=worker_refused reason=mig|host_memory gpu="..." host_memory_gib=...`, and does not load the proving client. It answers `/ping` and `/prove` with 503 and a JSON `error` for good. RunPod then removes it, and the client treats 503 as a failed attempt and tries again, which reaches another worker.
+
+The image needs a rebuild to carry this check. The image `v5` does not hold it.
 
 ### Results on RTX 4090 (pool `ADA_24`)
 
