@@ -44,3 +44,20 @@ worker (min workers 0) started cold, about 24 s, only once the prover asked.
   `warmup_ping` (status only).
 - **Config:** `watch` in backend.json; on by default when `indexerUrl` and the source beacon endpoints are set. The
   three-hour keep-alive timer stays as the backstop.
+
+## Correction, 2026-11-01
+
+Owner, verbatim: "it looks like half of the runpod runs are failing. it is wasting a lot of usage."
+
+The rule above let a keep-alive start at every finality while the committee deadline sat inside the planner's margin.
+A proof inside the head's own period cannot hand off to the next committee, so on 2026-10-31 the watcher paid for 47
+proofs in six hours that changed nothing, and 32 warm-up pings timed out on our side while RunPod still counted and
+started a worker for each. The rule now (commit c8663d76):
+
+- **Keep-alive due** only when a proof can make progress: the source has finalized a later period than the head's (or
+  the planner needs handoff steps), the head is older than `keepAliveSeconds`, or there is no head. A young head in the
+  source's finalized period is not due, however close the deadline. At most one keep-alive per direction per period.
+- **The request service** takes the watcher's word only for a handoff (`plannedHandoff`); everything else goes through
+  the indexer's check.
+- **Warm-up:** one ping at a time per direction, waiting up to 300 s (`warmup.pingTimeoutSeconds`), only before a sent
+  message's finality or a due handoff; a 200 ends the session, a timeout is logged at info and not repeated at once.
