@@ -49,6 +49,13 @@ describe("loadPair", () => {
     expect(() => loadPair({ environment: { EXPLORER_STATE_URLS_1: "ftp://x.example" }, deployment })).toThrow(/EXPLORER_STATE_URLS_1/);
   });
 
+  it("reads the header RPCs of a chain as a comma list, and refuses one that is not http", () => {
+    const pair = loadPair({ environment: { EXPLORER_HEADER_RPC_URL_1: " https://h.example , https://i.example/k ," }, deployment });
+    expect(pair.sides[0].headerRpcUrls).toEqual(["https://h.example", "https://i.example/k"]);
+    expect(pair.sides[1].headerRpcUrls).toEqual([]);
+    expect(() => loadPair({ environment: { EXPLORER_HEADER_RPC_URL_1: "ws://x.example" }, deployment })).toThrow(/EXPLORER_HEADER_RPC_URL_1/);
+  });
+
   it("lets a chain start with no endpoint when the caller does not require one, so the user can set it later", () => {
     const stripped = { chain_a: { ...deployment.chain_a, rpc_url: undefined }, chain_b: deployment.chain_b };
     const pair = loadPair({ environment: {}, deployment: stripped, requireRpcUrl: false });

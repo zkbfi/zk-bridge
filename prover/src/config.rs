@@ -294,6 +294,12 @@ pub struct DestinationConfig {
     /// The largest block range of one `eth_getLogs` call.
     #[serde(default = "default_log_range")]
     pub log_block_range: u64,
+    /// More execution RPCs of the destination chain, asked in order only for `debug_getRawHeader`, when `rpc_url` does not
+    /// serve the raw header (a node without the method answers -32601). The `opening-proof` command reads the header of a
+    /// block of this chain; a node with a long `eth_getProof` history may lack the method, and a node with the method may
+    /// keep too little proof history. Every header is still checked against the block hash, so none is trusted.
+    #[serde(default)]
+    pub header_rpc_urls: Vec<String>,
 }
 
 fn default_log_range() -> u64 {
@@ -658,6 +664,15 @@ fn validate_route(name: &str, route: &RouteConfig) -> Result<()> {
     {
         return Err(context(
             "source.rpc_url must start with http:// or https://".into(),
+        ));
+    }
+    if destination
+        .header_rpc_urls
+        .iter()
+        .any(|url| !is_http_url(url))
+    {
+        return Err(context(
+            "every destination.header_rpc_urls entry must start with http:// or https://".into(),
         ));
     }
     if destination.log_block_range == 0 {

@@ -21,6 +21,11 @@ export interface ChainEndpoints {
   readonly beacon: SecretReference | null
   /** More beacon APIs for states only, as one comma separated value. Absent when the file names none. */
   readonly stateUrls?: SecretReference | null
+  /**
+   * More execution RPCs of the chain, asked only for `debug_getRawHeader` when `rpc` lacks it, as one comma separated
+   * value (`EXPLORER_HEADER_RPC_URL_<chain id>`). Absent when the file names none.
+   */
+  readonly headerRpc?: SecretReference | null
 }
 
 /** The proving policy. */
@@ -81,10 +86,12 @@ export function parseProverSetup(value: unknown): ProverSetup {
     if (!/^\d+$/.test(chainId)) throw new ProverSetupError(`setup.chains key "${chainId}" is not a chain identifier.`)
     const record = asRecord(entry, `setup.chains.${chainId}`)
     const stateUrls = parseReference(record.stateUrls, `setup.chains.${chainId}.stateUrls`)
+    const headerRpc = parseReference(record.headerRpc, `setup.chains.${chainId}.headerRpc`)
     chains[chainId] = {
       rpc: parseReference(record.rpc, `setup.chains.${chainId}.rpc`),
       beacon: parseReference(record.beacon, `setup.chains.${chainId}.beacon`),
       ...(stateUrls === null ? {} : { stateUrls }),
+      ...(headerRpc === null ? {} : { headerRpc }),
     }
   }
   const policy = asRecord(root.policy, 'setup.policy')

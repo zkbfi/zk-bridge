@@ -82,6 +82,32 @@ describe("loading the context", () => {
 
   // A key of no known shape, so only the vault can keep it out of the log.
   const STATE_KEY = "Qm7rT2xLp9WzK4ne";
+  const HEADER_KEY = "Zx3vB8nQw1Ty6pLk";
+
+  it("resolves the header RPCs of a chain through their reference, and keeps their keys out of the log", async () => {
+    const setup: ProverSetup = {
+      ...emptyProverSetup(),
+      chains: {
+        "1": { rpc: null, beacon: null, headerRpc: { source: "environment", variable: "ETH_HEADERS" } },
+      },
+    };
+    const { configPath } = await files(setup);
+    const lines: string[] = [];
+    const context = await loadBotContext({
+      configPath,
+      environment: {
+        EXPLORER_RPC_URL_1: "http://127.0.0.1:1",
+        EXPLORER_RPC_URL_369: "http://127.0.0.1:2",
+        ETH_HEADERS: `https://headers-a.example, https://rpc.example/${HEADER_KEY}/1`,
+        EXPLORER_HEADER_RPC_URL_369: `https://other.example/v1/${HEADER_KEY}`,
+      },
+      write: (line) => lines.push(line),
+    });
+    expect(context.pair.sides[0].headerRpcUrls).toEqual(["https://headers-a.example", `https://rpc.example/${HEADER_KEY}/1`]);
+    expect(context.pair.sides[1].headerRpcUrls).toEqual([`https://other.example/v1/${HEADER_KEY}`]);
+    context.logger.info("headers", { first: context.pair.sides[0].headerRpcUrls?.[1], second: context.pair.sides[1].headerRpcUrls?.[0] });
+    expect(lines.join("\n")).not.toContain(HEADER_KEY);
+  });
 
   it("keeps a key inside one of several state URLs out of the log, from the setup file or from the environment", async () => {
     const setup: ProverSetup = {

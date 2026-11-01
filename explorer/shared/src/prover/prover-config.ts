@@ -135,6 +135,12 @@ function stateLines(stateUrls: readonly string[], cacheDirectory: string | undef
   return lines;
 }
 
+/** `header_rpc_urls` of the destination: the endpoints that the `opening-proof` command asks for the raw header. */
+function headerLines(headerRpcUrls: readonly string[]): readonly string[] {
+  if (headerRpcUrls.length === 0) return [];
+  return [`header_rpc_urls = [${headerRpcUrls.map((url) => quoted(url, "destination header rpc endpoint")).join(", ")}]`];
+}
+
 function handoffLines(handoff: HandoffSection | undefined): readonly string[] {
   if (handoff === undefined) return ['targets = ["stdout"]'];
   return [
@@ -184,6 +190,7 @@ export function renderProverConfig(
     `light_client = ${quoted(destination.contracts.lightClient, "destination light client")}`,
     `bridge = ${quoted(destination.contracts.bridge, "destination bridge")}`,
     `start_block = ${destination.startBlock}`,
+    ...headerLines(destination.headerRpcUrls ?? []),
     "",
   );
   return lines.join("\n");

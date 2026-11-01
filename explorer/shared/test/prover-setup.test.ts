@@ -58,6 +58,16 @@ describe("parseProverSetup", () => {
     expect(() => parseProverSetup(input)).toThrow(/setup.chains.943.stateUrls/);
   });
 
+  it("parses an optional reference to the header RPCs of a chain, and refuses a value", () => {
+    const input = valid();
+    input.chains = { "11155111": { rpc: null, beacon: null, headerRpc: { source: "environment", variable: "EXPLORER_HEADER_RPC_URL_11155111" } }, "1": {} };
+    const parsed = parseProverSetup(input);
+    expect(parsed.chains["11155111"]?.headerRpc).toEqual({ source: "environment", variable: "EXPLORER_HEADER_RPC_URL_11155111" });
+    expect(parsed.chains["1"]?.headerRpc).toBeUndefined();
+    input.chains = { "11155111": { headerRpc: "https://header.example.org" } };
+    expect(() => parseProverSetup(input)).toThrow(/setup.chains.11155111.headerRpc/);
+  });
+
   it("treats a missing chains field as no chains", () => {
     const input = valid();
     delete input.chains;

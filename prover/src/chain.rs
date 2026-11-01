@@ -98,6 +98,17 @@ impl ChainClient {
         Ok(client)
     }
 
+    /// A client that asks this node only for raw headers. It skips the `eth_chainId` check of [`Self::connect`]: every
+    /// raw header is checked against the hash that was asked for, so the node is never trusted, and a header endpoint
+    /// that is down must not stop a run that another source can serve.
+    pub fn header_only(name: &str, chain_id: u64, rpc: Box<dyn JsonRpc>) -> Self {
+        Self {
+            name: name.to_string(),
+            chain_id,
+            rpc,
+        }
+    }
+
     /// The configured name of the chain.
     pub fn name(&self) -> &str {
         &self.name

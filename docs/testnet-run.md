@@ -412,6 +412,14 @@ cast call "<bridge on chain 943>" 'depositsOpen()(bool)' --rpc-url pulsechain_te
 
 Both calls must print `true`. Until then, a send reverts with `DepositsNotOpen()`. Run the manual commands right after an update of the light client of the bridge, or the proof window error above comes back.
 
+**The runner needs a header RPC with `debug_getRawHeader` when its main RPC lacks it.** Besides `eth_getProof`, the proof needs the raw header of the remote block (`debug_getRawHeader`): a Sepolia block under Gloas has header fields that the block JSON does not show, so the rebuild from JSON hashes to another value. On 2026-11-01 the runner opened the bridge on Sepolia, but the bridge on chain 943 failed: the keyless Sepolia RPC with enough proof history (`https://ethereum-sepolia-rpc.publicnode.com`, about 100 blocks) answers `-32601` for `debug_getRawHeader`, and the keyed RPC that serves it keeps too short a proof window. The error was `malformed answer: the remote header: the raw header failed (rpc error -32601 ...) and the rebuild from JSON failed (...)`. Keep the main RPC of Sepolia on the node with the proof history, and name the keyed node as a header RPC, asked only for `debug_getRawHeader`:
+
+- in the environment of the bots: `EXPLORER_HEADER_RPC_URL_11155111=<keyed Sepolia RPC>` (a comma separated list for several), or `chains."11155111".headerRpc` of `prover-setup.json` as a reference (`{ "source": "environment", "variable": "EXPLORER_HEADER_RPC_URL_11155111" }`, or an `op://` reference);
+- in the backend configuration: `headerRpcUrls: { "11155111": ["<keyed Sepolia RPC>"] }`;
+- by hand, in the destination section of the route in `prover.toml`: `header_rpc_urls = ["<keyed Sepolia RPC>"]`.
+
+Every header is checked against the block hash that the own light client stored, so a header RPC is never trusted. When no source gives the header, the error names each one (`destination.rpc_url`, `destination.header_rpc_urls[i]`, the rebuild from JSON) with its cause and no URL. Never paste the keyed URL into a log or a ticket.
+
 ## Step 9: confirm the gate on Sepolia
 
 The gate of Sepolia is enforcing. The first sender of each epoch calls `BeaconForkGate.confirm(evidence)` before a send. See "Gate evidence" in `docs/hardened-build-contract.md`.

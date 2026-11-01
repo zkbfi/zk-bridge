@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { loadProverSetup, setupFilePath, spawnRunner, type CommandRunner, type ProverSetup } from "@zk-bridge/shared/config";
-import { PAIR_DEFINITIONS, beaconVariableName, loadPair, parseStateUrls, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair, type PairSide } from "@zk-bridge/shared";
+import { PAIR_DEFINITIONS, beaconVariableName, headerRpcVariableName, loadPair, parseStateUrls, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair, type PairSide } from "@zk-bridge/shared";
 import { BotConfigError, parseBotConfig, type BotConfig } from "../config/bot-config.ts";
 import { createLogger, type Logger } from "../logging/logger.ts";
 import { createSecretVault, openSecretStore, type Environment, type SecretVault } from "./secrets.ts";
@@ -51,9 +51,11 @@ async function pairEnvironment(setup: ProverSetup, environment: Environment, vau
     const rpc = await vault.resolveOptional(endpoints?.rpc);
     const beacon = await vault.resolveOptional(endpoints?.beacon);
     const stateUrls = await vault.resolveOptional(endpoints?.stateUrls);
+    const headerRpc = await vault.resolveOptional(endpoints?.headerRpc);
     if (rpc !== null) resolved[rpcVariableName(chainId)] = rpc;
     if (beacon !== null) resolved[beaconVariableName(chainId)] = beacon;
     if (stateUrls !== null) resolved[stateUrlsVariableName(chainId)] = stateUrls;
+    if (headerRpc !== null) resolved[headerRpcVariableName(chainId)] = headerRpc;
   }
   return resolved;
 }
@@ -92,11 +94,12 @@ export async function loadBotContext(input: LoadBotContextInput): Promise<BotCon
   const definitionChains = pairChainIds(setup.pair);
   const environment = await pairEnvironment(setup, input.environment, vault, definitionChains);
   const pair = loadPair({ pairName: setup.pair, environment, deployment });
-  // A list of state URLs is one value in the vault, so a single URL from it would not match. Each URL and its key-like
-  // parts count as secrets of their own, whether the list came from the setup file or from the environment.
+  // A list of state URLs or header RPCs is one value in the vault, so a single URL from it would not match. Each URL
+  // and its key-like parts count as secrets of their own, whether the list came from the setup file or the environment.
   for (const chainId of definitionChains) {
-    const variable = stateUrlsVariableName(chainId);
-    for (const url of parseStateUrls(environment[variable], variable)) for (const piece of urlSecrets(url)) vault.remember(piece);
+    for (const variable of [stateUrlsVariableName(chainId), headerRpcVariableName(chainId)]) {
+      for (const url of parseStateUrls(environment[variable], variable)) for (const piece of urlSecrets(url)) vault.remember(piece);
+    }
   }
   return { config, setup, pair, vault, logger, environment: input.environment };
 }
