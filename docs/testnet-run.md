@@ -505,7 +505,7 @@ Two test tokens on each chain: `zkb Test Dollar` (`tUSD`, 6 decimals) and `zkb T
 Run from the repository root, after step 0. The keystore account (`$KEYSTORE_NAME`, the deployer) becomes the minter. The key stays in the keystore; nothing goes on the command line. The traffic wallet's address is not secret.
 
 ```sh
-export TRAFFIC_WALLET=$(op read 'op://zkb.fi/testnet traffic wallet/address')
+export TRAFFIC_WALLET=<the traffic wallet's address, from your secret store>
 # Dry run first (no --broadcast): nothing reaches the chain and no file is written.
 forge script script/testnet/DeployTestTokens.s.sol --rpc-url sepolia --account "$KEYSTORE_NAME" --sender "$DEPLOYER" 2>&1 | redact
 # Sepolia: --skip-simulation and --slow, because Sepolia charges about 7 times what Foundry counts for new code (step 5).
@@ -525,7 +525,7 @@ Gas of the deploy, per chain: each token is one creation and one mint. On 2026-1
 On the app server (`deploy/app-server/config/traffic/`): run `provision.sh` once more (it adds the user `zkb_traffic` and `/etc/zk-bridge/traffic`), then copy the four templates to `/etc/zk-bridge/traffic/` and fill `bots.env` (the two RPC endpoints) and `traffic.env`:
 
 ```sh
-op read 'op://zkb.fi/testnet traffic wallet/private-key' | ssh zkbfi-app 'umask 027; { echo -n TRAFFIC_PRIVATE_KEY=; cat; echo; } > /etc/zk-bridge/traffic/traffic.env; chgrp zkb_traffic /etc/zk-bridge/traffic/traffic.env'
+<print the traffic wallet's private key from your secret store> | ssh zkbfi-app 'umask 027; { echo -n TRAFFIC_PRIVATE_KEY=; cat; echo; } > /etc/zk-bridge/traffic/traffic.env; chgrp zkb_traffic /etc/zk-bridge/traffic/traffic.env'
 ```
 
 `deploy.sh` then starts `zk-bridge-traffic.service` with the others; it skips it while a file is missing. `ansible-playbook bots.yml -e commit=<hash> -e bots=traffic` moves it alone. Logs: `journalctl -u zk-bridge-traffic -g '"traffic_sent"\|"traffic_skipped"'`. At start the bot logs `traffic_tokens`: every test token with the address of its copy on the other chain.
