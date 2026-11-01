@@ -22,12 +22,15 @@ use crate::contracts::update_calldata;
 use crate::error::{Error, Result};
 use crate::handoff::{utc_time_text, PackageDestination, ProofPackage, SCHEMA_VERSION};
 use crate::light_client::{public_values, verify_update_natively, LightClientOutput};
+use crate::logging::Logger;
 use crate::prover::{
     require_groth16_shape, require_native_values, ProgramKind, Proof, ProofStatement, Prover,
 };
 use crate::remote::verify_groth16;
 use crate::stored::StoredState;
+use crate::timing::{millis, summary_fields, ProducerTimings};
 use alloy_primitives::{hex, B256};
+use std::time::Instant;
 
 /// The length of the signature that the oracle backend returns: `r ‖ s ‖ v`.
 const ORACLE_PROOF_LENGTH: usize = 65;
@@ -79,23 +82,71 @@ pub fn produce(
     prover: &dyn Prover,
     request: &ProduceRequest,
 ) -> Result<Production> {
+    produce_logged(source, prover, request, &Logger::in_memory().0)
+}
+
+/// Like [`produce`], and writes the step timings to `logger`: one `prove_step` line for each step of the producer
+/// (`build`, `native`, `check`), the lines of the backend, and at the end one `prove_timing` line with all of them
+/// (`docs/gpu-prover.md`, "Timing logs"). A run that has nothing to prove writes no timing lines.
+///
+/// # Errors
+/// The errors of [`produce`].
+pub fn produce_logged(
+    source: &HttpBeaconSource,
+    prover: &dyn Prover,
+    request: &ProduceRequest,
+    logger: &Logger,
+) -> Result<Production> {
+    let run_started = Instant::now();
     prover.require_program_key(ProgramKind::LightClient, request.program_key)?;
+    let build_started = Instant::now();
     let Some(plan) = source.plan_update(&request.head)? else {
         return Ok(Production::UpToDate {
             head_slot: request.head.slot,
         });
     };
+    let build_ms = millis(build_started.elapsed());
+    step_line(logger, "build", build_ms);
+    let native_started = Instant::now();
     let output = verify_update_natively(&plan.input)?;
     require_start_at_head(&output, request)?;
     let expected_values = public_values(&output);
+    let native_ms = millis(native_started.elapsed());
+    step_line(logger, "native", native_ms);
+    let prove_started = Instant::now();
     let proof = prover.prove(request.program_key, &ProofStatement::Verified(plan.input))?;
+    let prove_ms = millis(prove_started.elapsed());
+    let check_started = Instant::now();
     check_proof(request, &proof, &expected_values)?;
+    let check_ms = millis(check_started.elapsed());
+    step_line(logger, "check", check_ms);
+    let producer = ProducerTimings {
+        build_ms,
+        native_ms,
+        prove_ms,
+        check_ms,
+        total_ms: millis(run_started.elapsed()),
+    };
+    logger.info(
+        "prove_timing",
+        &summary_fields(&producer, prover.take_timings().as_ref()),
+    );
     Ok(Production::Proof(Box::new(package(
         request,
         &output,
         plan.latest_finalized_slot,
         proof,
     ))))
+}
+
+fn step_line(logger: &Logger, step: &str, elapsed_ms: u64) {
+    logger.info(
+        "prove_step",
+        &[
+            ("step", step.to_string()),
+            ("elapsed_ms", elapsed_ms.to_string()),
+        ],
+    );
 }
 
 /// Fails unless the native run starts where the light client holds its head. A fold that starts elsewhere would revert on

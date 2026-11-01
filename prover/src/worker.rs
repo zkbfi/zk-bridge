@@ -25,12 +25,14 @@ use crate::error::{Error, Result};
 use crate::logging::Logger;
 use crate::prover::{native_job_from_guest_input, GuestJob, ProgramKind, Proof};
 use crate::remote::{ProveRequestBody, ProveResponseBody};
+use crate::timing::{millis, HostInfo, WorkerTimings};
 use alloy_primitives::{hex, B256};
 use std::io::Read as _;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 /// The largest request body that the worker reads. RunPod limits a request to 30 MB.
 pub const MAX_REQUEST_BYTES: u64 = 32 * 1024 * 1024;
@@ -45,6 +47,29 @@ pub trait GuestProver: Send + Sync {
     /// # Errors
     /// `Error::Config` when the key is not the key of the program for `job.kind`. `Error::Prover` when the proof fails.
     fn prove_guest(&self, program_key: B256, job: &GuestJob) -> Result<Proof>;
+
+    /// Like [`Self::prove_guest`], and tells how the time split inside the proving client. The default knows no split:
+    /// the worker then counts the whole call as the proof.
+    ///
+    /// # Errors
+    /// The errors of [`Self::prove_guest`].
+    fn prove_guest_staged(
+        &self,
+        program_key: B256,
+        job: &GuestJob,
+    ) -> Result<(Proof, Option<ProveStages>)> {
+        self.prove_guest(program_key, job)
+            .map(|proof| (proof, None))
+    }
+}
+
+/// How the time of one proof split inside the proving client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProveStages {
+    /// The SP1 Groth16 proof: core, compress and wrap in one call.
+    pub prove_ms: u64,
+    /// The client's verification of the new proof, and the checks after it.
+    pub verify_ms: u64,
 }
 
 #[cfg(feature = "sp1")]
@@ -62,6 +87,15 @@ where
 
     fn prove_guest(&self, program_key: B256, job: &GuestJob) -> Result<Proof> {
         Self::prove_guest(self, program_key, job)
+    }
+
+    fn prove_guest_staged(
+        &self,
+        program_key: B256,
+        job: &GuestJob,
+    ) -> Result<(Proof, Option<ProveStages>)> {
+        Self::prove_guest_staged(self, program_key, job)
+            .map(|(proof, stages)| (proof, Some(stages)))
     }
 }
 
@@ -100,6 +134,8 @@ pub struct Worker {
     one_proof_at_a_time: Mutex<()>,
     /// Set when the proving client failed a proof. It never resets: only a new worker is known to be sound.
     proving_client_failed: AtomicBool,
+    /// The host description for the timings, detected when the worker becomes ready.
+    host: OnceLock<HostInfo>,
     logger: Logger,
 }
 
@@ -110,6 +146,7 @@ impl Worker {
             prover: OnceLock::new(),
             one_proof_at_a_time: Mutex::new(()),
             proving_client_failed: AtomicBool::new(false),
+            host: OnceLock::new(),
             logger,
         }
     }
@@ -118,6 +155,7 @@ impl Worker {
     pub fn set_ready(&self, prover: Box<dyn GuestProver>) {
         // A second call keeps the first client. The binary calls this once.
         let _ = self.prover.set(prover);
+        let _ = self.host.get_or_init(HostInfo::detect);
     }
 
     /// Answers one request.
@@ -157,6 +195,7 @@ impl Worker {
     }
 
     fn prove(&self, body: &[u8]) -> Answer {
+        let received = Instant::now();
         let Some(prover) = self.prover.get() else {
             return Answer::error(503, "the worker is still starting");
         };
@@ -187,6 +226,7 @@ impl Worker {
             }
             Some(_) => {}
         }
+        let native_started = Instant::now();
         let job = match native_job_from_guest_input(request.statement_kind, guest_input) {
             Ok(job) => job,
             Err(Error::VerificationRefused(reason)) => {
@@ -194,13 +234,16 @@ impl Worker {
             }
             Err(error) => return Answer::error(500, error),
         };
+        let native_ms = millis(native_started.elapsed());
+        let queue_started = Instant::now();
         let _turn = self
             .one_proof_at_a_time
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let started = std::time::Instant::now();
-        let proof = match prover.prove_guest(program_key, &job) {
-            Ok(proof) => proof,
+        let queue_ms = millis(queue_started.elapsed());
+        let started = Instant::now();
+        let (proof, stages) = match prover.prove_guest_staged(program_key, &job) {
+            Ok(done) => done,
             Err(error @ Error::Config(_)) => return Answer::error(400, error),
             Err(error) => {
                 // The GPU server is a child process. When it dies, every later proof fails at once ("Broken pipe"),
@@ -218,9 +261,25 @@ impl Worker {
                 ("seconds", started.elapsed().as_secs().to_string()),
             ],
         );
+        let proving_ms = millis(started.elapsed());
+        let (prove_ms, verify_ms) = stages.map_or((proving_ms, 0), |stages| {
+            (stages.prove_ms, stages.verify_ms)
+        });
+        let host = self.host.get().cloned().unwrap_or_default();
+        let timings = WorkerTimings {
+            queue_ms,
+            native_ms,
+            prove_ms,
+            verify_ms,
+            total_ms: millis(received.elapsed()),
+            gpu: host.gpu,
+            cpu_model: host.cpu_model,
+            cpu_count: host.cpu_count,
+        };
         let response = ProveResponseBody {
             proof: hex::encode_prefixed(&proof.proof_bytes),
             public_values: hex::encode_prefixed(&proof.public_values),
+            timings: serde_json::to_value(&timings).ok(),
         };
         match serde_json::to_value(&response) {
             Ok(value) => Answer::json(200, &value),
@@ -403,6 +462,8 @@ mod tests {
         Proof,
         WrongKey,
         Failure,
+        /// A proof from a client that reports how its time split.
+        Staged,
     }
 
     /// Holds two keys, answers like a client, and counts how many proofs run at the same moment.
@@ -431,13 +492,26 @@ mod tests {
             }
         }
 
+        fn prove_guest_staged(
+            &self,
+            program_key: B256,
+            job: &GuestJob,
+        ) -> Result<(Proof, Option<ProveStages>)> {
+            let proof = self.prove_guest(program_key, job)?;
+            let stages = matches!(self.outcome, Outcome::Staged).then_some(ProveStages {
+                prove_ms: 1234,
+                verify_ms: 56,
+            });
+            Ok((proof, stages))
+        }
+
         fn prove_guest(&self, _program_key: B256, job: &GuestJob) -> Result<Proof> {
             let now_running = self.running.fetch_add(1, Ordering::SeqCst) + 1;
             self.most_running.fetch_max(now_running, Ordering::SeqCst);
             std::thread::sleep(std::time::Duration::from_millis(30));
             self.running.fetch_sub(1, Ordering::SeqCst);
             match self.outcome {
-                Outcome::Proof => Ok(Proof {
+                Outcome::Proof | Outcome::Staged => Ok(Proof {
                     public_values: job.expected_values.clone(),
                     proof_bytes: vec![0xab; 5],
                 }),
@@ -550,6 +624,74 @@ mod tests {
         let body: ProveResponseBody = serde_json::from_slice(&answer.body).unwrap();
         assert_eq!(body.public_values, hex::encode_prefixed(&expected));
         assert_eq!(body.proof, "0xababababab");
+    }
+
+    /// Claim: the answer carries the worker's timings: the wait for the GPU, the native run, the proof (the whole call,
+    /// for a client that reports no split) and the total, which is at least the proof. A client that reports a split
+    /// gives its own numbers.
+    /// Why it matters: the producer logs these numbers to tell a wait for a GPU from the proof itself.
+    #[test]
+    fn the_answer_carries_the_timings() {
+        let (worker, _) = ready_worker(Outcome::Proof);
+        let input = light_client_input(400);
+        let answer = worker.handle(
+            "POST",
+            "/prove",
+            &request_body(LIGHT_CLIENT_KEY, "lightClient", &input),
+        );
+        let body: ProveResponseBody = serde_json::from_slice(&answer.body).unwrap();
+        let timings = WorkerTimings::from_value(&body.timings.expect("timings")).expect("fit");
+        assert!(timings.prove_ms >= 30, "the stub sleeps 30 ms: {timings:?}");
+        assert_eq!(timings.verify_ms, 0);
+        assert!(timings.total_ms >= timings.prove_ms + timings.native_ms);
+        assert!(timings.cpu_count.is_some());
+        let raw: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+        assert!(raw["timings"]["totalMs"].is_u64(), "camelCase keys: {raw}");
+
+        let (staged, _) = ready_worker(Outcome::Staged);
+        let answer = staged.handle(
+            "POST",
+            "/prove",
+            &request_body(LIGHT_CLIENT_KEY, "lightClient", &input),
+        );
+        let body: ProveResponseBody = serde_json::from_slice(&answer.body).unwrap();
+        let timings = WorkerTimings::from_value(&body.timings.unwrap()).unwrap();
+        assert_eq!((timings.prove_ms, timings.verify_ms), (1234, 56));
+    }
+
+    /// Claim: a second request that waits for the first shows its wait as `queueMs`.
+    /// Why it matters: the wait for a GPU must not be counted as proving.
+    #[test]
+    fn a_waiting_request_reports_its_queue_time() {
+        let (worker, _) = ready_worker(Outcome::Proof);
+        let worker = Arc::new(worker);
+        let input = light_client_input(400);
+        let bodies: Vec<Vec<u8>> = (0..2)
+            .map(|_| request_body(LIGHT_CLIENT_KEY, "lightClient", &input))
+            .collect();
+        let handles: Vec<_> = bodies
+            .into_iter()
+            .map(|body| {
+                let worker = Arc::clone(&worker);
+                std::thread::spawn(move || worker.handle("POST", "/prove", &body))
+            })
+            .collect();
+        let mut queues: Vec<u64> = handles
+            .into_iter()
+            .map(|handle| {
+                let answer = handle.join().unwrap();
+                let body: ProveResponseBody = serde_json::from_slice(&answer.body).unwrap();
+                WorkerTimings::from_value(&body.timings.unwrap())
+                    .unwrap()
+                    .queue_ms
+            })
+            .collect();
+        queues.sort_unstable();
+        assert!(queues[0] < 20, "the first request did not wait: {queues:?}");
+        assert!(
+            queues[1] >= 20,
+            "the second waited for the first: {queues:?}"
+        );
     }
 
     /// Claim: a key the worker does not hold is refused with 400 before any native run or proof.

@@ -15,6 +15,7 @@
 //! - [`light_client`]: the only module that calls `lc-core`.
 //! - [`prover`]: the proving backends. Only light-client updates (and fork observations, for a worker) are proven.
 //! - [`remote`]: the backend that sends a proof job to a GPU worker and checks the answer.
+//! - [`timing`]: the step timings that a proof run logs.
 //! - [`worker`]: the HTTP server that such a worker runs (`docs/gpu-prover.md`).
 //! - [`fork_schedule`]: the fork schedule and chain specification that the prover reads from the beacon node at run time.
 //! - [`beacon`]: the beacon node source for updates and for the beacon part of a message proof.
@@ -43,4 +44,5 @@ pub mod remote;
 pub mod rpc;
 pub mod signer;
 pub mod stored;
+pub mod timing;
 pub mod worker;

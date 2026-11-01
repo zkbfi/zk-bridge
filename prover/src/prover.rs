@@ -60,6 +60,11 @@ pub trait Prover: Send + Sync {
     /// prove this kind of statement.
     fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof>;
 
+    /// The step timings of the last `prove`, taken once. A backend that measures nothing gives `None`.
+    fn take_timings(&self) -> Option<crate::timing::ProverTimings> {
+        None
+    }
+
     /// Checks the program a backend would run against the key that the destination contract stores.
     /// The producer calls it before it proves, with the key it read from the contract. A backend without a program of
     /// its own (the oracle and the remote worker) accepts every key.
@@ -429,6 +434,19 @@ impl<Client: sp1_sdk::blocking::Prover> Sp1ClientProver<Client> {
     /// `Error::Config` when `program_vkey` is not the key of the program for `job.kind`. `Error::Prover` when the
     /// proof fails, carries other public values or does not verify.
     pub fn prove_guest(&self, program_vkey: B256, job: &GuestJob) -> Result<Proof> {
+        self.prove_guest_staged(program_vkey, job)
+            .map(|(proof, _)| proof)
+    }
+
+    /// Like [`Self::prove_guest`], and tells the time of the SP1 proof and of the checks after it.
+    ///
+    /// # Errors
+    /// The errors of [`Self::prove_guest`].
+    pub fn prove_guest_staged(
+        &self,
+        program_vkey: B256,
+        job: &GuestJob,
+    ) -> Result<(Proof, crate::worker::ProveStages)> {
         use sp1_sdk::blocking::ProveRequest as _;
         let program = self.program(job.kind)?;
         require_matching_key(job.kind.label(), program.program_key, program_vkey)?;
@@ -450,7 +468,9 @@ impl<Client: sp1_sdk::blocking::Prover> Sp1ClientProver<Client> {
             .groth16()
             .run()
             .map_err(|error| Error::Prover(format!("the SP1 Groth16 proof failed: {error}")))?;
-        let prove_seconds = started.elapsed().as_secs();
+        let prove_elapsed = started.elapsed();
+        let prove_seconds = prove_elapsed.as_secs();
+        let verify_started = std::time::Instant::now();
         let proven_values = proof.public_values.to_vec();
         require_native_values(&proven_values, &job.expected_values)?;
         self.client
@@ -471,10 +491,17 @@ impl<Client: sp1_sdk::blocking::Prover> Sp1ClientProver<Client> {
                 ("proof_bytes", proof_bytes.len().to_string()),
             ],
         );
-        Ok(Proof {
-            public_values: proven_values,
-            proof_bytes,
-        })
+        let stages = crate::worker::ProveStages {
+            prove_ms: crate::timing::millis(prove_elapsed),
+            verify_ms: crate::timing::millis(verify_started.elapsed()),
+        };
+        Ok((
+            Proof {
+                public_values: proven_values,
+                proof_bytes,
+            },
+            stages,
+        ))
     }
 }
 
