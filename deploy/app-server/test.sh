@@ -174,6 +174,8 @@ else
 fi
 # The drain answers only POST /requests: the webhook and the job reads must stay up.
 if grep -qx '		method POST' "$ANSIBLE_DIR/templates/backend-drain.caddy.j2" && grep -qx '		path /requests' "$ANSIBLE_DIR/templates/backend-drain.caddy.j2"; then pass "drain matches POST /requests only"; else fail "drain does not match POST /requests only"; fi
+# The prove host passes on the pipeline reads (/progress, /directions, /benchmarks) next to the proof flow, and no webhook.
+if grep -qxF '	@routes path /health /requests /requests/* /proofs/latest/* /progress/* /directions/* /benchmarks' "$DIR/Caddyfile"; then pass "the prove host serves the pipeline reads"; else fail "the prove host does not serve the pipeline reads"; fi
 # A transient copy takes its sandbox from the unit file of the release: no sandbox setting is repeated in the playbooks.
 if grep -rE -- '--property=(Protect|Restrict|NoNewPrivileges|SystemCall|CapabilityBoundingSet)' "$ANSIBLE_DIR/tasks" "$ANSIBLE_DIR"/*.yml | grep -q .; then fail "a playbook sets a sandbox property by hand"; else pass "the playbooks take the sandbox from the unit files"; fi
 # The helpers the playbooks run on the server compile.
