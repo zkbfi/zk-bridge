@@ -468,6 +468,9 @@ importers:
 
   shared:
     dependencies:
+      '@msgboard/pow-grinder':
+        specifier: 0.4.0
+        version: 0.4.0
       '@msgboard/sdk':
         specifier: 0.4.0
         version: 0.4.0(supports-color@7.2.0)(typescript@5.9.3)(zod@4.6.5)

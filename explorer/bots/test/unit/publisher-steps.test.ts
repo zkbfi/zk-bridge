@@ -62,7 +62,7 @@ function world(options: { state?: PublisherState; outcome?: () => Promise<ProveO
       async post(input) {
         if (options.failPosts === true) throw new Error("the board refused the message");
         posts.push(input);
-        return { messageHash: word(0xb0 + posts.length), grindMilliseconds: 5 };
+        return { messageHash: word(0xb0 + posts.length), grindMilliseconds: 5, difficulty: 367_772n, threads: 4 };
       },
     },
     transferWaits: options.transferWaits ?? null,

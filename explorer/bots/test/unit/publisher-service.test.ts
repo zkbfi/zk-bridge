@@ -210,7 +210,7 @@ describe("startPublisher runs one step for each direction", () => {
   it("uses the board it is given and opens none of its own", async () => {
     const created = await world({ config: publisherConfig, setup: readySetup("http://127.0.0.1:1"), environment: environmentFor("http://127.0.0.1:1") });
     const { executor } = recordingExecutor({ code: 0, stdout: `${proofPackageJson()}\n` });
-    const post = vi.fn(async () => ({ messageHash: word(0xb1), grindMilliseconds: 1 }));
+    const post = vi.fn(async () => ({ messageHash: word(0xb1), grindMilliseconds: 1, difficulty: 367_772n, threads: 4 }));
     await start(created, { executor, board: { post }, publicClient: () => lightClientClient });
     expect(post).toHaveBeenCalledOnce();
   });

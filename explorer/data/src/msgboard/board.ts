@@ -21,7 +21,7 @@ export interface BoardPublisher {
    * Grinds the proof of work and posts the message.
    * @throws MessageTooLargeError when the payload is over the limit.
    */
-  post(input: { readonly category: Hex; readonly payload: Hex }): Promise<{ readonly messageHash: Hex; readonly grindMilliseconds: number }>;
+  post(input: { readonly category: Hex; readonly payload: Hex }): Promise<{ readonly messageHash: Hex; readonly grindMilliseconds: number; readonly difficulty: bigint; readonly threads: number }>;
 }
 
 /** The side of msgboard that the runner uses. */
@@ -88,8 +88,8 @@ export function createBoardPublisher(input: BoardPublisherInput): BoardPublisher
         timeoutMilliseconds: input.grindTimeoutMilliseconds,
       });
       const messageHash = (await client.request({ method: "msgboard_addMessage", params: [work.rlp] } as never)) as Hex;
-      input.logger.debug("board_message_posted", { messageHash, size, difficulty: work.difficulty, iterations: work.iterations });
-      return { messageHash, grindMilliseconds: work.durationMilliseconds };
+      input.logger.debug("board_message_posted", { messageHash, size, difficulty: work.difficulty, iterations: work.iterations, threads: work.threads, grindMilliseconds: work.durationMilliseconds });
+      return { messageHash, grindMilliseconds: work.durationMilliseconds, difficulty: work.difficulty, threads: work.threads };
     },
   };
 }
