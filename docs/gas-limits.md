@@ -1,5 +1,11 @@
 # Gas limits: one rule, traced through every layer
 
+**Superseded on 2026-11-01.** The message carries no gas limit any more. A delivery gives the target all the gas, and
+not enough gas reverts the delivery so it can run again. The one gas number of the mediator is the callback gas of a
+relay with a call, and the router's is the `callGas` of its terms. See `docs/hardened-build-contract.md`, "Gas reverts
+up, and three layers", and `docs/superpowers/specs/2026-11-01-gas-revert-up.md`. The text below is the record of the
+earlier rule.
+
 This page records how the gas limit of one message travels from the sender to the user call. It lists where the rule
 holds today and where it does not. Later tasks fix the gaps and add the tests below as their first step.
 
