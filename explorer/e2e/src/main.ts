@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { runBots } from "./stages/bots.ts";
 import { checkDashboards } from "./stages/dashboards.ts";
 import { confirmGate } from "./stages/gate.ts";
+import { runTraffic } from "./stages/traffic.ts";
 import { deliverRound, fundSenders, sendRound, startServices } from "./stages/transfers.ts";
 import { updateAndOpen } from "./stages/updates.ts";
 
@@ -43,6 +44,7 @@ const STAGES: Readonly<Record<string, (context: Context, args: readonly string[]
   "send-b": async (context) => sendRound(context, await startServices(context, INDEXER_URL), "b"),
   "deliver-b": (context) => deliverRound(context, "b"),
   bots: (context, args) => runBots(context, { resume: args.includes("--resume") }),
+  traffic: (context) => runTraffic(context),
   dashboards: (context) =>
     checkDashboards(context, {
       indexerUrl: INDEXER_URL,
