@@ -11,6 +11,7 @@
 #             direction (/directions/<direction>/pipeline) and the timings of each step (/benchmarks)
 #   webhook   the prover's callback; the backend's publicUrl names this host
 #   archive   evidence for messages that are sent and not yet delivered
+#   status    the status page and API of explorer/status (not an upstream snippet: one process, no green)
 #   indexer   the explorer indexer (Ponder): the read API and GraphQL, and at / a live page of its data (JSON on
 #             request). /sql, /metrics and /status stay private.
 
@@ -61,6 +62,16 @@ import /etc/caddy/upstreams/indexer.caddy
 	@ipfs path /ipfs/*
 	handle @ipfs {
 		reverse_proxy 127.0.0.1:{$ZKB_IPFS_GATEWAY_PORT:8080}
+	}
+	import not_found
+}
+
+# The status page and its JSON API (explorer/status): status.zkb.fi/ and /api/*. Read only; the service runs on this
+# server, so if the server is down the page is too (watch /api/summary from outside).
+{$ZKB_STATUS_HOST:status.zkb.fi} {
+	@status path / /api/*
+	handle @status {
+		reverse_proxy 127.0.0.1:{$ZKB_STATUS_PORT:8790}
 	}
 	import not_found
 }

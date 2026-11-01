@@ -1,0 +1,40 @@
+{
+  "11155111": {
+    "chain_id": 11155111,
+    "minter": "0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc",
+    "tokens": {
+      "tTKN": {
+        "address": "0x23b69083D577bd8D1a9FbDf8ef1411b7285CF45E",
+        "decimals": 18,
+        "name": "zkb Test Token",
+        "symbol": "tTKN"
+      },
+      "tUSD": {
+        "address": "0x988a6160b5580895Ea15a080A8d4eA763Cf6538F",
+        "decimals": 6,
+        "name": "zkb Test Dollar",
+        "symbol": "tUSD"
+      }
+    },
+    "traffic_wallet": "0x5F8e98993D4F82fAEC3E19F792D4F90b9Ff908Ca"
+  },
+  "943": {
+    "chain_id": 943,
+    "minter": "0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc",
+    "tokens": {
+      "tTKN": {
+        "address": "0xa8B9650A2021e014253a338629F8095D1f2e2910",
+        "decimals": 18,
+        "name": "zkb Test Token",
+        "symbol": "tTKN"
+      },
+      "tUSD": {
+        "address": "0x11b211E478105683096E5DA4cE1abf019fF35961",
+        "decimals": 6,
+        "name": "zkb Test Dollar",
+        "symbol": "tUSD"
+      }
+    },
+    "traffic_wallet": "0x5F8e98993D4F82fAEC3E19F792D4F90b9Ff908Ca"
+  }
+}

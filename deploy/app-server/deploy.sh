@@ -14,7 +14,7 @@
 #   5. Point /opt/zk-bridge/current at the release, in one rename.
 #   6. Install the systemd units of the release and the directories that the services write.
 #   7. Restart each service whose configuration exists. A service without its files is skipped, with a log line.
-#      ZKB_SERVICES="backend publisher" restarts only those (default: all five). the playbooks in deploy/ansible use it to move one
+#      ZKB_SERVICES="backend publisher" restarts only those (default: all six). the playbooks in deploy/ansible use it to move one
 #      service at a time. The others keep running the process they have; the Vite cache of the indexer is left alone
 #      unless the indexer is restarted.
 #   8. Remove old releases.
@@ -37,8 +37,9 @@ ETC=/etc/zk-bridge
 UNIT_DIR=/etc/systemd/system
 DEFAULT_REPO_URL=https://github.com/zkbfi/zk-bridge.git
 
-# The services in start order: the indexer first, because the others read it.
-SERVICES=(indexer backend publisher runner traffic)
+# The services in start order: the indexer first, because the others read it; the status service last, because it
+# watches them all.
+SERVICES=(indexer backend publisher runner traffic status)
 
 # The services to restart in step 7: ZKB_SERVICES, in the order of SERVICES, or all of them.
 restart_wanted() {
@@ -54,6 +55,7 @@ required_files() {
     publisher) echo publisher/bots.json publisher/prover-setup.json publisher/bots.env deployment.json ;;
     runner) echo runner/bots.json runner/prover-setup.json runner/bots.env runner/runner.env deployment.json ;;
     traffic) echo traffic/bots.json traffic/prover-setup.json traffic/bots.env traffic/traffic.env deployment.json ;;
+    status) echo status/status.json status/status.env deployment.json ;;
   esac
 }
 
@@ -65,6 +67,7 @@ service_user() {
     publisher) echo zkb_publisher ;;
     runner) echo zkb_runner ;;
     traffic) echo zkb_traffic ;;
+    status) echo zkb_status ;;
   esac
 }
 

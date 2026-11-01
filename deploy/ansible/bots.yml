@@ -1,5 +1,6 @@
 ---
-# Moves the publisher, the runner and the traffic bot to a release. There is no green beside blue: the runner and the
+# Moves the publisher, the runner, the traffic bot and the status service to a release (the status service holds no wallet and
+# has no nonce to collide, but it is moved the same way: stop, start, check). There is no green beside blue: the runner and the
 # traffic bot each send transactions from one wallet (two would collide on nonces), and the publisher posts proofs. The new process starts after the
 # old one stopped cleanly.
 #   - A bot whose configuration files do not exist under /etc/zk-bridge is skipped with a message, as deploy.sh does.
@@ -13,6 +14,7 @@
 #   ansible-playbook bots.yml -e commit=<hash>                          # publisher and runner
 #   ansible-playbook bots.yml -e commit=<hash> -e bots=runner           # one or more: publisher, runner, traffic, comma separated
 #   ansible-playbook bots.yml -e commit=<hash> -e bots=traffic          # the traffic bot (testnets; skipped without its files)
+#   ansible-playbook bots.yml -e commit=<hash> -e bots=status           # the status service (status.zkb.fi; sends nothing, skipped without its files)
 #   ansible-playbook bots.yml -e commit=<previous-hash> -e bots=runner  # rollback: the same step with the old release
 - name: Move the bots to a release
   hosts: zkbfi
@@ -23,9 +25,9 @@
     - name: Check the bots
       ansible.builtin.assert:
         that:
-          - bots.split(',') | difference(['publisher', 'runner', 'traffic']) | length == 0
+          - bots.split(',') | difference(['publisher', 'runner', 'traffic', 'status']) | length == 0
           - bots.split(',') | length > 0
-        fail_msg: "bots is a comma separated list of publisher, runner and traffic."
+        fail_msg: "bots is a comma separated list of publisher, runner, traffic and status."
         quiet: true
 
     - name: Find the release

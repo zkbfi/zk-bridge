@@ -106,6 +106,7 @@ ensure_user zkb_indexer /var/lib/zk-bridge-indexer
 ensure_user zkb_publisher /var/lib/zk-bridge-publisher
 ensure_user zkb_runner /var/lib/zk-bridge-runner
 ensure_user zkb_traffic /var/lib/zk-bridge-traffic
+ensure_user zkb_status /var/lib/zk-bridge-status
 
 # Code: owned by root, readable by the services, written only by the deploy step.
 install -d -m 0755 -o root -g root /opt/zk-bridge
@@ -116,6 +117,8 @@ install -d -m 0750 -o root -g zkb_indexer /etc/zk-bridge/indexer
 install -d -m 0750 -o root -g zkb_publisher /etc/zk-bridge/publisher
 install -d -m 0750 -o root -g zkb_runner /etc/zk-bridge/runner
 install -d -m 0750 -o root -g zkb_traffic /etc/zk-bridge/traffic
+# The status service has its own copy of the endpoints it reads; it needs no access to the other services' files.
+install -d -m 0750 -o root -g zkb_status /etc/zk-bridge/status
 
 # Before 2026-10-29 both bots shared the user zkb_bots. Remove it while it holds nothing; refuse to guess otherwise.
 if id zkb_bots >/dev/null 2>&1; then

@@ -1,0 +1,34 @@
+{
+  "name": "@zk-bridge/status",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The status service of zkb.fi (status.zkb.fi): checks of every service, chain, light client, gate, prover and wallet every minute, a small SQLite history, and a status page with a JSON API.",
+  "bin": {
+    "zk-bridge-status": "./bin/zk-bridge-status.mjs"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node bin/zk-bridge-status.mjs",
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.19.5",
+    "@zk-bridge/shared": "workspace:*",
+    "@zkb/data": "workspace:*",
+    "hono": "4.13.9",
+    "tsx": "4.23.15",
+    "viem": "2.56.9",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}
