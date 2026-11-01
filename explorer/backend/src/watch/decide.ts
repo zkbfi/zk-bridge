@@ -32,7 +32,7 @@ export type PendingProof = { readonly startSlot: number; readonly newSlot: numbe
 
 /** What a message proof of a batch carries for the log. */
 export type BatchFacts = {
-  readonly trigger: "profit" | "max-wait";
+  readonly trigger: "profit" | "interval";
   readonly batch: number;
   readonly waitedSeconds: number;
   readonly feesUsd: string | null;
@@ -50,9 +50,9 @@ export type ProofDecision =
   | { readonly due: true; readonly why: "keep-alive"; readonly handoff: boolean; readonly detail: string; readonly riders?: number; readonly stalePending?: PendingProof }
   | {
       readonly due: false;
-      readonly why: "not-newer" | "insufficient-signatures" | "stranded" | "wait-for-finality" | "proof-pending" | "nothing-due" | "waiting-for-profit";
+      readonly why: "not-newer" | "insufficient-signatures" | "stranded" | "wait-for-finality" | "proof-pending" | "nothing-due" | "min-interval";
       readonly detail: string;
-      /** For `waiting-for-profit`: the batch, for the log and the timer that wakes the watcher at its fallback. */
+      /** For `min-interval`: the batch, for the log and the timer that wakes the watcher when it is due. */
       readonly plan?: Extract<BatchPlan, { due: false }>;
     };
 
@@ -74,8 +74,11 @@ export type DecisionInput = {
   readonly nowSeconds: number;
   /** A pending proof older than this no longer holds a new proof back (`limits.pendingProofStaleSeconds`). Default: never. */
   readonly pendingStaleSeconds?: number;
-  /** The batching of the direction and what the batch is worth. Without it, or with no wait, a message proves at once. */
-  readonly batch?: { readonly rule: BatchRule; readonly economics: Economics };
+  /**
+   * The batching of the direction, what the batch is worth, and when the direction's last proof job started (seconds
+   * since 1970, null for none). Without it, or with no minimum interval, a message proves at once.
+   */
+  readonly batch?: { readonly rule: BatchRule; readonly economics: Economics; readonly lastProofAt: number | null };
 };
 
 /** A proof pending on the board still applies only while the light client head is the one it starts from. */
@@ -153,15 +156,16 @@ function waitingDetail(plan: Extract<BatchPlan, { due: false }>, rule: BatchRule
       ? `the fees cannot be valued (${plan.unknownWhy})`
       : `fees $${usdText(plan.feesUsd as bigint)} against a cost of $${usdText(plan.costUsd as bigint)}`;
   const when = plan.startWhy === "profit" ? `the batch is expected to pay at ${iso(plan.startAt)}` : `no batch pays within the lookahead`;
-  return `${plan.ready} ${plan.ready === 1 ? "message waits" : "messages wait"}, the oldest final since ${iso(plan.oldestFinalAt)}: ${worth}; ${when}; proving at ${iso(plan.maxWaitAt)} at the latest (max wait ${rule.maxWaitSeconds} s)`;
+  return `${plan.ready} ${plan.ready === 1 ? "message waits" : "messages wait"}, the oldest final since ${iso(plan.oldestFinalAt)}: ${worth}; ${when}; the last proof started at ${iso(plan.lastProofAt as number)}, so the next one is due at ${iso(plan.dueAt)} at the latest (min interval ${rule.minIntervalSeconds} s)`;
 }
 
 /**
  * Decides whether a proof is due now. Due when the update is signed by enough of the committee (the program's
  * two-thirds rule) and either a waiting message lies between the covered head and the new finalized header and its
- * batch is due ({@link planBatch}), or the keep-alive planner calls for a proof that can make progress
- * ({@link keepAliveProgress}). A handoff or a keep-alive of the age rule never waits for a batch: the waiting messages
- * ride along.
+ * batch is due ({@link planBatch}: it pays, or the last proof started `minIntervalSeconds` ago), or the keep-alive
+ * planner calls for a proof that can make progress ({@link keepAliveProgress}). A handoff or a keep-alive of the age
+ * rule never waits for the interval: the waiting messages ride along. With no waiting message, only a keep-alive can
+ * be due, however long ago the last proof was.
  *
  * A proof we have that starts at the head and can still land holds every new proof back, until it waited longer than
  * `pendingStaleSeconds`: it covers what it reaches, and a second proof from the same head would be paid for twice.
@@ -189,19 +193,24 @@ export function decideProof(input: DecisionInput): ProofDecision {
   const call = keepAliveCall(assessment, facts, policy);
   if (ready.length > 0) {
     const batch = input.batch;
-    if (batch === undefined || batch.rule.maxWaitSeconds === 0) {
+    if (batch === undefined || batch.rule.minIntervalSeconds === 0) {
       return { due: true, why: "message", messageIds: ready.map((message) => message.messageId), detail: `${ready.length} waiting ${ready.length === 1 ? "message is" : "messages are"} final at slot ${finalizedSlot}`, ...stale };
     }
     // The batch counts every uncovered message, final or not: the ones not final yet tell when it is expected to pay.
     const uncovered = input.messages.filter((message) => message.slot > covered).map((message) => ({ ...message, finalAt: expectedFinalityAt(message.slot, facts) }));
-    const plan = planBatch({ messages: uncovered, finalizedSlot, nowSeconds, rule: batch.rule, economics: batch.economics }) as BatchPlan;
+    const plan = planBatch({ messages: uncovered, finalizedSlot, nowSeconds, rule: batch.rule, economics: batch.economics, lastProofAt: batch.lastProofAt }) as BatchPlan;
     if (plan.due) {
-      const how = plan.trigger === "profit" ? "their fees cover the cost" : `the oldest has been final ${plan.waitedSeconds} s`;
+      const how =
+        plan.trigger === "profit"
+          ? "their fees cover the cost"
+          : batch.lastProofAt === null
+            ? "the direction has no proof yet"
+            : `the last proof started ${Math.round(nowSeconds - batch.lastProofAt)} s ago (min interval ${batch.rule.minIntervalSeconds} s)`;
       return { due: true, why: "message", messageIds: plan.messageIds as Hex[], detail: `${ready.length} waiting ${ready.length === 1 ? "message is" : "messages are"} final at slot ${finalizedSlot}: ${how}`, ...batchFacts(plan), ...stale };
     }
     // Liveness first: a handoff or an old head proves now, and the waiting messages ride along.
     if (call !== null) return { due: true, why: "keep-alive", handoff: call === "handoff", detail: `${assessment.reason}; ${ready.length} waiting ${ready.length === 1 ? "message rides" : "messages ride"} along`, riders: ready.length, ...stale };
-    return { due: false, why: "waiting-for-profit", detail: waitingDetail(plan, batch.rule), plan };
+    return { due: false, why: "min-interval", detail: waitingDetail(plan, batch.rule), plan };
   }
   if (!keepAliveDue(assessment)) return { due: false, why: "nothing-due", detail: assessment.reason };
   if (call === null) return { due: false, why: "nothing-due", detail: noProgressDetail(assessment, facts, policy, nowSeconds) };
@@ -234,7 +243,9 @@ export const handoffKey = (headSlot: number) => `handoff:${headSlot}`;
 
 /**
  * The times at which a proof is expected to start, sorted, one per time: the expected finality of each message that is
- * not final yet (with a batch wait, one time for the whole batch: when it is expected to pay, else its fallback), and the first finality within `horizonSeconds` (the lead time) that makes a period handoff due, when no
+ * not final yet (with a minimum interval, one time for the whole batch: when it is expected to pay, else when the
+ * interval since the last proof ends, and never before its first finality), and the first finality within
+ * `horizonSeconds` (the lead time) that makes a period handoff due, when no
  * keep-alive is due now. A handoff is due once the source's finality crosses into the new period, about two epochs
  * after the border, not when the clock crosses it. A keep-alive of the age rule asks for no warm worker.
  *
@@ -248,9 +259,9 @@ export function warmupPlan(input: Omit<DecisionInput, "participants" | "minParti
   const live = new Set<string>(waiting.map((message) => message.messageId));
   const byTime = new Map<number, { why: WarmupTarget["why"]; keys: string[] }>();
   const batch = input.batch;
-  if (batch !== undefined && batch.rule.maxWaitSeconds > 0) {
-    // One session per batch, timed to when its proof is expected to start: when it pays, else its fallback.
-    const plan = planBatch({ messages: waiting.map((message) => ({ ...message, finalAt: expectedFinalityAt(message.slot, facts) })), finalizedSlot, nowSeconds, rule: batch.rule, economics: batch.economics });
+  if (batch !== undefined && batch.rule.minIntervalSeconds > 0) {
+    // One session per batch, timed to when its proof is expected to start: when it pays, else when the interval ends.
+    const plan = planBatch({ messages: waiting.map((message) => ({ ...message, finalAt: expectedFinalityAt(message.slot, facts) })), finalizedSlot, nowSeconds, rule: batch.rule, economics: batch.economics, lastProofAt: batch.lastProofAt });
     if (plan !== null) byTime.set(plan.due ? nowSeconds : plan.startAt, { why: "message", keys: waiting.map((message) => message.messageId) });
   } else {
     for (const message of waiting.filter((candidate) => candidate.slot > finalizedSlot)) {

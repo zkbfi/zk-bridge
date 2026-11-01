@@ -14,7 +14,10 @@ import { jobStep, type Estimates, type ProofWhere, type WaitingService } from ".
 export type Pipeline = {
   readonly direction: ProofDirection;
   readonly now: number;
-  /** The batch the watcher holds back, or null when none waits. */
+  /**
+   * The batch the watcher holds back, or null when none waits. The wire keeps its first names: `trigger` "max-wait" and
+   * `fallbackAt` are the minimum interval since the last proof (`watch.minIntervalSeconds`) and when it ends.
+   */
   readonly batch: {
     readonly count: number;
     readonly oldestFinalAt: number;
@@ -96,16 +99,16 @@ export function buildPipeline(input: {
   now: number;
 }): Pipeline {
   const { decision, head, now } = input;
-  const waiting = decision?.why === "waiting-for-profit" ? (decision.batch ?? null) : null;
+  const waiting = decision?.why === "min-interval" ? (decision.batch ?? null) : null;
   const batch =
     waiting === null || decision === null
       ? null
       : {
           count: waiting.messages,
           oldestFinalAt: waiting.oldestFinalAt,
-          trigger: waiting.startWhy,
+          trigger: waiting.startWhy === "profit" ? ("profit" as const) : ("max-wait" as const),
           eta: waiting.startAt,
-          fallbackAt: waiting.maxWaitAt,
+          fallbackAt: waiting.dueAt,
           feesUsd: waiting.feesUsd,
           costUsd: waiting.costUsd,
           detail: decision.detail,

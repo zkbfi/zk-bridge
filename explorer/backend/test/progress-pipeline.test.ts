@@ -56,10 +56,13 @@ describe("the pipeline of a direction (2026-11-01)", () => {
     expect(buildPipeline(base)).toEqual({ direction: "first-to-second", now: NOW, batch: null, job: null, latestJob: null, latestProof: null, head: null, decision: null });
   });
 
-  it("a batch that waits, with its count, trigger, expected time and fallback", () => {
-    const waiting = decision({ why: "waiting-for-profit", detail: "2 messages wait", batch: { messages: 2, feesUsd: "0.01", costUsd: "0.05", unknownWhy: null, oldestFinalAt: 10, startAt: 20, startWhy: "max-wait", maxWaitAt: 20 } });
+  it("a batch that waits, with its count, trigger, expected time and fallback (the wire keeps max-wait and fallbackAt)", () => {
+    const batch = { messages: 2, feesUsd: "0.01", costUsd: "0.05", unknownWhy: null, oldestFinalAt: 10, startAt: 20, startWhy: "interval" as const, dueAt: 20, lastProofAt: 5 };
+    const waiting = decision({ why: "min-interval", detail: "2 messages wait", batch });
     expect(buildPipeline({ ...base, decision: waiting }).batch).toEqual({ count: 2, oldestFinalAt: 10, trigger: "max-wait", eta: 20, fallbackAt: 20, feesUsd: "0.01", costUsd: "0.05", detail: "2 messages wait" });
-    expect(buildPipeline({ ...base, decision: decision({ why: "waiting-for-profit" }) }).batch).toBeNull();
+    const paying = decision({ why: "min-interval", detail: "2 messages wait", batch: { ...batch, startWhy: "profit", startAt: 15 } });
+    expect(buildPipeline({ ...base, decision: paying }).batch).toMatchObject({ trigger: "profit", eta: 15, fallbackAt: 20 });
+    expect(buildPipeline({ ...base, decision: decision({ why: "min-interval" }) }).batch).toBeNull();
     expect(buildPipeline({ ...base, decision: decision() }).batch).toBeNull();
   });
 

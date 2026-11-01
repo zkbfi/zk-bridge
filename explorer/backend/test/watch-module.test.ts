@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PULSEX_FACTORIES, STABLES } from "@zk-bridge/shared";
 import { BackendConfigError, parseBackendConfig } from "../src/config.ts";
 import type { LightClientFacts } from "../src/keepalive/plan.ts";
-import { findActiveJob, getRequest } from "../src/requests/jobs.ts";
+import { findActiveJob, getRequest, insertJob, lastProofStartedAt } from "../src/requests/jobs.ts";
 import { start as startRequests } from "../src/requests/module.ts";
 import { createRequestService } from "../src/requests/service.ts";
 import { DEFAULT_WARMUP } from "../src/watch/warmup.ts";
@@ -223,7 +223,7 @@ describe("startWatch", () => {
     await stop();
   });
 
-  it("with a batch wait, values the waiting messages on PulseChain and proves at the fallback", async () => {
+  it("with a minimum interval (named by its deprecated alias), values the waiting messages on PulseChain and proves when the interval since the last proof ends", async () => {
     const run = setup();
     const USDC = STABLES[0]!.address;
     const POOL = "0x0000000000000000000000000000000000000a01";
@@ -238,10 +238,16 @@ describe("startWatch", () => {
         return [10n ** 12n, 10n ** 26n, 0];
       },
     };
-    const context = { ...run.context, config: makeConfig({ indexerUrl: "http://indexer.test", watch: { directions: ["first-to-second"], maxWaitSeconds: 600 } }) };
+    // The server's backend.json still names the interval maxWaitSeconds: read as minIntervalSeconds, with a warning.
+    const context = { ...run.context, config: makeConfig({ indexerUrl: "http://indexer.test", watch: { directions: ["first-to-second"], pairs: { "eth-pls": { maxWaitSeconds: 600 } } } }) };
+    // A proof of the direction started just now, before this process: the interval counts from it.
+    insertJob(run.context.storage, { id: "earlier", direction: "first-to-second", now: Date.now() });
+    run.context.storage.database.prepare("UPDATE jobs SET status = 'on-chain', new_slot = '1'").run();
+    const lastProofAt = Date.now();
     const stop = await startWatch({ context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, chainClient: () => chain } });
     await flush();
-    expect(run.named("watch_started")).toMatchObject([{ batch: { "first-to-second": { maxWaitSeconds: 600, lookaheadSeconds: 384, profitMargin: 1 } } }]);
+    expect(run.named("config_deprecated")).toMatchObject([{ level: "warn", key: "watch.pairs.eth-pls.maxWaitSeconds" }]);
+    expect(run.named("watch_started")).toMatchObject([{ batch: { "first-to-second": { minIntervalSeconds: 600, lookaheadSeconds: 384, profitMargin: 1 } } }]);
     const sent = HEAD + 100;
     const messageId = `0x${"ab".repeat(32)}`;
     run.beacon.set(FEED, { items: [{ messageId, sent: { timestamp: GENESIS + sent * SLOT }, transfer: { destinationToken: null } }] });
@@ -261,15 +267,17 @@ describe("startWatch", () => {
       "the chain indexer answered 503 for a message",
       "the chain indexer sent a message in an unknown shape",
     ]);
-    // Served: a message that pays no fee does not cover the cost, so the batch waits for its fallback.
+    // Served: a message that pays no fee does not cover the cost, so the batch waits for the interval to end.
     run.beacon.set(`/api/messages/${messageId}`, { data: "0x" });
     vi.setSystemTime(Date.now() + 61_000);
     await send(finalized, 502);
-    expect(run.named("proof_not_due").at(-1)).toMatchObject({ why: "waiting-for-profit", feesUsd: "0.000000" });
+    expect(run.named("proof_not_due").at(-1)).toMatchObject({ why: "min-interval", feesUsd: "0.000000", lastProofAt: new Date(lastProofAt).toISOString(), dueAt: new Date(lastProofAt + 600_000).toISOString() });
     expect(findActiveJob(run.context.storage, "first-to-second")).toBeNull();
     await vi.advanceTimersByTimeAsync(600_000);
     await flush();
-    expect(run.named("proof_due")).toMatchObject([{ why: "message", trigger: "max-wait", batch: 1 }]);
+    expect(run.named("proof_due")).toMatchObject([{ why: "message", trigger: "interval", batch: 1 }]);
+    // The job it started is now the last proof.
+    expect(lastProofStartedAt(run.context.storage, "first-to-second")).toBeGreaterThan(lastProofAt);
     await stop();
     run.backend.prover.settleAll({ kind: "up-to-date" });
     await run.service.settled();

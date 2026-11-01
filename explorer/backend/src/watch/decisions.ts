@@ -12,11 +12,13 @@ export type WaitingBatch = {
   /** Why the fees cannot be valued, when they cannot. */
   readonly unknownWhy: string | null;
   readonly oldestFinalAt: number;
-  /** When the proof is expected to start: when the batch pays, or at the fallback. */
+  /** When the proof is expected to start: when the batch pays, or when the minimum interval ends. */
   readonly startAt: number;
-  readonly startWhy: "profit" | "max-wait";
-  /** The fallback: the latest the proof starts. */
-  readonly maxWaitAt: number;
+  readonly startWhy: "profit" | "interval";
+  /** The fallback: the latest the proof starts, `minIntervalSeconds` after the last proof started. */
+  readonly dueAt: number;
+  /** When the direction's last proof job started: the interval counts from it. */
+  readonly lastProofAt: number;
 };
 
 /** What happened after a due decision: a job started or joined, a job was running, or the request was refused. */
@@ -35,13 +37,13 @@ export type WatchDecision = {
   /** The `why` of `proof_due` or `proof_not_due`. */
   readonly why: string;
   readonly detail: string;
-  /** For a due message proof: profit or max-wait, the batch size and how long its oldest message waited. */
-  readonly trigger?: "profit" | "max-wait";
+  /** For a due message proof: profit or interval, the batch size and how long its oldest message waited. */
+  readonly trigger?: "profit" | "interval";
   readonly batchSize?: number;
   readonly waitedSeconds?: number;
   readonly feesUsd?: string | null;
   readonly costUsd?: string | null;
-  /** For `waiting-for-profit`: the batch that waits. */
+  /** For `min-interval`: the batch that waits. */
   readonly batch?: WaitingBatch;
   readonly outcome?: DecisionOutcome;
 };

@@ -90,6 +90,18 @@ export function findLatestJob(storage: Storage, direction: ProofDirection): Job 
 }
 
 /**
+ * When the newest proof job of a direction started (milliseconds since 1970), whatever asked for it: a message, a
+ * handoff, a keep-alive, a user. A job that failed, or that found the chain up to date and ended on chain without a
+ * proof, made no proof and is left out. Null when the direction has none. The watcher's minimum interval counts from it.
+ */
+export function lastProofStartedAt(storage: Storage, direction: ProofDirection): number | null {
+  const row = storage.database
+    .prepare("SELECT max(created_at) AS latest FROM jobs WHERE direction = ? AND status <> 'failed' AND NOT (status = 'on-chain' AND new_slot IS NULL)")
+    .get(direction) as { latest: number | null };
+  return row.latest;
+}
+
+/**
  * The jobs of a direction made after `since` that may have paid for a proof, and the time of the oldest. A job that
  * found the chain up to date ended on chain without a proof and is left out.
  */

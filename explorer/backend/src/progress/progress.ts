@@ -270,11 +270,12 @@ function waitFor(stage: StageKey, since: number, facts: WaitFacts): WaitingOn {
 /** Why a final message has no job yet, from the watcher's latest decision. */
 function batchWait(decision: WatchDecision | null, since: number): WaitingOn {
   if (decision === null) return { service: "source-chain-finality", since, detail: "the watcher has decided nothing since the backend started; it acts on the next finality of the source chain" };
-  if (decision.why === "waiting-for-profit" && decision.batch !== undefined) {
+  // `batch-max-wait` keeps its first name on the wire: the batch waits for the minimum interval since the last proof.
+  if (decision.why === "min-interval" && decision.batch !== undefined) {
     const batch = decision.batch;
     return batch.startWhy === "profit"
       ? { service: "batch-profit", since, eta: batch.startAt, detail: decision.detail }
-      : { service: "batch-max-wait", since, eta: batch.maxWaitAt, detail: decision.detail };
+      : { service: "batch-max-wait", since, eta: batch.dueAt, detail: decision.detail };
   }
   if (decision.why === "proof-pending") return { service: "proof-dedup-pending", since, detail: decision.detail };
   return { service: "source-chain-finality", since, detail: `the watcher acts on the next finality of the source chain; its last decision: ${decision.detail}` };
