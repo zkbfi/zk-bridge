@@ -12,8 +12,21 @@ export interface CallRequest {
   readonly gas?: bigint;
 }
 
-/** The result of a simulation: the gas of the call, or the reason it reverts. */
-export type Simulation = { readonly ok: true; readonly gas: bigint } | { readonly ok: false; readonly reason: string };
+/**
+ * The gas limit of a simulation unless the request names one. A node that is not told a limit picks its own (the block
+ * limit, or an RPC cap that some chains set very high), and a node that checks the balance against `gas * fee` then
+ * refuses the simulation of a wallet that is well funded.
+ */
+export const SIMULATION_GAS_LIMIT = 30_000_000n;
+
+/** What a simulation asked the node for: the gas limit, and the fee cap (null: none, so the node checks no balance). */
+export interface SimulationTerms {
+  readonly gas: bigint;
+  readonly maxFeePerGas: bigint | null;
+}
+
+/** The result of a simulation: the gas of the call, or the reason it reverts and the terms the request carried. */
+export type Simulation = { readonly ok: true; readonly gas: bigint } | { readonly ok: false; readonly reason: string; readonly used?: SimulationTerms };
 
 /** The fees of the next block. */
 export interface FeeQuote {
@@ -131,14 +144,17 @@ export function createTransactionPort(input: TransactionPortInput): TransactionP
     account: signer.address,
     feeQuote,
     async simulate(request) {
-      const quote = await feeQuote();
-      const gasPrice = { maxFeePerGas: quote.baseFee + quote.priorityFee, maxPriorityFeePerGas: quote.priorityFee };
+      // A simulation shows what the call does, not what the wallet can pay: the bot prices the real send afterwards and
+      // checks the balance against its worst case. So the request carries an explicit gas limit and no fee fields; a node
+      // then checks no balance (a fee cap times the node's own default gas can exceed a funded wallet).
+      const gas = request.gas ?? SIMULATION_GAS_LIMIT;
+      const used: SimulationTerms = { gas, maxFeePerGas: null };
       try {
-        await client.call({ account: signer.address, to: request.to, data: request.data, ...gasPrice });
-        const gas = await client.estimateGas({ account: signer.address, to: request.to, data: request.data, ...gasPrice });
-        return { ok: true, gas };
+        await client.call({ account: signer.address, to: request.to, data: request.data, gas });
+        const estimated = await client.estimateGas({ account: signer.address, to: request.to, data: request.data, gas });
+        return { ok: true, gas: estimated };
       } catch (error) {
-        return { ok: false, reason: reasonOf(error) };
+        return { ok: false, reason: reasonOf(error), used };
       }
     },
     async call(request) {

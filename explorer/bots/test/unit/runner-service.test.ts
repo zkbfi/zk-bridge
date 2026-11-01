@@ -405,7 +405,9 @@ describe("startRunner keeps running until the signal fires", () => {
 
   it("logs a message that the runner cannot process, instead of stopping", async () => {
     const started = await prepare();
-    const { overrides, subscribers } = standardOverrides();
+    const { overrides, client, subscribers } = standardOverrides();
+    // The simulation answers (it needs no fee quote); the step after it asks for one.
+    Object.assign(client, { call: async () => ({ data: "0x" }), estimateGas: async () => 100_000n });
     const controller = new AbortController();
     const done = run(started, overrides, { runOnce: false, signal: controller.signal });
     for (let attempt = 0; attempt < 200 && subscribers.length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));

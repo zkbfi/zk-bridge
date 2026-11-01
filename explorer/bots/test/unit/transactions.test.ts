@@ -1,7 +1,7 @@
 import { BaseError, parseTransaction, recoverTransactionAddress, type Hex, type PublicClient, type TransactionSerializableEIP1559 } from "viem";
 import { describe, expect, it, vi } from "vitest";
 import { signerFromPrivateKeyText } from "../../../terminal/src/signing/key-sources.ts";
-import { createTransactionPort, GAS_BUFFER_PERCENT, sendTerms, worstCaseCostWei } from "../../src/chain/transactions.ts";
+import { createTransactionPort, GAS_BUFFER_PERCENT, SIMULATION_GAS_LIMIT, sendTerms, worstCaseCostWei } from "../../src/chain/transactions.ts";
 import type { Signer } from "../../src/signing/open-signer.ts";
 import { address, word } from "../support/builders.ts";
 
@@ -10,6 +10,7 @@ const ANVIL_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f
 const ANVIL_ADDRESS = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
 const TARGET = address(0x55);
 const DATA: Hex = "0xdeadbeef";
+const SIMULATED = { gas: SIMULATION_GAS_LIMIT, maxFeePerGas: null };
 
 interface ClientOverrides {
   baseFeePerGas?: bigint | null | undefined;
@@ -112,47 +113,67 @@ describe("the port identity", () => {
 });
 
 describe("simulate", () => {
-  it("runs the call, then estimates the gas, both at the current fees", async () => {
+  it("runs the call, then estimates the gas, with an explicit gas limit and no fee fields", async () => {
     const client = fakeClient();
     expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: true, gas: 50_000n });
-    const expected = { account: ANVIL_ADDRESS, to: TARGET, data: DATA, maxFeePerGas: 107n, maxPriorityFeePerGas: 7n };
+    const expected = { account: ANVIL_ADDRESS, to: TARGET, data: DATA, gas: SIMULATION_GAS_LIMIT };
     expect(client.call).toHaveBeenCalledWith(expected);
     expect(client.estimateGas).toHaveBeenCalledWith(expected);
+  });
+
+  it("never asks the node to check the balance against a fee cap (the PulseChain testnet approval that was refused with 1000 PLS)", async () => {
+    // A node that refuses a request whose fee cap times its gas exceeds the balance, as the live node did.
+    const balance = 1_000n * 10n ** 18n;
+    const refuse = async (request?: unknown) => {
+      const { gas, maxFeePerGas } = request as { gas?: bigint; maxFeePerGas?: bigint };
+      if ((gas ?? 10n ** 12n) * (maxFeePerGas ?? 0n) > balance) throw new BaseError("The total cost (gas * gas fee + value) of executing this transaction exceeds the balance of the account.");
+      return { data: "0x" as Hex };
+    };
+    const client = fakeClient({ call: refuse as never, estimateGas: (async (request?: unknown) => ((await refuse(request)), 56_139n)) as never });
+    client.estimateMaxPriorityFeePerGas.mockResolvedValue(1_230_000_000n);
+    client.getBlock.mockResolvedValue({ baseFeePerGas: 7n });
+    expect(await portOver(client, { minimumPriorityFeeWei: 10_000_000n }).simulate({ to: TARGET, data: DATA })).toEqual({ ok: true, gas: 56_139n });
+  });
+
+  it("takes the gas limit of the request and reports it, with no fee, when the simulation fails", async () => {
+    const client = fakeClient({ call: async () => Promise.reject(new BaseError("The execution reverted.")) });
+    expect(await portOver(client).simulate({ to: TARGET, data: DATA, gas: 777n })).toEqual({ ok: false, reason: "The execution reverted.", used: { gas: 777n, maxFeePerGas: null } });
+    expect(client.call).toHaveBeenCalledWith(expect.objectContaining({ gas: 777n }));
   });
 
   it("reports the short message and the selector of the revert data", async () => {
     const reverted = new BaseError("The execution reverted.", { cause: Object.assign(new Error("inner"), { data: "0x12345678abcdef" }) });
     const client = fakeClient({ call: async () => Promise.reject(reverted) });
-    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "The execution reverted. (revert data 0x12345678)" });
+    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "The execution reverted. (revert data 0x12345678)", used: SIMULATED });
     expect(client.estimateGas).not.toHaveBeenCalled();
   });
 
   it("reports the short message alone when the revert data is shorter than a selector", async () => {
     const reverted = new BaseError("The execution reverted.", { cause: Object.assign(new Error("inner"), { data: "0x12" }) });
     const client = fakeClient({ estimateGas: async () => Promise.reject(reverted) });
-    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "The execution reverted." });
+    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "The execution reverted.", used: SIMULATED });
   });
 
   it("reports the short message alone when the error carries no revert data", async () => {
     const client = fakeClient({ call: async () => Promise.reject(new BaseError("The request timed out.")) });
-    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "The request timed out." });
+    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "The request timed out.", used: SIMULATED });
   });
 
   it("reports the message of a plain error", async () => {
     const client = fakeClient({ call: async () => Promise.reject(new Error("socket closed")) });
-    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "socket closed" });
+    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "socket closed", used: SIMULATED });
   });
 
   it("reports the short message of an object that is not an error", async () => {
     const client = fakeClient({ call: async () => Promise.reject({ shortMessage: "out of gas" }) });
-    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "out of gas" });
+    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "out of gas", used: SIMULATED });
   });
 
   it("reports the text of a value that is neither an error nor an object with a message", async () => {
     const client = fakeClient({ call: async () => Promise.reject("plain text") });
-    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "plain text" });
+    expect(await portOver(client).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "plain text", used: SIMULATED });
     const second = fakeClient({ call: async () => Promise.reject({ shortMessage: 5 }) });
-    expect(await portOver(second).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "[object Object]" });
+    expect(await portOver(second).simulate({ to: TARGET, data: DATA })).toEqual({ ok: false, reason: "[object Object]", used: SIMULATED });
   });
 });
 

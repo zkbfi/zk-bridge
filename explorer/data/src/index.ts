@@ -507,6 +507,9 @@ export {
   describeRevert,
   type GateConfirmation,
   ensureGateConfirmed,
+  EVIDENCE_BLOCK_LAG,
+  SIMULATION_RETRY_MILLISECONDS,
+  type EvidenceBlock,
 } from "./gate-evidence.js";
 
 // Chain metadata: native coin tickers and block explorers

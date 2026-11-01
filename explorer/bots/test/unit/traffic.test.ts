@@ -178,6 +178,17 @@ describe("a traffic send", () => {
     expect(first.port.sent).toHaveLength(0);
   });
 
+  it("names the gas and the fee that the failed simulation used", async () => {
+    const { first, logs, traffic } = world();
+    first.state.balances.set(DOLLAR.toLowerCase(), 100_000n * DOLLAR_UNIT);
+    first.port.simulations.set(DOLLAR.toLowerCase(), { ok: false, reason: "paused", used: { gas: 30_000_000n, maxFeePerGas: null } });
+    await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
+    expect(eventsNamed(logs, "traffic_skipped")[0]).toMatchObject({ detail: "paused", simulatedGas: "30000000", simulatedMaxFeePerGas: "none" });
+    first.port.simulations.set(DOLLAR.toLowerCase(), { ok: false, reason: "paused", used: { gas: 1n, maxFeePerGas: 9n } });
+    await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
+    expect(eventsNamed(logs, "traffic_skipped")[1]).toMatchObject({ simulatedGas: "1", simulatedMaxFeePerGas: "9" });
+  });
+
   it("keeps the native reserve before the approval", async () => {
     const { first, logs, traffic } = world();
     first.state.balances.set(DOLLAR.toLowerCase(), 100_000n * DOLLAR_UNIT);
