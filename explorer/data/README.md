@@ -53,8 +53,10 @@ Proof queue (`backend-client`):
 
 | Export | What it does |
 | --- | --- |
-| `createBackendClient({ baseUrl, fetchJson, postJson })` | `requestProof` (POST `/requests`; a refusal comes back as a value), `requestStatus` (GET `/requests/:id`), `directionStatus` (GET `/directions/:direction`), `latestProof` (GET `/proofs/latest/:direction`, null on 404), `evidence`, `health`. |
+| `createBackendClient({ baseUrl, fetchJson, postJson })` | `requestProof` (POST `/requests`; a refusal comes back as a value), `requestStatus` (GET `/requests/:id`), `directionStatus` (GET `/directions/:direction`), `latestProof` (GET `/proofs/latest/:direction`, null on 404), `evidence`, `health`, and the pipeline reads `progress` (GET `/progress/:messageId`, null on 404), `pipeline` (GET `/directions/:direction/pipeline`) and `benchmarks` (GET `/benchmarks?window=24h`). |
 | `BackendClientError`, `jobViewSchema`, `latestProofSchema`, `ProofRequestInput`, `ProofRequestAnswer`, `JobView`, `LatestProof`, `BackendHealth` | Errors, schemas and types. |
+| `transferProgressSchema`, `directionPipelineSchema`, `benchmarksSchema`, `TransferProgress`, `DirectionPipeline`, `Benchmarks` | The shapes of the pipeline reads (explorer/backend/README.md, "Pipeline reads"). |
+| `PIPELINE_STAGES`, `WAITING_SERVICES`, `WAITING_SERVICE_TEXT`, `BENCHMARK_STEPS` | The stage keys in order, the services a transfer can wait on with one sentence each, and the timed steps. |
 | `evidencePackageSchema`, `EvidencePackage` | The evidence package of a message. |
 
 Indexer API views (`api-views`, `audit`, `feed-query`, `history-query`, `delivery-cost*`):

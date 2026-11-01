@@ -265,6 +265,21 @@ export {
   type BackendClient,
 } from "./backend-client.js";
 export {
+  PIPELINE_STAGES,
+  type PipelineStage,
+  WAITING_SERVICES,
+  type WaitingService,
+  WAITING_SERVICE_TEXT,
+  transferProgressSchema,
+  type TransferProgress,
+  directionPipelineSchema,
+  type DirectionPipeline,
+  BENCHMARK_STEPS,
+  type BenchmarkStep,
+  benchmarksSchema,
+  type Benchmarks,
+} from "./pipeline-views.js";
+export {
   proofPackageSchema,
   type ProofPackage,
   prerequisiteSchema,
