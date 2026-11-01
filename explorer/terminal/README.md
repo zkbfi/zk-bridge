@@ -97,7 +97,7 @@ rate, and the account that delivers supplies no rate.
 - Gas based mode fields: a decimal factor such as `1` on the cost (1 is the cost itself, 0.5 half of it), the base fee ceiling in gwei,
   and `Your coin price`: your own price of one whole native coin of the other chain, in whole tokens. The form folds
   your price into the multiplier now, so the mode works for any token. It fills the fields when you enter the form, or
-  choose the mode or the token, with the factor of 1, twice the base fee now, and the price from the token valuation.
+  choose the mode or the token, with the factor of 1, three times the base fee now (the Normal gas level), and the price from the token valuation.
   A number that you typed stays when you change the amount.
 - Where the destination chain reports no base fee (the `baseFee` field of the chain configuration is `none`, for example BSC), the default
   reads the whole gas price, with the same margin, and the panel says why. Without your price and without a token

@@ -277,9 +277,13 @@ and the time left while in flight or the age once delivered. A row links to the 
     their originals, so prices are for display only and are never used to compute amounts, tips or fees.
 
 - **Gas levels (owner):** choosing a higher level raises the gas-price ceiling the deliverer may spend (in every tip
-  mode, including the default percentage tip), so the choice always does something. Normal / High / Highest allow
+  mode, including the default percentage tip), so the choice always does something. Low / Normal / High allow
   up to 2× / 3× / 5× and are expected to cost 1× / 1.5× / 2.5× (owner: "those multipliers are fine"). The cost they
   multiply is the full cost of releasing as if this bridge were the only one: $0.025 proof + the destination gas.
+  **Names and default (owner, quotes 105–106):** the levels were renamed from Normal / High / Highest to Low / Normal /
+  High, and Normal (the middle, 3×) is the default. One constant, `DEFAULT_GAS_LEVEL`, carries it: no ceiling (an old link,
+  an empty field) means Normal, the recommended tick and the reset go to it, the default fee's cost basis is the cost at
+  Normal, and the breakdown line for another level is relative to Normal ("+" for High, "−" for Low).
 - **Saving the cap (owner):** lowering the cap in the review applies to this bridge only; a small save button (a
   floppy-disk icon) next to the cap slider makes it the default for people who want that.
 - **High-tip warning (owner):** labelled **"High cap %"** (owner; earlier "High tip %", and not "tip too high"). The Bridge pill takes the
@@ -610,3 +614,5 @@ don't call it "tip too high", call it "high tip %""
 102. "native can be recognized as a valid iput to the search params, but it should immediately update to the hash"
 103. "how about just zkb for the org name"
 104. "we need to update the "zkb" symbol prefix to just be "z""
+105. "lets rename the gas levels too, from normal/high/highest to low/normal/high"
+106. "make normal (middle) as default"

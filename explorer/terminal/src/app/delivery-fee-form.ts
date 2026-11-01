@@ -8,9 +8,11 @@
  * interface say the same thing.
  */
 import {
+  DEFAULT_GAS_LEVEL,
   DEFAULT_GAS_MARGIN,
   DEFAULT_TIP_PERCENTAGE_MULTIPLIER,
   buildFeeSuggestions,
+  ceilingWeiOf,
   defaultTip,
   defaultTipChoiceOf,
   describeFee,
@@ -214,9 +216,9 @@ function parseRatePercent(label: string, text: string): bigint {
 
 const valueOf = (values: Values, name: string): string => (values[name] ?? '').trim()
 
-/** The base fee ceiling that a blank field means: twice the base fee now. */
+/** The base fee ceiling that a blank field means: that of the default gas level (Normal), three times the base fee now. */
 export function defaultCeilingWei(dataSource: FeeDataSource): bigint {
-  return dataSource.baseFeeWei * 2n
+  return ceilingWeiOf(dataSource.baseFeeWei, DEFAULT_GAS_LEVEL)
 }
 
 function payoutOf(values: Values, target: DeliveryTarget): PayoutKind {
@@ -413,7 +415,7 @@ export function senderPriceText(target: DeliveryTarget): string {
 
 /**
  * The numbers that the chosen mode puts into the editable fields. The gas mode, the default, starts at the factor of 1 (the
- * measured cost), the ceiling of twice the base fee now and the price of the valuation. The percentage starts at the tip of
+ * measured cost), the ceiling of three times the base fee now and the price of the valuation. The percentage starts at the tip of
  * 0.1 percent. The fixed amount starts at the suggestion. The cost based suggestions stay on the panel for the user to read.
  */
 export function suggestedFields(mode: FeeFormMode, state: DeliveryFeeState, target: DeliveryTarget): Values {

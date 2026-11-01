@@ -15,7 +15,7 @@ const menuOf = (sliders: readonly FeeSlider[]) => (
 const props = (overrides: Partial<FeeLineProps> = {}): FeeLineProps => ({
   summary: "Deliver for 0.39%, max $0.39",
   summaryFull: "Deliver for 0.39%, max $0.39",
-  gasHelp: "Gas level: Normal up to 2× today's base fee, High 3×, Highest 5×.",
+  gasHelp: "Gas level: Low up to 2× today's base fee, Normal 3×, High 5×.",
   gasLevel: 2,
   time: "~15 min",
   steps: [
@@ -41,14 +41,21 @@ describe("the delivery control (owner, quote 98)", () => {
     expect(container.querySelector('[data-fee="gas"]')!.textContent).toBe("");
   });
 
-  it("makes the bars beside the gas can the level control: a tap asks for the next level, wrapping after Highest", async () => {
+  it("makes the bars beside the gas can the level control: a tap asks for the next level, wrapping after High", async () => {
     const onGasLevel = vi.fn();
     const { rerender } = render(<FeeLine {...props({ gasLevel: 1, onGasLevel })} />);
-    await userEvent.click(screen.getByRole("button", { name: "Gas level: Normal. Change" }));
+    await userEvent.click(screen.getByRole("button", { name: "Gas level: Low. Change" }));
     expect(onGasLevel).toHaveBeenLastCalledWith(2);
+    rerender(<FeeLine {...props({ gasLevel: 2, onGasLevel })} />);
+    await userEvent.click(screen.getByRole("button", { name: "Gas level: Normal. Change" }));
+    expect(onGasLevel).toHaveBeenLastCalledWith(3);
     rerender(<FeeLine {...props({ gasLevel: 3, onGasLevel })} />);
-    await userEvent.click(screen.getByRole("button", { name: "Gas level: Highest. Change" }));
+    await userEvent.click(screen.getByRole("button", { name: "Gas level: High. Change" }));
     expect(onGasLevel).toHaveBeenLastCalledWith(1);
+    // No level yet reads as the default, Normal, so the next one is High.
+    rerender(<FeeLine {...props({ gasLevel: 0, onGasLevel })} />);
+    await userEvent.click(screen.getByRole("button", { name: "Gas level: Normal. Change" }));
+    expect(onGasLevel).toHaveBeenLastCalledWith(3);
     expect(screen.queryByRole("radiogroup")).toBeNull();
   });
 

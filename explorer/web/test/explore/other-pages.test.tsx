@@ -31,7 +31,7 @@ describe("Explore's other pages", () => {
     expect(await screen.findByText("Proof #1", { selector: ".zb-xband-big" })).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: "11,194,368" })).toHaveAttribute("href", "#/explore/slot/11194368");
     expect(screen.getByText(/period 1,366/)).toBeInTheDocument();
-    expect(screen.getByText("Posted in").nextElementSibling).toHaveAttribute("href", "#/explore/tx/11155111/0x4663c8c20fc80a37f8e93102602d2fb969e93d1973c49011edff6915ab4828db");
+    expect(screen.getByText("Transaction", { selector: ".zb-k" }).nextElementSibling?.querySelector("a")).toHaveAttribute("href", "#/explore/tx/11155111/0x4663c8c20fc80a37f8e93102602d2fb969e93d1973c49011edff6915ab4828db");
     await waitFor(() => expect(screen.getByText("Verifier").nextElementSibling).toHaveAttribute("href", expect.stringMatching(/^#\/explore\/contract\/11155111\//)));
     expect(screen.getByText("604,091")).toBeInTheDocument();
     // The route icons on the orange band sit on plates.

@@ -31,6 +31,7 @@
     },
     "tipPercent": "0.1",
     "newCopyGasLimit": { "11155111": "9000000" },
+    "gateBeaconUrls": { "11155111": "https://lodestar-sepolia.chainsafe.io" },
     "minimumNativeWei": { "11155111": "50000000000000000", "943": "1000000000000000000" },
     "minimumPriorityFeeWei": { "943": "10000000" },
     "receiptTimeoutSeconds": 300

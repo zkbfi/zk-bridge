@@ -103,6 +103,7 @@ export {
   HARD_CAP_STEP_WAD,
   NO_PRICE_SHARE_WAD,
   type GasLevel,
+  DEFAULT_GAS_LEVEL,
   GAS_LEVELS,
   ceilingWeiOf,
   gasLevelOfCeiling,
@@ -177,3 +178,40 @@ export {
 
 // The symbol of a bridged copy
 export { BRIDGED_SYMBOL_PREFIX, bridgedSymbolOf, nativeSymbolOf } from "./bridged-symbol.js";
+
+// The fork evidence of the deposit gate
+export {
+  BEACON_ROOTS_ADDRESS,
+  PROGRESSIVE_SHAPE,
+  ALLOWED_SHAPES,
+  isAllowedShape,
+  plainVersionGindex,
+  versionGindex,
+  genesisValidatorsRootGindex,
+  versionBranchLength,
+  genesisValidatorsRootBranchLength,
+  depthOfVersionBranch,
+  hashPair,
+  type BeaconBlockHeader,
+  beaconHeaderRoot,
+  isValidBranch,
+  versionLeaf,
+  type ForkVerdict,
+  judgeForkEvidence,
+  type BeaconClock,
+  gateEpochAt,
+  gateEpochEnd,
+  type ForkEvidence,
+  FORK_EVIDENCE_ABI,
+  encodeForkEvidence,
+  decodeForkEvidence,
+  confirmCalldata,
+  type ConfirmRefusal,
+  type ConfirmCheck,
+  checkConfirmEvidence,
+  compactMultiproofDescriptor,
+  compactMultiproofNodes,
+  branchFromNodes,
+  forkProofGindices,
+  forkEvidenceFromMultiproof,
+} from "./gate-evidence.js";

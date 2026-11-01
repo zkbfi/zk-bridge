@@ -18,6 +18,7 @@ import {
   deliveryGasUsd,
   feeWarnings,
   GAS_LEVELS,
+  DEFAULT_GAS_LEVEL,
   gasLevelOfCeiling,
   highCap,
   highCapLine,
@@ -48,6 +49,7 @@ describe("the constants", () => {
     expect(PERCENT_WAD).toBe(10n ** 16n);
     expect(DEFAULT_CAP_WAD).toBe(PERCENT_WAD);
     expect(NO_PRICE_SHARE_WAD).toBe(PERCENT_WAD / 10n);
+    expect(DEFAULT_GAS_LEVEL).toBe(2);
     expect(GAS_LEVELS).toEqual({ 1: { ceilingFactor: 2n, expectedHalves: 2n }, 2: { ceilingFactor: 3n, expectedHalves: 3n }, 3: { ceilingFactor: 5n, expectedHalves: 5n } });
   });
 });
@@ -94,8 +96,8 @@ describe("the default fee curve: the owner's reference table", () => {
     expect(defaultFee({ amountUsd: 25n * USD, costUsd: micro(125_000n), capWad: PERCENT_WAD / 2n })).toEqual({ binding: "cap", feeUsd: micro(125_000n), shareWad: PERCENT_WAD / 2n });
   });
 
-  it("adds a higher gas level's extra cost on top of the curve, so the fee rises with the level; the floor and the cap still hold", () => {
-    // $50: the curve is about $0.1939; at High the cost is $0.0375 against $0.025 at Normal, an extra $0.0125.
+  it("adds a gas level's extra cost over the default on top of the curve, so the fee rises with the level; the floor and the cap still hold", () => {
+    // $50: the curve is about $0.1939; at High the cost is $0.0375 against $0.025 at the default level, an extra $0.0125.
     const normal = defaultFee({ amountUsd: 50n * USD, costUsd: micro(25_000n), capWad: DEFAULT_CAP_WAD });
     const high = defaultFee({ amountUsd: 50n * USD, costUsd: micro(37_500n), capWad: DEFAULT_CAP_WAD, levelExtraUsd: micro(12_500n) });
     expect(high.binding).toBe("curve");
@@ -117,7 +119,7 @@ describe("the default fee curve: the owner's reference table", () => {
 describe("the total cost", () => {
   const gas = { gasUsed: 1_000_000n, baseFeeWei: 1_000_000_000n, priorityFeeWei: 0n, nativePriceE18: 1_000n * 10n ** 18n };
   it("is the full cost, the $0.025 proof plus the delivery gas, times the level's expected multiple (1×, 1.5×, 2.5×)", () => {
-    // 1e6 gas × 1 gwei = 0.001 coin at $1,000 = $1 of gas; + $0.025 proof = $1.025 at Normal.
+    // 1e6 gas × 1 gwei = 0.001 coin at $1,000 = $1 of gas; + $0.025 proof = $1.025 at Low.
     expect(([1, 2, 3] as GasLevel[]).map((level) => deliveryGasUsd({ ...gas, level }))).toEqual([micro(1_000_000n), micro(1_000_000n), micro(1_000_000n)]);
     expect(([1, 2, 3] as GasLevel[]).map((level) => totalCostUsd({ ...gas, level }))).toEqual([micro(1_025_000n), micro(1_537_500n), micro(2_562_500n)]);
   });
@@ -136,9 +138,9 @@ describe("the total cost", () => {
 describe("gas levels and the ceiling", () => {
   it("write a ceiling of 2×, 3× or 5× today's base fee and read back as the nearest level, ties to the lower", () => {
     expect(([1, 2, 3] as GasLevel[]).map((level) => ceilingWeiOf(10n, level))).toEqual([20n, 30n, 50n]);
-    expect(gasLevelOfCeiling(null, 10n)).toBe(1);
-    expect(gasLevelOfCeiling(30n, null)).toBe(1);
-    expect(gasLevelOfCeiling(30n, 0n)).toBe(1);
+    expect(gasLevelOfCeiling(null, 10n)).toBe(DEFAULT_GAS_LEVEL);
+    expect(gasLevelOfCeiling(30n, null)).toBe(DEFAULT_GAS_LEVEL);
+    expect(gasLevelOfCeiling(30n, 0n)).toBe(DEFAULT_GAS_LEVEL);
     expect(gasLevelOfCeiling(30n, 10n)).toBe(2);
     expect(gasLevelOfCeiling(49n, 11n)).toBe(3);
     expect(gasLevelOfCeiling(25n, 10n)).toBe(1); // halfway between 20 and 30
@@ -173,8 +175,8 @@ describe("High cap %", () => {
     expect(highCapLine(null)).toEqual({ numerator: 1n, denominator: 100n });
   });
 
-  it("reads the tip before gas: the fee less the Normal-level cost", () => {
-    const base = { costNormalUsd: micro(1_025_000n), amountUsd: 50n * USD, shareWithoutPriceWad: null };
+  it("reads the tip before gas: the fee less the cost at the default level", () => {
+    const base = { costDefaultUsd: micro(1_025_000n), amountUsd: 50n * USD, shareWithoutPriceWad: null };
     expect(highCap({ ...base, feeUsd: micro(1_525_000n) })).toBe(false); // $0.50 tip is exactly 1%
     expect(highCap({ ...base, feeUsd: micro(1_525_001n) })).toBe(true);
     expect(highCap({ ...base, feeUsd: micro(100n) })).toBe(false); // under cost: no tip
@@ -183,7 +185,7 @@ describe("High cap %", () => {
   });
 
   it("reads the share against 1% without a price", () => {
-    const base = { feeUsd: null, costNormalUsd: null, amountUsd: null };
+    const base = { feeUsd: null, costDefaultUsd: null, amountUsd: null };
     expect(highCap({ ...base, shareWithoutPriceWad: PERCENT_WAD + 1n })).toBe(true);
     expect(highCap({ ...base, shareWithoutPriceWad: PERCENT_WAD })).toBe(false);
     expect(highCap({ ...base, shareWithoutPriceWad: null })).toBe(false);
@@ -216,20 +218,20 @@ describe("the cap warning (owner, quotes 70-71)", () => {
     expect(([1, 2, 3] as GasLevel[]).map((level) => ceilingCostUsd({ ...gas, level }))).toEqual([micro(2_025_000n), micro(3_025_000n), micro(5_025_000n)]);
     expect(ceilingCostUsd({ ...gas, priorityFeeWei: 1_000_000_000n, level: 1 })).toBe(micro(3_025_000n));
   });
-  it("does not warn in the owner's example: $500, cost $0.05, Normal ceiling gives $0.075, fee $0.50 keeps $0.45 under $1", () => {
-    expect(capWarns({ gasBased: true, amountUsd: 500n * USD, capWad: DEFAULT_CAP_WAD, expandedCostUsd: micro(75_000n), costNormalUsd: micro(50_000n) })).toBe(false);
+  it("does not warn in the owner's example: $500, cost $0.05, default-level ceiling gives $0.075, fee $0.50 keeps $0.45 under $1", () => {
+    expect(capWarns({ gasBased: true, amountUsd: 500n * USD, capWad: DEFAULT_CAP_WAD, expandedCostUsd: micro(75_000n), costDefaultUsd: micro(50_000n) })).toBe(false);
   });
   it("warns in gas-based mode when the fee at the expanded cost, capped, would leave more than the line", () => {
-    // $500 at Highest with $2 of gas at Normal: expanded $10.025, fee max($0.50, $20.05) capped at $5, leaves $2.975 > $1.
-    expect(capWarns({ gasBased: true, amountUsd: 500n * USD, capWad: DEFAULT_CAP_WAD, expandedCostUsd: micro(10_025_000n), costNormalUsd: micro(2_025_000n) })).toBe(true);
+    // $500 at High with $2 of gas at the default level: expanded $10.025, fee max($0.50, $20.05) capped at $5, leaves $2.975 > $1.
+    expect(capWarns({ gasBased: true, amountUsd: 500n * USD, capWad: DEFAULT_CAP_WAD, expandedCostUsd: micro(10_025_000n), costDefaultUsd: micro(2_025_000n) })).toBe(true);
     // A lower cap pulls it back under the line: 0.5% = $2.50 leaves $0.475.
-    expect(capWarns({ gasBased: true, amountUsd: 500n * USD, capWad: PERCENT_WAD / 2n, expandedCostUsd: micro(10_025_000n), costNormalUsd: micro(2_025_000n) })).toBe(false);
+    expect(capWarns({ gasBased: true, amountUsd: 500n * USD, capWad: PERCENT_WAD / 2n, expandedCostUsd: micro(10_025_000n), costDefaultUsd: micro(2_025_000n) })).toBe(false);
   });
   it("never warns for percent or fixed fees, or without prices", () => {
-    expect(capWarns({ gasBased: false, amountUsd: 500n * USD, capWad: DEFAULT_CAP_WAD, expandedCostUsd: micro(10_025_000n), costNormalUsd: micro(2_025_000n) })).toBe(false);
-    expect(capWarns({ gasBased: true, amountUsd: null, capWad: DEFAULT_CAP_WAD, expandedCostUsd: micro(10_025_000n), costNormalUsd: micro(2_025_000n) })).toBe(false);
-    expect(capWarns({ gasBased: true, amountUsd: 500n * USD, capWad: DEFAULT_CAP_WAD, expandedCostUsd: null, costNormalUsd: micro(2_025_000n) })).toBe(false);
-    expect(capWarns({ gasBased: true, amountUsd: 500n * USD, capWad: DEFAULT_CAP_WAD, expandedCostUsd: micro(10_025_000n), costNormalUsd: null })).toBe(false);
+    expect(capWarns({ gasBased: false, amountUsd: 500n * USD, capWad: DEFAULT_CAP_WAD, expandedCostUsd: micro(10_025_000n), costDefaultUsd: micro(2_025_000n) })).toBe(false);
+    expect(capWarns({ gasBased: true, amountUsd: null, capWad: DEFAULT_CAP_WAD, expandedCostUsd: micro(10_025_000n), costDefaultUsd: micro(2_025_000n) })).toBe(false);
+    expect(capWarns({ gasBased: true, amountUsd: 500n * USD, capWad: DEFAULT_CAP_WAD, expandedCostUsd: null, costDefaultUsd: micro(2_025_000n) })).toBe(false);
+    expect(capWarns({ gasBased: true, amountUsd: 500n * USD, capWad: DEFAULT_CAP_WAD, expandedCostUsd: micro(10_025_000n), costDefaultUsd: null })).toBe(false);
   });
 });
 
@@ -240,7 +242,7 @@ describe("the warnings together", () => {
       capWad: DEFAULT_CAP_WAD,
       feeUsd: 2n * USD,
       costUsd: micro(100_000n),
-      costNormalUsd: micro(100_000n),
+      costDefaultUsd: micro(100_000n),
       shareWithoutPriceWad: null,
       belowBreakEven: false,
       gasBased: true,
@@ -276,7 +278,7 @@ describe("the fixed vectors", () => {
     expect({ binding: result.binding, shareWad: String(result.shareWad), feeUsd: result.feeUsd === null ? null : String(result.feeUsd) }).toEqual(output);
   });
   it.each(vectors.highCap)("highCap $input", ({ input, output }) => {
-    expect(highCap({ feeUsd: big(input.feeUsd), costNormalUsd: big(input.costNormalUsd), amountUsd: big(input.amountUsd), shareWithoutPriceWad: big(input.shareWithoutPriceWad) })).toBe(output);
+    expect(highCap({ feeUsd: big(input.feeUsd), costDefaultUsd: big(input.costDefaultUsd), amountUsd: big(input.amountUsd), shareWithoutPriceWad: big(input.shareWithoutPriceWad) })).toBe(output);
   });
   it.each(vectors.smallTransfer)("smallTransfer $input", ({ input, output }) => {
     expect(smallTransfer({ costUsd: big(input.costUsd), amountUsd: big(input.amountUsd), capWad: BigInt(input.capWad) })).toBe(output);
@@ -291,7 +293,7 @@ describe("the fixed vectors", () => {
         capWad: BigInt(input.capWad),
         feeUsd: big(input.feeUsd),
         costUsd: big(input.costUsd),
-        costNormalUsd: big(input.costNormalUsd),
+        costDefaultUsd: big(input.costDefaultUsd),
         shareWithoutPriceWad: big(input.shareWithoutPriceWad),
         belowBreakEven: input.belowBreakEven,
         gasBased: input.gasBased,
@@ -303,7 +305,7 @@ describe("the fixed vectors", () => {
     expect(ceilingCostUsd({ gasUsed: BigInt(input.gasUsed), baseFeeWei: BigInt(input.baseFeeWei), priorityFeeWei: BigInt(input.priorityFeeWei), nativePriceE18: BigInt(input.nativePriceE18), level: input.level as GasLevel })).toBe(BigInt(output));
   });
   it.each(vectors.capWarns)("capWarns $input", ({ input, output }) => {
-    expect(capWarns({ gasBased: input.gasBased, amountUsd: big(input.amountUsd), capWad: BigInt(input.capWad), expandedCostUsd: big(input.expandedCostUsd), costNormalUsd: big(input.costNormalUsd) })).toBe(output);
+    expect(capWarns({ gasBased: input.gasBased, amountUsd: big(input.amountUsd), capWad: BigInt(input.capWad), expandedCostUsd: big(input.expandedCostUsd), costDefaultUsd: big(input.costDefaultUsd) })).toBe(output);
   });
   it.each(vectors.hardCapCheck)("hardCapCheck $note", ({ input, output }) => {
     const found = hardCapCheck({ amountUnits: BigInt(input.amountUnits), feeUnits: BigInt(input.feeUnits), worstFeeUnits: BigInt(input.worstFeeUnits), hardCapWad: BigInt(input.hardCapWad) });

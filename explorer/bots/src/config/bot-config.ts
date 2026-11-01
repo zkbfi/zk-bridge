@@ -307,6 +307,14 @@ export const trafficSchema = z
      * `maxGasPerTx` (10,000,000).
      */
     newCopyGasLimit: z.record(z.string().regex(/^\d+$/, "must be a chain id"), z.string().regex(/^\d+$/, "must be a whole number of gas, as text")).default({}),
+    /**
+     * The beacon API that serves the state proofs of the deposit gate, by chain id. Before the first send of an epoch from
+     * a chain whose gate enforces (Sepolia), the bot confirms the epoch with a proof from it. It needs the compact
+     * multiproof endpoint of Lodestar (`/eth/v0/beacon/proof/state/...`); the public Lodestar nodes serve it. The proof is
+     * checked against the beacon root that the chain itself holds, so the node need not be trusted. Without an entry the
+     * bot uses the beacon URL of the pair for that chain (`EXPLORER_BEACON_URL_<chain id>`).
+     */
+    gateBeaconUrls: z.record(z.string().regex(/^\d+$/, "must be a chain id"), z.string().url()).default({}),
     /** The native coin that the wallet keeps on each chain, by chain id: no send spends below it. Each chain of the pair needs an entry. */
     minimumNativeWei: z.record(z.string().regex(/^\d+$/, "must be a chain id"), weiSchema),
     /** The priority fee in wei. Default: what the node suggests. */

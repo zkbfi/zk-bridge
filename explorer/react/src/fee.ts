@@ -37,23 +37,23 @@ export type DefaultFeeInput = {
   readonly amountUsd: bigint | null;
   /** The cost of delivery and proof at the gas level in force, or null without a price. */
   readonly costUsd: bigint | null;
-  /** The same cost at the Normal gas level. */
-  readonly costNormalUsd: bigint | null;
+  /** The same cost at the default gas level (Normal, `DEFAULT_GAS_LEVEL` of `@zkb/core`). */
+  readonly costDefaultUsd: bigint | null;
   /** The automatic fee's cap, in percent of the amount. */
   readonly capPercent: number;
 };
 
 /**
- * The default fee: the larger of the default curve and twice the cost, held at the cap. A higher gas level adds its
+ * The default fee: the larger of the default curve and twice the cost, held at the cap. A level above the default adds its
  * extra expected cost on top of the curve, so the fee rises with the bars.
  *
  * @param input The amount, the costs and the cap.
  */
-export const useDefaultFee = ({ amountUsd, costUsd, costNormalUsd, capPercent }: DefaultFeeInput): { readonly capWad: bigint; readonly auto: DefaultFee } => {
+export const useDefaultFee = ({ amountUsd, costUsd, costDefaultUsd, capPercent }: DefaultFeeInput): { readonly capWad: bigint; readonly auto: DefaultFee } => {
   const capWad = capWadOf(capPercent, DEFAULT_CAP_WAD);
   return useMemo(
-    () => ({ capWad, auto: defaultFee({ amountUsd, costUsd, capWad, ...(costUsd === null || costNormalUsd === null ? {} : { levelExtraUsd: costUsd - costNormalUsd }) }) }),
-    [amountUsd, costUsd, costNormalUsd, capWad],
+    () => ({ capWad, auto: defaultFee({ amountUsd, costUsd, capWad, ...(costUsd === null || costDefaultUsd === null ? {} : { levelExtraUsd: costUsd - costDefaultUsd }) }) }),
+    [amountUsd, costUsd, costDefaultUsd, capWad],
   );
 };
 

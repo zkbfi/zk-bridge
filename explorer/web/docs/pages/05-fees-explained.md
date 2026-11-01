@@ -21,7 +21,7 @@ Under the amount you send sits one control with three parts.
 | Part | What it shows | What a tap does |
 |---|---|---|
 | Take my money | Who delivers and the fee, such as "A bot delivers it · 0.39%" | Opens the delivery menu |
-| Gas can and bars | Your gas level | Moves to the next level: Normal, High, Highest, then Normal again |
+| Gas can and bars | Your gas level | Moves to the next level: Low, Normal, High, then Low again |
 | Clock | The time to arrival, such as "~16 min" | Lists every step with its estimate |
 
 Hold the pointer on any part, or focus it with the keyboard, to read the whole sentence. Tap the same part again, tap elsewhere or press Escape to close what it opened.
@@ -32,7 +32,7 @@ The delivery menu holds every fee setting in one place:
 - The value of that choice, such as the tip as a share of the amount.
 - The gas level.
 - The automatic fee cap and the hard fee cap.
-- What the fee covers: delivery gas, proof, the extra for a higher gas level, tip, and the fee in total.
+- What the fee covers: delivery gas, proof, the extra or saving of your gas level, tip, and the fee in total.
 - **Advanced**: the gas limit, the relay router and a call after delivery.
 
 ## The default fee
@@ -64,11 +64,13 @@ The bars beside the gas can set how much gas price you allow the deliverer. Toda
 
 | Level | The deliverer may pay up to | Expected cost |
 |---|---|---|
-| Normal | 2 × today's base fee | 1 × today's cost |
-| High | 3 × today's base fee | 1.5 × today's cost |
-| Highest | 5 × today's base fee | 2.5 × today's cost |
+| Low | 2 × today's base fee | 1 × today's cost |
+| Normal | 3 × today's base fee | 1.5 × today's cost |
+| High | 5 × today's base fee | 2.5 × today's cost |
 
-A higher level gives a bot room to deliver even when gas jumps. It also raises the fee, in every fee choice, by the extra cost it is expected to bring. The breakdown shows that extra on its own line.
+Normal is where every transfer starts. A link that sets no gas level also means Normal.
+
+High gives a bot more room to deliver when gas jumps. It also raises the fee, in every fee choice, by the extra cost it is expected to bring. Low gives a bot less room and costs less than Normal. The breakdown shows the difference to Normal on its own line, with a plus for the extra and a minus for the saving.
 
 In the menu, the gas level shows as a range on a track, with today's gas marked as the anchor. A line under it reads, for example: "Anchored at today's gas · could land between $0.18 and $0.31 over 15 min".
 
@@ -147,7 +149,7 @@ Each value in the menu is one control: a slider with tick marks, an exact field 
 
 - **Reset to recommended** shows while the value differs from the recommendation.
 - After a reset, a **Back to your …** button appears in the same place, for example "Back to your 0.44%". It stays until you change something else.
-- The ticks are named under the track: "2× cost", "high cap", "auto cap", "High", "Highest" and "recommended". When two names would touch, one is left out and named in the control's ? help instead.
+- The ticks are named under the track: "2× cost", "high cap", "auto cap", "Low", "High" and "recommended". When two names would touch, one is left out and named in the control's ? help instead.
 
 The tip slider in the Share choice and the same value elsewhere are one value: move either and every number follows.
 
