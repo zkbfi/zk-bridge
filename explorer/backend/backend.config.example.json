@@ -34,11 +34,18 @@
     "secondsBetweenJobsPerDirection": 120,
     "secondsBeforeRetryAfterFailure": 60,
     "jobsPerDirectionPerDay": 96,
-    "keepAliveSeconds": 43200
+    "keepAliveSeconds": 43200,
+    "pendingProofStaleSeconds": 600
   },
   "indexerUrl": "http://127.0.0.1:42069",
   "watch": {
     "sse": true,
+    "maxWaitSeconds": 300,
+    "profitMargin": 1.0,
+    "pairs": {
+      "eth-pls": { "maxWaitSeconds": 300 },
+      "sepolia-pls943": { "maxWaitSeconds": 3600 }
+    },
     "warmup": { "enabled": true, "leadP": 0.9, "leadObservations": 20, "defaultLeadSeconds": 90, "minLeadSeconds": 30, "maxLeadSeconds": 600, "holdIntervalSeconds": 40, "intervalSeconds": 30, "graceSeconds": 90, "minGapSeconds": 300, "dailyCapSeconds": 3600, "pingTimeoutSeconds": 300 }
   }
 }
