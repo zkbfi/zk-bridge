@@ -1,0 +1,39 @@
+---
+# Installs and enables the light client keep-alive: the oneshot service and the timer that runs it every three hours
+# (deploy/app-server/keepalive). The timer is enabled and started; the service is never started here (a run is a march
+# that can hold a proof job for hours). deploy.sh does not install these units.
+#
+#   cd deploy/ansible
+#   ansible-playbook keepalive.yml                    # from /opt/zk-bridge/current
+#   ansible-playbook keepalive.yml -e commit=<hash>   # from that built release
+- name: Install the keep-alive service and timer
+  hosts: zkbfi
+  gather_facts: false
+  tasks:
+    - name: Find the release when one is named
+      ansible.builtin.include_tasks: tasks/resolve_release.yml
+      when: commit is defined or zkb_built_commit is defined
+
+    - name: Install the unit files
+      ansible.builtin.copy:
+        src: "{{ zkb_release | default(zkb_current) }}/deploy/app-server/keepalive/{{ item }}"
+        dest: "{{ zkb_unit_dir }}/{{ item }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - "{{ zkb_keepalive_service }}"
+        - "{{ zkb_keepalive_timer }}"
+      register: zkb_keepalive_units
+
+    - name: Reload systemd when a unit file changed
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: zkb_keepalive_units is changed
+
+    - name: Enable the timer and set its state
+      ansible.builtin.systemd_service:
+        name: "{{ zkb_keepalive_timer }}"
+        enabled: true
+        state: started

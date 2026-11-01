@@ -33,7 +33,7 @@ const delivery = (() => {
       recipient: receiver,
       transferValue: 250_000_000n,
       transferValueAtMost: 250_000_000n,
-      token: { symbol: "zkbUSDC", decimals: 6 },
+      token: { symbol: "zUSDC", decimals: 6 },
       tokenValueInWei: 10n ** 18n,
       senderPrice: senderPriceOfToken({ tokenValueInWei: 10n ** 18n, tokenDecimals: 18 }),
       payout: "token",

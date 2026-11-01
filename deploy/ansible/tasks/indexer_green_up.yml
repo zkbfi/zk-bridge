@@ -1,0 +1,78 @@
+---
+# Starts the release's Ponder as the transient unit zk-bridge-indexer-pre on the green port, and waits for /ready.
+# Needs zkb_commit, zkb_release, zkb_indexer_port (resolve_release.yml, caddy_env.yml). Stops green again and fails when
+# it exits, stalls (/status unchanged for zkb_stall_seconds) or is not ready after zkb_green_timeout. Blue and Caddy are
+# not touched here.
+- name: Look for a green indexer that is already running
+  ansible.builtin.stat:
+    path: "{{ zkb_transient_dir }}/{{ zkb_green_indexer_unit }}.service"
+  register: zkb_green_stat
+  check_mode: false
+
+- name: Stop, because a green indexer exists
+  ansible.builtin.fail:
+    msg: "{{ zkb_green_indexer_unit }} is already running from an earlier attempt. Stop it first: ansible-playbook indexer.yml -e action=rollback"
+  when: zkb_green_stat.stat.exists and not ansible_check_mode
+
+- name: Check that the green port is free
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ zkb_indexer_green_port }}"
+    state: stopped
+    timeout: 3
+  check_mode: false
+
+- name: Start and wait for green
+  block:
+    - name: Start green (the release's indexer unit settings, on the green port)
+      ansible.builtin.include_tasks: transient_unit.yml
+      vars:
+        zkb_tu_name: "{{ zkb_green_indexer_unit }}"
+        zkb_tu_release: "{{ zkb_release }}"
+        zkb_tu_service: indexer
+        zkb_tu_props:
+          - "Environment=PORT={{ zkb_indexer_green_port }}"
+        zkb_tu_args:
+          - --port
+          - "{{ zkb_indexer_green_port }}"
+
+    - name: Forget the progress mark of an earlier green
+      ansible.builtin.file:
+        path: /run/zkb-green-progress.json
+        state: absent
+
+    - name: Wait for green to answer /ready (stops on a stall)
+      ansible.builtin.script:
+        cmd: >-
+          {{ playbook_dir }}/files/green_poll.py --port {{ zkb_indexer_green_port }} --unit {{ zkb_green_indexer_unit }}
+          --state /run/zkb-green-progress.json --stall {{ zkb_stall_seconds }}
+        executable: python3
+      register: zkb_green_poll
+      until: zkb_green_poll.rc != 10
+      retries: "{{ (zkb_green_timeout | int / zkb_green_poll_seconds | int) | round(0, 'ceil') | int }}"
+      delay: "{{ zkb_green_poll_seconds }}"
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: Check that green is ready
+      ansible.builtin.assert:
+        that:
+          - zkb_green_poll.rc == 0
+        fail_msg: >-
+          {{ {10: 'green is not ready after ' ~ zkb_green_timeout ~ ' s',
+              20: 'green has not moved for ' ~ zkb_stall_seconds ~ ' s (a stalled backfill, the failure of 2026-10-31)',
+              30: 'green exited'}[zkb_green_poll.rc] | default('green failed') }}.
+          Read: journalctl -u {{ zkb_green_indexer_unit }} --no-pager | tail -n 50
+        quiet: true
+      when: not ansible_check_mode
+  rescue:
+    - name: Stop green
+      ansible.builtin.include_tasks: stop_transient.yml
+      vars:
+        zkb_unit: "{{ zkb_green_indexer_unit }}"
+
+    - name: Stop, because green failed
+      ansible.builtin.fail:
+        msg: "Green failed ({{ ansible_failed_result.msg | default('see above') }}). Blue is untouched and Caddy did not change."

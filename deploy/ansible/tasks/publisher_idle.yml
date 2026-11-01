@@ -1,0 +1,18 @@
+---
+# Sets zkb_publisher_proving: true while the publisher is in the middle of a paid proof on the remote prover, that is,
+# its last journal event of the past 6 hours is proving_started. The journal is read for the event names only and is
+# never printed (it can hold endpoint URLs).
+- name: Read the last proving event of the publisher
+  ansible.builtin.shell: |
+    set -o pipefail
+    journalctl -u {{ zkb_publisher_unit }} -o cat --since '-6 hours' --no-pager 2>/dev/null \
+      | grep -oE '{{ zkb_publisher_events }}' | tail -n 1 || true
+  args:
+    executable: /bin/bash
+  register: zkb_publisher_last_event
+  changed_when: false
+  check_mode: false
+
+- name: Remember whether it is proving
+  ansible.builtin.set_fact:
+    zkb_publisher_proving: "{{ zkb_publisher_last_event.stdout | trim == 'proving_started' }}"

@@ -1,0 +1,40 @@
+/*
+ * @zkb/react: the stylesheet of the components. Import it once in the host (`import "@zkb/react/styles.css"`).
+ *
+ * Nothing here names a colour or a size of its own: every one is a CSS custom property of the `--zkb-*` family, and the
+ * value after the comma is only the fallback for a host that sets none. A host themes the components by setting the
+ * variables on :root (or on any ancestor of them), for example `--zkb-accent: var(--my-brand)`. The names, their roles and
+ * their fallbacks are documented in README.md. The class names (`zb-*`) are the ones the dapp has always used.
+ */
+
+/* Icons of tokens and chains */
+.zb-tok-icon { position: relative; display: inline-block; flex: none; }
+.zb-tok-icon img.zb-main { display: block; width: 100%; height: 100%; }
+/* On the accent band an icon sits on a neutral round plate, 2 px around it; a badge keeps its own small plate. */
+.zb-tok-icon.zb-on-accent { border-radius: 50%; background: var(--zkb-plate, #ffffff); padding: 2px; }
+.zb-tok-icon.zb-on-accent img.zb-badge { right: -2px; bottom: -1px; }
+.zb-tok-icon img.zb-badge { position: absolute; right: -4px; bottom: -3px; width: 50%; height: 50%; border-radius: 50%; background: var(--zkb-page, #ffffff); padding: 1px; }
+.zb-tok-fallback { display: grid; place-items: center; width: 100%; height: 100%; border-radius: 50%; background: var(--zkb-raised, #f2f2f2); color: var(--zkb-raised-ink, #1a1a1a); border: 1px solid var(--zkb-raised-edge, #d9d9d9); font-size: var(--zkb-text-micro, 13px); font-weight: 700; }
+
+/* The sheet: the scrim, the panel and its head */
+.zb-scrim { position: fixed; inset: 0; z-index: var(--zkb-layer-scrim, 40); background: var(--zkb-scrim, rgba(0, 0, 0, 0.55)); }
+.zb-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--zkb-layer-sheet, 41); max-height: 86vh; overflow: auto; background: var(--zkb-sheet-bg, #ffffff); color: var(--zkb-sheet-ink, #1a1a1a); border-top: 3px solid var(--zkb-accent, #d4501e); }
+@media (min-width: 720px) { .zb-sheet { left: 50%; right: auto; width: min(var(--zkb-column-width, 640px), calc(100vw - 32px)); transform: translateX(-50%); bottom: 10vh; border: 3px solid var(--zkb-accent, #d4501e); } }
+.zb-sheet.zb-sheet-top { display: flex; flex-direction: column; }
+@media (min-width: 720px) { .zb-sheet.zb-sheet-top { top: 12vh; bottom: auto; max-height: 78vh; overflow: hidden; } }
+.zb-sheet-bare { border-top: 0 !important; }
+@media (min-width: 720px) { .zb-sheet-bare { border: 3px solid var(--zkb-sheet-bare-edge, var(--zkb-accent, #d4501e)) !important; } }
+/* The column inside a sheet: as wide as the sheet, with the gutters of the device. */
+.zb-sheet-col { max-width: var(--zkb-column-width, 640px); margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+.zb-sheet-head { display: flex; align-items: center; padding-block: 14px 8px; }
+.zb-sheet-head h2 { font-size: var(--zkb-text-large, 18px); margin: 0; }
+.zb-close { width: var(--zkb-touch, 44px); height: var(--zkb-touch, 44px); border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--zkb-edge, #d9d9d9); flex: none; }
+.zb-sheet-icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* The review: rows and notices */
+.zb-review { padding-bottom: 18px; }
+.zb-kv { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--zkb-line, #e3e3e3); font-size: var(--zkb-text, 16px); }
+.zb-kv:first-child { border-top: 0; }
+.zb-kv .zb-k { color: var(--zkb-muted, #666666); }
+.zb-kv-sub { padding: 2px 0 2px 14px; border-top: 0; font-size: var(--zkb-text-small, 14px); color: var(--zkb-muted, #666666); }
+.zb-warnbox { border: 1.5px solid var(--zkb-accent, #d4501e); color: var(--zkb-warn, #a8400f); padding: 8px 12px; font-size: var(--zkb-text-small, 14px); margin: 10px 0; }

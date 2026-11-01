@@ -47,6 +47,9 @@ describe("the prover configuration file", () => {
     expect(text).toContain('chain = "pulsechain"');
     expect(text).toContain("chain_id = 369");
     expect(text).toContain('remote_api_key_env = "RUNPOD_API_KEY"');
+    // RunPod ends a request after 330 s; three tries of 360 s fit the backend's 1800 s job limit, four of 900 s did not.
+    expect(text).toContain("remote_timeout_seconds = 360");
+    expect(text).toContain("remote_attempts = 3");
     expect(text).toContain("light_client = ");
   });
 

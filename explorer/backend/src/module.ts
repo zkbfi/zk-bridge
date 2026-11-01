@@ -22,6 +22,11 @@ export type BackendModuleContext = {
   /** Milliseconds since 1970. */
   readonly now: () => number;
   readonly logger: Logger;
+  /**
+   * Pings the remote prover's health route and answers the HTTP status. The watcher calls it to warm a worker before a
+   * proof. Absent in a context without the key; the watcher then sends no warm-ups.
+   */
+  readonly pingProver?: () => Promise<number>;
 };
 
 /** The two functions every module exports, plus an optional health report. */

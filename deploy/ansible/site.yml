@@ -1,0 +1,39 @@
+---
+# The full ordered deploy of one release to the app server:
+#   build -> caddy -> preflight -> indexer (green, verify, switch, soak, finish) -> backend (drain, switch) -> bots -> keep-alive
+# Each step is also a playbook of its own, with its own rollback; read the header of each. The hosted sites (sites.yml)
+# are separate: they run on your machine and name what they publish.
+#
+#   cd deploy/ansible
+#   ansible-playbook site.yml -e ref=<branch|tag|full-commit>
+#   ansible-playbook site.yml -e ref=<ref> -e zkb_interactive_soak=false -e zkb_soak_seconds=0   # no pause for the soak
+#   ansible-playbook site.yml -e ref=<ref> --check --diff     # what it would do (the build does not run under --check)
+#
+# It stops at the first failure and leaves the services as that step leaves them: a failed indexer step leaves blue
+# serving; a failed drain restarts nothing; a failed backend start is rolled back by its own playbook. Run in tmux: the
+# longest waits are two hours for green and 40 minutes for jobs to drain. Before the first real run, read
+# docs/deploy-blue-green.md ("What is not verified").
+- name: Build the release
+  ansible.builtin.import_playbook: build.yml
+
+- name: Install the Caddyfile and the upstream files
+  ansible.builtin.import_playbook: caddy.yml
+
+- name: Check the server
+  ansible.builtin.import_playbook: preflight.yml
+
+- name: Blue/green the indexer
+  ansible.builtin.import_playbook: indexer.yml
+  vars:
+    zkb_step: all
+
+- name: Move the backend
+  ansible.builtin.import_playbook: backend.yml
+  vars:
+    zkb_step: switch
+
+- name: Move the bots
+  ansible.builtin.import_playbook: bots.yml
+
+- name: Install the keep-alive timer
+  ansible.builtin.import_playbook: keepalive.yml

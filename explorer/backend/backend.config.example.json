@@ -32,5 +32,9 @@
     "jobsPerDirectionPerDay": 96,
     "keepAliveSeconds": 43200
   },
-  "indexerUrl": "http://127.0.0.1:42069"
+  "indexerUrl": "http://127.0.0.1:42069",
+  "watch": {
+    "sse": true,
+    "warmup": { "enabled": true, "leadSeconds": 45, "intervalSeconds": 30, "graceSeconds": 90, "minGapSeconds": 300, "pingTimeoutSeconds": 300 }
+  }
 }

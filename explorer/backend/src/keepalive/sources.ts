@@ -35,12 +35,12 @@ export async function readLightClient(client: ReadClient, lightClient: Address):
 /** A GET that answers a status and a parsed JSON body (null when the body is not JSON). */
 export type JsonGet = (url: string) => Promise<{ readonly status: number; readonly body: unknown }>;
 
-/** The {@link JsonGet} over the global fetch, with the beacon User-Agent and a timeout. */
-export function fetchJsonGet(fetchFunction: typeof fetch = globalThis.fetch): JsonGet {
+/** The {@link JsonGet} over the global fetch, with the beacon User-Agent and a timeout (30 s by default). */
+export function fetchJsonGet(fetchFunction: typeof fetch = globalThis.fetch, timeoutMilliseconds = BEACON_TIMEOUT_MILLISECONDS): JsonGet {
   return async (url) => {
     const answer = await fetchFunction(url, {
       headers: { accept: "application/json", "user-agent": USER_AGENT },
-      signal: AbortSignal.timeout(BEACON_TIMEOUT_MILLISECONDS),
+      signal: AbortSignal.timeout(timeoutMilliseconds),
     });
     const body: unknown = await answer.json().catch(() => null);
     return { status: answer.status, body };

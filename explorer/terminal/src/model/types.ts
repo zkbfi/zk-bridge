@@ -48,6 +48,8 @@ export interface TokenInfo {
   readonly side: ChainSide
   /** The token on the other chain that this token bridges to, when it exists. */
   readonly counterpart: Address | null
+  /** True when the bridge minted this token as the copy of a native token of the other chain (the indexer knows; the symbol does not tell). Absent means a native token. */
+  readonly isBridgedCopy?: boolean | undefined
 }
 
 /** A chain of a pair, with the contracts that the dashboard calls. */

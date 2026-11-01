@@ -64,7 +64,7 @@ contract BridgedTokenTest is MediatorFixture {
     function test_bridgeContractIsTheMediatorAndTheMetadataIsSet() public view {
         assertEq(copy.bridgeContract(), address(mediatorB));
         assertEq(copy.name(), "Token A from Chain A");
-        assertEq(copy.symbol(), "zkbTKA");
+        assertEq(copy.symbol(), "zTKA");
         assertEq(copy.decimals(), 18);
     }
 

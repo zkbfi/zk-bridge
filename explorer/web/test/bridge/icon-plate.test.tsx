@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { TokenIcon } from "../../src/bridge/TokenIcon";
 
 const css = readFileSync(`${process.cwd()}/src/bridge/bridge.css`, "utf8");
+const packageCss = readFileSync(`${process.cwd()}/../react/styles.css`, "utf8");
 
 describe("icons on the accent band (owner: \"we need to have a neutral bg such as white or black\")", () => {
   it("sit on a neutral plate when the surface is the accent, and on none elsewhere", () => {
@@ -26,6 +27,8 @@ describe("icons on the accent band (owner: \"we need to have a neutral bg such a
     expect(plate("\\.theme-ember-light")).toBe("white #ffffff");
     expect(plate("\\.theme-ember-dark")).toMatch(/^black #1[0-4]1[0-4]1[0-4]$/);
     expect(plate("\\.theme-mono")).toMatch(/^black #0[0-9a-f]0[0-9a-f]0[0-9a-f]$/);
-    expect(css).toMatch(/\.zb-tok-icon\.zb-on-accent \{[^}]*background: var\(--zb-plate\)[^}]*padding: 2px/);
+    // The component reads the plate through its own variable, which the dapp maps to the theme's plate.
+    expect(packageCss).toMatch(/\.zb-tok-icon\.zb-on-accent \{[^}]*background: var\(--zkb-plate, [^)]*\)[^}]*padding: 2px/);
+    expect(css).toMatch(/--zkb-plate: var\(--zb-plate\)/);
   });
 });

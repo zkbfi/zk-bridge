@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { DEFAULT_INDEXER_URL, EMPTY_CONNECTION_SETTINGS, type HttpClient } from '@zk-bridge/shared'
+import { defaultBeaconUrl } from '../../src/config/default-beacon'
 import { createConnectionRuntime, describeSetting, registryLayer } from '../../src/data/connection-runtime'
 import { REGISTRY_RPC_URL, fakeChainAccesses, fakeConnections, fallbackStatus, livePair } from '../support/live-support'
 
@@ -52,7 +53,7 @@ describe('precedence of a URL: the user, then the environment, then the default'
   })
 
   test('the registry layer offers the deployment URL and the standard indexer address, and no URL for a chain without one', () => {
-    expect(registryLayer(livePair().sharedPair)).toEqual({ indexerUrl: DEFAULT_INDEXER_URL, rpcUrls: { 1: REGISTRY_RPC_URL, 369: null }, beaconUrls: { 1: 'https://one.valve.city/beacon/vk_demo/1', 369: 'https://one.valve.city/beacon/vk_demo/369' } })
+    expect(registryLayer(livePair().sharedPair)).toEqual({ indexerUrl: DEFAULT_INDEXER_URL, rpcUrls: { 1: REGISTRY_RPC_URL, 369: null }, beaconUrls: { 1: defaultBeaconUrl(1), 369: defaultBeaconUrl(369) } })
   })
 })
 

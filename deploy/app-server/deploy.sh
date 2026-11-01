@@ -14,6 +14,9 @@
 #   5. Point /opt/zk-bridge/current at the release, in one rename.
 #   6. Install the systemd units of the release and the directories that the services write.
 #   7. Restart each service whose configuration exists. A service without its files is skipped, with a log line.
+#      ZKB_SERVICES="backend publisher" restarts only those (default: all four). the playbooks in deploy/ansible use it to move one
+#      service at a time. The others keep running the process they have; the Vite cache of the indexer is left alone
+#      unless the indexer is restarted.
 #   8. Remove old releases.
 #
 # It writes no configuration and no secret. Those go into /etc/zk-bridge by hand (config/*.example).
@@ -36,6 +39,12 @@ DEFAULT_REPO_URL=https://github.com/zkbfi/zk-bridge.git
 
 # The services in start order: the indexer first, because the others read it.
 SERVICES=(indexer backend publisher runner)
+
+# The services to restart in step 7: ZKB_SERVICES, in the order of SERVICES, or all of them.
+restart_wanted() {
+  [ -z "${ZKB_SERVICES:-}" ] && return 0
+  case " $ZKB_SERVICES " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
 
 # The files a service needs before it may start, relative to /etc/zk-bridge.
 required_files() {
@@ -62,6 +71,11 @@ service_user() {
 main() {
   exec </dev/null
   umask 022
+
+  local name
+  for name in ${ZKB_SERVICES:-}; do
+    case " ${SERVICES[*]} " in *" $name "*) ;; *) log "ZKB_SERVICES names an unknown service: $name"; exit 1 ;; esac
+  done
 
   local ref=${1:-} repo_url=${2:-${ZKB_REPO_URL:-$DEFAULT_REPO_URL}}
   [ -n "$ref" ] || { log "usage: deploy.sh <git-ref> [<repo-url>]"; exit 1; }
@@ -129,6 +143,9 @@ main() {
     touch "$release/.complete"
   fi
 
+  # ZKB_BUILD_ONLY=1 stops here, so a new indexer schema can be filled on a spare port before the switch.
+  if [ "${ZKB_BUILD_ONLY:-}" = 1 ]; then log "built $release, not switched"; exit 0; fi
+
   # --- 5. Switch ------------------------------------------------------------------------------------------------
   local previous=none
   [ ! -L "$CURRENT" ] || previous=$(basename "$(readlink "$CURRENT")")
@@ -148,7 +165,9 @@ main() {
 
   # The indexer's user owns its state directory and could plant links in it, so root does no file work there: the
   # indexer's user makes its directories and clears the Vite cache, which belongs to one build of the indexer.
-  runuser -u zkb_indexer -- sh -c 'cd /var/lib/zk-bridge-indexer && mkdir -p -m 0700 ponder generated && rm -rf ponder/vite'
+  runuser -u zkb_indexer -- sh -c 'cd /var/lib/zk-bridge-indexer && mkdir -p -m 0700 ponder generated'
+  # Only when the indexer restarts: a second Ponder (indexer.yml, green) may be using the cache now.
+  if restart_wanted indexer; then runuser -u zkb_indexer -- rm -rf /var/lib/zk-bridge-indexer/ponder/vite; fi
 
   # Configuration: readable by the service's group only. The deployment file holds no secret.
   for service in "${SERVICES[@]}"; do
@@ -162,6 +181,7 @@ main() {
   # --- 7. Restart -----------------------------------------------------------------------------------------------
   local started=() file missing
   for service in "${SERVICES[@]}"; do
+    restart_wanted "$service" || continue
     missing=
     for file in $(required_files "$service"); do
       [ -f "$ETC/$file" ] || { missing=$ETC/$file; break; }

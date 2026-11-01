@@ -32,7 +32,7 @@ function stateFor(values: Values, valuations: Record<string, bigint> = price, re
   return buildDeliveryFeeModel({ values, target: targetFor(values, valuations, pair), report: reportOverride, transferValue: transferValueOf(values.amount ?? '', decimals) })
 }
 
-// A gas based fee fits only the wrapped native token (price 10^18, 18 decimals): WETH on Ethereum bridges to zkbWETH,
+// A gas based fee fits only the wrapped native token (price 10^18, 18 decimals): WETH on Ethereum bridges to zWETH,
 // which this pair names as the wrapped native token of PulseChain.
 const weth = FIXTURE_TOKENS[2]!
 const zkWeth = FIXTURE_TOKENS[3]!
@@ -83,7 +83,7 @@ describe('resolveDeliveryTarget', () => {
     const target = targetFor(baseValues)
     expect(target.chain.name).toBe('PulseChain')
     expect(target.router).toBe(FIXTURE_PAIR.second.contracts.deliveryRouter!)
-    expect(target.token).toEqual({ symbol: 'zkbUSDC', decimals: 6 })
+    expect(target.token).toEqual({ symbol: 'zUSDC', decimals: 6 })
   })
 
   test('says so and offers nothing when the deployment names no delivery router for the destination', () => {
@@ -117,7 +117,7 @@ describe('buildDeliveryFeeModel', () => {
     if (suggestions.percentage.kind !== 'available' || suggestions.fixed.kind !== 'available' || suggestions.gasMultiplier.kind !== 'available') throw new Error('all three are available')
     expect(suggestions.percentage.description.certaintyLabel).toBe('exact')
     expect(suggestions.fixed.description.certaintyLabel).toBe('exact')
-    expect(suggestions.gasMultiplier.description.certaintyLabel).toMatch(/^estimate, at most [\d.]+ zkbWETH$/)
+    expect(suggestions.gasMultiplier.description.certaintyLabel).toMatch(/^estimate, at most [\d.]+ zWETH$/)
   })
 
   test('the measured delivery gas of the callback kind is the p90, and the cost is the gas alone', () => {
@@ -146,14 +146,14 @@ describe('buildDeliveryFeeModel', () => {
     const typed = readyModel(stateFor({ ...baseValues, feeMode: 'fixed', feeFixed: '1.5' }, {}))
     if (typed.chosen.kind !== 'ready') throw new Error('a typed amount needs no price')
     expect(typed.chosen.director.limit).toBe(1_500_000n)
-    expect(typed.chosen.description.summary).toBe('1.5 zkbUSDC (exact)')
+    expect(typed.chosen.description.summary).toBe('1.5 zUSDC (exact)')
   })
 
   test('a fixed amount of 0 builds a valid tip of nothing, with no price needed', () => {
     const zero = readyModel(stateFor({ ...baseValues, feeMode: 'fixed', feeFixed: '0' }, {}))
     if (zero.chosen.kind !== 'ready') throw new Error('a fixed amount of 0 is allowed')
     expect(zero.chosen.director.limit).toBe(0n)
-    expect(zero.chosen.description.summary).toBe('0 zkbUSDC (exact)')
+    expect(zero.chosen.description.summary).toBe('0 zUSDC (exact)')
   })
 
   test('a transfer too small to pay for its delivery makes the suggestion unavailable with the reason', () => {
@@ -166,7 +166,7 @@ describe('buildDeliveryFeeModel', () => {
     if (model.chosen.kind !== 'ready') throw new Error('0.5 percent is valid')
     expect(model.chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 5n * 10n ** 15n })
     expect(model.chosen.description.certaintyLabel).toBe('exact')
-    expect(model.chosen.description.nowUnits).toBe(500_000n) // 0.5 percent of 100 zkbUSDC: the mediator takes no fee, so the whole amount counts
+    expect(model.chosen.description.nowUnits).toBe(500_000n) // 0.5 percent of 100 zUSDC: the mediator takes no fee, so the whole amount counts
   })
 
   test('the recipient defaults to the receiver and can be changed', () => {
@@ -200,7 +200,7 @@ describe('buildDeliveryFeeModel', () => {
   })
 
   test('the gas multiplier works for any token: the price of the valuation is folded into the multiplier', () => {
-    // One zkbUSDC is worth 4e14 wei, so one wei is worth 1e6 / 4e14 units. With the margin 1.2 the multiplier is 3e9.
+    // One zUSDC is worth 4e14 wei, so one wei is worth 1e6 / 4e14 units. With the margin 1.2 the multiplier is 3e9.
     const model = readyModel(stateFor({ ...baseValues, feeMode: 'gas', feeMultiplier: '1.2' }))
     expect(model.suggestions.gasMultiplier.kind).toBe('available')
     if (model.chosen.kind !== 'ready') throw new Error('the valuation gives a price')
@@ -209,7 +209,7 @@ describe('buildDeliveryFeeModel', () => {
   })
 
   test('the price of the sender replaces the valuation, and works with no valuation at all', () => {
-    // The sender says one whole native coin is worth 2,500 zkbUSDC: 2,500e6 units for 1e18 wei. Margin 1.0.
+    // The sender says one whole native coin is worth 2,500 zUSDC: 2,500e6 units for 1e18 wei. Margin 1.0.
     const typed = { ...baseValues, feeMode: 'gas', feeMultiplier: '1', feeSenderPrice: '2500' }
     for (const valuations of [price, {}]) {
       const model = readyModel(stateFor(typed, valuations))
@@ -265,7 +265,7 @@ describe('refillDeliveryFee', () => {
   test('choosing the gas multiplier fills the margin, the ceiling and the price of the valuation as the sender price', () => {
     const next = refillDeliveryFee({ ...baseValues, delivery: 'yes', feeMode: 'percentage' }, { ...baseValues, delivery: 'yes', feeMode: 'gas' }, context)
     expect(next.feeMultiplier).toBe('1')
-    expect(next.feeSenderPrice).toBe('2500') // one zkbUSDC is worth 4e14 wei, so one coin is worth 2,500
+    expect(next.feeSenderPrice).toBe('2500') // one zUSDC is worth 4e14 wei, so one coin is worth 2,500
     expect(next.feeCeilingGwei).toBe('14')
   })
 
@@ -277,7 +277,7 @@ describe('refillDeliveryFee', () => {
   test('changing the margin refills the fixed amount', () => {
     const before = { ...baseValues, delivery: 'yes', feeMode: 'fixed', feeFixed: '1' }
     const next = refillDeliveryFee(before, { ...before, feeMargin: '50' }, context)
-    expect(next.feeFixed).toBe('6.3') // the cost is 4.2 zkbUSDC, plus 50 percent
+    expect(next.feeFixed).toBe('6.3') // the cost is 4.2 zUSDC, plus 50 percent
   })
 
   test('does nothing when the user pays nothing', () => {

@@ -151,6 +151,34 @@ else
   pass "deploy.sh leaves the state directories to their users"
 fi
 
+# --- Caddy upstream files (deploy/ansible) -------------------------------------------------------------------------
+ANSIBLE_DIR="$DIR/../ansible"
+# The Caddyfile imports the upstream files and no longer names a port itself, so the playbooks own the routing.
+for name in backend indexer; do
+  if grep -qxF "import /etc/caddy/upstreams/$name.caddy" "$DIR/Caddyfile"; then pass "Caddyfile imports $name.caddy"; else fail "Caddyfile imports $name.caddy"; fi
+done
+lacks Caddyfile '^[[:space:]]*reverse_proxy'
+# The snippets that caddy.yml writes give the routing the Caddyfile had before: the same ports, and no other behaviour.
+if grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_INDEXER_PORT:{{ zkb_default_indexer_port }}}' "$ANSIBLE_DIR/templates/indexer-normal.caddy.j2" \
+  && grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_BACKEND_PORT:{{ zkb_default_backend_port }}}' "$ANSIBLE_DIR/templates/backend-normal.caddy.j2" \
+  && grep -qx 'zkb_default_indexer_port: 42069' "$ANSIBLE_DIR/inventory/group_vars/zkbfi.yml" \
+  && grep -qx 'zkb_default_backend_port: 8787' "$ANSIBLE_DIR/inventory/group_vars/zkbfi.yml"; then
+  pass "the normal upstream templates carry the ports the Caddyfile had"
+else
+  fail "the normal upstream templates do not carry the old ports"
+fi
+# The drain answers only POST /requests: the webhook and the job reads must stay up.
+if grep -qx '		method POST' "$ANSIBLE_DIR/templates/backend-drain.caddy.j2" && grep -qx '		path /requests' "$ANSIBLE_DIR/templates/backend-drain.caddy.j2"; then pass "drain matches POST /requests only"; else fail "drain does not match POST /requests only"; fi
+# A transient copy takes its sandbox from the unit file of the release: no sandbox setting is repeated in the playbooks.
+if grep -rE -- '--property=(Protect|Restrict|NoNewPrivileges|SystemCall|CapabilityBoundingSet)' "$ANSIBLE_DIR/tasks" "$ANSIBLE_DIR"/*.yml | grep -q .; then fail "a playbook sets a sandbox property by hand"; else pass "the playbooks take the sandbox from the unit files"; fi
+# The helpers the playbooks run on the server compile.
+if command -v python3 >/dev/null 2>&1; then
+  if python3 -m py_compile "$ANSIBLE_DIR"/files/*.py; then pass "ansible helpers compile"; else fail "ansible helpers compile"; fi
+  find "$ANSIBLE_DIR/files" -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
+fi
+# deploy.sh moves one service at a time on request.
+if grep -q 'ZKB_SERVICES' "$DIR/deploy.sh"; then pass "deploy.sh honours ZKB_SERVICES"; else fail "deploy.sh lacks ZKB_SERVICES"; fi
+
 # The light client lines of the indexer's live page (indexer-home/heads.test.mjs).
 if command -v node >/dev/null; then
   if node --test "$DIR/indexer-home/heads.test.mjs" >/dev/null 2>&1; then pass "indexer-home: light client lines"; else fail "indexer-home: light client lines (node --test $DIR/indexer-home/heads.test.mjs)"; fi

@@ -168,7 +168,7 @@ describe("the indexer follows synthetic chains", () => {
       await chainB.deploy("SyntheticLightClient"),
       await chainB.deploy("SyntheticGate", [false]),
       await chainB.deploy("SyntheticRegistry"),
-      await chainB.deploy("SyntheticToken", ["Alpha from Ethereum", "zkbALP", 6]),
+      await chainB.deploy("SyntheticToken", ["Alpha from Ethereum", "zALP", 6]),
     ];
 
     const section = (chainId: number, rpc: string, addresses: Record<string, Address | undefined>) => ({
@@ -246,7 +246,7 @@ describe("the indexer follows synthetic chains", () => {
     expect(item.delivered).toMatchObject({ success: true, executedBy: chainB.accounts[4]?.toLowerCase() });
     expect(item.transfer?.deliveredValue).toBe("1000000");
     expect(item.transfer?.paidTo).toBe(recipient().toLowerCase());
-    expect(item.transfer?.destinationToken).toMatchObject({ symbol: "zkbALP", isBridgedCopy: true, homeToken: tokenA.toLowerCase() });
+    expect(item.transfer?.destinationToken).toMatchObject({ symbol: "zALP", isBridgedCopy: true, homeToken: tokenA.toLowerCase() });
   });
 
   it("balances escrow against supply after the delivery", async () => {
@@ -266,7 +266,7 @@ describe("the indexer follows synthetic chains", () => {
       const found = await feedItem(id);
       return found?.transfer?.sourceToken?.symbol ? found : undefined;
     });
-    expect(sent.transfer?.sourceToken).toMatchObject({ symbol: "zkbALP" });
+    expect(sent.transfer?.sourceToken).toMatchObject({ symbol: "zALP" });
     // Burned on B, not released on A: the escrow still holds it and the audit counts it as pending.
     await waitForAudit(tokenA, { escrow: SIX_DECIMALS, bridgedSupply: 600_000n, pendingForward: 0n, pendingBackward: value });
 

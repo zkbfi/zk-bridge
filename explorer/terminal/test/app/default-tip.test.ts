@@ -32,7 +32,7 @@ const zkUsdc = FIXTURE_TOKENS[1]!
 const receiver = '0x0000000000000000000000000000000000000abc'
 /** No fee mode: the form default decides. */
 const defaultValues: Values = { token: `first:${usdc.address}`, amount: '100', receiver, feeMargin: '10', feePriorityGwei: '1' }
-/** One zkbUSDC (6 decimals) is worth 4e14 wei, so one wei is worth 1e6 / 4e14 base units. */
+/** One zUSDC (6 decimals) is worth 4e14 wei, so one wei is worth 1e6 / 4e14 base units. */
 const TOKEN_VALUE_IN_WEI = 400_000_000_000_000n
 const priced = { [zkUsdc.address.toLowerCase()]: TOKEN_VALUE_IN_WEI }
 const report = buildFixtureDeliveryCost(369, FIXTURE_NOW)
@@ -207,7 +207,7 @@ describe('the words of the gas mode', () => {
   test('the panel shows the short label and the limit as the price ceiling', () => {
     const text = panelText(defaultValues)
     expect(text).toContain(`Tip mode        ${GAS_MODE_SHORT_LABEL}`)
-    expect(text).toMatch(/Limit {11}[\d.]+ zkbUSDC \(price ceiling: the most the tip can be\)/)
+    expect(text).toMatch(/Limit {11}[\d.]+ zUSDC \(price ceiling: the most the tip can be\)/)
     expect(text).not.toContain('proof')
   })
 

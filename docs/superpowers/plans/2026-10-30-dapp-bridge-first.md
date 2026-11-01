@@ -281,7 +281,7 @@ Bridge
       only Ethereum-mainnet origins), so it stays "—".
 - [ ] Arrival time per direction: still the per-chain constants (finality + proof + delivery). The heads give the lag
       only; the backend has no proving-time status endpoint the dapp reads yet, and no recorded average is published.
-- [ ] "arrives as zkbETH" for the wrap route: the label should name what the wrap route mints; not checked on chain.
+- [ ] "arrives as zETH" for the wrap route: the label should name what the wrap route mints; not checked on chain.
 
 Picker
 - [x] Token list per chain: the registry (`/api/tokens`, empty on v4) plus each chain's native coin.

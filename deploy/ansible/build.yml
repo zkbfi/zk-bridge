@@ -1,0 +1,72 @@
+---
+# Builds a release on the app server and does NOT switch to it (what `ZKB_BUILD_ONLY=1 deploy.sh <ref>` does): fetch the
+# ref into the bare repository, unpack it under /opt/zk-bridge/releases/<commit>, install the Node.js packages, build the
+# prover, write release.env (the indexer schema). `current` does not move and no service restarts. A release that is
+# already built is left as it is.
+#
+#   cd deploy/ansible
+#   ansible-playbook build.yml -e ref=<branch|tag|full-commit>
+#   ansible-playbook build.yml -e ref=<ref> -e repo_url=<git url>      # another remote (default: deploy.sh's)
+#
+# It prints the commit, the release path and the indexer schema. Use the commit with the other playbooks
+# (-e commit=<hash>). Under --check it builds nothing (a build has no read-only form); for a full 40-digit ref it still
+# reports the release as it would be named.
+- name: Build a release without switching to it
+  hosts: zkbfi
+  gather_facts: false
+  tasks:
+    - name: Check that a ref was named
+      ansible.builtin.assert:
+        that:
+          - ref is defined
+          - ref | string | length > 0
+          - ref | string is match('^[A-Za-z0-9._/@^~+-]+$')
+        fail_msg: "Name the ref to build: -e ref=<branch|tag|full-commit>"
+        quiet: true
+
+    - name: Fetch the ref, unpack and build the release (deploy.sh with ZKB_BUILD_ONLY=1)
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/../app-server/deploy.sh {{ ref | quote }}{{ (' ' ~ (repo_url | quote)) if repo_url is defined else '' }}"
+        executable: /bin/bash
+      environment:
+        ZKB_BUILD_ONLY: "1"
+      register: zkb_build
+      changed_when: "'is already built' not in (zkb_build.stdout ~ zkb_build.stderr)"
+
+    - name: Take the commit from the output of the build
+      ansible.builtin.set_fact:
+        zkb_built_commit: "{{ (zkb_build.stdout ~ zkb_build.stderr) | regex_search('deploy: commit ([0-9a-f]{40})', '\\1') | first }}"
+      when: not ansible_check_mode
+
+    - name: Under --check, name the release from a full commit ref
+      ansible.builtin.set_fact:
+        zkb_built_commit: "{{ ref }}"
+      when:
+        - ansible_check_mode
+        - ref | string is match('^[0-9a-f]{40}$')
+
+    - name: Say so when --check cannot name the release
+      ansible.builtin.debug:
+        msg: "--check: nothing is built, and a ref that is not a full commit has no name yet. Add -e commit=<hash> to look at a built release."
+      when:
+        - ansible_check_mode
+        - zkb_built_commit is not defined
+        - commit is not defined
+
+    - name: Leave the host out of this play
+      ansible.builtin.meta: end_host
+      when:
+        - ansible_check_mode
+        - zkb_built_commit is not defined
+        - commit is not defined
+
+    - name: Check the release
+      ansible.builtin.include_tasks: tasks/resolve_release.yml
+
+    - name: Report the release
+      ansible.builtin.debug:
+        msg:
+          - "commit: {{ zkb_commit }}"
+          - "release: {{ zkb_release }}"
+          - "indexer schema: {{ zkb_release_schema }}"
+          - "next: ansible-playbook site.yml -e commit={{ zkb_commit }}   (or one playbook at a time)"

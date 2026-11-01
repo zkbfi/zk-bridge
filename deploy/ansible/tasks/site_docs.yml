@@ -1,0 +1,64 @@
+---
+# docs.zkb.fi is DNSLink: the TXT record _dnslink.docs.zkb.fi names the docs CID, and the Worker zkb-fi-docs only
+# redirects to a gateway that resolves it, so the Worker needs no deploy. The CID is pinned (kubo node) before this runs;
+# the old CID stays pinned for a week at least. Rollback: run this again with the old CID (printed below).
+- name: Check the CID
+  ansible.builtin.assert:
+    that:
+      - docs_cid is match('^(bafy[a-z2-7]{50,}|Qm[1-9A-HJ-NP-Za-km-z]{44})$')
+    fail_msg: "docs_cid is not a CIDv1 (bafy...) or CIDv0 (Qm...)."
+    quiet: true
+
+- name: Check that the new docs CID is served by a public gateway (so it is pinned somewhere)
+  ansible.builtin.uri:
+    url: "{{ zkb_ipfs_gateway }}/ipfs/{{ docs_cid }}/"
+    timeout: 60
+  register: zkb_docs_gateway
+  until: zkb_docs_gateway.status == 200
+  retries: 5
+  delay: 10
+  check_mode: false
+
+- name: Find the zone
+  ansible.builtin.uri:
+    url: "https://api.cloudflare.com/client/v4/zones?name={{ zkb_cf_zone }}"
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.pipe', 'op read ' ~ (zkb_op_cloudflare_token_ref | quote)) }}"
+    return_content: true
+  register: zkb_cf_zones
+  no_log: true
+  check_mode: false
+
+- name: Find the current DNSLink record
+  ansible.builtin.uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ zkb_cf_zones.json.result[0].id }}/dns_records?type=TXT&name={{ zkb_dnslink_name }}"
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.pipe', 'op read ' ~ (zkb_op_cloudflare_token_ref | quote)) }}"
+    return_content: true
+  register: zkb_cf_record
+  no_log: true
+  check_mode: false
+
+- name: Say what is there now (the old CID is the rollback)
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Now: ' ~ (zkb_cf_record.json.result[0].content | replace('"', '')) ~ ' (ttl ' ~ zkb_cf_record.json.result[0].ttl ~ ', 1 means automatic).'
+         if zkb_cf_record.json.result | length > 0 else 'There is no DNSLink record yet.' }}
+      New: dnslink=/ipfs/{{ docs_cid }}. Resolvers cache by TTL: expect that long before everyone sees the change.
+
+- name: Write the record
+  ansible.builtin.uri:
+    url: >-
+      https://api.cloudflare.com/client/v4/zones/{{ zkb_cf_zones.json.result[0].id }}/dns_records{{
+      ('/' ~ zkb_cf_record.json.result[0].id) if zkb_cf_record.json.result | length > 0 else '' }}
+    method: "{{ 'PUT' if zkb_cf_record.json.result | length > 0 else 'POST' }}"
+    headers:
+      Authorization: "Bearer {{ lookup('ansible.builtin.pipe', 'op read ' ~ (zkb_op_cloudflare_token_ref | quote)) }}"
+    body_format: json
+    body:
+      type: TXT
+      name: "{{ zkb_dnslink_name }}"
+      content: "dnslink=/ipfs/{{ docs_cid }}"
+      ttl: "{{ zkb_cf_record.json.result[0].ttl if zkb_cf_record.json.result | length > 0 else 1 }}"
+  when: not zkb_cf_record.json.result | length > 0 or (zkb_cf_record.json.result[0].content | replace('"', '')) != 'dnslink=/ipfs/' ~ docs_cid
+  no_log: true

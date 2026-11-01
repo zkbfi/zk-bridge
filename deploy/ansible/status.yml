@@ -1,0 +1,75 @@
+---
+# Read-only report of where things stand on the app server: units, the current release, the live indexer schema, green,
+# where Caddy points, whether the backend is draining, and the jobs in flight. Safe at any time (it also runs under --check).
+#
+#   cd deploy/ansible
+#   ansible-playbook status.yml
+- name: Report the state of the app server
+  hosts: zkbfi
+  gather_facts: false
+  tasks:
+    - name: Read the ports from the Caddy environment
+      ansible.builtin.include_tasks: tasks/caddy_env.yml
+
+    - name: Read the state of the units
+      ansible.builtin.service_facts:
+      check_mode: false
+
+    - name: Look at the current release
+      ansible.builtin.stat:
+        path: "{{ zkb_current }}"
+      register: zkb_current_stat
+      check_mode: false
+
+    - name: Look at the green and check instances
+      ansible.builtin.stat:
+        path: "{{ zkb_transient_dir }}/{{ item }}.service"
+      loop:
+        - "{{ zkb_green_indexer_unit }}"
+        - "{{ zkb_check_backend_unit }}"
+      register: zkb_transient_stats
+      check_mode: false
+
+    - name: Read the Caddy upstream files
+      ansible.builtin.slurp:
+        src: "{{ zkb_caddy_upstreams }}/{{ item }}.caddy"
+      loop:
+        - indexer
+        - backend
+      register: zkb_upstream_files
+      failed_when: false
+      check_mode: false
+
+    - name: Ask the indexers for /ready
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ item }}/ready"
+        status_code: [200, 503, -1]
+      loop:
+        - "{{ zkb_indexer_port }}"
+        - "{{ zkb_indexer_green_port }}"
+      register: zkb_ready
+      failed_when: false
+      check_mode: false
+
+    - name: Count the jobs in flight
+      ansible.builtin.script:
+        cmd: "{{ playbook_dir }}/files/jobs_idle.py --port {{ zkb_backend_port }} --reads 1"
+        executable: python3
+      register: zkb_jobs
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg:
+          - "current release: {{ (zkb_current_stat.stat.lnk_target | default('none')) | basename }}"
+          - "indexer: {{ ansible_facts.services[zkb_indexer_unit ~ '.service'].state | default('absent') }}, /ready {{ zkb_ready.results[0].status | default('?') }}"
+          - "green ({{ zkb_green_indexer_unit }}): {{ 'running' if zkb_transient_stats.results[0].stat.exists else 'not running' }}, /ready {{ zkb_ready.results[1].status | default('?') }}"
+          - "backend: {{ ansible_facts.services[zkb_backend_unit ~ '.service'].state | default('absent') }}; backend check instance: {{ 'running' if zkb_transient_stats.results[1].stat.exists else 'not running' }}"
+          - "publisher: {{ ansible_facts.services[zkb_publisher_unit ~ '.service'].state | default('absent') }}; runner: {{ ansible_facts.services[zkb_runner_unit ~ '.service'].state | default('absent') }}"
+          - "keep-alive timer: {{ ansible_facts.services[zkb_keepalive_timer].state | default('absent') }}; march: {{ ansible_facts.services[zkb_keepalive_service].state | default('absent') }}"
+          - "caddy: {{ ansible_facts.services['caddy.service'].state | default('absent') }}"
+          - "caddy indexer upstream: {{ 'green first, blue fallback' if (zkb_upstream_files.results[0].content | default('') | b64decode) is search('Green') else 'blue only' }}"
+          - "caddy backend routes: {{ 'DRAINING' if (zkb_upstream_files.results[1].content | default('') | b64decode) is search('DRAINING') else 'normal' }}"
+          - "jobs: {{ zkb_jobs.stdout | default('?') }}"

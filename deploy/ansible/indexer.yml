@@ -1,0 +1,163 @@
+---
+# Blue/green deploy of the indexer (Ponder). Each release has its own Postgres schema, so the new release can fill its
+# schema on a second port (green, 42070) while the live indexer (blue) keeps serving. Caddy is switched only after green
+# answers /ready and its API matches blue's. Blue keeps running as the fallback until the finish.
+#
+#   cd deploy/ansible
+#   ansible-playbook indexer.yml -e commit=<hash>                      # green, compare, switch (the default)
+#   ansible-playbook indexer.yml -e commit=<hash> -e action=green      # only start green and compare; look, then switch
+#   ansible-playbook indexer.yml -e action=switch                      # point Caddy at a green that is running
+#   ansible-playbook indexer.yml -e action=rollback                    # Caddy to blue alone, stop green (until the finish)
+#   ansible-playbook indexer.yml -e commit=<hash> -e action=finish     # after the soak: the real unit takes the schema
+#   ansible-playbook indexer.yml -e commit=<hash> -e action=restart    # same schema: a warm restart of the unit
+#   ansible-playbook indexer.yml -e commit=<hash> -e accept_warnings=true   # switch although a number is >2% behind
+#
+# Green is started from the unit file of the release (user, sandbox, environment files, command) and differs only in its
+# port. The wait for /ready stops green if /status does not change for 10 minutes (zkb_stall_seconds) and gives up
+# after 2 hours (zkb_green_timeout). When the release uses the schema that is already live, there is nothing to
+# pre-index: the playbook says so and ends (the code of the indexer is then the code that runs; use action=restart to
+# restart the unit from the new release anyway). After a switch, keep both for an hour and watch a new message appear on
+# indexer.zkb.fi before the finish. action=all (site.yml) runs green, switch, a soak and the finish in one run.
+- name: Blue/green the indexer
+  hosts: zkbfi
+  gather_facts: false
+  vars:
+    accept_warnings: false
+  tasks:
+    - name: Take the action from -e action=... (site.yml passes zkb_step)
+      ansible.builtin.set_fact:
+        zkb_action: "{{ zkb_step | default(step | default(action | default('deploy'))) }}"
+
+    - name: Check the action
+      ansible.builtin.assert:
+        that:
+          - zkb_action in ['deploy', 'green', 'switch', 'rollback', 'finish', 'restart', 'all']
+        fail_msg: "action is one of deploy, green, switch, rollback, finish, restart, all."
+        quiet: true
+
+    - name: Read the ports and the indexer host from the Caddy environment
+      ansible.builtin.include_tasks: tasks/caddy_env.yml
+
+    - name: Find the release
+      ansible.builtin.include_tasks: tasks/resolve_release.yml
+      when: zkb_action in ['deploy', 'green', 'finish', 'restart', 'all']
+
+    - name: Compare the schema of the release with the live one
+      when: zkb_action in ['deploy', 'green', 'all']
+      block:
+        - name: Read the schema of the running indexer
+          ansible.builtin.include_tasks: tasks/live_indexer_schema.yml
+
+        - name: Say what is going to happen
+          ansible.builtin.debug:
+            msg: >-
+              {{ 'The release uses the schema of the running indexer (' ~ zkb_live_schema ~ '): nothing to pre-index.'
+                 if zkb_release_schema == zkb_live_schema
+                 else 'New schema ' ~ zkb_release_schema ~ ' (running: ' ~ zkb_live_schema ~ ').' }}
+
+        - name: Skip the rest when the schema is unchanged
+          ansible.builtin.debug:
+            msg: >-
+              Skipping the indexer: the code is the code that runs. If the unit should restart from the new release anyway
+              (it is warm, a few seconds, and Caddy holds requests meanwhile): ansible-playbook indexer.yml -e commit={{ zkb_commit }} -e action=restart
+          when: zkb_release_schema == zkb_live_schema
+
+        - name: Leave the host out of this play
+          ansible.builtin.meta: end_host
+          when: zkb_release_schema == zkb_live_schema
+
+    - name: Start green and compare it with blue
+      when: zkb_action in ['deploy', 'green', 'all']
+      block:
+        - name: Start green and wait for /ready
+          ansible.builtin.include_tasks: tasks/indexer_green_up.yml
+
+        - name: Compare the API of green with blue
+          ansible.builtin.include_tasks: tasks/indexer_compare.yml
+          when: not ansible_check_mode
+
+        - name: Stop on numbers that are behind, unless they are accepted
+          ansible.builtin.fail:
+            msg: >-
+              Green answers /ready, but some numbers are more than 2% behind blue (the WARN lines above). Green keeps running.
+              Look, then: ansible-playbook indexer.yml -e action=switch   (or repeat with -e accept_warnings=true)
+          when:
+            - zkb_action in ['deploy', 'all']
+            - zkb_compare_warned | default(false)
+            - not (accept_warnings | bool)
+
+    - name: Switch Caddy to green
+      ansible.builtin.include_tasks: tasks/indexer_switch.yml
+      when: zkb_action in ['deploy', 'switch', 'all']
+
+    - name: Say what is kept
+      ansible.builtin.debug:
+        msg: "Switched. Blue keeps running as the fallback. Rollback: -e action=rollback. After the soak: -e commit=<hash> -e action=finish."
+      when: zkb_action in ['deploy', 'switch'] and not ansible_check_mode
+
+    - name: Roll back to blue
+      when: zkb_action == 'rollback'
+      block:
+        - name: Point Caddy at the indexer unit alone
+          ansible.builtin.include_tasks: tasks/caddy_upstream.yml
+          vars:
+            zkb_upstream: indexer
+            zkb_upstream_mode: normal
+
+        - name: Stop green
+          ansible.builtin.include_tasks: tasks/stop_transient.yml
+          vars:
+            zkb_unit: "{{ zkb_green_indexer_unit }}"
+
+    - name: Let the new indexer soak, then finish
+      when: zkb_action == 'all'
+      block:
+        - name: Wait for the soak time (-e zkb_soak_seconds=0 skips it)
+          ansible.builtin.wait_for:
+            timeout: "{{ zkb_soak_seconds }}"
+          when: zkb_soak_seconds | int > 0 and not ansible_check_mode
+
+        - name: Ask for a look at indexer.zkb.fi (-e zkb_interactive_soak=false skips this)
+          ansible.builtin.pause:
+            prompt: "Check that a new message appears on the indexer. Press Enter to finish the indexer, Ctrl-C then A to stop here"
+          when: zkb_interactive_soak | default(true) | bool and not ansible_check_mode
+
+    - name: Make the real unit serve the new schema
+      ansible.builtin.include_tasks: tasks/indexer_finish.yml
+      when: zkb_action in ['finish', 'all']
+
+    - name: Restart the unit from the release (same schema)
+      when: zkb_action == 'restart'
+      block:
+        - name: Restart only the indexer
+          ansible.builtin.command:
+            argv:
+              - bash
+              - "{{ zkb_release }}/deploy/app-server/deploy.sh"
+              - "{{ zkb_commit }}"
+              - "{{ zkb_repo_dir }}"
+          environment:
+            ZKB_SERVICES: indexer
+          changed_when: true
+
+        - name: Check that deploy.sh made the release current
+          ansible.builtin.stat:
+            path: "{{ zkb_current }}"
+          register: zkb_now_current
+          when: not ansible_check_mode
+
+        - name: Stop unless current is the release (a deploy.sh that fetched nothing must not pass as a switch)
+          ansible.builtin.assert:
+            that: zkb_now_current.stat.lnk_target | default('') == zkb_release
+            fail_msg: "deploy.sh did not switch: current is {{ zkb_now_current.stat.lnk_target | default('none') }}"
+          when: not ansible_check_mode
+
+        - name: Wait for /ready
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ zkb_indexer_port }}/ready"
+            status_code: 200
+          register: zkb_restart_ready
+          until: zkb_restart_ready.status == 200
+          retries: 60
+          delay: 10
+          when: not ansible_check_mode

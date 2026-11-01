@@ -1,27 +1,10 @@
+import { availableParallelism } from "node:os";
 import { Worker } from "node:worker_threads";
 import type { Hex } from "viem";
+import { MAXIMUM_THREADS } from "./grind-stamper.mjs";
 
-/** What a grind needs. The endpoint can carry a key, so it travels in the worker data and never in a log. */
-export interface GrindInput {
-  readonly boardUrl: string;
-  readonly category: Hex;
-  readonly payload: Hex;
-  readonly timeoutMilliseconds: number;
-}
-
-/** A message with its proof of work, ready for `msgboard_addMessage`. */
-export interface GrindResult {
-  /** The message in the length prefix encoding that `msgboard_addMessage` takes. */
-  readonly rlp: Hex;
-  readonly hash: Hex;
-  readonly nonce: bigint;
-  readonly difficulty: bigint;
-  readonly iterations: bigint;
-  readonly durationMilliseconds: number;
-}
-
-/** Finds the proof of work for a message. The real one runs in a worker thread. */
-export type GrindFunction = (input: GrindInput) => Promise<GrindResult>;
+export type { GrindInput, GrindResult, GrindFunction } from "@zkb/data";
+import type { GrindFunction, GrindInput, GrindResult } from "@zkb/data";
 
 /** The worker failed or ran out of time. */
 export class GrindError extends Error {
@@ -32,47 +15,78 @@ type WorkerReply =
   | { readonly ok: true; readonly rlp: Hex; readonly hash: Hex; readonly nonce: string; readonly difficulty: string; readonly iterations: string; readonly durationMilliseconds: number }
   | { readonly ok: false; readonly error: string };
 
+/** One thread per core, so that the whole machine searches for the nonce. At least one, and no more than the ranges allow. */
+export function threadsForGrind(): number {
+  return Math.max(1, Math.min(availableParallelism(), MAXIMUM_THREADS));
+}
+
 /**
- * Grinds in a worker thread, so the event loop of the bot keeps running. The worker is a plain module
+ * Grinds on `threads` worker threads at once, so that the event loop of the bot keeps running. Each thread searches a
+ * range of nonces of its own, and the first to find a valid nonce wins: the others stop. The worker is a plain module
  * (`grind-worker.mjs`) so that it loads without a TypeScript loader.
  *
- * @throws GrindError when the worker reports an error, crashes, or outlives `timeoutMilliseconds`.
+ * @throws GrindError when every worker reports an error or crashes, or when none finishes within `timeoutMilliseconds`.
  */
-export const grindInWorker: GrindFunction = (input) =>
-  new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./grind-worker.mjs", import.meta.url), {
-      workerData: {
-        url: input.boardUrl,
-        category: input.category,
-        payload: input.payload,
-        timeoutMilliseconds: input.timeoutMilliseconds,
-      },
-    });
+export function grindOnThreads(input: GrindInput, threads: number): Promise<GrindResult> {
+  return new Promise((resolve, reject) => {
+    const started = Array.from(
+      { length: threads },
+      (_, threadIndex) =>
+        new Worker(new URL("./grind-worker.mjs", import.meta.url), {
+          workerData: {
+            url: input.boardUrl,
+            category: input.category,
+            payload: input.payload,
+            timeoutMilliseconds: input.timeoutMilliseconds,
+            threadIndex,
+          },
+        }),
+    );
+    let settled = false;
+    let failures = 0;
+    let firstError: GrindError | undefined;
+    const finish = (): void => {
+      settled = true;
+      clearTimeout(timer);
+      for (const worker of started) void worker.terminate();
+    };
     const timer = setTimeout(() => {
-      void worker.terminate();
+      finish();
       reject(new GrindError(`the proof of work did not finish in ${input.timeoutMilliseconds} milliseconds`));
     }, input.timeoutMilliseconds);
-    const finish = (): void => {
-      clearTimeout(timer);
-      void worker.terminate();
-    };
-    worker.once("message", (reply: WorkerReply) => {
-      finish();
-      if (!reply.ok) {
-        reject(new GrindError(reply.error));
-        return;
+    // A failed thread does not end the grind while another thread still searches: its range may be the only one that failed.
+    const fail = (error: GrindError): void => {
+      failures += 1;
+      firstError ??= error;
+      if (failures === threads) {
+        finish();
+        reject(firstError);
       }
-      resolve({
-        rlp: reply.rlp,
-        hash: reply.hash,
-        nonce: BigInt(reply.nonce),
-        difficulty: BigInt(reply.difficulty),
-        iterations: BigInt(reply.iterations),
-        durationMilliseconds: reply.durationMilliseconds,
+    };
+    for (const worker of started) {
+      worker.once("message", (reply: WorkerReply) => {
+        if (settled) return;
+        if (!reply.ok) {
+          fail(new GrindError(reply.error));
+          return;
+        }
+        finish();
+        resolve({
+          rlp: reply.rlp,
+          hash: reply.hash,
+          nonce: BigInt(reply.nonce),
+          difficulty: BigInt(reply.difficulty),
+          iterations: BigInt(reply.iterations),
+          durationMilliseconds: reply.durationMilliseconds,
+          threads,
+        });
       });
-    });
-    worker.once("error", (error: Error) => {
-      finish();
-      reject(new GrindError(`the grind worker crashed: ${error.message}`));
-    });
+      worker.once("error", (error: Error) => {
+        if (!settled) fail(new GrindError(`the grind worker crashed: ${error.message}`));
+      });
+    }
   });
+}
+
+/** Grinds on one thread per core. */
+export const grindInWorker: GrindFunction = (input) => grindOnThreads(input, threadsForGrind());

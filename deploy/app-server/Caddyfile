@@ -16,9 +16,13 @@
 	email {$ZKB_ACME_EMAIL}
 }
 
-(backend) {
-	reverse_proxy 127.0.0.1:{$ZKB_BACKEND_PORT:8787}
-}
+# The upstreams are in two files that the playbooks in deploy/ansible own (docs/deploy-blue-green.md). Each one defines
+# a snippet, backend and indexer_upstream (Caddy 2.6 cannot import a snippet from inside another snippet, so the file
+# defines backend itself). caddy.yml writes them with the ports of ZKB_BACKEND_PORT (8787) and
+# ZKB_INDEXER_PORT (42069), which is the routing this file had before they existed, and does so before it installs this
+# file: an import of a missing file fails.
+import /etc/caddy/upstreams/backend.caddy
+import /etc/caddy/upstreams/indexer.caddy
 
 (not_found) {
 	handle {
@@ -53,7 +57,7 @@
 {$ZKB_INDEXER_HOST} {
 	@routes path /health /ready /api/* /graphql /graphql/*
 	handle @routes {
-		reverse_proxy 127.0.0.1:{$ZKB_INDEXER_PORT:42069}
+		import indexer_upstream
 	}
 	# The address itself: a live page of the on-chain data (deploy/app-server/indexer-home, shipped with each release),
 	# or the summary as JSON for a client that asks for JSON.
@@ -63,7 +67,7 @@
 	}
 	handle @home_json {
 		rewrite * /api/summary
-		reverse_proxy 127.0.0.1:{$ZKB_INDEXER_PORT:42069}
+		import indexer_upstream
 	}
 	handle / {
 		root * /opt/zk-bridge/current/deploy/app-server/indexer-home

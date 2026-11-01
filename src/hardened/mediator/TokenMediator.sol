@@ -152,8 +152,8 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     /// copy. The copy of `Wrapped Ether` from Ethereum is `Wrapped Ether from Ethereum`.
     string public constant NAME_CONNECTOR = " from ";
     /// @notice The prefix that a bridged copy adds to the symbol of its native token, with no separator. The copy of
-    /// `WETH` is `zkbWETH`.
-    string public constant SYMBOL_PREFIX = "zkb";
+    /// `WETH` is `zWETH`.
+    string public constant SYMBOL_PREFIX = "z";
 
     /// @notice The caller of a handler is not the message bridge.
     error NotBridge(address caller);

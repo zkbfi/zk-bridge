@@ -49,7 +49,7 @@ describe("rankResults", () => {
 
   it("finds a token by symbol on either chain", () => {
     const titles = rankResults("usdc", everything).filter((result) => result.kind === "token").map((result) => result.title);
-    expect(titles).toEqual(expect.arrayContaining(["USDC", "zkbUSDC"]));
+    expect(titles).toEqual(expect.arrayContaining(["USDC", "zUSDC"]));
   });
 
   it("finds a token by address", () => {

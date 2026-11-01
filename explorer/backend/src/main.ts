@@ -15,6 +15,8 @@ import * as requests from "./requests/module.ts";
 import { createProverFactories } from "./requests/job-prover.ts";
 import { createProofNeedReader, withoutIndexer } from "./requests/proof-need.ts";
 import { openStorage } from "./storage.ts";
+import { createProverPing } from "./watch/ping.ts";
+import { watchedDirections } from "./watch/module.ts";
 import * as webhook from "./webhook/module.ts";
 
 /** The modules by name. A later task replaces the stub behind a name. */
@@ -75,6 +77,8 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
   if (input.enabled.includes("requests")) {
     requireBeaconUrls(config, input.pair);
     requireIndexerUrl(config);
+    // A watch that is switched on but cannot run is a configuration error, before anything starts.
+    watchedDirections(config, input.pair);
   }
   const readProofNeed =
     config.indexerUrl === undefined
@@ -90,7 +94,8 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     path: input.environment.PATH ?? "/usr/bin:/bin",
     logger,
   });
-  const context: BackendModuleContext = { storage, config, pair: input.pair, prover: provers.utilityProver, proverForJob: provers.proverForJob, readProofNeed, now, logger };
+  const pingProver = createProverPing({ endpoint: config.remote.endpoint, apiKey: secrets.runpodApiKey, timeoutMilliseconds: config.watch.warmup.pingTimeoutSeconds * 1000 });
+  const context: BackendModuleContext = { storage, config, pair: input.pair, prover: provers.utilityProver, proverForJob: provers.proverForJob, readProofNeed, now, logger, pingProver };
   const app = createApp({ context, modules: MODULES, enabled: input.enabled });
   const stoppers = await Promise.all(input.enabled.map((name) => MODULES[name].start(context)));
   const server = await new Promise<ReturnType<typeof serve> & { port: number }>((resolve) => {

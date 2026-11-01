@@ -2,24 +2,8 @@ import { keccak256, type Hex } from "viem";
 import { ORACLE_PROOF_MESSAGE_VERSION, tryDecodeProofMessage, type ProofDirection, type ProofMessage } from "../proof-message.js";
 import { CommandStartError, CommandTimeoutError } from "./execute-command.js";
 import { ProverCommandError, ProverOutputError, type ProverBinary } from "./prover-binary.js";
+import type { LightClientHead, LightClientReader } from "./light-client.js";
 import type { VerifyGuard } from "./verify-guard.js";
-
-/** What the proof check needs to know about the light client on the destination chain. */
-export interface LightClientHead {
-  readonly headSlot: bigint;
-  readonly headRoot: Hex;
-  readonly programKey: Hex;
-  /**
-   * The clock settings of the light client (`genesisTime` in seconds, `secondsPerSlot`). With them the intake refuses a
-   * proof whose new slot the contract would refuse as `HeadInFuture`, before any costly check. A reader may leave them out.
-   */
-  readonly clock?: { readonly genesisTime: bigint; readonly secondsPerSlot: bigint };
-}
-
-/** Reads the light client on the destination chain. */
-export interface LightClientReader {
-  read(): Promise<LightClientHead>;
-}
 
 /** Why a proof message is not used. */
 export type ProofRefusal =

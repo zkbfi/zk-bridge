@@ -80,7 +80,7 @@ job only when the chain indexer (`indexerUrl`) shows that the direction needs a 
   them (the public chain 943 node) strands it for good, so keep the value well below that. `bin/zk-bridge-keepalive.mjs`
   checks and marches the light clients through this API (docs/testnet-run.md, "Keeping the light clients alive").
 
-The reason in the request (`message`, `keep-alive`, `user`) does not change this. The backend asks the indexer only after
+The reason in the request (`message`, `keep-alive`, `user`, and the backend's own `finality`) does not change this. The backend asks the indexer only after
 the caller limits, the wait of the direction and the daily budget passed, and one answer serves a direction for 15
 seconds. The answers:
 
@@ -97,6 +97,58 @@ Two limits remain as a backstop when the indexer reports wrong facts:
   `secondsBeforeRetryAfterFailure` (default 60) after a failed job.
 - `jobsPerDirectionPerDay` (default 96) jobs that may pay for a proof, per direction, in any 24 hours. A job that found
   the chain up to date paid nothing and does not count.
+
+## Proving on finality
+
+The requests module also starts proofs on its own, within seconds of the source chain finalizing what a proof needs.
+Per direction it watches the source beacon node and, on each new finalized header, starts a job through the same path
+as `POST /requests` (reason `finality`, caller `watch`), so the gates above apply unchanged.
+
+- **How it learns of finality.** The beacon event stream (`/eth/v1/events`). When the node does not serve it, holds its
+  headers for 10 s, closes it, or sends nothing for three slots, the backend polls every slot (12 s on Ethereum and
+  Sepolia, 10 s on PulseChain) and tries the stream again after 5 s, doubling up to 5 minutes. `watch_transport` in the
+  log says which one runs.
+- **What it reads.** On a node that serves `/eth/v1/beacon/light_client/finality_update`, that update: the one the
+  prover takes. On a node that does not (the PulseChain nodes), the newest block and the sync aggregate of the block
+  after it, as the prover builds its update there. A new finalized slot then counts one block later.
+- **When it starts a job.** At least 342 of the 512 sync committee members signed (the light-client program's
+  two-thirds rule), and either a waiting message lies between the light client head and the new finalized header, or
+  the keep-alive planner (`src/keepalive/plan.ts`) calls for a proof that can make progress: the source finalized a
+  header in a sync-committee period after the head's (or handoff steps are needed), the head is older than
+  `limits.keepAliveSeconds`, or the light client has no head. A young head in the period of the source's finality starts
+  nothing, however close its deadline: such a proof moves the head inside the period and hands off to no new committee
+  (`proof_not_due` names the next possible handoff). Only a handoff skips the indexer's age rule (`plannedHandoff`); a
+  keep-alive of the age rule meets it like any request. The watcher starts at most one keep-alive per period of the
+  source's finality unless the head has aged past the keep-alive age. A message that a proof already posted to the board
+  covers, while that proof still starts at the head, starts nothing. One finalized header starts at most one job, and
+  no job starts while one runs.
+- **Warm-up.** Shortly before a proof is expected (45 s before the expected finality of a sent message, or once before a
+  period handoff that the next finality makes due), the backend calls `GET <remote.endpoint>/ping` with the RunPod key.
+  One ping per direction is outstanding at most, and it waits up to `warmup.pingTimeoutSeconds` (300 s) because the
+  load-balancing endpoint holds it while a worker starts. Before a message it repeats every 30 s after an answer until
+  90 s past the expected finality, and a 200 (warm) ends the session. At most one session per direction in 5 minutes,
+  and never while a job runs. A ping that times out is logged as `warmup_ping_timeout` (info) and no new session starts
+  for 5 minutes. Set the endpoint's idle timeout to cover the prover's preparation (60 s is the documented value,
+  docs/gpu-prover.md).
+- **The log.** `finality_seen` (slot, `source` sse or poll, `latencyMs` from the start of the signature slot),
+  `proof_due` (why), `proof_not_due` (why, at debug level unless signatures are short or the light client is stranded),
+  `job_started` (`reason: "finality"`, `latencyMs` from the arrival of the finality event; the aim is under 5 s) and
+  `warmup_ping` (the status only; the address and the key never appear), `warmup_ping_timeout`.
+
+Settings, all optional (`watch` in the configuration file):
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | on when `indexerUrl` and the beacon endpoint of each watched source chain are set | `false` turns it off; `true` makes a missing endpoint a start error. |
+| `directions` | both | `["first-to-second"]` or `["second-to-first"]` to watch one. |
+| `sse` | `true` | `false` polls only. |
+| `pollSeconds` | one slot of the source chain | The poll interval while no stream runs. |
+| `scanSeconds` | 15 | How often the warm-up looks at the sent messages. |
+| `warmup.enabled` | `true` | `false` sends no ping. |
+| `warmup.leadSeconds`, `intervalSeconds`, `graceSeconds`, `minGapSeconds` | 45, 30, 90, 300 | The warm-up timing above. |
+| `warmup.pingTimeoutSeconds` | 300 | How long one ping may wait for a cold worker. |
+
+The keep-alive timer (docs/testnet-run.md, "Keeping the light clients alive") stays as the backstop.
 
 ## Local testing with the oracle setting
 

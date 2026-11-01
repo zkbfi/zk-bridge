@@ -1,0 +1,81 @@
+---
+# Installs the Caddyfile of a release and the two upstream snippets it imports, validates the whole configuration, and
+# reloads Caddy. A reload keeps the old configuration when the new one is bad; a restart would drop connections, so this
+# playbook never restarts Caddy. If validation or the reload fails, the previous Caddyfile is put back and Caddy is
+# reloaded with it.
+#
+#   cd deploy/ansible
+#   ansible-playbook caddy.yml -e commit=<hash>                 # the Caddyfile of that built release
+#   ansible-playbook caddy.yml -e commit=<hash> --check --diff  # what would change
+#
+# The upstream files (/etc/caddy/upstreams/indexer.caddy and backend.caddy) are written only when missing, with the
+# routing the Caddyfile had before they existed (ports from /etc/caddy/zkb.env, else 42069 and 8787). Later playbooks
+# change them. If /etc/caddy/Caddyfile is a link into `current`, the link is replaced by a file with the release's content.
+- name: Install the Caddyfile and the upstream snippets
+  hosts: zkbfi
+  gather_facts: false
+  tasks:
+    - name: Find the release
+      ansible.builtin.include_tasks: tasks/resolve_release.yml
+
+    - name: Make the upstream directory
+      ansible.builtin.file:
+        path: "{{ zkb_caddy_upstreams }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write the upstream files that are missing (never overwrites a live one)
+      ansible.builtin.template:
+        src: "{{ item }}-normal.caddy.j2"
+        dest: "{{ zkb_caddy_upstreams }}/{{ item }}.caddy"
+        owner: root
+        group: root
+        mode: "0644"
+        force: false
+      loop:
+        - indexer
+        - backend
+
+    - name: Install the Caddyfile, validate, reload
+      block:
+        - name: Install the Caddyfile of the release, keeping the old one
+          ansible.builtin.copy:
+            src: "{{ zkb_release }}/deploy/app-server/Caddyfile"
+            dest: "{{ zkb_caddyfile }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0644"
+            backup: true
+          register: zkb_caddyfile_written
+
+        - name: Validate the whole configuration
+          ansible.builtin.include_tasks: tasks/caddy_validate.yml
+
+        - name: Reload Caddy
+          ansible.builtin.systemd_service:
+            name: caddy
+            state: reloaded
+          when: zkb_caddyfile_written is changed
+      rescue:
+        - name: Put the previous Caddyfile back
+          ansible.builtin.copy:
+            src: "{{ zkb_caddyfile_written.backup_file }}"
+            dest: "{{ zkb_caddyfile }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0644"
+          when: zkb_caddyfile_written.backup_file is defined
+
+        - name: Reload Caddy with the previous Caddyfile
+          ansible.builtin.systemd_service:
+            name: caddy
+            state: reloaded
+          when: zkb_caddyfile_written.backup_file is defined
+
+        - name: Stop, because the Caddyfile did not change
+          ansible.builtin.fail:
+            msg: "Caddy rejected the Caddyfile of {{ zkb_commit }}. The previous Caddyfile is back and Caddy was reloaded with it."

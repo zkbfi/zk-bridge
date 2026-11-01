@@ -1,5 +1,5 @@
 import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, type Address, type ContractFunctionArgs, type Hex } from "viem";
-import { decodeMediatorMessage, deliveryRouterAbi, messageBridgeAbi, requiredDeliveryGas, tokenFactoryAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
+import { bridgedSymbolOf, decodeMediatorMessage, deliveryRouterAbi, messageBridgeAbi, requiredDeliveryGas, tokenFactoryAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
@@ -166,7 +166,7 @@ export async function withDestinationToken(dependencies: DeliveryDependencies, i
     data: encodeFunctionData({ abi: tokenFactoryAbi, functionName: "predictAddress", args: [BigInt(dependencies.sourceChainId), transfer.sourceToken.address as Address] }),
   });
   const address = decodeFunctionResult({ abi: tokenFactoryAbi, functionName: "predictAddress", data: answer });
-  const destinationToken = { chainId: dependencies.chain.chainId, address, symbol: `zkb${transfer.sourceToken.symbol}`, decimals: transfer.sourceToken.decimals };
+  const destinationToken = { chainId: dependencies.chain.chainId, address, symbol: bridgedSymbolOf(transfer.sourceToken.symbol), decimals: transfer.sourceToken.decimals };
   return { ...item, transfer: { ...transfer, destinationToken } };
 }
 

@@ -44,7 +44,7 @@ function setup(options: { environment?: Record<string, string>; verify?: ProverB
     async post(input) {
       if (options.boardFailure !== undefined) throw options.boardFailure;
       posts.push(input);
-      return { messageHash: word(0x99), grindMilliseconds: 1 };
+      return { messageHash: word(0x99), grindMilliseconds: 1, difficulty: 367_772n, threads: 4 };
     },
   };
   const controllable = controllableProver();

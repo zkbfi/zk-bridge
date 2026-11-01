@@ -1,0 +1,39 @@
+---
+# One release channel. Needs zkb_channel (next or stable) and publish_<channel> (a release directory).
+- name: Work out what to publish
+  ansible.builtin.set_fact:
+    zkb_site: "{{ zkb_sites[zkb_channel] }}"
+    zkb_release_dir: "{{ publish_next if zkb_channel == 'next' else publish_stable }}"
+
+- name: Check the release directory
+  ansible.builtin.stat:
+    path: "{{ zkb_release_dir }}/version.json"
+  register: zkb_release_manifest
+  check_mode: false
+
+- name: Check that it is a release
+  ansible.builtin.assert:
+    that:
+      - zkb_release_manifest.stat.exists
+    fail_msg: "{{ zkb_release_dir }} has no version.json: pass the release directory made by release.sh (or promote.sh)."
+    quiet: true
+
+- name: Deploy the landing page of the release (publish-pages.sh verifies it first)
+  ansible.builtin.command:
+    argv:
+      - "{{ zkb_repo_root }}/script/release/publish-pages.sh"
+      - "{{ zkb_release_dir }}"
+  environment:
+    RELEASE_CHANNEL: "{{ zkb_site.channel }}"
+    RELEASE_PAGES_LANDING: "{{ zkb_site.worker }}"
+    RELEASE_LANDING_DOMAINS: "{{ zkb_site.domains }}"
+    CLOUDFLARE_API_TOKEN: "{{ lookup('ansible.builtin.pipe', 'op read ' ~ (zkb_op_cloudflare_token_ref | quote)) }}"
+    CLOUDFLARE_ACCOUNT_ID: "{{ lookup('ansible.builtin.pipe', 'op read ' ~ (zkb_op_cloudflare_account_ref | quote)) }}"
+  changed_when: true
+  no_log: true
+
+- name: Say what to look at
+  ansible.builtin.debug:
+    msg:
+      - "Published to {{ zkb_site.worker }} ({{ zkb_site.domains }})."
+      - "Check https://{{ (zkb_site.domains | split(','))[0] }}/version.json: the sequence and the archive CIDs must be the ones release.sh printed."

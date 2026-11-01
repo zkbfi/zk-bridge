@@ -1,0 +1,46 @@
+{
+  "name": "@zkb/data",
+  "version": "0.0.0",
+  "description": "The data layer of the zkb.fi bridge screen: proofs from the msgboard, the proof queue client, the indexer API views, RPC reads that name their block, and the endpoint settings with their fallback. Browser and Node.",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "abis": "node scripts/generate-abis.mjs",
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json",
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@msgboard/sdk": "0.4.0",
+    "@zkb/core": "workspace:*",
+    "viem": "2.56.9",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "@types/ws": "8.18.1",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11",
+    "ws": "8.21.3"
+  }
+}

@@ -1,0 +1,13 @@
+---
+# Sets zkb_modules_down: the names of the backend modules that /health does not report as running.
+#   zkb_port  the port of the backend to ask
+- name: Read /health of the backend on port {{ zkb_port }}
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ zkb_port }}/health"
+    return_content: true
+  register: zkb_health
+  check_mode: false
+
+- name: Remember the modules that are not running
+  ansible.builtin.set_fact:
+    zkb_modules_down: "{{ zkb_health.json.modules | default({}) | dict2items | rejectattr('value.state', 'equalto', 'running') | map(attribute='key') | sort | list }}"

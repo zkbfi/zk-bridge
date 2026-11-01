@@ -44,7 +44,7 @@ describe('the tip field of the bridge form', () => {
       expect(frame).toContain(shown)
     }
     expect(frame).toMatch(/Gas multiplier {2,}1 /)
-    expect(frame).toMatch(/Your tip {8}about [\d.]+ zkbUSDC now/)
+    expect(frame).toMatch(/Your tip {8}about [\d.]+ zUSDC now/)
     // The Mode field (relayTokens) is gone: the call data holds the tip terms.
     expect(frame).not.toMatch(/Mode {2,}relayTokens/)
   })
@@ -70,7 +70,7 @@ describe('the tip field of the bridge form', () => {
     await screen.type('9')
     const frame = screen.frame()
     expect(frame).toMatch(/Fixed amount {2,}4\.69/)
-    expect(frame).toContain('Your tip        4.69 zkbUSDC (exact)')
+    expect(frame).toContain('Your tip        4.69 zUSDC (exact)')
   })
 
   test('the gas mode works for any token, with the price of the sender labelled as theirs', async () => {
@@ -78,8 +78,8 @@ describe('the tip field of the bridge form', () => {
     const frame = screen.frame()
     expect(frame).toContain('Your coin price')
     expect(frame).toMatch(/Your coin price {2,}2500/)
-    expect(frame).toMatch(/estimate, at most [\d.]+ zkbUSDC/)
-    expect(frame).toMatch(/Your tip {8}about [\d.]+ zkbUSDC now/)
+    expect(frame).toMatch(/estimate, at most [\d.]+ zUSDC/)
+    expect(frame).toMatch(/Your tip {8}about [\d.]+ zUSDC now/)
   })
 
   test('on the wrapped native token the gas multiplier offers the native payout', async () => {
@@ -88,7 +88,7 @@ describe('the tip field of the bridge form', () => {
     const frame = screen.frame()
     expect(frame).toContain('WETH on Ethereum')
     expect(frame).toContain('Pay the reward address in')
-    expect(frame).toMatch(/estimate, at most [\d.]+ zkbWETH/)
+    expect(frame).toMatch(/estimate, at most [\d.]+ zWETH/)
   })
 
   test('says that no value is known when the destination token has none, and asks for a price', async () => {
@@ -105,7 +105,7 @@ describe('the tip field of the bridge form', () => {
     await screen.press('ARROW_RIGHT') // percentage
     const frame = screen.frame()
     expect(frame).toMatch(/Percentage {2,}0\.1/)
-    expect(frame).toContain('Your tip        0.1 zkbUSDC (exact)')
+    expect(frame).toContain('Your tip        0.1 zUSDC (exact)')
   })
 
   test('Enter reviews relayTokensAndCall to the router with the tip terms, and sends nothing', async () => {

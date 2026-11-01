@@ -168,9 +168,28 @@ impl FakeWorker {
                 timeout,
                 attempts,
                 retry_delay: Duration::from_millis(20),
+                cold_start_wait: Duration::from_secs(30),
             },
             Logger::in_memory().0,
         )
+    }
+
+    /// A backend with one attempt for ordinary failures and `cold_start_wait` for a worker that is not ready. The
+    /// second value gives the log lines.
+    fn waiting_prover(&self, cold_start_wait: Duration) -> (RemoteProver, Arc<Mutex<Vec<String>>>) {
+        let (logger, lines) = Logger::in_memory();
+        let prover = RemoteProver::new(
+            RemoteSettings {
+                endpoint_url: self.url.clone(),
+                api_key: API_KEY.into(),
+                timeout: long(),
+                attempts: 1,
+                retry_delay: Duration::from_millis(20),
+                cold_start_wait,
+            },
+            logger,
+        );
+        (prover, lines)
     }
 }
 
@@ -433,20 +452,19 @@ fn cold_start_answers_are_retried() {
     assert_eq!(worker.requests().len(), 4);
 }
 
-/// Claim: when every attempt fails, the backend stops after exactly the configured attempts, says how many it made
+/// Claim: when every attempt fails with an error that is not a cold start (here a 500), the backend stops after exactly the configured attempts, says how many it made
 /// and why the last one failed, and never prints the API key.
 #[test]
 #[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn the_attempts_run_out() {
-    let worker =
-        FakeWorker::start(|_| Reply::with(503, r#"{"error":"the worker is still starting"}"#));
+    let worker = FakeWorker::start(|_| Reply::with(500, r#"{"error":"the proof failed"}"#));
     let error = worker
         .prover(3, long())
         .prove(fixture().program_key, &real_statement())
         .unwrap_err();
     let text = error.to_string();
     assert!(
-        text.contains("after 3 attempts") && text.contains("still starting"),
+        text.contains("after 3 attempts") && text.contains("the proof failed"),
         "got {text}"
     );
     assert!(!text.contains(API_KEY));
@@ -514,6 +532,7 @@ fn the_backend_and_the_worker_agree_over_http() {
             timeout: long(),
             attempts: 1,
             retry_delay: Duration::ZERO,
+            cold_start_wait: Duration::ZERO,
         },
         Logger::in_memory().0,
     );
@@ -535,4 +554,108 @@ fn the_backend_and_the_worker_agree_over_http() {
 
     server.unblock();
     handle.join().unwrap();
+}
+
+/// The answer of the RunPod load balancer when no worker became ready within its own wait (seen on 2026-10-31 after
+/// about 5 minutes, while the hosts pulled the 20 GB image).
+const RUNPOD_COLD: &str =
+    r#"{"status":400,"title":"Bad Request","detail":"timed out waiting for worker"}"#;
+
+/// Any request body: these tests drive the transport only, so they need no statement that the program accepts.
+const BODY: &str = r#"{"programKey":"0x01","statementKind":"lightClient","guestInput":"0x"}"#;
+
+fn transport_answer() -> Reply {
+    Reply::ok(&[0xaa; 4], &[0xbb; 2])
+}
+
+/// Claim: a cold worker is awaited. The RunPod 400 "timed out waiting for worker", the worker's 503 and a 204 are
+/// "not ready yet": the backend waits and sends the job again, and accepts the answer once the worker is up. These
+/// waits do not spend the attempts for ordinary failures (here 1). Each wait writes one log line without the key.
+/// Why it matters: on 2026-10-31 a cold endpoint answered this 400 after about 5 minutes and the prover gave up at
+/// once, while the worker became ready minutes later.
+#[test]
+fn a_cold_worker_is_awaited_until_it_is_ready() {
+    let good = transport_answer();
+    let worker = FakeWorker::start(move |index| match index {
+        0 | 1 => Reply::with(400, RUNPOD_COLD),
+        2 => Reply::with(503, r#"{"error":"the worker is still starting"}"#),
+        3 => Reply::with(204, ""),
+        _ => good.clone(),
+    });
+    let (prover, lines) = worker.waiting_prover(Duration::from_secs(30));
+    let answer = prover
+        .request_proof(BODY)
+        .expect("the answer after the cold start");
+    assert_eq!(answer.proof, "0xaaaaaaaa");
+    assert_eq!(worker.requests().len(), 5);
+    let lines = lines.lock().unwrap().clone();
+    let waits: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.contains("remote_worker_not_ready"))
+        .collect();
+    assert_eq!(waits.len(), 4, "{lines:?}");
+    assert!(
+        waits[0].contains("timed out waiting for worker"),
+        "{}",
+        waits[0]
+    );
+    assert!(lines.iter().all(|line| !line.contains(API_KEY)));
+}
+
+/// Claim: when the worker is still not ready at the end of the configured wait, the backend stops with a message
+/// that says it waited, names the setting and gives the last answer. It never prints the key.
+/// Why it matters: the backend's job limit must hold, and the operator must see why the proof failed.
+#[test]
+fn a_cold_start_beyond_the_limit_fails_clearly() {
+    let worker = FakeWorker::start(|_| Reply::with(400, RUNPOD_COLD));
+    let (prover, _lines) = worker.waiting_prover(Duration::from_millis(400));
+    let started = std::time::Instant::now();
+    let error = prover.request_proof(BODY).unwrap_err();
+    let elapsed = started.elapsed();
+    let text = error.to_string();
+    assert!(
+        text.contains("not ready")
+            && text.contains("remote_cold_start_wait_seconds")
+            && text.contains("timed out waiting for worker"),
+        "got {text}"
+    );
+    assert!(!text.contains(API_KEY));
+    assert!(worker.requests().len() > 1, "it waited and sent again");
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "it stopped near the limit: {elapsed:?}"
+    );
+}
+
+/// Claim: every other 400 stops at once, also after a cold start answer: a refusal by the worker, another RunPod
+/// detail, and a worker error that only mentions the cold start text in its own field.
+/// Why it matters: a rejected input is never retried, and a paid proof is never run twice.
+#[test]
+fn another_400_is_not_retried() {
+    let worker = FakeWorker::start(|index| match index {
+        0 => Reply::with(400, RUNPOD_COLD),
+        _ => Reply::with(
+            400,
+            r#"{"error":"this worker holds no program with key 0x01"}"#,
+        ),
+    });
+    let (prover, _lines) = worker.waiting_prover(Duration::from_secs(30));
+    let error = prover.request_proof(BODY).unwrap_err();
+    assert!(error.to_string().contains("refused the job"), "got {error}");
+    assert_eq!(worker.requests().len(), 2);
+
+    for body in [
+        r#"{"status":400,"title":"Bad Request","detail":"invalid request body"}"#,
+        r#"{"error":"the request is not valid: timed out waiting for worker"}"#,
+        "Bad Request",
+    ] {
+        let worker = FakeWorker::start(move |_| Reply::with(400, body));
+        let (prover, _lines) = worker.waiting_prover(Duration::from_secs(30));
+        let error = prover.request_proof(BODY).unwrap_err();
+        assert!(
+            error.to_string().contains("refused the job"),
+            "{body}: got {error}"
+        );
+        assert_eq!(worker.requests().len(), 1, "{body}");
+    }
 }

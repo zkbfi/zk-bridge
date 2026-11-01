@@ -15,8 +15,8 @@ const SAMPLE_CALL_ABI = parseAbi(["function setRoute(uint256 id, address to)"]);
 const payloadOf = (item: FeedItem): Hex => {
   const token = item.token;
   if (token === null || item.amount === null) return encodeFunctionData({ abi: SAMPLE_CALL_ABI, functionName: "setRoute", args: [7n, item.recipient] });
-  // The sample tokens on the source side are either native there or a "zkb" copy of a token native on the destination.
-  const homeIsSource = !token.symbol.startsWith("zkb");
+  // The sample tokens on the source side are either native there or a bridged copy of a token native on the destination.
+  const homeIsSource = !token.isBridgedCopy;
   const functionName = homeIsSource ? "handleBridgedTokens" : "handleNativeTokens";
   return encodeFunctionData({ abi: tokenMediatorAbi, functionName, args: [homeIsSource ? token.address : (token.counterpart ?? token.address), item.recipient, item.amount] });
 };

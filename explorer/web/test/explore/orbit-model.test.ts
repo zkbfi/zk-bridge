@@ -60,11 +60,13 @@ describe("status → step", () => {
 });
 
 describe("planets", () => {
-  it("colours a token by a stable hash into four tones, a zkb copy like its origin", () => {
+  it("colours a token by a stable hash into four tones, a bridged copy like its origin", () => {
     const tone = planetTone(toneKey(usdc));
     expect([1, 2, 3, 4]).toContain(tone);
     expect(planetTone(toneKey(usdc))).toBe(tone);
-    expect(planetTone(toneKey(FIXTURE_TOKENS[1]!))).toBe(tone); // zkbUSDC
+    expect(planetTone(toneKey(FIXTURE_TOKENS[1]!))).toBe(tone); // zUSDC
+    expect(toneKey({ symbol: "ZRX" })).toBe("ZRX"); // native, though it starts with the copy prefix
+    expect(toneKey({ symbol: "zZRX", isBridgedCopy: true })).toBe("ZRX");
     const tones = new Set(["USDC", "WETH", "DAI", "PLS", "HEX", "WBTC", "USDT", "message"].map(planetTone));
     expect(tones.size).toBeGreaterThan(1);
   });

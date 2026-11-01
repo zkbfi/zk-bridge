@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import type { Address } from "viem";
+import { nativeSymbolOf } from "@zk-bridge/shared";
 import type { FeedItem, TokenInfo } from "@terminal/model/types";
 import { useDeliveryCost, useSnapshots } from "../app/queries";
 import { formatRoute } from "../app/route";
@@ -92,14 +93,14 @@ export const ActivityScreen = () => {
   const tokenIcon = (token: TokenInfo | null, size = 22) =>
     token === null ? null : (() => {
       const subject = iconSubjectOf(token, pair);
-      return <TokenIcon subject={subject} badgeChainId={subject.chainId} symbol={token.symbol} size={size} />;
+      return <TokenIcon subject={subject} badgeChainId={subject.chainId} symbol={token.symbol} isBridgedCopy={token.isBridgedCopy} size={size} />;
     })();
   const amount = (row: FeedItem) =>
     row.token === null || row.amount === null ? (
       "Message"
     ) : (
       <>
-        <Num text={amountText(row.amount, row.token.decimals)} /> {row.token.symbol.replace(/^zkb/i, "")}
+        <Num text={amountText(row.amount, row.token.decimals)} /> {nativeSymbolOf(row.token)}
       </>
     );
 

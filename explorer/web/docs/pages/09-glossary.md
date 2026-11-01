@@ -20,7 +20,7 @@ The part of a proof-of-stake chain that tracks validators and finality. The ligh
 
 ## Bridged copy
 
-A token that the bridge mints on one chain to stand for a native token of the other chain. Its name is the name of the native token, then " from " and the home chain, for example Wrapped Ether from Ethereum. Its symbol has the prefix "zkb", for example zkbWETH. The bridge burns the copy when the tokens go back home.
+A token that the bridge mints on one chain to stand for a native token of the other chain. Its name is the name of the native token, then " from " and the home chain, for example Wrapped Ether from Ethereum. Its symbol has the prefix "z", for example zWETH. The bridge burns the copy when the tokens go back home.
 
 ## Cost
 

@@ -16,6 +16,7 @@ remote_api_key_env = "RUNPOD_API_KEY"
 # remote_timeout_seconds = 900
 # remote_attempts = 4
 # remote_retry_delay_seconds = 10
+# remote_cold_start_wait_seconds = 900   # the longest wait for a cold worker; keep it plus one proof under the backend's job limit
 # backend "sp1" proves on the local processor:
 # sp1_elf_path = "/elf/light-client.elf"                  # the light-client guest program
 # sp1_observation_elf_path = "/elf/fork-observation.elf"  # the fork observation guest program (optional)

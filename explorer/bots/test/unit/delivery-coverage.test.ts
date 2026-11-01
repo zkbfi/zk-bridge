@@ -334,13 +334,23 @@ describe("the destination token of a first transfer", () => {
     return { ...listed, transfer: { ...listed.transfer!, destinationToken: null, sourceIsNative: overrides.sourceIsNative === undefined ? true : overrides.sourceIsNative } };
   };
 
+  it("gives the copy of a native token whose symbol starts with Z the prefix on top of its own letters", async () => {
+    const listed = firstTransfer();
+    const item: FeedItem = { ...listed, transfer: { ...listed.transfer!, sourceToken: { ...listed.transfer!.sourceToken, symbol: "ZRX" } } };
+    const w = setup({ item, tokenFactory: FACTORY });
+    w.chain.predictedCopy = WRAPPED_NATIVE;
+    const preparation = await w.prepare();
+    if (preparation.kind !== "ready") throw new Error("the item was expected to be ready for a batch");
+    expect(preparation.ready.item.transfer?.destinationToken?.symbol).toBe("zZRX");
+  });
+
   it("asks the token factory of the destination chain for the copy and prices the tip in it", async () => {
     // The factory predicts the copy. The fee check needs it: the router quotes the tip in the destination token.
     const w = setup({ item: firstTransfer(), tokenFactory: FACTORY });
     w.chain.predictedCopy = WRAPPED_NATIVE;
     const preparation = await w.prepare();
     if (preparation.kind !== "ready") throw new Error("the item was expected to be ready for a batch");
-    expect(preparation.ready.item.transfer?.destinationToken).toEqual({ chainId: 369, address: WRAPPED_NATIVE, symbol: "zkbSRC", decimals: 18 });
+    expect(preparation.ready.item.transfer?.destinationToken).toEqual({ chainId: 369, address: WRAPPED_NATIVE, symbol: "zSRC", decimals: 18 });
     const asked = w.chain.log.find((entry) => entry.kind === "call" && entry.request.to === FACTORY);
     expect(asked?.request.data).toBe(encodeFunctionData({ abi: tokenFactoryAbi, functionName: "predictAddress", args: [1n, SOURCE_TOKEN] }));
   });

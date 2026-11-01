@@ -101,7 +101,7 @@ export const TokenPage = ({ id }: { readonly id: string }) => {
   const volume = day.reduce((sum, item) => sum + (item.amount ?? 0n), 0n);
   return (
     <>
-      <XBand label={home.name} big={token.symbol} icon={<TokenIcon subject={iconSubjectOf(token, pair)} badgeChainId={home.chainId} symbol={token.symbol} size={44} surface="accent" />} />
+      <XBand label={home.name} big={token.symbol} icon={<TokenIcon subject={iconSubjectOf(token, pair)} badgeChainId={home.chainId} symbol={token.symbol} isBridgedCopy={token.isBridgedCopy} size={44} surface="accent" />} />
       <div className="zb-col zb-xpage">
         <KV k={`On ${home.name}`} href={explore({ kind: "contract", chainId: home.chainId, id: token.address })}><span className="zb-mono">{token.address === "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE" ? "native coin" : shortHex(token.address)}</span></KV>
         {token.counterpart === null ? <KV k={`On ${other.name}`}><Missing why="Not bridged yet; the first transfer deploys it" /></KV> : <KV k={`On ${other.name}`} href={explore({ kind: "token", id: `${side === "first" ? "second" : "first"}:${token.counterpart}` })}><span className="zb-mono">{shortHex(token.counterpart)}</span></KV>}
