@@ -891,6 +891,22 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "error",
+    "name": "GasLimitBelowMinimum",
+    "inputs": [
+      {
+        "name": "gasLimit",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minimum",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "HandlerDuringTransfer",
     "inputs": []
   },
