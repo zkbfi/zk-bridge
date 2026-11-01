@@ -171,7 +171,7 @@ contract BridgeWorldTest is WorldSupport {
         assertEq(copy, _independentCopyAddress(address(nativeToken)), "the copy is at the address of the factory rule");
         assertGt(copy.code.length, 0, "the copy has code");
         assertEq(BridgedToken(copy).name(), "Token A from Chain A", "the name");
-        assertEq(BridgedToken(copy).symbol(), "zkbTKA", "the symbol");
+        assertEq(BridgedToken(copy).symbol(), "zTKA", "the symbol");
         assertEq(BridgedToken(copy).decimals(), 18, "the decimals");
         assertEq(BridgedToken(copy).balanceOf(receiverOnB), AMOUNT, "the receiver holds the amount, with no fee");
         assertEq(BridgedToken(copy).totalSupply(), AMOUNT, "the copy supply is the amount");

@@ -73,15 +73,15 @@ contract TokenMediatorTest is MediatorFixture {
 
         BridgedToken copy = BridgedToken(_copyOf(address(sixDecimals)));
         assertEq(copy.name(), "USD Coin from Chain A");
-        assertEq(copy.symbol(), "zkbUSDC");
+        assertEq(copy.symbol(), "zUSDC");
         assertEq(copy.decimals(), 6);
         assertEq(address(copy), mediatorB.tokenFactory().predictAddress(CHAIN_A, address(sixDecimals)));
     }
 
     /// Claim: a copy is named for its native token and its home chain, in both directions. Shows: with the chains named
     /// Ethereum (A) and PulseChain (B), the copy on chain B of `Wrapped Ether` is `Wrapped Ether from Ethereum` with the
-    /// symbol `zkbWETH`, and the copy on chain A of `Pulse Token` is `Pulse Token from PulseChain` with the symbol
-    /// `zkbPLS`. The factory holds the name. Matters: the name is the only sign of where a token came from. A wrong
+    /// symbol `zWETH`, and the copy on chain A of `Pulse Token` is `Pulse Token from PulseChain` with the symbol
+    /// `zPLS`. The factory holds the name. Matters: the name is the only sign of where a token came from. A wrong
     /// name or a missing separator rule would mislead holders, and no setter can fix a name later.
     function test_aCopyIsNamedForItsNativeTokenAndItsHomeChain() public {
         nameOfChainA = "Ethereum";
@@ -99,13 +99,13 @@ contract TokenMediatorTest is MediatorFixture {
         _bridgeAtoB(alice, address(weth), bob, 1 ether);
         BridgedToken onB = BridgedToken(mediatorB.bridgedTokenAddress(address(weth)));
         assertEq(onB.name(), "Wrapped Ether from Ethereum");
-        assertEq(onB.symbol(), "zkbWETH");
+        assertEq(onB.symbol(), "zWETH");
         assertEq(mediatorB.tokenFactory().homeChainName(), "Ethereum");
 
         _bridgeBtoA(alice, address(pulse), bob, 1 ether);
         BridgedToken onA = BridgedToken(mediatorA.bridgedTokenAddress(address(pulse)));
         assertEq(onA.name(), "Pulse Token from PulseChain");
-        assertEq(onA.symbol(), "zkbPLS");
+        assertEq(onA.symbol(), "zPLS");
         assertEq(mediatorA.tokenFactory().homeChainName(), "PulseChain");
     }
 

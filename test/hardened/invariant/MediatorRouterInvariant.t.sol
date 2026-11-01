@@ -198,7 +198,7 @@ contract MediatorRouterInvariantTest is StdInvariant, Test {
                 string.concat(IERC20Metadata(native).name(), " from ", factory.homeChainName()),
                 "name"
             );
-            assertEq(IERC20Metadata(copy).symbol(), string.concat("zkb", IERC20Metadata(native).symbol()), "symbol");
+            assertEq(IERC20Metadata(copy).symbol(), string.concat("z", IERC20Metadata(native).symbol()), "symbol");
         }
     }
 
