@@ -13,7 +13,9 @@ const COPY = getAddress("0x6666666666666666666666666666666666666666");
 const MESSAGE_ID = `0x${"ab".repeat(32)}` as const;
 
 function client(code: string | undefined) {
-  const readContract = vi.fn(async ({ functionName }: { functionName: string }) => (functionName === "predictAddress" ? COPY : 77n));
+  const readContract = vi.fn(async ({ functionName }: { functionName: string }) =>
+    functionName === "predictAddress" ? COPY : functionName === "isRegisteredAsNativeToken" ? true : functionName === "isBridgedTokenDeployAcknowledged" ? false : 77n,
+  );
   return {
     getBalance: vi.fn(async () => 5n),
     getCode: vi.fn(async () => code),
@@ -30,6 +32,8 @@ describe("the traffic reader", () => {
     expect(await reader.tokenBalance(DOLLAR, WALLET)).toBe(77n);
     expect(await reader.allowance(DOLLAR, WALLET, MEDIATOR)).toBe(77n);
     expect(await reader.copyAddress({ tokenFactory: FACTORY, homeChainId: 943, nativeToken: DOLLAR })).toBe(COPY);
+    expect(await reader.nativeRecord(MEDIATOR, DOLLAR)).toEqual({ registered: true, acknowledged: false });
+    expect(answers.readContract).toHaveBeenCalledWith(expect.objectContaining({ address: MEDIATOR, functionName: "isBridgedTokenDeployAcknowledged", args: [DOLLAR] }));
     expect(answers.readContract).toHaveBeenCalledWith(expect.objectContaining({ address: FACTORY, functionName: "predictAddress", args: [943n, DOLLAR] }));
     expect(answers.readContract).toHaveBeenCalledWith(expect.objectContaining({ address: DOLLAR, functionName: "allowance", args: [WALLET, MEDIATOR] }));
   });

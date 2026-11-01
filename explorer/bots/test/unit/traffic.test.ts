@@ -106,6 +106,18 @@ describe("a traffic send", () => {
     expect(eventsNamed(logs, "traffic_sent")[1]).toMatchObject({ deploysCopy: false, messageGasLimit: null });
   });
 
+  it("marks the first send of a token as a deploy message, and holds the token back after it", async () => {
+    const { first, logs, traffic } = world();
+    first.state.balances.set(DOLLAR.toLowerCase(), 100_000n * DOLLAR_UNIT);
+    first.state.allowances.set(DOLLAR.toLowerCase(), 10n ** 30n);
+    first.state.records = new Map([[DOLLAR.toLowerCase(), { registered: false, acknowledged: false }]]);
+    await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
+    expect(eventsNamed(logs, "traffic_sent")[0]).toMatchObject({ deployMessage: true, deploysCopy: false });
+    first.state.records.set(DOLLAR.toLowerCase(), { registered: true, acknowledged: false });
+    expect(await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "no-eligible-token" });
+    expect(eventsNamed(logs, "traffic_skipped")[0]).toMatchObject({ candidates: [{ symbol: "tUSD", kind: "native", reason: "waiting-for-first-return" }, { kind: "copy" }] });
+  });
+
   it("logs a send that deploys the copy also without a gas limit for it", async () => {
     const { first, second, logs, traffic } = world();
     first.state.balances.set(DOLLAR.toLowerCase(), 100_000n * DOLLAR_UNIT);

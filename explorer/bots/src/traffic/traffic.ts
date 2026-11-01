@@ -92,12 +92,14 @@ export function createTraffic(input: TrafficInput): Traffic {
       if (token.chainId === source.chainId) {
         const balance = await source.reader.tokenBalance(token.address, wallet);
         const copy = await destination.reader.copyAddress({ tokenFactory: destination.contracts.tokenFactory, homeChainId: source.chainId, nativeToken: token.address });
-        candidates.push({ symbol: token.symbol, kind: "native", decimals: token.decimals, sourceToken: token.address, destinationToken: copy, sourceBalance: balance, homeBalance: balance, bounds });
+        const homeRecord = await source.reader.nativeRecord(source.contracts.mediator, token.address);
+        candidates.push({ symbol: token.symbol, kind: "native", decimals: token.decimals, sourceToken: token.address, destinationToken: copy, sourceBalance: balance, homeBalance: balance, homeRecord, bounds });
       } else if (token.chainId === destination.chainId) {
         const copy = await source.reader.copyAddress({ tokenFactory: source.contracts.tokenFactory, homeChainId: destination.chainId, nativeToken: token.address });
         const copyBalance = await source.reader.tokenBalance(copy, wallet);
         const homeBalance = await destination.reader.tokenBalance(token.address, wallet);
-        candidates.push({ symbol: token.symbol, kind: "copy", decimals: token.decimals, sourceToken: copy, destinationToken: token.address, sourceBalance: copyBalance, homeBalance, bounds });
+        const homeRecord = await destination.reader.nativeRecord(destination.contracts.mediator, token.address);
+        candidates.push({ symbol: token.symbol, kind: "copy", decimals: token.decimals, sourceToken: copy, destinationToken: token.address, sourceBalance: copyBalance, homeBalance, homeRecord, bounds });
       }
     }
     return candidates;
@@ -156,9 +158,11 @@ export function createTraffic(input: TrafficInput): Traffic {
     }
 
     // The first send of a native token deploys its copy on the destination: ask for the gas the destination needs for that.
-    // The runner cannot price such a send (the indexer names no destination token before the copy exists): it is
-    // logged, so the operator delivers it once by hand.
+    // A send whose copy has no code yet deploys it. With `deployMessage` (no copy came home yet) the runner cannot price
+    // the send: the indexer names no destination token for a deploy message. Both are logged, so the operator delivers it
+    // by hand; the plan sends such a token only once.
     const deploysCopy = candidate.kind === "native" && !(await destination.reader.hasCode(candidate.destinationToken));
+    const deployMessage = candidate.kind === "native" && !candidate.homeRecord.acknowledged;
     const messageGasLimit = deploysCopy ? destination.newCopyGasLimit : null;
     const data = relayData({ token: candidate.sourceToken, router, amount, terms: termsFor(destination, router, candidate.destinationToken), gasLimit: messageGasLimit });
     const simulation = await source.port.simulate({ to: source.contracts.mediator, data });
@@ -181,6 +185,7 @@ export function createTraffic(input: TrafficInput): Traffic {
       transactionHash: receipt.hash,
       messageId,
       deploysCopy,
+      deployMessage,
       messageGasLimit,
       gasUsed: receipt.gasUsed,
       gasCostWei: receipt.gasUsed * receipt.effectiveGasPrice,

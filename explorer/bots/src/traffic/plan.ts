@@ -44,11 +44,17 @@ export interface Candidate {
   readonly sourceBalance: bigint;
   /** The wallet's balance of the native token on its home chain. For a native candidate it equals `sourceBalance`. */
   readonly homeBalance: bigint;
+  /**
+   * What the home mediator records of the native token. A relay of a native token is a deploy message until a copy came
+   * home (`acknowledged`), and the runner cannot price a deploy message. So a native token goes out once (when it was
+   * never relayed), then waits until a copy came home; and a copy whose native token is not acknowledged goes home first.
+   */
+  readonly homeRecord: { readonly registered: boolean; readonly acknowledged: boolean };
   readonly bounds: TokenBounds;
 }
 
 /** Why a candidate cannot go now. */
-export type IneligibleReason = "home-balance-at-minimum" | "copy-balance-below-amount";
+export type IneligibleReason = "home-balance-at-minimum" | "copy-balance-below-amount" | "waiting-for-first-return";
 
 /** The chosen transfer, or why none goes. */
 export type Pick =
@@ -86,11 +92,13 @@ export function drawAmount(bounds: Bounds, decimals: number, random: Random): bi
  * Picks the transfer of one send. Each candidate draws its amount (a copy never more than its balance) and is eligible
  * when
  *
- * - native: the home balance stays at or above the minimum of its band after the send;
+ * - native: it was never relayed, or a copy of it came home already (otherwise it waits: its relay would be one more
+ *   deploy message, which the runner does not deliver); and its home balance stays at or above the minimum of its band
+ *   after the send;
  * - copy: its balance reaches the smallest amount.
  *
  * Candidates that pull a balance back into its band go first: a native token whose home balance is above the band, and a
- * copy whose native token is below the band at home. Among the candidates of the first group that has any, the pick is
+ * copy whose native token is below the band at home or has not seen a copy come home yet. Among the candidates of the first group that has any, the pick is
  * uniform.
  */
 export function pickTransfer(candidates: readonly Candidate[], random: Random): Pick {
@@ -99,6 +107,10 @@ export function pickTransfer(candidates: readonly Candidate[], random: Random): 
   for (const candidate of candidates) {
     const drawn = drawAmount(candidate.bounds.amount, candidate.decimals, random);
     if (candidate.kind === "native") {
+      if (candidate.homeRecord.registered && !candidate.homeRecord.acknowledged) {
+        refused.push({ symbol: candidate.symbol, kind: candidate.kind, reason: "waiting-for-first-return" });
+        continue;
+      }
       if (candidate.sourceBalance < drawn || candidate.sourceBalance - drawn < candidate.bounds.balance.minimum) {
         refused.push({ symbol: candidate.symbol, kind: candidate.kind, reason: "home-balance-at-minimum" });
         continue;
@@ -110,7 +122,7 @@ export function pickTransfer(candidates: readonly Candidate[], random: Random): 
       refused.push({ symbol: candidate.symbol, kind: candidate.kind, reason: "copy-balance-below-amount" });
       continue;
     }
-    eligible.push({ candidate, amount: drawn < candidate.sourceBalance ? drawn : candidate.sourceBalance, priority: candidate.homeBalance < candidate.bounds.balance.minimum });
+    eligible.push({ candidate, amount: drawn < candidate.sourceBalance ? drawn : candidate.sourceBalance, priority: candidate.homeBalance < candidate.bounds.balance.minimum || !candidate.homeRecord.acknowledged });
   }
   if (eligible.length === 0) return { kind: "skip", reason: "no-eligible-token", candidates: refused };
   const urgent = eligible.filter((entry) => entry.priority);

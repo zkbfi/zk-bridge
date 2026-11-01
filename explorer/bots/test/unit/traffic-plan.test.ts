@@ -26,6 +26,7 @@ function candidate(overrides: Partial<Candidate> = {}): Candidate {
     destinationToken: COPY,
     sourceBalance: 100_000n * DOLLAR,
     homeBalance: 100_000n * DOLLAR,
+    homeRecord: { registered: true, acknowledged: true },
     bounds: BOUNDS,
     ...overrides,
   };
@@ -101,6 +102,23 @@ describe("pickTransfer", () => {
         { symbol: "tTKN", kind: "copy", reason: "copy-balance-below-amount" },
       ],
     });
+  });
+
+  it("sends a native token that was never relayed, and holds it back until a copy came home", () => {
+    expect(pickTransfer([candidate({ homeRecord: { registered: false, acknowledged: false } })], () => 0).kind).toBe("send");
+    expect(pickTransfer([candidate({ homeRecord: { registered: true, acknowledged: false } })], () => 0)).toEqual({
+      kind: "skip",
+      reason: "no-eligible-token",
+      candidates: [{ symbol: "tUSD", kind: "native", reason: "waiting-for-first-return" }],
+    });
+  });
+
+  it("sends a copy home first while its native token has not seen a copy come home", () => {
+    const native = candidate({ symbol: "tTKN" });
+    const copy = candidate({ kind: "copy", sourceToken: COPY, sourceBalance: 50n * DOLLAR, homeRecord: { registered: true, acknowledged: false } });
+    const pick = pickTransfer([native, copy], sequence(0, 0, 0));
+    expect(pick.kind === "send" && pick.candidate).toBe(copy);
+    expect(pick.kind === "send" && pick.priority).toBe(true);
   });
 
   it("sends a copy home first when the home balance is below the band", () => {

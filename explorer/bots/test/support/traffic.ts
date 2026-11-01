@@ -35,12 +35,15 @@ export interface FakeReaderState {
   allowances: Map<string, bigint>;
   /** Lowercase addresses that hold code. Default: every address. */
   code?: Set<string>;
+  /** What the mediator records of a native token, by lowercase address. Default: relayed before, and acknowledged. */
+  records?: Map<string, { registered: boolean; acknowledged: boolean }>;
 }
 
 /** A reader over a state that the test changes. */
 export function fakeReader(chainId: number, state: FakeReaderState): TrafficReader & { readonly state: FakeReaderState } {
   return {
     state,
+    nativeRecord: async (_mediator, token) => state.records?.get(token.toLowerCase()) ?? { registered: true, acknowledged: true },
     hasCode: async (address) => state.code === undefined || state.code.has(address.toLowerCase()),
     nativeBalance: async () => state.native,
     tokenBalance: async (token) => state.balances.get(token.toLowerCase()) ?? 0n,

@@ -12,6 +12,11 @@ export interface TrafficReader {
   allowance(token: Address, owner: Address, spender: Address): Promise<bigint>;
   /** Whether an address holds code: whether a bridged copy exists yet. */
   hasCode(address: Address): Promise<boolean>;
+  /**
+   * What the mediator of this chain records of a token native here: whether it was ever relayed, and whether the other
+   * chain proved that the copy exists (a copy came home). Until then every relay of the token is a deploy message.
+   */
+  nativeRecord(mediator: Address, token: Address): Promise<{ readonly registered: boolean; readonly acknowledged: boolean }>;
   /** The address of the bridged copy, on this chain, of a token that is native on `homeChainId`. */
   copyAddress(input: { readonly tokenFactory: Address; readonly homeChainId: number; readonly nativeToken: Address }): Promise<Address>;
 }
@@ -32,6 +37,11 @@ export function createTrafficReader(client: Pick<PublicClient, "getBalance" | "g
     async allowance(token, owner, spender) {
       if (!(await hasCode(token))) return 0n;
       return (await client.readContract({ address: token, abi: erc20Abi, functionName: "allowance", args: [owner, spender] })) as bigint;
+    },
+    async nativeRecord(mediator, token) {
+      const read = async (functionName: "isRegisteredAsNativeToken" | "isBridgedTokenDeployAcknowledged") =>
+        (await client.readContract({ address: mediator, abi: tokenMediatorAbi, functionName, args: [token] })) as boolean;
+      return { registered: await read("isRegisteredAsNativeToken"), acknowledged: await read("isBridgedTokenDeployAcknowledged") };
     },
     async copyAddress(input) {
       return (await client.readContract({

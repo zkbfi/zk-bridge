@@ -245,14 +245,14 @@ minutes after the way out, with up to 60 seconds of jitter. So every proof the b
    maximum fee) would take the native balance below it does not go.
 
 Every attempt is a log line: `traffic_sent` (direction, symbol, kind, `tokenAddress`, amount, `transactionHash`, `messageId`,
-`deploysCopy`, `messageGasLimit`, gas), `traffic_approved`, `traffic_skipped` with a reason, or `traffic_failed` (an error, for example
+`deployMessage`, `deploysCopy`, `messageGasLimit`, gas), `traffic_approved`, `traffic_skipped` with a reason, or `traffic_failed` (an error, for example
 an endpoint that does not answer; the next poll tries again). At start `traffic_tokens` lists each test token with the
 address of its copy on the other chain: the runner's `tokenValuationsWei` needs all of them, because the runner prices
 a tip only in a token it has a value for.
 
 | Reason | Meaning |
 |---|---|
-| `no-eligible-token` | No candidate can go; `candidates` says why for each (`home-balance-at-minimum`, `copy-balance-below-amount`). |
+| `no-eligible-token` | No candidate can go; `candidates` says why for each (`home-balance-at-minimum`, `copy-balance-below-amount`, `waiting-for-first-return`). |
 | `native-below-reserve` | The worst case of the approval or the relay would take the native coin below `minimumNativeWei`. |
 | `gate-not-confirmed` | The source gate enforces and nobody confirmed the current epoch (`ForkNotConfirmed`). Sepolia's gate enforces. |
 | `deposits-not-open` | The source bridge is still locked. |
@@ -260,11 +260,14 @@ a tip only in a token it has a value for.
 | `approval-simulation-reverted`, `relay-simulation-reverted` | The node refused the call; `error` names the error when an ABI knows it. |
 | `approval-reverted`, `relay-reverted` | The transaction was mined and reverted. |
 
-**The first send of each token in each direction deploys its copy, and the runner does not deliver it**: the indexer
-names no destination token before the copy exists, so the runner skips the item with `no-price-for-fee-token`.
-`traffic_sent` marks such a send with `deploysCopy: true`. Deliver it once by hand through the delivery router (anyone
-may); every later send of the token is an ordinary release that the runner prices. The end-to-end stage `traffic` does
-exactly that.
+**The first send of each token is delivered by hand.** Until a copy of a native token came home once, the mediator
+sends every relay of it as a deploy message, and the runner skips a deploy message with `no-price-for-fee-token` (the
+indexer names no destination token for it). So a native token goes out once, when it was never relayed, and then waits
+(`waiting-for-first-return`) until a copy came home; its copies go home first. `traffic_sent` marks the one deploy
+message with `deployMessage: true` (and `deploysCopy: true` when the copy has no code yet). Deliver it once by hand
+through the delivery router (anyone may). The copies then go home as ordinary releases that the runner prices, and from
+then on every send is one. That is one hand delivery for each test token: four on the testnet. The end-to-end stage
+`traffic` does exactly that.
 
 An attempt uses up its interval, sent or skipped. A slot is written to `stateDirectory/traffic-<pair>.json` before the
 first transaction leaves, so an attempt whose receipt never arrives is not sent twice. `--once` sends in each enabled
