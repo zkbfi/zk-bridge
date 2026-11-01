@@ -41,11 +41,13 @@ export type ProofRequest = {
    */
   readonly since?: number;
   /**
-   * The watcher's planner found a keep-alive due: it read the light client and the beacon chain, and the committee
-   * deadline is inside the margin. The indexer's own rule only knows the head's age, which can still look young then.
-   * Taken only with reason `finality`, which no HTTP request can carry; every other check still applies.
+   * The watcher's planner found a period handoff due: it read the light client and the beacon chain, and the source
+   * finalized past the head's sync-committee period (or handoff steps are needed), so the proof moves the light client
+   * into a newer committee period. The indexer's own rule only knows the head's age, which can still look young then.
+   * A keep-alive of the age rule does not set it and goes through that rule. Taken only with reason `finality`, which
+   * no HTTP request can carry; every other check still applies.
    */
-  readonly plannedKeepAlive?: boolean;
+  readonly plannedHandoff?: boolean;
 };
 
 /** The answer of {@link RequestService.submit}. */
@@ -215,7 +217,7 @@ export function createRequestService(input: RequestServiceInput): RequestService
         logger.warn("proof_need_unknown", { direction: request.direction, error });
         return { refused: "cannot-check", retryAfterSeconds: CANNOT_CHECK_RETRY_SECONDS };
       }
-      if (!need.needed && request.reason === "finality" && request.plannedKeepAlive === true) need = { needed: true, why: "keep-alive" };
+      if (!need.needed && request.reason === "finality" && request.plannedHandoff === true) need = { needed: true, why: "keep-alive" };
       if (!need.needed) return { refused: "nothing-to-prove" };
       // Another request may have made a job while the indexer answered, so every check runs again with the insert.
       const current = now();

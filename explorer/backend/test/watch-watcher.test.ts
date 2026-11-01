@@ -30,7 +30,7 @@ const job = (overrides: Partial<Job> = {}): Job => ({
   ...overrides,
 });
 
-function setup(options: { messages?: ListedMessage[]; facts?: LightClientFacts; submit?: (request: ProofRequest) => SubmitResult; ping?: boolean } = {}) {
+function setup(options: { messages?: ListedMessage[]; facts?: LightClientFacts; submit?: (request: ProofRequest) => SubmitResult; ping?: boolean | (() => Promise<number>) } = {}) {
   const log = memoryLogger();
   const state = {
     facts: options.facts ?? facts(),
@@ -74,7 +74,7 @@ function setup(options: { messages?: ListedMessage[]; facts?: LightClientFacts; 
         ? null
         : async () => {
             pings.push(Date.now());
-            return 204;
+            return typeof options.ping === "function" ? options.ping() : 204;
           },
     policy: DEFAULT_POLICY,
     minParticipants: MIN_PARTICIPANTS,
@@ -178,9 +178,69 @@ describe("the direction watcher, on finality", () => {
     run.watcher.observe(reading);
     await run.watcher.settled();
     expect(run.reads.history).toBe(1);
-    expect(run.submitted).toMatchObject([{ reason: "finality", plannedKeepAlive: true }]);
+    expect(run.submitted).toMatchObject([{ reason: "finality", plannedHandoff: true }]);
     expect(run.submitted[0]).not.toHaveProperty("messageId");
     expect(run.named("proof_due")).toMatchObject([{ why: "keep-alive" }]);
+  });
+
+  it("sends a keep-alive of the age rule through the indexer's gate, without a planned handoff", async () => {
+    const run = setup();
+    const reading = observation(HEAD + 13 * 300);
+    arrive(reading);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    expect(run.named("proof_due")).toMatchObject([{ why: "keep-alive" }]);
+    expect(run.submitted).toHaveLength(1);
+    expect(run.submitted[0]).not.toHaveProperty("plannedHandoff");
+    expect(run.submitted[0]).not.toHaveProperty("messageId");
+  });
+
+  it("starts no keep-alive for a young head in the period of finality, however close the deadline (2026-10-31)", async () => {
+    // The head 500 slots before its period ends, only its own committee stored: the deadline is 1.7 h away.
+    const head = 1001 * PERIOD - 500;
+    const run = setup({ facts: facts(head, false) });
+    for (const finalized of [head + 32, head + 64, head + 96]) {
+      const reading = observation(finalized);
+      arrive(reading);
+      run.watcher.observe(reading);
+      await run.watcher.settled();
+    }
+    expect(run.submitted).toEqual([]);
+    expect(run.named("proof_not_due")).toMatchObject([{ why: "nothing-due" }, { why: "nothing-due" }, { why: "nothing-due" }]);
+    expect(run.named("proof_not_due")[0]?.detail).toContain("period 1001 begins at");
+  });
+
+  it("starts at most one keep-alive per period of finality unless the head ages past the keep-alive age", async () => {
+    // The source signs in period 1001, finality is still in 1000, the head in 1000 holds only its own committee:
+    // handoff steps are due. The light-client reading lags after the job, so the planner would ask again.
+    const head = 1000 * PERIOD + 8000;
+    const run = setup({ facts: facts(head, false) });
+    const first = observation(1001 * PERIOD - 60);
+    arrive(first);
+    run.watcher.observe(first);
+    await run.watcher.settled();
+    expect(run.submitted).toMatchObject([{ plannedHandoff: true }]);
+    run.state.active = null;
+    const second = observation(1001 * PERIOD - 28);
+    arrive(second);
+    run.watcher.observe(second);
+    await run.watcher.settled();
+    expect(run.submitted).toHaveLength(1);
+    expect(run.named("proof_not_due").at(-1)).toMatchObject({ level: "info", why: "keep-alive-this-period" });
+    // Finality crosses into period 1001: a new period, so the keep-alive may go again.
+    const crossed = observation(1001 * PERIOD + 4);
+    arrive(crossed);
+    run.watcher.observe(crossed);
+    await run.watcher.settled();
+    expect(run.submitted).toHaveLength(2);
+    // In the same period again, but the head has aged past the keep-alive age: allowed.
+    run.state.active = null;
+    run.state.facts = facts(1001 * PERIOD + 4, false);
+    const aged = observation(1001 * PERIOD + 4 + 13 * 300);
+    arrive(aged);
+    run.watcher.observe(aged);
+    await run.watcher.settled();
+    expect(run.submitted).toHaveLength(3);
   });
 
   it("warns about a stranded light client and starts nothing", async () => {
@@ -314,6 +374,71 @@ describe("the direction watcher, warm-ups", () => {
     expect(run.pings).toHaveLength(1);
   });
 
+  it("keeps one ping outstanding at most; a 200 ends the session", async () => {
+    let answer!: (status: number) => void;
+    const run = setup({ messages: [listed(SENT)], ping: () => new Promise<number>((resolve) => (answer = resolve)) });
+    vi.setSystemTime(expected - DEFAULT_WARMUP.leadSeconds * 1000);
+    const scan = run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(0);
+    // The endpoint holds the first ping while a worker starts: later scans send nothing.
+    vi.setSystemTime(expected - DEFAULT_WARMUP.leadSeconds * 1000 + DEFAULT_WARMUP.intervalSeconds * 1000);
+    await run.watcher.scan();
+    vi.setSystemTime(expected);
+    await run.watcher.scan();
+    expect(run.pings).toHaveLength(1);
+    answer(200);
+    await scan;
+    expect(run.named("warmup_ping")).toMatchObject([{ why: "message", session: "new", status: 200 }]);
+    // Warm: the session is over, no repeat.
+    vi.setSystemTime(expected + DEFAULT_WARMUP.intervalSeconds * 1000);
+    await run.watcher.scan();
+    expect(run.pings).toHaveLength(1);
+  });
+
+  it("logs a timed-out ping at info and sends none for the minimum gap after it", async () => {
+    let fail!: (error: Error) => void;
+    const run = setup({ messages: [listed(SENT), listed(SENT + 32, "b")], ping: () => new Promise<number>((_, reject) => (fail = reject)) });
+    vi.setSystemTime(expected - DEFAULT_WARMUP.leadSeconds * 1000);
+    const scan = run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(0);
+    vi.setSystemTime(expected + 120_000);
+    fail(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+    await scan;
+    expect(run.named("warmup_ping_timeout")).toMatchObject([{ level: "info", direction: "first-to-second", why: "message" }]);
+    expect(run.named("warmup_ping_failed")).toEqual([]);
+    expect(run.named("warmup_ping")).toEqual([]);
+    // The second message's finality is near, but the gap since the timeout has not passed.
+    const second = expectedFinalityAt(SENT + 32, facts()) * 1000;
+    vi.setSystemTime(second - DEFAULT_WARMUP.leadSeconds * 1000);
+    expect(second - DEFAULT_WARMUP.leadSeconds * 1000 - (expected + 120_000)).toBeLessThan(DEFAULT_WARMUP.minGapSeconds * 1000);
+    await run.watcher.scan();
+    expect(run.pings).toHaveLength(1);
+    // An abort counts the same.
+    run.state.messages = [listed(SENT + 640, "c")];
+    const third = expectedFinalityAt(SENT + 640, facts()) * 1000;
+    vi.setSystemTime(third - DEFAULT_WARMUP.leadSeconds * 1000);
+    const again = run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(0);
+    fail(new DOMException("aborted", "AbortError"));
+    await again;
+    expect(run.pings).toHaveLength(2);
+    expect(run.named("warmup_ping_timeout")).toHaveLength(2);
+  });
+
+  it("sends no warm-up for a keep-alive inside the period of finality (2026-10-31)", async () => {
+    const head = 1001 * PERIOD - 500;
+    const run = setup({ facts: facts(head, false) });
+    const reading = observation(head + 32);
+    arrive(reading);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    for (let step = 0; step < 40; step += 1) {
+      vi.setSystemTime(reading.receivedAt + step * 15_000);
+      await run.watcher.scan();
+    }
+    expect(run.pings).toEqual([]);
+  });
+
   it("logs a failed ping and a failed scan once", async () => {
     const run = setup({ messages: [listed(SENT)] });
     vi.setSystemTime(expected);
@@ -322,7 +447,7 @@ describe("the direction watcher, warm-ups", () => {
     });
     await failing.watcher.scan();
     expect(failing.named("warmup_ping_failed")).toMatchObject([{ error: { message: "endpoint down" } }]);
-    expect(failing.named("warmup_ping")).toMatchObject([{ status: null }]);
+    expect(failing.named("warmup_ping")).toEqual([]);
     run.state.factsFail = true;
     await run.watcher.scan();
     await run.watcher.scan();

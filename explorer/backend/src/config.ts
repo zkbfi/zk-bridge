@@ -110,6 +110,8 @@ export const backendConfigSchema = z
             intervalSeconds: positiveInteger.default(DEFAULT_WARMUP.intervalSeconds),
             graceSeconds: positiveInteger.default(DEFAULT_WARMUP.graceSeconds),
             minGapSeconds: positiveInteger.default(DEFAULT_WARMUP.minGapSeconds),
+            /** How long one ping may wait while the load-balancing endpoint starts a worker. */
+            pingTimeoutSeconds: positiveInteger.default(DEFAULT_WARMUP.pingTimeoutSeconds),
           })
           .strict()
           .prefault({}),
