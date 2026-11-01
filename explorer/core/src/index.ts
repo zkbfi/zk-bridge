@@ -215,3 +215,14 @@ export {
   forkProofGindices,
   forkEvidenceFromMultiproof,
 } from "./gate-evidence.js";
+
+// Search: what a typed text can be (pure parsing; the resolver is in @zkb/data)
+export {
+  type QueryCandidate,
+  type QueryCandidateKind,
+  type QueryClassification,
+  MAXIMUM_QUERY_LENGTH,
+  MINIMUM_PREFIX_DIGITS,
+  CANDIDATE_CLASS,
+  classifyQuery,
+} from "./search-query.js";

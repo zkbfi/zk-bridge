@@ -203,3 +203,7 @@ pnpm typecheck     # tsc -p .
 pnpm build         # tsc -p tsconfig.build.json -> dist/
 pnpm abis          # regenerate src/abis from the Foundry output (forge build first)
 ```
+
+## Search
+
+`resolve(text, sources)` reads a search text (`classifyQuery` of `@zkb/core`) and returns typed results (`message`, `transaction`, `address`, `token`, `slot`, `block`, `proof`, `release`), each with `links` to the dapp's Explore, the indexer's page (`#lookup=`), the status page (`#check=`), the backend JSON, the IPFS gateway and the block explorers of the chain (`crossLinks`, `CHAIN_METADATA`). The readers (`sources.indexer`, `sources.chain`, `sources.proofs`, `sources.backend`) are the caller's and all optional; a reader that fails is named in `problems` and the rest still answer. Ranking is fixed: exact identifier, address, prefix, token symbol, number; found before shaped. `SearchSites` are link targets, not connections: the public hosts are `ZKB_SITES`, an empty base makes relative links. The dapp's palette, the indexer's `GET /api/search` and the indexer's page (`deploy/app-server/indexer-home/zkb-search.js`, built by `pnpm --filter @zk-bridge/web run build:indexer-search`) all use it.
