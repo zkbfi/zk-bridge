@@ -212,7 +212,7 @@ describe("resolve: hashes", () => {
       backend: { progress: async () => { throw new Error("down"); } },
     });
     expect(result.results).toHaveLength(1);
-    expect(result.problems).toEqual(["backend: down"]);
+    expect(result.problems).toEqual(["backend: unavailable"]);
   });
 
   it("finds a message by the transaction that sent or delivered it, with the transaction as a second result", async () => {
@@ -263,7 +263,7 @@ describe("resolve: hashes", () => {
 
   it("reports a node that fails and goes on", async () => {
     const result = await resolve(h("c0"), { ...base, chain: { transaction: async (chainId) => { if (chainId === 943) throw new Error("timeout"); return true; } } });
-    expect(result.problems).toEqual(["PulseChain testnet v4 node: timeout"]);
+    expect(result.problems).toEqual(["PulseChain testnet v4 node: unavailable"]);
     expect(result.results.map((entry) => entry.chainId)).toEqual([11155111]);
   });
 
@@ -274,13 +274,26 @@ describe("resolve: hashes", () => {
 
   it("reports an indexer that fails", async () => {
     const result = await resolve(messageId, { ...base, indexer: { message: async () => { throw new Error("503"); }, messageByTransaction: async () => { throw "bad"; } } });
-    expect(result.problems).toEqual(["indexer: 503", "indexer: bad"]);
+    expect(result.problems).toEqual(["indexer: unavailable", "indexer: unavailable"]);
     expect(result.results).toHaveLength(2);
   });
 
   it("answers without any reader", async () => {
     const result = await resolve(messageId, base);
     expect(result.results.map((entry) => entry.kind)).toEqual(["transaction", "transaction"]);
+  });
+});
+
+describe("resolve: errors", () => {
+  it("never puts the text of a reader's error in the answer, and hands it to onError", async () => {
+    const secret = "fetch failed: https://rpc.example/v1/KEY123456 (key=abc)";
+    const seen: [string, unknown][] = [];
+    const result = await resolve(messageId, { ...base, indexer: { message: async () => { throw new Error(secret); }, messageByTransaction: async () => { throw secret; } } }, { onError: (label, error) => seen.push([label, error]) });
+    expect(JSON.stringify(result)).not.toContain("KEY123456");
+    expect(JSON.stringify(result)).not.toContain("rpc.example");
+    expect(result.problems).toEqual(["indexer: unavailable", "indexer: unavailable"]);
+    expect(seen.map(([label]) => label)).toEqual(["indexer", "indexer"]);
+    expect(String(seen[0]?.[1])).toContain("KEY123456");
   });
 });
 
@@ -314,7 +327,7 @@ describe("resolve: addresses", () => {
     expect((await resolve(account, make({ 11155111: false, 943: true }, 1))).results[0]).toMatchObject({ addressType: "contract", subtitle: "Contract · 1 transfer · its transfers and balances" });
     const failing = await resolve(account, make({ 11155111: new Error("x"), 943: false }, new Error("y")));
     expect(failing.results[0]).toMatchObject({ addressType: "unknown", subtitle: "Address · its transfers and balances" });
-    expect(failing.problems).toEqual(["Sepolia node: x", "indexer: y"]);
+    expect(failing.problems).toEqual(["Sepolia node: unavailable", "indexer: unavailable"]);
     expect((await resolve(account, base)).results[0]).toMatchObject({ addressType: "unknown" });
   });
 });
@@ -420,7 +433,7 @@ describe("resolve: numbers", () => {
       chain: { block: async () => { throw new Error("late"); } },
     });
     expect(result.results.find((entry) => entry.kind === "slot")).toMatchObject({ confirmed: false, subtitle: "Beacon chain" });
-    expect(result.problems).toEqual(["Sepolia node: late", "PulseChain testnet v4 node: late"]);
+    expect(result.problems).toEqual(["Sepolia node: unavailable", "PulseChain testnet v4 node: unavailable"]);
   });
 
   it("lists only the proofs that the page has loaded when it has any source of them", async () => {
@@ -430,7 +443,7 @@ describe("resolve: numbers", () => {
     expect(found.results[0]).toMatchObject({ kind: "proof", confirmed: true, subtitle: "Slot 11,477,760 · light client update on PulseChain testnet v4", title: "Proof #12" });
     expect((await resolve("13", { ...base, proofs })).results.some((entry) => entry.kind === "proof")).toBe(false);
     const broken = await resolve("12", { ...base, proofs: { matching: async () => { throw new Error("no board"); } } });
-    expect(broken.problems).toEqual(["proofs: no board"]);
+    expect(broken.problems).toEqual(["proofs: unavailable"]);
   });
 
   it("offers proofs only on chains that hold a light client", async () => {

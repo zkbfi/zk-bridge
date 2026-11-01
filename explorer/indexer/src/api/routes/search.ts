@@ -52,6 +52,13 @@ const headUpdateOf = (row: { readonly chainId: number; readonly slot: bigint; re
   transactionHash: row.transactionHash,
 });
 
+/** An error message for the log: no URL, no credentials, no long token. */
+const redacted = (error: unknown): string =>
+  (error instanceof Error ? error.message : String(error))
+    .replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, "<url>")
+    .replace(/\b0x[0-9a-fA-F]{16,}\b|\b[A-Za-z0-9_-]{24,}\b/g, "<token>")
+    .slice(0, 300);
+
 /** The readers of the resolver over this indexer's own tables. */
 const readers = (): NonNullable<SearchSources["indexer"]> => {
   const byCondition = async (condition: ReturnType<typeof eq>): Promise<SearchMessage | null> => {
@@ -102,7 +109,8 @@ export const registerSearchRoute = (app: Hono): void => {
     // Nothing to read for a text the search does not know.
     const known = classifyQuery(text).candidates.length > 0;
     const sources: SearchSources = { sites: sitesFromEnvironment(), chains: searchChainsFromPair(pair), ...(known ? { indexer: readers() } : {}) };
-    return c.json(await resolve(text, sources, limitText === undefined ? {} : { limit }));
+    const onError = (label: string, error: unknown): void => console.error(`search ${label} failed: ${redacted(error)}`);
+    return c.json(await resolve(text, sources, { onError, ...(limitText === undefined ? {} : { limit }) }));
   });
 };
 

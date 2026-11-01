@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { headUpdates, messages, tokens, transfers } from "../../ponder.schema";
 import { registerSearchRoute } from "../../src/api/routes/search";
 import { calls, respondWith, type QueryCall } from "./support/fake-api";
@@ -149,7 +149,30 @@ describe("GET /api/search", () => {
     });
     const { status, body } = await get(`/api/search?q=${id}`);
     expect(status).toBe(200);
-    expect(body.problems).toContain("indexer: db down");
+    expect(body.problems).toContain("indexer: unavailable");
+  });
+
+  it("keeps URLs and keys out of the answer and logs the error without them", async () => {
+    const logged: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...parts: unknown[]) => void logged.push(parts.join(" ")));
+    respondWith(() => {
+      throw new Error("connect ECONNREFUSED postgres://user:pw@db.internal:5432/x via https://rpc.internal/v1/SECRETKEY99");
+    });
+    const response = await app.request(`/api/search?q=${id}`);
+    const text = await response.text();
+    spy.mockRestore();
+    for (const leak of ["postgres", "db.internal", "SECRETKEY99", "rpc.internal", "pw@"]) expect(text, leak).not.toContain(leak);
+    expect(logged.length).toBeGreaterThan(0);
+    for (const leak of ["db.internal", "SECRETKEY99", "rpc.internal", "pw@"]) expect(logged.join("\n"), leak).not.toContain(leak);
+    expect(logged.join("\n")).toContain("ECONNREFUSED");
+    // A thrown string is logged the same way.
+    const spy2 = vi.spyOn(console, "error").mockImplementation((...parts: unknown[]) => void logged.push(parts.join(" ")));
+    respondWith(() => {
+      throw "plain https://x.internal/k failure";
+    });
+    await app.request(`/api/search?q=${id}`);
+    spy2.mockRestore();
+    expect(logged.join("\n")).toContain("plain <url>");
   });
 
   it("links to the hosts that the deployment names", async () => {

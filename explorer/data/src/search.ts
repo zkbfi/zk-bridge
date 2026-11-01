@@ -311,7 +311,7 @@ export type SearchResolution = {
   readonly unsupported: "name" | null;
   /** The results, best first. */
   readonly results: readonly SearchResult[];
-  /** One sentence for each reader that failed. */
+  /** One fixed sentence ("<source>: unavailable") for each reader that failed. It never holds the error text. */
   readonly problems: readonly string[];
 };
 
@@ -323,6 +323,8 @@ const bound = <arguments_ extends unknown[], value>(reader: ((...arguments__: ar
 export type ResolveOptions = {
   /** The most results returned. Default 25. */
   readonly limit?: number;
+  /** Called with the source and the error of a reader that failed. `problems` never holds the error's text; log it here, redacted. */
+  readonly onError?: (label: string, error: unknown) => void;
 };
 
 const DEFAULT_LIMIT = 25;
@@ -354,7 +356,9 @@ export async function resolve(text: string, sources: SearchSources, options: Res
     try {
       return await run();
     } catch (error) {
-      problems.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+      // The answer carries a fixed sentence: a reader's error can hold an internal URL or a key. The caller gets the error.
+      problems.push(`${label}: unavailable`);
+      options.onError?.(label, error);
       return undefined;
     }
   };

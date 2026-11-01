@@ -90,9 +90,9 @@ describe("searchCrossReferenced", () => {
   it("reports a failure with the message of an Error, and with text for any other thrown value, and still offers the transactions", async () => {
     const failing = (thrown: unknown): IndexerClient => ({ message: async () => { throw thrown; }, findMessageByTransaction: async () => null, transactionCost: async () => null });
     const error = await run(delivered.id, failing(new Error("boom")));
-    expect(error.problem).toBe("The indexer lookup failed: boom");
+    expect(error.problem).toBe("The indexer lookup failed: unavailable");
     expect(error.results.map((result) => result.kind)).toEqual(["transaction", "transaction"]);
-    expect((await run(delivered.id, failing("plain text"))).problem).toBe("The indexer lookup failed: plain text");
+    expect((await run(delivered.id, failing("plain text"))).problem).toBe("The indexer lookup failed: unavailable");
   });
 
   it("offers a slot, blocks and proofs for a number, each with its links", async () => {
