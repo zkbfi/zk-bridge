@@ -1,0 +1,62 @@
+# The traffic bot (explorer/bots, testnets): sends small test transfers back and forth between the chains of the pair
+# on a schedule, with the dapp's default tip, so the runner and the prover have regular work. It holds the traffic
+# wallet key and opens no port. deploy.sh installs this file.
+#
+#   /etc/zk-bridge/traffic/bots.json            the bot settings (config/traffic/bots.json.example)
+#   /etc/zk-bridge/traffic/prover-setup.json    the pair and the RPC endpoints, as references (config/traffic/prover-setup.json.example)
+#   /etc/zk-bridge/traffic/bots.env             secrets: endpoints (config/traffic/bots.env.example)
+#   /etc/zk-bridge/traffic/traffic.env          the wallet key, TRAFFIC_PRIVATE_KEY (config/traffic/traffic.env.example)
+#   /etc/zk-bridge/deployment.json            contract addresses of the pair (written by docker/deploy.sh)
+#   /var/lib/zk-bridge-traffic                  the state file (the last slot of each direction)
+[Unit]
+Description=zk-bridge testnet traffic bot
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/zk-bridge/traffic/bots.json
+ConditionPathExists=/etc/zk-bridge/traffic/traffic.env
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=zkb_traffic
+Group=zkb_traffic
+WorkingDirectory=/opt/zk-bridge/current/explorer/bots
+EnvironmentFile=/etc/zk-bridge/traffic/bots.env
+EnvironmentFile=/etc/zk-bridge/traffic/traffic.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node bin/zk-bridge-bot.mjs traffic --config /etc/zk-bridge/traffic/bots.json
+Restart=on-failure
+RestartSec=10
+# The bot stops after its current step, which can wait for a receipt. Give it time before SIGKILL.
+TimeoutStopSec=330
+
+# Sandbox. Writable: the state directory, and a private /tmp (tsx keeps its cache there).
+ReadWritePaths=/var/lib/zk-bridge-traffic
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# No MemoryDenyWriteExecute: the V8 JIT needs memory that is writable and executable.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -222,9 +222,13 @@ The test tokens are `tUSD` (6 decimals) and `tTKN` (18 decimals), deployed on ea
 `script/testnet/DeployTestTokens.s.sol` (docs/testnet-run.md, "Test tokens and traffic"). Their bridged copies carry the
 prefix `z` (`ztUSD`, `ztTKN`). The script writes the test token file that `traffic.tokensFile` names.
 
+Owner, later: "seems like it would be best to have these proofs be posted if and only if they have erc20s moving across
+the bridge. otherwise they are useless. so perhaps we should be doing bridges 4x/hr".
+
 Each direction sends once in each interval, at its offset plus a jitter that a hash of the direction and the interval
-fixes, so a restart keeps it. The default is one send an hour in each direction, the way back half an hour after the way
-out. With the backend proving at least once an hour, every hour has transfers to deliver. A send:
+fixes, so a restart keeps it. The default is four sends an hour in each direction (every 15 minutes), the way back 7.5
+minutes after the way out, with up to 60 seconds of jitter. So every proof the backend makes carries token transfers.
+`intervalSeconds`, `jitterSeconds` and the offsets set another cadence. A send:
 
 1. Lists what can move from the source chain: the test tokens native there, and the copies there of the destination's
    test tokens. Each draws an amount between `amount.minimum` and `amount.maximum` (in hundredths of a token; a copy
@@ -265,8 +269,8 @@ direction at once, whatever the schedule.
 | `signer` | As `runner.signer`. On the app server `env:TRAFFIC_PRIVATE_KEY`. |
 | `tokensFile` | The test token file. |
 | `tokens` | By symbol: `amount` and `balance`, each `{ "minimum", "maximum" }` in whole tokens as text. |
-| `intervalSeconds`, `jitterSeconds`, `pollSeconds` | 3600, 300 and 60. |
-| `directions` | `first-to-second` and `second-to-first`, each `{ "enabled", "offsetSeconds" }`. Defaults: both on, offsets 0 and 1800. |
+| `intervalSeconds`, `jitterSeconds`, `pollSeconds` | 900, 60 and 60. |
+| `directions` | `first-to-second` and `second-to-first`, each `{ "enabled", "offsetSeconds" }`. Defaults: both on, offsets 0 and 450. |
 | `tipPercent` | The tip as a percentage of the amount. Default `0.1`, the dapp's default. |
 | `newCopyGasLimit` | By destination chain id: the gas limit of a send that deploys a copy there, at most the bridge's `maxGasPerTx` (10,000,000). Set `"11155111": "9000000"` on the testnet. |
 | `minimumNativeWei` | Required, by chain id, for each chain of the pair. |

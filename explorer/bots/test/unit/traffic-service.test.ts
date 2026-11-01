@@ -18,7 +18,6 @@ const MESSAGE_ID = `0x${"ef".repeat(32)}` as const;
 /** The contracts of the service world's deployment file (`test/support/service-world.ts`). */
 const MEDIATOR = { 1: getAddress(`0x${"12".repeat(20)}`), 369: getAddress(`0x${"22".repeat(20)}`) } as const;
 const BRIDGE = { 1: getAddress(`0x${"11".repeat(20)}`), 369: getAddress(`0x${"21".repeat(20)}`) } as const;
-const HOUR = 3_600_000;
 const SLOT = 480_000;
 
 const closers: Array<() => Promise<void>> = [];
@@ -104,7 +103,7 @@ function overridesFor(extra: TrafficOverrides = {}) {
     },
     reader: (chainId) => fakeReader(chainId, states[chainId] as FakeReaderState),
     random: () => 0,
-    now: () => dueAt("first-to-second", SLOT, { intervalMilliseconds: HOUR, offsetMilliseconds: 0, jitterMilliseconds: 300_000 }),
+    now: () => dueAt("first-to-second", SLOT, { intervalMilliseconds: 900_000, offsetMilliseconds: 0, jitterMilliseconds: 60_000 }),
     ...extra,
   };
   return { overrides, states, nodes, dispose, urls };
@@ -129,11 +128,11 @@ describe("tipRateOf", () => {
 });
 
 describe("the traffic configuration", () => {
-  it("fills the defaults: one send an hour in each direction, half an hour apart", () => {
+  it("fills the defaults: four sends an hour in each direction, seven and a half minutes apart", () => {
     const parsed = parseBotConfig({ schemaVersion: 1, stateDirectory: "/s", ...trafficSection({ directory: "/d" }) }).traffic!;
-    expect(parsed).toMatchObject({ intervalSeconds: 3600, jitterSeconds: 300, tipPercent: "0.1", receiptTimeoutSeconds: 300, minimumPriorityFeeWei: {} });
-    expect(parsed.directions).toEqual({ "first-to-second": { enabled: true, offsetSeconds: 0 }, "second-to-first": { enabled: true, offsetSeconds: 1800 } });
-    expect(scheduleOf(parsed, "second-to-first")).toEqual({ intervalMilliseconds: HOUR, offsetMilliseconds: HOUR / 2, jitterMilliseconds: 300_000 });
+    expect(parsed).toMatchObject({ intervalSeconds: 900, jitterSeconds: 60, tipPercent: "0.1", receiptTimeoutSeconds: 300, minimumPriorityFeeWei: {} });
+    expect(parsed.directions).toEqual({ "first-to-second": { enabled: true, offsetSeconds: 0 }, "second-to-first": { enabled: true, offsetSeconds: 450 } });
+    expect(scheduleOf(parsed, "second-to-first")).toEqual({ intervalMilliseconds: 900_000, offsetMilliseconds: 450_000, jitterMilliseconds: 60_000 });
   });
 
   it("refuses bounds whose minimum is above the maximum, and an empty token list", () => {
@@ -182,7 +181,7 @@ describe("startTraffic", () => {
     const sends = named(created, "traffic_sent");
     expect(sends.map((event) => event.direction)).toEqual(["first-to-second", "second-to-first"]);
     expect(sends[0]).toMatchObject({ bot: "traffic", pair: "eth-pls", symbol: "tUSD", messageId: MESSAGE_ID });
-    expect(named(created, "traffic_started")[0]).toMatchObject({ wallet: SIGNER_ADDRESS, signer: "private-key", intervalSeconds: 3600, tipPercent: "0.1" });
+    expect(named(created, "traffic_started")[0]).toMatchObject({ wallet: SIGNER_ADDRESS, signer: "private-key", intervalSeconds: 900, tipPercent: "0.1" });
     expect((named(created, "traffic_tokens")[0]?.tokens as unknown[]).length).toBe(2);
     const state = JSON.parse(readFileSync(statePath(created), "utf8"));
     expect(state.directions["first-to-second"].lastSlot).toBe(SLOT);

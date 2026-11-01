@@ -254,19 +254,23 @@ export const trafficSchema = z
     tokensFile: pathSchema,
     /** The settings by symbol. A token of the file without an entry here is not sent. */
     tokens: z.record(z.string().min(1), trafficTokenSchema).refine((tokens) => Object.keys(tokens).length > 0, "name at least one token"),
-    /** Seconds between two sends of one direction. */
-    intervalSeconds: positiveSeconds.default(3600),
+    /**
+     * Seconds between two sends of one direction. Default 900: four sends an hour in each direction. Owner: "seems like
+     * it would be best to have these proofs be posted if and only if they have erc20s moving across the bridge.
+     * otherwise they are useless. so perhaps we should be doing bridges 4x/hr".
+     */
+    intervalSeconds: positiveSeconds.default(900),
     /** The most seconds that a send comes after its due time. Drawn once for each interval, so a restart keeps it. */
-    jitterSeconds: z.number().int().nonnegative().default(300),
+    jitterSeconds: z.number().int().nonnegative().default(60),
     /** Seconds between two looks at the clock. */
     pollSeconds: positiveSeconds.default(60),
     directions: z
       .object({
         "first-to-second": trafficDirectionSchema.default({ enabled: true, offsetSeconds: 0 }),
-        "second-to-first": trafficDirectionSchema.default({ enabled: true, offsetSeconds: 1800 }),
+        "second-to-first": trafficDirectionSchema.default({ enabled: true, offsetSeconds: 450 }),
       })
       .strict()
-      .default({ "first-to-second": { enabled: true, offsetSeconds: 0 }, "second-to-first": { enabled: true, offsetSeconds: 1800 } }),
+      .default({ "first-to-second": { enabled: true, offsetSeconds: 0 }, "second-to-first": { enabled: true, offsetSeconds: 450 } }),
     /**
      * The tip, as a percentage of the amount, in the share mode of the delivery router. Default 0.1: the default tip
      * of the dapp and the terminal (`DEFAULT_TIP_PERCENTAGE_MULTIPLIER`).

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "endpointUrl": "",
+  "runpodApiKey": null,
+  "chains": {
+    "11155111": {
+      "rpc": { "source": "environment", "variable": "EXPLORER_RPC_URL_11155111" }
+    },
+    "943": {
+      "rpc": { "source": "environment", "variable": "EXPLORER_RPC_URL_943" }
+    }
+  },
+  "msgboardUrl": null,
+  "pair": "sepolia-pls943",
+  "directions": ["first-to-second", "second-to-first"],
+  "policy": { "proveWhenTransferWaits": false, "intervalSeconds": 0 }
+}
