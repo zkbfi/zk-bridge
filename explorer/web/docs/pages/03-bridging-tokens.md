@@ -8,7 +8,7 @@ A token is native on the chain where it was created. USDC on Ethereum, for examp
 
 When you bridge a native token, the bridge locks it in the token mediator, the contract that handles tokens. The other chain then mints a bridged copy for the recipient. When you bridge the copy back, the bridge burns it, and the mediator unlocks the native token on its home chain. The supply of each copy always matches what the mediator holds.
 
-A copy takes the name of the native token, then " from " and the home chain, such as Wrapped Ether from Ethereum. Its symbol adds the prefix "zkb", such as zkbWETH. On the Bridge screen, what arrives shows with the same icon as what you send, with a small badge of the destination chain, and the line under it names the copy: "arrives as zkbUSDC on PulseChain".
+A copy takes the name of the native token, then " from " and the home chain, such as Wrapped Ether from Ethereum. Its symbol adds the prefix "z", such as zWETH. On the Bridge screen, what arrives shows with the same icon as what you send, with a small badge of the destination chain, and the line under it names the copy: "arrives as zUSDC on PulseChain".
 
 ## Choosing the token
 

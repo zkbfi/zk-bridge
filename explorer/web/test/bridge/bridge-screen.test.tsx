@@ -38,7 +38,7 @@ describe("the bridge screen", () => {
     const out = toBand();
     await waitFor(() => expect(out.querySelector("[data-badge]")).not.toBeNull());
     expect(out.querySelector("[data-badge]")?.getAttribute("data-badge")).toBe(String(FIXTURE_PAIR.second.chainId));
-    expect(within(out).getByText(/arrives as/)).toBeInTheDocument();
+    expect(within(out).getByText(/arrives as/)).toHaveTextContent("arrives as zUSDC");
   });
 
   it("flips the direction and keeps the amount", async () => {

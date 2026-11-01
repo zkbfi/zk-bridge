@@ -64,7 +64,7 @@ describe("the confirm dialog: the default gas based tip", () => {
     renderPage(<TransactionDialog steps={await gasStepsOf(FIXTURE_PAIR)} onClose={() => undefined} />, {});
     const delivery = await screen.findByTestId("confirm-delivery");
     expect(within(delivery).getByText("gas based, up to the limit")).toBeInTheDocument();
-    expect(within(delivery).getByTestId("confirm-tip-maximum")).toHaveTextContent(/^The limit is [\d.]+ zkbUSDC\. It is the price ceiling/);
+    expect(within(delivery).getByTestId("confirm-tip-maximum")).toHaveTextContent(/^The limit is [\d.]+ zUSDC\. It is the price ceiling/);
     expect(within(delivery).getByTestId("confirm-gas-mode-help")).toHaveTextContent(GAS_MODE_HELP);
     expect(within(delivery).queryByTestId("confirm-gas-notice")).toBeNull();
   });

@@ -174,3 +174,6 @@ export {
   type PricedToken,
   pricingAddress,
 } from "./pulsex-pricing.js";
+
+// The symbol of a bridged copy
+export { BRIDGED_SYMBOL_PREFIX, bridgedSymbolOf, nativeSymbolOf } from "./bridged-symbol.js";

@@ -74,7 +74,7 @@ const BrowsePage = ({ kind }: { readonly kind: string }) => {
     if (kind === "tokens") {
       return tokens.map((token) => {
         const chain = token.side === "first" ? pair.first : pair.second;
-        return <XRow key={`${token.side}:${token.address}`} href={href({ kind: "token", id: `${token.side}:${token.address}` })} icon={<TokenIcon subject={{ chainId: chain.chainId, address: token.address }} badgeChainId={chain.chainId} symbol={token.symbol} size={28} decorative />} title={token.symbol} sub={shortHex(token.address)} />;
+        return <XRow key={`${token.side}:${token.address}`} href={href({ kind: "token", id: `${token.side}:${token.address}` })} icon={<TokenIcon subject={{ chainId: chain.chainId, address: token.address }} badgeChainId={chain.chainId} symbol={token.symbol} isBridgedCopy={token.isBridgedCopy} size={28} decorative />} title={token.symbol} sub={shortHex(token.address)} />;
       });
     }
     if (kind === "addresses") {

@@ -2,7 +2,7 @@
  * The tokens of the run, in the shape that the terminal wants, and the balance reads that the checks use.
  */
 import { erc20Abi, type Address } from "viem";
-import { tokenFactoryAbi } from "@zk-bridge/shared";
+import { bridgedSymbolOf, tokenFactoryAbi } from "@zk-bridge/shared";
 import type { TokenInfo } from "../../terminal/src/model/types";
 import { chainOf, type Context, type Side } from "./context.ts";
 
@@ -42,8 +42,8 @@ export const terminalTokens = async (context: Context): Promise<readonly TokenIn
     const copy = await copyOf(context, token);
     const homeSide = token.home === "a" ? "first" : "second";
     const otherSideName = token.home === "a" ? "second" : "first";
-    infos.push({ address: token.address, symbol: token.symbol, decimals: 18, side: homeSide, counterpart: copy });
-    infos.push({ address: copy, symbol: `zkb${token.symbol}`, decimals: 18, side: otherSideName, counterpart: token.address });
+    infos.push({ address: token.address, symbol: token.symbol, decimals: 18, side: homeSide, counterpart: copy, isBridgedCopy: false });
+    infos.push({ address: copy, symbol: bridgedSymbolOf(token.symbol), decimals: 18, side: otherSideName, counterpart: token.address, isBridgedCopy: true });
   }
   return infos;
 };

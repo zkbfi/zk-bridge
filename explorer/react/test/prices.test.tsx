@@ -33,11 +33,11 @@ const reader = (block = BLOCK): PoolReader => {
 
 const pairOfChains = { first: { chainId: 1 }, second: { chainId: 369 } };
 const usdc: PriceableToken = { address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", symbol: "USDC", decimals: 6, side: "first", counterpart: null };
-const minted: PriceableToken = { address: "0x1111111111111111111111111111111111111111", symbol: "zkbUSDC", decimals: 6, side: "second", counterpart: usdc.address };
+const minted: PriceableToken = { address: "0x1111111111111111111111111111111111111111", symbol: "zUSDC", decimals: 6, side: "second", counterpart: usdc.address, isBridgedCopy: true };
 const local: PriceableToken = { address: TOKEN, symbol: "TKN", decimals: 18, side: "second", counterpart: null };
 
 describe("the sample prices", () => {
-  it("are USDC $1, ETH $3,000 and PLS $0.00003 at block 0, a zkb copy at its origin's price, and null for the rest", () => {
+  it("are USDC $1, ETH $3,000 and PLS $0.00003 at block 0, a bridged copy at its origin's price, and null for the rest", () => {
     const prices = samplePrices([usdc, minted, { ...usdc, address: "0x2222222222222222222222222222222222222222", symbol: "ODD" }], pairOfChains);
     expect(prices.get(tokenPriceKey(usdc))).toEqual({ usdE18: E18, block: 0n, pool: null });
     expect(prices.get(tokenPriceKey(minted))?.usdE18).toBe(E18);
@@ -45,6 +45,16 @@ describe("the sample prices", () => {
     expect(prices.get(nativePriceKey(1))?.usdE18).toBe(3_000n * E18);
     expect(prices.get(nativePriceKey(369))?.usdE18).toBe(30_000_000_000_000n);
     expect(samplePrices([], { first: { chainId: 5 }, second: { chainId: 369 } }).get("native:5")).toBeNull();
+  });
+
+  it("do not take a native token that starts with Z for a copy, and give its copy the price of the origin", () => {
+    const zrx: PriceableToken = { address: "0x3333333333333333333333333333333333333333", symbol: "ZRX", decimals: 18, side: "first", counterpart: null };
+    const zrxCopy: PriceableToken = { address: "0x4444444444444444444444444444444444444444", symbol: "zZRX", decimals: 18, side: "second", counterpart: zrx.address, isBridgedCopy: true };
+    const wethCopy: PriceableToken = { address: "0x5555555555555555555555555555555555555555", symbol: "zWETH", decimals: 18, side: "second", counterpart: null, isBridgedCopy: true };
+    const prices = samplePrices([zrx, zrxCopy, wethCopy], pairOfChains);
+    expect(prices.get(tokenPriceKey(zrx))).toBeNull();
+    expect(prices.get(tokenPriceKey(zrxCopy))).toBeNull();
+    expect(prices.get(tokenPriceKey(wethCopy))?.usdE18).toBe(3_000n * E18);
   });
 
   it("explain themselves in the tooltip", () => {
@@ -69,6 +79,18 @@ describe("loadPrices", () => {
     const watching: PoolReader = { ...reader(), bridgedCopyOf: async (token) => (asked.push(token), null) };
     await loadPrices([minted], pairOfChains, watching);
     expect(asked).toContain(usdc.address);
+  });
+
+  it("asks about the origin of a copy only, never of a native token whose symbol starts with Z", async () => {
+    const origin = "0x3333333333333333333333333333333333333333" as Address;
+    const zrxOnSecond: PriceableToken = { address: "0x6666666666666666666666666666666666666666", symbol: "ZRX", decimals: 18, side: "second", counterpart: origin };
+    const asked: Address[] = [];
+    const watching: PoolReader = { ...reader(), bridgedCopyOf: async (token) => (asked.push(token), null) };
+    await loadPrices([zrxOnSecond], pairOfChains, watching);
+    expect(asked).not.toContain(origin);
+    const copyOfZrx: PriceableToken = { ...zrxOnSecond, symbol: "zZRX", isBridgedCopy: true };
+    await loadPrices([copyOfZrx], pairOfChains, watching);
+    expect(asked).toContain(origin);
   });
 
   it("prices a token on the first chain's side by its own chain", async () => {

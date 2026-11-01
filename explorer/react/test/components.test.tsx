@@ -55,14 +55,20 @@ describe("TokenIcon", () => {
   });
 
   it("falls back to a lettered disc when the image fails, and drops a badge that fails", () => {
-    const { container } = render(<TokenIcon subject={{ chainId: 1 }} symbol="zkbUSDC" badgeChainId={369} size={32} />);
+    const { container } = render(<TokenIcon subject={{ chainId: 1 }} symbol="zUSDC" isBridgedCopy badgeChainId={369} size={32} />);
     fireEvent.error(container.querySelector("img.zb-badge")!);
     expect(container.querySelector("img.zb-badge")).toBeNull();
     fireEvent.error(container.querySelector("img.zb-main")!);
-    const fallback = screen.getByRole("img", { name: "zkbUSDC" });
+    const fallback = screen.getByRole("img", { name: "zUSDC" });
     expect(fallback).toHaveTextContent("USD");
     expect(fallback).toHaveStyle({ fontSize: "11px" });
     expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("keeps the Z of a native token whose symbol starts with Z in the lettered disc", () => {
+    const { container } = render(<TokenIcon subject={{ chainId: 1 }} symbol="ZRX" size={32} />);
+    fireEvent.error(container.querySelector("img.zb-main")!);
+    expect(screen.getByRole("img", { name: "ZRX" })).toHaveTextContent("ZRX");
   });
 
   it("keeps the letters of a tiny icon readable", () => {

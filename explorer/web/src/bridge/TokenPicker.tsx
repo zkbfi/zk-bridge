@@ -163,7 +163,7 @@ export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () =>
                 onClick={() => onPick(token)}
                 onMouseEnter={() => setActive(index)}
               >
-                <TokenIcon subject={subject} badgeChainId={subject.chainId} symbol={token.symbol} size={36} />
+                <TokenIcon subject={subject} badgeChainId={subject.chainId} symbol={token.symbol} isBridgedCopy={token.isBridgedCopy} size={36} />
                 <span className="zb-token-name">
                   <b style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                     {token.symbol}

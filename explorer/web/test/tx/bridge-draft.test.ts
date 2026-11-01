@@ -154,7 +154,7 @@ describe("the price field", () => {
   });
 
   it("defaults from a configured valuation of another token", async () => {
-    // One whole zkbUSDC is worth 1/3000 of a coin, so one coin is worth 3000 zkbUSDC.
+    // One whole zUSDC is worth 1/3000 of a coin, so one coin is worth 3000 zUSDC.
     const draft = computeBridgeDraft(values(), PERCENT, await data({ valuations: { [FIXTURE_TOKENS[1]!.address.toLowerCase()]: 10n ** 18n / 3_000n } }));
     expect(draft.defaultSenderPriceText).toBe("3000");
   });
@@ -164,7 +164,7 @@ describe("the price field", () => {
     expect(withoutPrice).toMatchObject({ status: "blocked", reason: expect.stringContaining("Enter your price of the native coin") });
     const priced = computeBridgeDraft(values(), options({ mode: "gas-multiplier", senderPriceText: "3000" }), await data());
     expect(priced.status).toBe("ready");
-    expect(priced.delivery?.description.certaintyLabel).toMatch(/^estimate, at most [\d.]+ zkbUSDC$/);
+    expect(priced.delivery?.description.certaintyLabel).toMatch(/^estimate, at most [\d.]+ zUSDC$/);
     const cheaper = computeBridgeDraft(values(), options({ mode: "gas-multiplier", senderPriceText: "1500" }), await data());
     expect(priced.delivery!.director.multiplier).toBe(cheaper.delivery!.director.multiplier * 2n);
   });

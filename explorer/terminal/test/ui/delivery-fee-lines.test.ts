@@ -33,15 +33,15 @@ describe('the live panel of the bridge form', () => {
         'Gas             210000 gas, measured from 40 recent deliveries, p90',
         'Base fee        7 gwei at block 21000000 (2026-10-25T11:59:48.000Z)',
         'Cost            gas 0.00168 PLS + margin -0.00164004 PLS',
-        'Tip range       low 2.7125 zkbUSDC, suggested 5.425 zkbUSDC, high 8.1375 zkbUSDC',
+        'Tip range       low 2.7125 zUSDC, suggested 5.425 zUSDC, high 8.1375 zUSDC',
         'The suggested tips are a low range: half, one and a half times, and the measured gas cost of a delivery at the base fee. In the gas mode the lowest tip is just above zero. For a tip of zero, choose No tip or a fixed amount of 0. A tip below the cost is allowed.',
         'A tip goes to the reward address of the delivery router. It is voluntary and it buys no promise. A low tip, or no tip, never makes a delivery fail.',
-        'Percentage      4.62 zkbUSDC (exact)  (4.6246246246246247 percent of the transfer)',
-        'Fixed           4.62 zkbUSDC (exact)  (a fixed amount)',
-        "Gas multiplier  about 5.425 zkbUSDC now (estimate, at most 10.85 zkbUSDC)  (the gas that the deliverer's transaction makes available times the gas price, at 0.0000000025 token units for each wei (your price and margin), never above the limit. Expect the tip to reach the limit)",
+        'Percentage      4.62 zUSDC (exact)  (4.6246246246246247 percent of the transfer)',
+        'Fixed           4.62 zUSDC (exact)  (a fixed amount)',
+        "Gas multiplier  about 5.425 zUSDC now (estimate, at most 10.85 zUSDC)  (the gas that the deliverer's transaction makes available times the gas price, at 0.0000000025 token units for each wei (your price and margin), never above the limit. Expect the tip to reach the limit)",
         'Tip mode        percentage of the transfer',
-        'Your tip        0.0999 zkbUSDC (exact)',
-        'At most         0.0999 zkbUSDC',
+        'Your tip        0.0999 zUSDC (exact)',
+        'At most         0.0999 zUSDC',
       ].join('\n'),
     )
   })
@@ -53,7 +53,7 @@ describe('the live panel of the bridge form', () => {
 
   test('shows the tip range as low, suggested and high, and the words about a tip', () => {
     const text = panel()
-    expect(text).toMatch(/Tip range\s+low [\d.]+ zkbUSDC, suggested [\d.]+ zkbUSDC, high [\d.]+ zkbUSDC/)
+    expect(text).toMatch(/Tip range\s+low [\d.]+ zUSDC, suggested [\d.]+ zUSDC, high [\d.]+ zUSDC/)
     expect(text).toContain('voluntary')
     expect(text).toContain('buys no promise')
   })
@@ -67,7 +67,7 @@ describe('the live panel of the bridge form', () => {
     const text = panel({ priced: false })
     expect(text).toContain('Percentage      unavailable: no value of the token is configured')
     expect(text).toContain('Gas multiplier  unavailable: enter your price of the native coin in this token')
-    expect(text).toContain('Your tip        0.0999 zkbUSDC (exact)')
+    expect(text).toContain('Your tip        0.0999 zUSDC (exact)')
   })
 
   test('an unavailable suggestion shows its reason', () => {
@@ -76,7 +76,7 @@ describe('the live panel of the bridge form', () => {
 
   test('gas mode on a token that is not the native coin is an estimate, priced from the sender price', () => {
     const text = panel({ values: { ...values, feeMode: 'gas' } })
-    expect(text).toMatch(/Your tip {8}about [\d.]+ zkbUSDC now \(estimate, at most [\d.]+ zkbUSDC\)/)
+    expect(text).toMatch(/Your tip {8}about [\d.]+ zUSDC now \(estimate, at most [\d.]+ zUSDC\)/)
   })
 
   test('the wrapped native token gets the estimate label with its maximum', () => {
@@ -88,7 +88,7 @@ describe('the live panel of the bridge form', () => {
     if (resolved.kind !== 'ready') throw new Error(resolved.reason)
     const state = buildDeliveryFeeModel({ values: used, target: resolved.target, report, transferValue: 10n ** 18n })
     const text = deliveryPanelLines({ kind: 'state', state, target: resolved.target }).map(lineText).join('\n')
-    expect(text).toMatch(/Your tip {8}about [\d.]+ zkbWETH now \(estimate, at most [\d.]+ zkbWETH\)/)
+    expect(text).toMatch(/Your tip {8}about [\d.]+ zWETH now \(estimate, at most [\d.]+ zWETH\)/)
   })
 
   test('loading, failed and missing amount are stated plainly', () => {

@@ -112,12 +112,12 @@ describe("parseMessageDetail, refusals of bad input", () => {
 
 describe("parseMessageDetail, the transfer", () => {
   const token = { address: ADDRESS, symbol: "USDC", decimals: 6, chainId: 1 };
-  const transfer = { sourceToken: token, destinationToken: { ...token, chainId: 369, symbol: "zkbUSDC" }, recipient: ADDRESS, value: "10", deliveredValue: "9", hasCallback: true };
+  const transfer = { sourceToken: token, destinationToken: { ...token, chainId: 369, symbol: "zUSDC" }, recipient: ADDRESS, value: "10", deliveredValue: "9", hasCallback: true };
 
   it("reads every field of a transfer", () => {
     expect(parseMessageDetail({ ...base, transfer }).transfer).toEqual({
       sourceToken: { address: CHECKSUM, symbol: "USDC", decimals: 6, chainId: 1 },
-      destinationToken: { address: CHECKSUM, symbol: "zkbUSDC", decimals: 6, chainId: 369 },
+      destinationToken: { address: CHECKSUM, symbol: "zUSDC", decimals: 6, chainId: 369 },
       recipient: CHECKSUM,
       sender: null,
       value: 10n,

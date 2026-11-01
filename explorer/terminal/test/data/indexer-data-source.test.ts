@@ -10,7 +10,7 @@ const usdcCopy = '0x00000000000000000000000000000000000b0001'
 const tokens = {
   tokens: [
     { chainId: 1, address: usdcHome, symbol: 'USDC', name: 'USD Coin', decimals: 6, metadataRead: true, isBridgedCopy: false, homeChainId: 1, homeToken: usdcHome },
-    { chainId: 369, address: usdcCopy, symbol: 'zkbUSDC', name: 'USD Coin from Ethereum', decimals: 6, metadataRead: true, isBridgedCopy: true, homeChainId: 1, homeToken: usdcHome },
+    { chainId: 369, address: usdcCopy, symbol: 'zUSDC', name: 'USD Coin from Ethereum', decimals: 6, metadataRead: true, isBridgedCopy: true, homeChainId: 1, homeToken: usdcHome },
     { chainId: 1, address: '0x00000000000000000000000000000000000a0002', symbol: null, name: null, decimals: 18, metadataRead: false, isBridgedCopy: false, homeChainId: 1, homeToken: '0x00000000000000000000000000000000000a0002' },
   ],
 }
@@ -119,6 +119,18 @@ describe('indexer data source', () => {
     expect(list[0]?.counterpart?.toLowerCase()).toBe(usdcCopy)
     expect(list[1]?.counterpart?.toLowerCase()).toBe(usdcHome)
     expect(list[2]?.decimals).toBe(18)
+  })
+
+  test('a token is a copy by what the indexer says, never by its symbol', async () => {
+    const zrx = '0x00000000000000000000000000000000000a0003'
+    const zrxCopy = '0x00000000000000000000000000000000000b0003'
+    const rows = { tokens: [
+      ...tokens.tokens,
+      { chainId: 1, address: zrx, symbol: 'ZRX', name: '0x Protocol', decimals: 18, metadataRead: true, isBridgedCopy: false, homeChainId: 1, homeToken: zrx },
+      { chainId: 369, address: zrxCopy, symbol: 'zZRX', name: '0x Protocol from Ethereum', decimals: 18, metadataRead: true, isBridgedCopy: true, homeChainId: 1, homeToken: zrx },
+    ] }
+    const list = await source({ '/api/tokens': rows }).listTokens('eth-pls')
+    expect(list.map((token) => [token.symbol, token.isBridgedCopy])).toEqual([['USDC', false], ['zUSDC', true], [expect.any(String), false], ['ZRX', false], ['zZRX', true]])
   })
 
   test('the audit sums both pending directions into in flight and carries no fee column', async () => {

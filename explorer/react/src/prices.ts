@@ -5,7 +5,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import type { Address } from "viem";
-import type { PriceQuote } from "@zkb/core";
+import { nativeSymbolOf, type PriceQuote } from "@zkb/core";
 import { nativeUsd, plsUsd, resolvePricingAddress, tokenUsd, type PoolReader } from "@zkb/data";
 
 /** A token to price: what the oracle needs to know about it. */
@@ -17,6 +17,8 @@ export type PriceableToken = {
   readonly side: "first" | "second";
   /** The token on the other chain that it bridges to, or null. */
   readonly counterpart: Address | null;
+  /** True when the bridge minted it as the copy of a native token (its symbol cannot tell: ZRX is native). */
+  readonly isBridgedCopy?: boolean | undefined;
 };
 
 /** A pair, as far as prices go: the two chains. */
@@ -43,12 +45,12 @@ const sideChain = (pair: PriceablePair, side: PriceableToken["side"]) => (side =
 const subjectOf = (token: PriceableToken, pair: PriceablePair) => {
   const own = sideChain(pair, token.side);
   const other = sideChain(pair, token.side === "first" ? "second" : "first");
-  const minted = /^zkb/i.test(token.symbol) && token.counterpart !== null;
+  const minted = token.isBridgedCopy && token.counterpart !== null;
   return { chainId: own.chainId, address: token.address, origin: minted ? { chainId: other.chainId, address: token.counterpart! } : null };
 };
 
 const E18 = 10n ** 18n;
-/** Sample prices for the sample data, by symbol (a zkb copy takes its origin's), read at no real block (0). */
+/** Sample prices for the sample data, by symbol (a bridged copy takes its origin's), read at no real block (0). */
 const SAMPLE_USD_E18: Readonly<Record<string, bigint>> = { USDC: E18, WETH: 3_000n * E18, ETH: 3_000n * E18, WPLS: 30_000_000_000_000n, PLS: 30_000_000_000_000n };
 
 /**
@@ -59,11 +61,11 @@ const SAMPLE_USD_E18: Readonly<Record<string, bigint>> = { USDC: E18, WETH: 3_00
  */
 export const samplePrices = (tokens: readonly PriceableToken[], pair: PriceablePair): PriceMap => {
   const quote = (symbol: string): PriceQuote | null => {
-    const usdE18 = SAMPLE_USD_E18[symbol.replace(/^zkb/i, "")];
+    const usdE18 = SAMPLE_USD_E18[symbol];
     return usdE18 === undefined ? null : { usdE18, block: 0n, pool: null };
   };
   return new Map([
-    ...tokens.map((token): [string, PriceQuote | null] => [tokenPriceKey(token), quote(token.symbol)]),
+    ...tokens.map((token): [string, PriceQuote | null] => [tokenPriceKey(token), quote(nativeSymbolOf(token))]),
     ...[pair.first, pair.second].map((chain): [string, PriceQuote | null] => [nativePriceKey(chain.chainId), quote(chain.chainId === 369 ? "PLS" : chain.chainId === 1 ? "ETH" : "")]),
   ]);
 };

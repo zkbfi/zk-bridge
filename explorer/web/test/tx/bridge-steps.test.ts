@@ -41,7 +41,7 @@ const deliveryFor = (mode: "percentage" | "gas-multiplier" | "fixed" = "percenta
       recipient: receiver,
       transferValue: 250_000_000n,
       transferValueAtMost: 250_000_000n,
-      token: { symbol: "zkbUSDC", decimals: 6 },
+      token: { symbol: "zUSDC", decimals: 6 },
       tokenValueInWei: 10n ** 18n,
       senderPrice: mode === "gas-multiplier" ? { numerator: 3_000n * 10n ** 6n, denominator: 10n ** 18n } : WRAPPED_PRICE,
       payout: "token",
@@ -224,7 +224,7 @@ describe("calldata parity with the terminal for a tipped relay", () => {
   const terminalValues = (extra: Record<string, string>): Record<string, string> => ({ ...values(), amount: "250", delivery: "yes", ...extra });
   const terminalContext = async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
-    // Three thousand zkbUSDC for one coin: one whole zkbUSDC is worth 10^18 * 10^6 / (3000 * 10^6) wei, rounded down.
+    // Three thousand zUSDC for one coin: one whole zUSDC is worth 10^18 * 10^6 / (3000 * 10^6) wei, rounded down.
     const valuation = (10n ** 18n * 10n ** 6n) / (3_000n * 10n ** 6n);
     return { tokens, context: { ...context, deliveryCost: buildDeliveryReport(369), tokenValuationsWei: { [FIXTURE_TOKENS[1]!.address.toLowerCase()]: valuation } } };
   };

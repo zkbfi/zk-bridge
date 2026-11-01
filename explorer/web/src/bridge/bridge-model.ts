@@ -4,6 +4,7 @@
  */
 import type { ChainSnapshotResult } from "@terminal/chain/live-reads";
 import type { ChainConfig, ChainSide, Direction, LightClientHead, PairConfig, TokenInfo } from "@terminal/model/types";
+import { bridgedSymbolOf, nativeSymbolOf } from "@zk-bridge/shared";
 import { formatUnits } from "../ui/format";
 
 /** The source and destination chains of a direction. */
@@ -78,7 +79,7 @@ export const tokenFor = (choice: string | undefined, tokens: readonly TokenInfo[
 
 /**
  * The token a flip moves to, keeping the asset (owner, quotes 101–102): a token's counterpart on the other chain; the
- * native coin's counterpart is its wrapped native token's counterpart (ETH on Ethereum ↔ zkbWETH on PulseChain); and a
+ * native coin's counterpart is its wrapped native token's counterpart (ETH on Ethereum ↔ zWETH on PulseChain); and a
  * counterpart that is the other chain's wrapped native token lands on that chain's native coin when the list has it.
  * Only a token with no counterpart in the list falls back to the other chain's first token.
  *
@@ -161,3 +162,12 @@ export const amountText = (value: bigint, decimals: number): string => {
   const digits = value > 0n && value < 10n ** BigInt(Math.max(0, decimals - 6)) ? decimals : 6;
   return formatUnits(value, decimals, { maximumFractionDigits: Math.min(digits, decimals) });
 };
+
+/**
+ * The symbol that a token has on the other chain, as the Bridge screen says it: the native symbol of a copy, the copy's
+ * symbol (the prefix and the symbol) of a native token. Decided by what the token is, not by how its symbol starts, so
+ * `ZRX` is native and arrives as `zZRX`.
+ *
+ * @param token The token that is sent.
+ */
+export const arrivesAsSymbol = (token: Pick<TokenInfo, "symbol" | "isBridgedCopy">): string => (token.isBridgedCopy === true ? nativeSymbolOf(token) : bridgedSymbolOf(token.symbol));

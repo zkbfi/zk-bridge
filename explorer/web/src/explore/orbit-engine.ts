@@ -13,6 +13,7 @@
  * tab is hidden.
  */
 import type { Direction } from "@terminal/model/types";
+import { nativeSymbolOf } from "@zk-bridge/shared";
 import type { Planet } from "./orbit-model";
 
 /** A point in the SVG's units. */
@@ -504,7 +505,7 @@ export class OrbitEngine {
   private paint(body: Body): void {
     const { radius, tone, icon, token } = body.planet;
     const letter = element("text", { class: "zb-orb-letter", "text-anchor": "middle", dy: "0.35em", "font-size": (radius * 0.95).toFixed(1) });
-    letter.textContent = (token?.symbol.replace(/^zkb/i, "") ?? "M").slice(0, 1).toUpperCase();
+    letter.textContent = (token === null || token === undefined ? "M" : nativeSymbolOf(token)).slice(0, 1).toUpperCase();
     const parts: SVGElement[] = [element("circle", { r: (radius + 1.5).toFixed(2), class: "zb-orb-halo" }), element("circle", { r: radius.toFixed(2), class: `zb-orb-body zb-orb-t${tone}` }), letter];
     const pattern = icon === null ? null : this.patternFor(icon);
     if (pattern !== null) parts.push(element("circle", { r: radius.toFixed(2), class: "zb-orb-img", fill: `url(#${pattern.id})` }));

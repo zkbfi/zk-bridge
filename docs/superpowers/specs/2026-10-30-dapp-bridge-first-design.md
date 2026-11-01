@@ -163,7 +163,7 @@ and the time left while in flight or the age once delivered. A row links to the 
   (address + identicon; opens the account menu). **To row** mirrors it above the Bridge pill: "To" + the destination
   chain icon joined to the destination address (your wallet by default).
 - **Token:** the output shows the same token as the input: the same icon with a small badge of the destination chain
-  (ETH with a PulseChain badge; the on-chain token is zkbWETH, said in small text under the amount).
+  (ETH with a PulseChain badge; the on-chain token is zWETH, said in small text under the amount).
 - **Balance line:** right-aligned under the token pill so MAX lines up with the token pill's edge; the USD value on
   the left. Same line under the output (USD left).
 - **USD needs a real oracle (owner):** today's USD values come from tokens bridged over the Omnibridge, not from this
@@ -265,7 +265,7 @@ and the time left while in flight or the age once delivered. A row links to the 
     `0x02DcdD04e3F455D838cd1249292C58f3B79e3C3C` ≈ 3.99e8 WPLS ≈ $2,243, matching its thin direct USDC pool ($2,230).
   - **Method:** PLS/USD = the depth-weighted median of the three stable pools across v1 and v2. A token's price =
     its WPLS pool with the deepest WPLS side, if that side is worth at least a minimum (say $10k), else "—". Tokens
-    bridged by zkb.fi take their origin token's price (zkbWETH → ETH, via WETH from Ethereum on PulseX); Ethereum-side
+    bridged by zkb.fi take their origin token's price (zWETH → ETH, via WETH from Ethereum on PulseX); Ethereum-side
     tokens likewise use their PulseChain market. Testnets show no prices.
   - **Bridged tokens and Ethereum costs (owner, short term):** every bridged token is reversed out through the current
     Omnibridge to its PulseChain copy and priced on PulseX (v1/v2) against USDC/USDT/DAI. ETH transaction costs use
@@ -362,7 +362,7 @@ and the time left while in flight or the age once delivered. A row links to the 
   money-hand icon.
 - **Tokens in the URL are addresses (owner, 2026-10-31):** each chain's token is its address; the native coin is the
   zero address. "native" is accepted as input and immediately rewritten to the zero address. Flipping the direction
-  keeps the asset: it moves to that token's counterpart on the other chain (ETH → its zkb copy on PulseChain, a zkb copy
+  keeps the asset: it moves to that token's counterpart on the other chain (ETH → its bridged copy on PulseChain, a bridged copy
   → its origin, native → the wrapped native's counterpart), never to the other chain's own native coin.
 - **Colour (owner, 2026-10-31):** each theme is a small palette; every role is one of its colours. In the Ember themes
   every palette colour sits on the ember's hue (OKLCH ≈ 41°) with even lightness steps; Mono is neutral; good (150°)
@@ -609,3 +609,4 @@ don't call it "tip too high", call it "high tip %""
 101. "it looks like the native key is maintaining itself outside of the switch network button. i think i would rather have the hash (defaulting to the zero address for native) on each chain rather than the native shorthand. otherwise you end up with eth switching to pls, when all you asked to do is switch the chain direction"
 102. "native can be recognized as a valid iput to the search params, but it should immediately update to the hash"
 103. "how about just zkb for the org name"
+104. "we need to update the "zkb" symbol prefix to just be "z""

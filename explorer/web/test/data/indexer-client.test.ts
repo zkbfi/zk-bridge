@@ -21,7 +21,7 @@ const apiItem = {
   releaseFailed: false,
   transfer: {
     sourceToken: { chainId: 1, address: ADDRESS, symbol: "USDC", decimals: 6 },
-    destinationToken: { chainId: 369, address: ADDRESS, symbol: "zkbUSDC", decimals: 6 },
+    destinationToken: { chainId: 369, address: ADDRESS, symbol: "zUSDC", decimals: 6 },
     sender: ADDRESS,
     recipient: ADDRESS,
     value: "1000000",

@@ -68,11 +68,11 @@ export const FIXTURE_PAIR: PairConfig = {
 /** The sample tokens: three native on Ethereum or PulseChain, and their bridged copies. */
 export const FIXTURE_TOKENS: readonly TokenInfo[] = [
   { address: address('1001'), symbol: 'USDC', decimals: 6, side: 'first', counterpart: address('2001') },
-  { address: address('2001'), symbol: 'zkbUSDC', decimals: 6, side: 'second', counterpart: address('1001') },
+  { address: address('2001'), symbol: 'zUSDC', decimals: 6, side: 'second', counterpart: address('1001'), isBridgedCopy: true },
   { address: address('1002'), symbol: 'WETH', decimals: 18, side: 'first', counterpart: address('2002') },
-  { address: address('2002'), symbol: 'zkbWETH', decimals: 18, side: 'second', counterpart: address('1002') },
+  { address: address('2002'), symbol: 'zWETH', decimals: 18, side: 'second', counterpart: address('1002'), isBridgedCopy: true },
   { address: address('2003'), symbol: 'WPLS', decimals: 18, side: 'second', counterpart: address('1003') },
-  { address: address('1003'), symbol: 'zkbWPLS', decimals: 18, side: 'first', counterpart: address('2003') },
+  { address: address('1003'), symbol: 'zWPLS', decimals: 18, side: 'first', counterpart: address('2003'), isBridgedCopy: true },
 ]
 
 /** A made-up account that the fixtures use as the connected account. */

@@ -24,7 +24,7 @@ export const iconUrl = (subject: IconSubject, imageServer: string = DEFAULT_IMAG
 const chainOf = (pair: PairConfig, side: TokenInfo["side"]): ChainConfig => (side === "first" ? pair.first : pair.second);
 
 /**
- * The subject whose icon a token shows. A token minted by this bridge (zkb…) shows its original's icon, and a wrapped
+ * The subject whose icon a token shows. A token minted by this bridge (a copy) shows its original's icon, and a wrapped
  * native coin shows the chain's own icon, so ETH and its bridged copy look the same (the owner: "the zkbweth should
  * still be the same icon as the input").
  *
@@ -36,7 +36,7 @@ export const iconSubjectOf = (token: TokenInfo, pair: PairConfig): IconSubject =
   const other = chainOf(pair, token.side === "first" ? "second" : "first");
   const isWrappedNative = (chain: ChainConfig, address: Address | null): boolean => address !== null && chain.contracts.wrappedNative?.toLowerCase() === address.toLowerCase();
   if (isWrappedNative(own, token.address) || token.address === "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE") return { chainId: own.chainId };
-  if (/^zkb/i.test(token.symbol) && token.counterpart !== null) {
+  if (token.isBridgedCopy && token.counterpart !== null) {
     if (isWrappedNative(other, token.counterpart)) return { chainId: other.chainId };
     return { chainId: other.chainId, address: token.counterpart };
   }

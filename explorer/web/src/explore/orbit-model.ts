@@ -22,7 +22,7 @@
  * tells it apart from "proof ready" until it lands.
  */
 import type { ChainConfig, Direction, FeedItem, PairConfig, TokenInfo } from "@terminal/model/types";
-import { DEFAULT_CAP_WAD, defaultFee, defaultFinalitySeconds, deliveryGasUsd, PROOF_COST_USD, stepDurations, timingStats, totalCostUsd, type CostInput } from "@zk-bridge/shared";
+import { nativeSymbolOf, DEFAULT_CAP_WAD, defaultFee, defaultFinalitySeconds, deliveryGasUsd, PROOF_COST_USD, stepDurations, timingStats, totalCostUsd, type CostInput } from "@zk-bridge/shared";
 import type { DirectionTiming, Spread, WindowTiming } from "./explore-source";
 import { chainsFor, transferSteps } from "../bridge/bridge-model";
 
@@ -79,8 +79,8 @@ export const proofCoversWith =
 /** One of the four planet colours (intensities of the ember hue): --zb-planet-1 … --zb-planet-4. */
 export type PlanetTone = 1 | 2 | 3 | 4;
 
-/** What a planet's colour is keyed on: the token's symbol without its zkb prefix, so a copy matches its origin. */
-export const toneKey = (token: Pick<TokenInfo, "symbol"> | null): string => (token === null ? "message" : token.symbol.replace(/^zkb/i, "").toUpperCase());
+/** What a planet's colour is keyed on: the token's symbol without its copy prefix, so a copy matches its origin. */
+export const toneKey = (token: Pick<TokenInfo, "symbol" | "isBridgedCopy"> | null): string => (token === null ? "message" : nativeSymbolOf(token).toUpperCase());
 
 /**
  * A stable colour for a token: an FNV-1a hash of its key into the four planet tones.
