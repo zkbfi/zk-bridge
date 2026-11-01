@@ -220,6 +220,20 @@ When a kind has no samples, `isDefault` is true and `defaultGas` is a configured
 
 `GET /api/registry` returns `{ observations: [{ chainId, version, slot, transactionHash, blockNumber, timestamp }] }`.
 
+`GET /api/search?q=&limit=` is the cross-referenced search of zkb.fi, run over this indexer's own tables (it reads no chain and no other service). `q` is what a person types; `limit` is 1 to 50 (default 25). `@zkb/core` reads the text (`classifyQuery`) and `@zkb/data` resolves it (`resolve`), the same code as the dapp's palette and the indexer's page. A missing `q` or a text over 200 characters gives 400. The answer is `{ query, candidates, unsupported, results, problems }`:
+
+| Text | Reading | Result |
+| --- | --- | --- |
+| 32 bytes, with or without `0x` | message identifier, then transaction hash | a `message` found by identifier or by its send or delivery transaction (with the transaction as a second result); a `transaction` that is a light client update; else the hash as a `transaction` on each chain, not confirmed |
+| 20 bytes | address | a contract of the deployment by role (`bridge`, `mediator`, `lightClient`, `gate`...); a bridged `token`; else an `address` with its transfer count |
+| `0x` and 6 to 63 hex digits | start of a hash or address | contracts, tokens and messages that start with it (at most 10 of each) |
+| a word | token symbol or name | `token` results, exact before prefix before substring |
+| digits | proof, beacon slot, block | `proof` and `block` on each chain and a `slot` (confirmed when a head update has that slot) |
+| `bafy...` or `Qm...` | CID | a `release` |
+| `name.eth` and the like | ENS-like name | nothing; `unsupported` is `"name"` |
+
+Each result is `{ id, kind, title, subtitle, confirmed, chainId, addressType, target, links, rank }`. `confirmed` is true when a table has it; false when only the shape fits (the page it links to checks). `links` has one entry per surface that shows the same thing, `{ surface, label, url }`: `dapp` (`#/explore/...` or `#/message/...`), `indexer` (`#lookup=<text>` on the indexer's page), `status` (`#check=<id>` of the status page), `backend` (`/progress/<id>`, `/directions/<direction>/pipeline`), `gateway` (`/ipfs/<cid>`), and one `explorer` link per block explorer of the chain. The hosts default to the public ones of zkb.fi and can be set with `EXPLORER_SITE_DAPP`, `EXPLORER_SITE_INDEXER`, `EXPLORER_SITE_STATUS`, `EXPLORER_SITE_BACKEND` and `EXPLORER_SITE_GATEWAY`. Results are ordered by rank: an exact identifier, then an address, a prefix, a symbol, a number; found before shaped; the order never changes between calls. `problems` names a table that failed to read; the other results still come. No schema change.
+
 `GET /api/tokens` returns `{ tokens: [token object + registeredTransactionHash, registeredBlockNumber, registeredTimestamp] }`.
 
 `GET /api/escrow` returns `{ escrow: [{ chainId, token, balance, updatedBlockNumber, updatedTimestamp }], bridgedSupply: [{ chainId, token, nativeToken, homeChainId, minted, burned, supply, ... }] }`. `balance` is `mediatorBalance(token)` read from the contract. `supply` is mints minus burns of the copy.
