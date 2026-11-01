@@ -167,6 +167,18 @@ describe("the bot configuration", () => {
     expect(() => parseBotConfig({ ...minimal, publisher: { prover: { binary: "p" }, remote: { mode: "queue" } } })).toThrow(BotConfigError);
   });
 
+  it("reads an endpoint list for the remote backend and refuses a bad one", () => {
+    const endpoints = [
+      { label: "dedicated", url: "http://203.0.113.7:40123", readyWaitSeconds: 20, timeoutSeconds: 120, attempts: 2 },
+      { label: "serverless", url: "https://abc123.api.runpod.ai", apiKeyVariable: "RUNPOD_API_KEY" },
+    ];
+    const withList = (list: unknown) => ({ ...minimal, publisher: { prover: { binary: "p" }, remote: { mode: "load-balancing", endpoints: list } } });
+    expect(parseBotConfig(withList(endpoints)).publisher?.remote).toEqual({ mode: "load-balancing", endpoints });
+    expect(() => parseBotConfig(withList([]))).toThrow(BotConfigError);
+    expect(() => parseBotConfig(withList([{ ...endpoints[1], url: "http://abc123.api.runpod.ai" }]))).toThrow(/https/);
+    expect(() => parseBotConfig(withList([endpoints[0], { ...endpoints[1], label: "dedicated" }]))).toThrow(/own label/);
+  });
+
   it("names the field of the first problem", () => {
     expect(() => parseBotConfig({ schemaVersion: 1 })).toThrow(/config\.stateDirectory/);
   });

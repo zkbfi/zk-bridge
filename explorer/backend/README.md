@@ -34,7 +34,8 @@ The backend reads no endpoint from the environment.
 | `modules` | The modules to run when the command line names none. |
 | `publicUrl` | How the prover reaches this service. The prover posts to `<publicUrl>/webhook/jobs/<id>`. |
 | `prover` | `binary` (path of `zk-bridge-prover`) and `timeoutSeconds`. |
-| `remote.endpoint` | The remote proving endpoint (the load balancing endpoint of the graphics processor service). |
+| `remote.endpoints` | The proving endpoints in priority order, such as a dedicated worker first and the serverless endpoint as the fallback. See "Proving endpoints". |
+| `remote.endpoint` | The older form: one load balancing endpoint, with its key in `runpodApiKeyVariable`. Set `remote.endpoint` or `remote.endpoints`, not both. |
 | `rpcUrls` | The execution endpoint of each chain, by chain identifier. Both chains of the pair are required. |
 | `beaconUrls` | The beacon endpoint of each chain. The `requests` module needs both. |
 | `stateUrls` | Optional. More beacon APIs of each chain, by chain identifier, as a list. The prover asks them in order, only for states, when the beacon endpoint does not serve an old state. The prover also keeps every state it verified in `beacon-states/` next to `databasePath`, and reads the start state of a job from there first. |
@@ -50,11 +51,43 @@ A secret is never in the file. The file names the environment variable, and the 
 
 | Variable (default name) | Set by field | Use |
 | --- | --- | --- |
-| `RUNPOD_API_KEY` | `runpodApiKeyVariable` | The key of the remote proving service. It reaches the prover only through the environment of the child process. |
+| `RUNPOD_API_KEY` | `apiKeyVariable` of an entry of `remote.endpoints`, or `runpodApiKeyVariable` with `remote.endpoint` | The key of a proving endpoint. Each entry with a key names its own variable; an entry without one (a dedicated worker on its TCP port) needs none. A key reaches the prover only through the environment of the child process. |
 | `BACKEND_WEBHOOK_BEARER` | `webhookBearerVariable` | The bearer value that the prover sends to the webhook. At least 32 bytes. The backend refuses to start with less. |
 
-The endpoints in `rpcUrls`, `beaconUrls`, `stateUrls`, `msgboardUrl`, `remote.endpoint` and `indexerUrl` can carry a key.
-They stay in the file, so protect the file. The logger removes every endpoint, and every long part of its path, from each log line.
+The endpoints in `rpcUrls`, `beaconUrls`, `stateUrls`, `msgboardUrl`, `remote.endpoints` (every entry), `remote.endpoint`
+and `indexerUrl` can carry a key. They stay in the file, so protect the file. The logger removes every endpoint, and every
+long part of its path, from each log line.
+
+## Proving endpoints
+
+The prover tries the entries of `remote.endpoints` in order, one at a time, and moves to the next only when one cannot
+give a proof: it is unreachable, it stays not ready past its `readyWaitSeconds`, it runs out of `attempts`, or it turns
+the request away (401, 403, 404). A refusal of the job (a 400 or 422 of the worker), a 200 that is not a proof and a
+proof that fails the local checks end the job at once: no other endpoint proves it again. The job never goes to two
+endpoints at the same time, so the serverless fallback bills nothing while the dedicated worker answers. The full table
+is in `docs/gpu-prover.md`, "Endpoint list".
+
+```json
+"remote": {
+  "endpoints": [
+    { "label": "dedicated", "url": "http://203.0.113.7:40123", "readyWaitSeconds": 20, "timeoutSeconds": 120, "attempts": 2 },
+    { "label": "serverless", "url": "https://ENDPOINT_IDENTIFIER.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY" }
+  ]
+}
+```
+
+| Entry field | Meaning |
+| --- | --- |
+| `label` | The name in the logs: 1 to 32 lower case letters, digits, `-` or `_`. Each label once. The logs never show the URL. |
+| `url` | The base URL of the worker. With `apiKeyVariable` it must be `https://` (or `http://` on the local machine). |
+| `apiKeyVariable` | Optional. The NAME of the variable with the key. Without it the prover sends no `Authorization` header. |
+| `readyWaitSeconds` | Optional. The longest wait for a worker that answers "not ready". Default 900. Keep it short for a dedicated worker. |
+| `timeoutSeconds` | Optional. One request. Default 360. |
+| `attempts` | Optional. Requests after ordinary failures before the prover moves on. Default 3. |
+
+The `prove_timing` fields of `job_proved` carry `endpoint` (the label that gave the proof) and `failover_count`.
+The warm-up ping goes to the first endpoint only, with its key when it has one: a ping of the serverless fallback would
+start a paid worker that a healthy dedicated worker never needs. With the older `remote.endpoint`, the label is `remote`.
 
 ## Callers and limits
 
@@ -123,7 +156,7 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
   covers, while that proof still starts at the head, starts nothing. One finalized header starts at most one job, and
   no job starts while one runs.
 - **Warm-up.** Shortly before a proof is expected (45 s before the expected finality of a sent message, or once before a
-  period handoff that the next finality makes due), the backend calls `GET <remote.endpoint>/ping` with the RunPod key.
+  period handoff that the next finality makes due), the backend calls `GET <first endpoint>/ping` with that endpoint's key, if it has one.
   One ping per direction is outstanding at most, and it waits up to `warmup.pingTimeoutSeconds` (300 s) because the
   load-balancing endpoint holds it while a worker starts. Before a message it repeats every 30 s after an answer until
   90 s past the expected finality, and a 200 (warm) ends the session. At most one session per direction in 5 minutes,

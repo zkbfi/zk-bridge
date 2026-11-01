@@ -5,7 +5,7 @@ import type { SecretReference } from "@zk-bridge/shared/config";
 import { BotConfigError, type PublisherConfig } from "../config/bot-config.ts";
 import { createIndexerClient } from "../indexer/client.ts";
 import { createBoardPublisher, grindInWorker, type BoardPublisher, type GrindFunction } from "@zk-bridge/shared/msgboard";
-import { createLightClientReader, createProverBinary, executeCommand, type BackendSection, type CommandExecutor } from "@zk-bridge/shared/prover";
+import { createLightClientReader, createProverBinary, endpointKeyVariables, executeCommand, type BackendSection, type CommandExecutor, type ProverSecret, type RemoteEndpoint } from "@zk-bridge/shared/prover";
 import { sidesOfDirection, type BotContext } from "../runtime/context.ts";
 import { runLoop } from "../runtime/loop.ts";
 import { createStateFile } from "../runtime/state-file.ts";
@@ -42,21 +42,25 @@ function requirePublisherConfig(context: BotContext): PublisherConfig {
 
 interface Proving {
   readonly backend: BackendSection;
-  readonly secret: { readonly variable: string; readonly value: string };
+  readonly secrets: readonly ProverSecret[];
 }
 
 /** What the chosen backend needs, once the setup file passed the checks. */
 type ProvingPlan =
   | { readonly kind: "oracle"; readonly keyVariable: string }
-  | { readonly kind: "remote"; readonly mode: PublisherConfig["remote"]; readonly endpoint: string; readonly apiKeyVariable: string; readonly apiKey: SecretReference };
+  | { readonly kind: "remote"; readonly mode: PublisherConfig["remote"]; readonly endpoint: string; readonly apiKeyVariable: string; readonly apiKey: SecretReference }
+  | { readonly kind: "remote-list"; readonly endpoints: readonly RemoteEndpoint[] };
 
 /**
  * Refuses a setup that the chosen backend cannot run with. The oracle backend needs nothing from the setup file.
  *
- * @throws BotConfigError when the remote backend lacks its endpoint or its key reference.
+ * @throws BotConfigError when the remote backend lacks its endpoint or its key reference. An endpoint list in the bot
+ *   configuration needs nothing from the setup file.
  */
 function planProving(context: BotContext, publisher: PublisherConfig): ProvingPlan {
   if (publisher.backend === "oracle") return { kind: "oracle", keyVariable: publisher.oracleKeyVariable };
+  // A list in the bot configuration replaces the one endpoint of the setup file.
+  if (publisher.remote.endpoints !== undefined) return { kind: "remote-list", endpoints: publisher.remote.endpoints };
   const { setup } = context;
   if (setup.endpointUrl === "") throw new BotConfigError("The setup file has no remote prover endpoint (endpointUrl).");
   if (setup.runpodApiKey === null) throw new BotConfigError("The setup file has no reference to the RunPod key (runpodApiKey).");
@@ -68,12 +72,22 @@ async function resolveProving(context: BotContext, plan: ProvingPlan): Promise<P
   if (plan.kind === "oracle") {
     // Local testing only: the oracle key is a test key from the environment.
     const value = await context.vault.resolve({ source: "environment", variable: plan.keyVariable });
-    return { backend: { kind: "oracle", keyVariable: plan.keyVariable }, secret: { variable: plan.keyVariable, value } };
+    return { backend: { kind: "oracle", keyVariable: plan.keyVariable }, secrets: [{ variable: plan.keyVariable, value }] };
+  }
+  if (plan.kind === "remote-list") {
+    // An endpoint address can carry a key in its path, and a dedicated worker's address is private: the logger
+    // removes every one of them, as it removes a resolved secret.
+    for (const endpoint of plan.endpoints) context.vault.remember(endpoint.url);
+    const secrets: ProverSecret[] = [];
+    for (const variable of endpointKeyVariables(plan.endpoints)) {
+      secrets.push({ variable, value: await context.vault.resolve({ source: "environment", variable }) });
+    }
+    return { backend: { kind: "remote", mode: { mode: "load-balancing" }, endpoints: plan.endpoints }, secrets };
   }
   const value = await context.vault.resolve(plan.apiKey);
   return {
     backend: { kind: "remote", mode: plan.mode, endpoint: plan.endpoint, apiKeyVariable: plan.apiKeyVariable },
-    secret: { variable: plan.apiKeyVariable, value },
+    secrets: [{ variable: plan.apiKeyVariable, value }],
   };
 }
 
@@ -110,7 +124,7 @@ export async function startPublisher(input: StartPublisherInput): Promise<void> 
     executor: overrides.executor ?? executeCommand,
     timeoutMilliseconds: publisher.prover.timeoutSeconds * 1000,
     backend: proving.backend,
-    proverSecret: proving.secret,
+    proverSecret: proving.secrets,
     baseEnvironment: { PATH: context.environment.PATH ?? "/usr/bin:/bin" },
     temporaryDirectory: join(context.config.stateDirectory, "tmp"),
     stateCacheDirectory: join(context.config.stateDirectory, "beacon-states"),

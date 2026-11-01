@@ -92,6 +92,53 @@ describe("startPublisher refuses an incomplete setup", () => {
   });
 });
 
+describe("startPublisher with an endpoint list", () => {
+  const DEDICATED_URL = "http://203.0.113.7:40123";
+  const listConfig = {
+    publisher: {
+      ...publisherConfig.publisher,
+      remote: {
+        mode: "load-balancing",
+        endpoints: [
+          { label: "dedicated", url: DEDICATED_URL, readyWaitSeconds: 20 },
+          { label: "serverless", url: "https://abc123.api.runpod.ai", apiKeyVariable: "RUNPOD_API_KEY" },
+          { label: "backup", url: "https://backup.example.org", apiKeyVariable: "BACKUP_KEY" },
+        ],
+      },
+    },
+  };
+
+  it("needs no endpoint from the setup file, writes the list, gives each key in the environment only, and registers every address for redaction", async () => {
+    const node = await board();
+    const created = await world({
+      config: listConfig,
+      setup: readySetup(node.url, { endpointUrl: "", runpodApiKey: null }),
+      environment: { ...environmentFor(node.url), BACKUP_KEY: "backup_TESTONLY_value" },
+    });
+    const texts: string[] = [];
+    const specs: CommandSpec[] = [];
+    const executor: CommandExecutor = async (spec) => {
+      specs.push(spec);
+      texts.push(readFileSync(spec.args[1]!, "utf8"));
+      return { code: 3, stdout: "", stderr: "" };
+    };
+    await start(created, { executor, publicClient: () => lightClientClient });
+    expect(texts[0]).toContain('[[prover.remote_endpoints]]\nlabel = "dedicated"\nurl = "http://203.0.113.7:40123"\nready_wait_seconds = 20');
+    expect(texts[0]).toContain('label = "backup"');
+    expect(texts[0]).not.toContain("remote_url");
+    expect(texts[0]).not.toContain(RUNPOD_KEY);
+    expect(specs[0]!.environment).toEqual({ PATH: "/custom/bin", RUNPOD_API_KEY: RUNPOD_KEY, BACKUP_KEY: "backup_TESTONLY_value" });
+    expect(created.context.vault.knownSecrets()).toEqual(expect.arrayContaining([DEDICATED_URL, "https://abc123.api.runpod.ai", RUNPOD_KEY, "backup_TESTONLY_value"]));
+    expect(created.logLines.join("\n")).not.toContain(RUNPOD_KEY);
+  });
+
+  it("refuses to start when a key variable of the list is not set", async () => {
+    const node = await board();
+    const created = await world({ config: listConfig, setup: readySetup(node.url), environment: environmentFor(node.url) });
+    await expect(start(created, { publicClient: () => lightClientClient })).rejects.toThrow(/BACKUP_KEY/);
+  });
+});
+
 describe("startPublisher with the oracle backend, which is for local testing only", () => {
   const oracleConfig = { publisher: { ...publisherConfig.publisher, backend: "oracle" } };
   // Made-up test key with the right shape. It is not a live key.

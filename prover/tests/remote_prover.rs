@@ -174,8 +174,9 @@ impl FakeWorker {
     fn prover(&self, attempts: u32, timeout: Duration) -> RemoteProver {
         RemoteProver::new(
             RemoteSettings {
+                label: "remote".into(),
                 endpoint_url: self.url.clone(),
-                api_key: API_KEY.into(),
+                api_key: Some(API_KEY.into()),
                 timeout,
                 attempts,
                 retry_delay: Duration::from_millis(20),
@@ -191,8 +192,9 @@ impl FakeWorker {
         let (logger, lines) = Logger::in_memory();
         let prover = RemoteProver::new(
             RemoteSettings {
+                label: "remote".into(),
                 endpoint_url: self.url.clone(),
-                api_key: API_KEY.into(),
+                api_key: Some(API_KEY.into()),
                 timeout: long(),
                 attempts: 1,
                 retry_delay: Duration::from_millis(20),
@@ -538,8 +540,9 @@ fn the_backend_and_the_worker_agree_over_http() {
 
     let backend = RemoteProver::new(
         RemoteSettings {
+            label: "remote".into(),
             endpoint_url: url.clone(),
-            api_key: API_KEY.into(),
+            api_key: Some(API_KEY.into()),
             timeout: long(),
             attempts: 1,
             retry_delay: Duration::ZERO,
@@ -793,5 +796,320 @@ fn the_step_lines_name_the_worker_and_hold_no_secret() {
     assert!(
         !all.contains(API_KEY) && !all.contains("http://") && !all.contains("https://"),
         "{all}"
+    );
+}
+
+/// A URL where nothing listens: a port that was bound and let go.
+fn closed_url() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    format!("http://{address}")
+}
+
+/// The settings of one endpoint for the failover tests: short pauses, one attempt per endpoint unless changed.
+fn endpoint(label: &str, url: &str, api_key: Option<&str>, ready_wait: Duration) -> RemoteSettings {
+    RemoteSettings {
+        label: label.into(),
+        endpoint_url: url.into(),
+        api_key: api_key.map(str::to_string),
+        timeout: Duration::from_secs(5),
+        attempts: 1,
+        retry_delay: Duration::from_millis(20),
+        cold_start_wait: ready_wait,
+    }
+}
+
+/// A dedicated worker without a key, then a serverless endpoint with one. The second value gives the log lines.
+fn two_endpoints(
+    dedicated_url: &str,
+    serverless_url: &str,
+) -> (RemoteProver, Arc<Mutex<Vec<String>>>) {
+    let (logger, lines) = Logger::in_memory();
+    let prover = RemoteProver::with_endpoints(
+        vec![
+            endpoint("dedicated", dedicated_url, None, Duration::from_millis(300)),
+            endpoint(
+                "serverless",
+                serverless_url,
+                Some(API_KEY),
+                Duration::from_secs(30),
+            ),
+        ],
+        logger,
+    );
+    (prover, lines)
+}
+
+/// Asserts that no log line names an address of an endpoint or the key.
+fn assert_no_address(lines: &Arc<Mutex<Vec<String>>>, addresses: &[&str]) {
+    for line in lines.lock().unwrap().iter() {
+        assert!(!line.contains(API_KEY), "{line}");
+        for address in addresses {
+            let host = address.trim_start_matches("http://");
+            assert!(!line.contains(host), "{line}");
+        }
+    }
+}
+
+/// Claim: when the dedicated worker is unreachable, the job goes to the serverless endpoint, which gives the proof.
+/// The timings name the serverless endpoint and one failover. The failover line names both endpoints by position and
+/// label, never by address, and never shows the key.
+/// Why it matters: a dedicated worker that is down (restarted, out of capacity) must not stop the delivery.
+#[test]
+fn an_unreachable_dedicated_worker_falls_over_to_serverless() {
+    let serverless = FakeWorker::start(|_| transport_answer());
+    let dedicated_url = closed_url();
+    let (prover, lines) = two_endpoints(&dedicated_url, &serverless.url);
+    let (answer, timings) = prover
+        .request_proof_timed(BODY)
+        .expect("serverless answers");
+    assert_eq!(answer.proof, "0xaaaaaaaa");
+    assert_eq!(timings.endpoint, "serverless");
+    assert_eq!(timings.failover_count, 1);
+    assert_eq!(serverless.requests().len(), 1);
+    assert_eq!(
+        serverless.requests()[0].authorization.as_deref(),
+        Some(format!("Bearer {API_KEY}").as_str())
+    );
+    let all = lines.lock().unwrap().join("\n");
+    let failover = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|line| line.contains("event=remote_endpoint_failover"))
+        .cloned()
+        .expect("a failover line");
+    for part in [
+        "endpoint_index=1",
+        "endpoint=dedicated",
+        "next_endpoint_index=2",
+        "next_endpoint=serverless",
+    ] {
+        assert!(failover.contains(part), "{part} in {failover}");
+    }
+    assert!(!all.contains("remote_job_refused"), "{all}");
+    assert_no_address(&lines, &[&dedicated_url, &serverless.url]);
+}
+
+/// Claim: a dedicated worker that stays not ready past its own short wait is left for the serverless endpoint. The
+/// short wait holds: the job does not sit out the serverless endpoint's long wait on the dedicated worker.
+#[test]
+fn a_dedicated_worker_not_ready_past_its_wait_falls_over() {
+    let dedicated =
+        FakeWorker::start(|_| Reply::with(503, r#"{"error":"the worker is still starting"}"#));
+    let serverless = FakeWorker::start(|_| transport_answer());
+    let (prover, lines) = two_endpoints(&dedicated.url, &serverless.url);
+    let started = std::time::Instant::now();
+    let (_, timings) = prover
+        .request_proof_timed(BODY)
+        .expect("serverless answers");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(!dedicated.requests().is_empty());
+    assert_eq!(serverless.requests().len(), 1);
+    assert_eq!(timings.endpoint, "serverless");
+    assert_eq!(timings.failover_count, 1);
+    assert!(timings.not_ready_count >= 1);
+    let all = lines.lock().unwrap().join("\n");
+    assert!(
+        all.contains("event=remote_worker_not_ready") && all.contains("endpoint=dedicated"),
+        "{all}"
+    );
+    assert!(all.contains("not ready after"), "{all}");
+    assert_no_address(&lines, &[&dedicated.url, &serverless.url]);
+}
+
+/// Claim: when the dedicated worker refuses the job (a 400 that rejects the input, a 422), the job fails at once and
+/// the serverless endpoint is never asked.
+/// Why it matters: the same input fails the same way everywhere. Sending it on would pay for a cold start and a GPU
+/// run that cannot give a proof.
+#[test]
+fn a_refusal_of_the_job_does_not_fall_over() {
+    for (status, body) in [
+        (
+            400,
+            r#"{"error":"this worker holds no program with key 0x01"}"#,
+        ),
+        (
+            422,
+            r#"{"error":"the program rejects the input: too few signers"}"#,
+        ),
+    ] {
+        let dedicated = FakeWorker::start(move |_| Reply::with(status, body));
+        let serverless = FakeWorker::start(|_| transport_answer());
+        let (prover, lines) = two_endpoints(&dedicated.url, &serverless.url);
+        let error = prover.request_proof(BODY).unwrap_err();
+        assert!(
+            error.to_string().contains("refused the job"),
+            "{status}: {error}"
+        );
+        assert_eq!(dedicated.requests().len(), 1, "{status}");
+        assert!(serverless.requests().is_empty(), "{status}");
+        let all = lines.lock().unwrap().join("\n");
+        assert!(
+            all.contains("event=remote_job_refused") && all.contains("endpoint=dedicated"),
+            "{all}"
+        );
+        assert!(!all.contains("remote_endpoint_failover"), "{all}");
+    }
+}
+
+/// Claim: a 200 that is not a proof ends the job at the endpoint that sent it; the serverless endpoint is not asked.
+#[test]
+fn a_malformed_answer_does_not_fall_over() {
+    let dedicated = FakeWorker::start(|_| Reply::with(200, "<html>hello</html>"));
+    let serverless = FakeWorker::start(|_| transport_answer());
+    let (prover, _lines) = two_endpoints(&dedicated.url, &serverless.url);
+    let error = prover.request_proof(BODY).unwrap_err();
+    assert!(matches!(error, Error::Malformed(_)), "{error}");
+    assert!(serverless.requests().is_empty());
+}
+
+/// Claim: when the dedicated worker gives the proof, the serverless endpoint is never called. The dedicated worker
+/// gets no `Authorization` header, because it has no key.
+/// Why it matters: cost. The serverless endpoint is a fallback, and it bills each worker that starts.
+#[test]
+fn a_proof_from_the_dedicated_worker_never_reaches_serverless() {
+    let dedicated = FakeWorker::start(|_| transport_answer());
+    let serverless = FakeWorker::start(|_| transport_answer());
+    let (prover, _lines) = two_endpoints(&dedicated.url, &serverless.url);
+    let (_, timings) = prover.request_proof_timed(BODY).expect("dedicated answers");
+    assert_eq!(timings.endpoint, "dedicated");
+    assert_eq!(timings.failover_count, 0);
+    assert_eq!(dedicated.requests().len(), 1);
+    assert_eq!(dedicated.requests()[0].authorization, None);
+    assert!(serverless.requests().is_empty());
+}
+
+/// Claim: an endpoint that turns the request away itself (401, 403: a key it does not take; 404: a wrong path) is
+/// left for the next one after one request.
+#[test]
+fn an_endpoint_that_turns_the_request_away_falls_over() {
+    for status in [401, 403, 404] {
+        let dedicated = FakeWorker::start(move |_| Reply::with(status, "Unauthorized"));
+        let serverless = FakeWorker::start(|_| transport_answer());
+        let (prover, _lines) = two_endpoints(&dedicated.url, &serverless.url);
+        let (_, timings) = prover
+            .request_proof_timed(BODY)
+            .expect("serverless answers");
+        assert_eq!(timings.endpoint, "serverless", "{status}");
+        assert_eq!(dedicated.requests().len(), 1, "{status}");
+    }
+}
+
+/// Claim: a dedicated worker that fails with a server error is retried up to its own attempts, then left for the next
+/// endpoint. The retries add up in the timings.
+#[test]
+fn server_errors_use_the_endpoint_attempts_then_fall_over() {
+    let dedicated = FakeWorker::start(|_| Reply::with(500, r#"{"error":"the proof failed"}"#));
+    let serverless = FakeWorker::start(|_| transport_answer());
+    let mut first = endpoint("dedicated", &dedicated.url, None, Duration::ZERO);
+    first.attempts = 2;
+    let second = endpoint("serverless", &serverless.url, Some(API_KEY), Duration::ZERO);
+    let prover = RemoteProver::with_endpoints(vec![first, second], Logger::in_memory().0);
+    let (_, timings) = prover
+        .request_proof_timed(BODY)
+        .expect("serverless answers");
+    assert_eq!(dedicated.requests().len(), 2);
+    assert_eq!(timings.retry_count, 1);
+    assert_eq!(timings.failover_count, 1);
+}
+
+/// Claim: when every endpoint fails, the error names each one by position and label with its last reason, and holds
+/// no address and no key.
+#[test]
+fn every_endpoint_down_fails_clearly() {
+    let dedicated_url = closed_url();
+    let serverless = FakeWorker::start(|_| Reply::with(400, RUNPOD_COLD));
+    let (logger, lines) = Logger::in_memory();
+    let prover = RemoteProver::with_endpoints(
+        vec![
+            endpoint("dedicated", &dedicated_url, None, Duration::ZERO),
+            endpoint(
+                "serverless",
+                &serverless.url,
+                Some(API_KEY),
+                Duration::from_millis(200),
+            ),
+        ],
+        logger,
+    );
+    let text = prover.request_proof(BODY).unwrap_err().to_string();
+    assert!(
+        text.contains("no remote endpoint gave a proof (2 tried)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("endpoint 1 (dedicated): ") && text.contains("no answer"),
+        "{text}"
+    );
+    assert!(
+        text.contains("endpoint 2 (serverless): ") && text.contains("timed out waiting for worker"),
+        "{text}"
+    );
+    let dedicated_host = dedicated_url.trim_start_matches("http://");
+    let serverless_host = serverless.url.trim_start_matches("http://");
+    assert!(
+        !text.contains(dedicated_host) && !text.contains(serverless_host),
+        "{text}"
+    );
+    assert!(!text.contains(API_KEY));
+    assert!(lines
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|line| line.contains("event=remote_endpoints_exhausted")));
+    assert_no_address(&lines, &[&dedicated_url, &serverless.url]);
+}
+
+/// Claim: a proof from the dedicated worker that fails the local checks fails the job. The serverless endpoint is not
+/// asked to prove it again, and an error line names the endpoint that sent the bad proof.
+/// Why it matters: a bad proof points at a broken or hostile worker. Proving again elsewhere would hide it.
+#[test]
+fn a_bad_proof_is_an_error_and_is_not_proved_again() {
+    let chain = ChainKind::Pulsechain;
+    let built = build_update(
+        chain.spec(),
+        UpdateRecipe {
+            store_slot: 8_300,
+            finalized_slot: 8_400,
+            attested_slot: 8_500,
+            signature_slot: 8_501,
+            participants: 400,
+            include_next_committee: true,
+            store_knows_next_committee: true,
+        },
+    );
+    let statement = ProofStatement::Verified(UpdateInput {
+        chain,
+        store: built.store,
+        steps: steps_with_table_versions(chain, vec![built.update]),
+    });
+    let dedicated = FakeWorker::start(|_| transport_answer());
+    let serverless = FakeWorker::start(|_| transport_answer());
+    let (prover, lines) = two_endpoints(&dedicated.url, &serverless.url);
+    let error = prover
+        .prove(B256::repeat_byte(0x11), &statement)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("differ from the native run"),
+        "{error}"
+    );
+    assert_eq!(dedicated.requests().len(), 1);
+    assert!(serverless.requests().is_empty());
+    let refused = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|line| line.contains("event=remote_proof_refused"))
+        .cloned()
+        .expect("an error line");
+    assert!(
+        refused.contains("endpoint=dedicated") && refused.contains("level=error"),
+        "{refused}"
     );
 }

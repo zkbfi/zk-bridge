@@ -737,6 +737,8 @@ fn a_run_ends_with_one_timing_summary() {
                 wait_worker_ms: 90_000,
                 not_ready_count: 4,
                 retry_count: 0,
+                endpoint: "dedicated".into(),
+                failover_count: 0,
                 remote_ms: 50_000,
                 worker: Some(WorkerTimings {
                     queue_ms: 0,
@@ -761,6 +763,8 @@ fn a_run_ends_with_one_timing_summary() {
     for (key, value) in [
         ("wait_worker_ms", "90000"),
         ("not_ready_count", "4"),
+        ("endpoint", "dedicated"),
+        ("failover_count", "0"),
         ("remote_ms", "50000"),
         ("worker_timings", "reported"),
         ("worker_prove_ms", "48000"),

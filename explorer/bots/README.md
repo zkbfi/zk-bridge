@@ -44,7 +44,7 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `maximumMessageBytes` | The largest msgboard message. Default 8192. |
 | `publisher.prover.binary`, `.timeoutSeconds` | The `zk-bridge-prover` binary. |
 | `publisher.apiKeyVariable` | The variable that the prover reads the RunPod key from. Default `RUNPOD_API_KEY`. |
-| `publisher.remote` | `{ "mode": "load-balancing" }`. The only mode today. |
+| `publisher.remote` | `{ "mode": "load-balancing" }`. The only mode today. It may add `endpoints`, a list of proving endpoints in priority order (`[{ "label", "url", "apiKeyVariable"?, "readyWaitSeconds"?, "timeoutSeconds"?, "attempts"? }]`, as in the backend, `explorer/backend/README.md`, "Proving endpoints"). With `endpoints` the setup file's `endpointUrl` and `runpodApiKey` are not used: each key comes from the environment variable that its entry names, and every endpoint address is removed from the logs. |
 | `publisher.backend` | `remote` (default) or `oracle`. The `oracle` backend is for local testing only. The prover signs with a test key, and only a local chain accepts that signature. Never set it on a live deployment. Only the tests and the end-to-end run set it. With it, the publisher posts the oracle form of the proof message (version 2). |
 | `publisher.oracleKeyVariable` | The variable that holds the test key of the `oracle` backend. Default `ORACLE_KEY`. With `oracle`, the setup file needs no remote prover endpoint and no RunPod key. |
 | `publisher.pollSeconds`, `.republishSeconds`, `.retryBackoffSeconds` | 30, 600 and 120. |

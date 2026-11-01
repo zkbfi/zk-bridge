@@ -9,8 +9,12 @@
   "modules": ["requests", "webhook", "msgboard-indexer", "archive"],
   "publicUrl": "https://backend.example.org",
   "prover": { "binary": "/usr/local/bin/zk-bridge-prover", "timeoutSeconds": 1800 },
-  "remote": { "endpoint": "https://example.api.runpod.ai" },
-  "runpodApiKeyVariable": "RUNPOD_API_KEY",
+  "remote": {
+    "endpoints": [
+      { "label": "dedicated", "url": "http://203.0.113.7:40123", "readyWaitSeconds": 20, "timeoutSeconds": 120, "attempts": 2 },
+      { "label": "serverless", "url": "https://example.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY" }
+    ]
+  },
   "webhookBearerVariable": "BACKEND_WEBHOOK_BEARER",
   "rpcUrls": {
     "1": "https://ethereum-rpc.example.org",

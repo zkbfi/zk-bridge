@@ -138,6 +138,11 @@ pub struct RemoteTimings {
     pub not_ready_count: u32,
     /// How often an ordinary failure (no answer, a server error) made the backend send the job again.
     pub retry_count: u32,
+    /// The label of the endpoint that gave the proof (`prover.remote_endpoints`, or `remote` for the single
+    /// `prover.remote_url`). A label from the configuration, never a URL.
+    pub endpoint: String,
+    /// How many endpoints the backend gave up on before the one that gave the proof: 0 when the first one answered.
+    pub failover_count: u32,
     /// The request that the worker accepted, from the first byte sent to the last byte read. A worker that the
     /// platform starts while it holds the request makes this include a cold start; `worker.total_ms` tells how much
     /// of it was the proof.
@@ -172,6 +177,8 @@ pub fn prover_step_lines(
                 ("elapsed_ms", remote.wait_worker_ms.to_string()),
                 ("not_ready_count", remote.not_ready_count.to_string()),
                 ("retry_count", remote.retry_count.to_string()),
+                ("endpoint", remote.endpoint.clone()),
+                ("failover_count", remote.failover_count.to_string()),
             ],
         ));
         lines.push(("remote", vec![("elapsed_ms", remote.remote_ms.to_string())]));
@@ -201,7 +208,7 @@ pub struct ProducerTimings {
 /// The fields of the `prove_timing` line.
 ///
 /// `native_ms` and `verify_ms` add the backend's part to the producer's part. `wait_worker_ms`, `not_ready_count`,
-/// `retry_count` and `remote_ms` appear for the remote backend only. `worker_*` appear when the worker reported timings;
+/// `retry_count`, `endpoint`, `failover_count` and `remote_ms` appear for the remote backend only. `worker_*` appear when the worker reported timings;
 /// otherwise `worker_timings=none` says that the worker did not (a remote backend only).
 /// `remote_overhead_ms` is `remote_ms` minus the worker's `total_ms`: the network, the proxy and a cold start that the
 /// platform hid inside the request.
@@ -220,6 +227,8 @@ pub fn summary_fields(
         fields.push(("wait_worker_ms", remote.wait_worker_ms.to_string()));
         fields.push(("not_ready_count", remote.not_ready_count.to_string()));
         fields.push(("retry_count", remote.retry_count.to_string()));
+        fields.push(("endpoint", remote.endpoint.clone()));
+        fields.push(("failover_count", remote.failover_count.to_string()));
         fields.push(("remote_ms", remote.remote_ms.to_string()));
     }
     fields.push(("verify_ms", verify_ms.to_string()));
@@ -302,6 +311,8 @@ mod tests {
                 wait_worker_ms: 60_000,
                 not_ready_count: 2,
                 retry_count: 1,
+                endpoint: "serverless".into(),
+                failover_count: 1,
                 remote_ms: 43_000,
                 worker: Some(worker()),
             }),
@@ -313,6 +324,8 @@ mod tests {
             ("wait_worker_ms", "60000"),
             ("not_ready_count", "2"),
             ("retry_count", "1"),
+            ("endpoint", "serverless"),
+            ("failover_count", "1"),
             ("remote_ms", "43000"),
             ("verify_ms", "10"),
             ("prove_ms", "100000"),

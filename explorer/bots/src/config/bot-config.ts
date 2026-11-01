@@ -1,6 +1,7 @@
 import { MULTICALL3_ADDRESS, minimumPriorityFeeWei } from "@zk-bridge/shared";
 import { parseReferenceText, type SecretReference } from "@zk-bridge/shared/config";
 import { z } from "zod";
+import { remoteEndpointListSchema } from "@zk-bridge/shared/prover";
 
 /**
  * The bot configuration file: one JSON file that both bots read. It holds paths, numbers and references to secrets.
@@ -71,7 +72,19 @@ export type SignerConfig = z.infer<typeof signerSchema>;
  * answers when the proof is ready. A queue mode (submit, then poll or wait for a webhook) adds a case here and a case
  * in `renderProverConfig`. Nothing that calls the proof source changes.
  */
-export const remoteModeSchema = z.discriminatedUnion("mode", [z.object({ mode: z.literal("load-balancing") }).strict()]);
+export const remoteModeSchema = z.discriminatedUnion("mode", [
+  z
+    .object({
+      mode: z.literal("load-balancing"),
+      /**
+       * Proving endpoints in priority order, such as a dedicated worker first and the serverless endpoint as the
+       * fallback. Without it the publisher uses the one endpoint of the setup file (`endpointUrl`, `runpodApiKey`). Each
+       * key comes from the environment variable that its entry names.
+       */
+      endpoints: remoteEndpointListSchema.optional(),
+    })
+    .strict(),
+]);
 
 /** The remote mode of the publisher. */
 export type RemoteMode = z.infer<typeof remoteModeSchema>;
