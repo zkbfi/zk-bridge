@@ -15,6 +15,8 @@ fs_permissions = [
   { access = "read", path = "./.deploy" },
   { access = "read", path = "./light-client/tests/fixtures" },
   { access = "read", path = "./test/hardened/fixtures" },
+  # script/testnet/DeployTestTokens.s.sol writes the test token file of the testnet next to its deployment file.
+  { access = "read-write", path = "./deploy/deployments" },
 ]
 
 # Long fuzz and invariant runs. Select with `FOUNDRY_PROFILE=deep forge test`. The default profile above is unchanged.
