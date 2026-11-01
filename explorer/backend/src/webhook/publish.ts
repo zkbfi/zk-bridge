@@ -3,6 +3,7 @@ import type { ProofDirection } from "@zk-bridge/shared";
 import type { BoardPublisher } from "@zk-bridge/shared/msgboard";
 import type { Logger } from "../logger.ts";
 import { getJob, touchProvingJob, updateJob, type Job } from "../requests/jobs.ts";
+import { recordBoardPost } from "../requests/timings.ts";
 import type { Storage } from "../storage.ts";
 
 /** The head of a light client. Only the slot matters here. */
@@ -53,7 +54,7 @@ export interface ProofPublisher {
   settled(): Promise<void>;
 }
 
-type StoredProof = { job_id: string; direction: ProofDirection; payload: Hex; start_slot: string; new_slot: string; attempts: number; last_attempt_at: number | null };
+type StoredProof = { job_id: string; direction: ProofDirection; payload: Hex; start_slot: string; new_slot: string; stored_at: number; attempts: number; last_attempt_at: number | null };
 
 /** A fixed phrase for the stored error: the text of a board error can name an endpoint. */
 function errorKind(error: unknown): string {
@@ -83,8 +84,10 @@ export function createProofPublisher(input: ProofPublisherInput): ProofPublisher
     touchProvingJob(storage, stored.job_id, input.now());
     try {
       const posted = await input.board.post({ category: input.categoryFor(stored.direction), payload: stored.payload });
+      const postedAt = input.now();
       storage.transaction(() => {
-        storage.database.prepare("UPDATE webhook_proofs SET posted_at = ?, message_hash = ?, last_error = NULL WHERE job_id = ?").run(input.now(), posted.messageHash, stored.job_id);
+        storage.database.prepare("UPDATE webhook_proofs SET posted_at = ?, message_hash = ?, last_error = NULL WHERE job_id = ?").run(postedAt, posted.messageHash, stored.job_id);
+        recordBoardPost(storage, { jobId: stored.job_id, direction: stored.direction, storedAt: stored.stored_at, postedAt, grindMs: posted.grindMilliseconds });
         const moved = updateJob(storage, stored.job_id, { status: "published", startSlot: stored.start_slot, newSlot: stored.new_slot }, input.now(), ["proving"]);
         if (!moved) logger.warn("webhook_job_moved_during_post", { jobId: stored.job_id });
       });

@@ -8,6 +8,8 @@ import { findActiveJob, findLatestJob, getJob, getRequest, type Job } from "./jo
 import { createRequestService, type RequestService } from "./service.ts";
 import { startWatch } from "../watch/module.ts";
 import { createWarmupStore, noteJobWorkerWait } from "../watch/warmup-store.ts";
+import { recordProveTiming } from "./timings.ts";
+import { registerProgressRoutes } from "../progress/routes.ts";
 
 /** The largest request body in bytes. A real body is under 300 bytes. */
 export const MAXIMUM_BODY_BYTES = 4096;
@@ -46,8 +48,10 @@ function serviceFor(context: BackendModuleContext): RequestService {
     limits: context.config.limits,
     proverTimeoutMilliseconds: context.config.prover.timeoutSeconds * 1000,
     logger: context.logger,
-    // A job that met a cold worker tells the warm-up how long a cold start takes.
+    // The timings of every proof are kept for `GET /benchmarks` and the estimates of `GET /progress`. A job that met a
+    // cold worker also tells the warm-up how long a cold start takes.
     onProved: (event) => {
+      recordProveTiming(context.storage, { jobId: event.jobId, direction: event.direction, startedAt: event.startedAt, provedAt: context.now(), timing: event.timing });
       const wait = noteJobWorkerWait(createWarmupStore(context.storage), { direction: event.direction, startedAt: event.startedAt, timing: event.timing, at: context.now() });
       if (wait.kind === "cold") context.logger.info("warmup_observed", { direction: event.direction, source: "job", jobId: event.jobId, seconds: wait.seconds });
       if (wait.kind === "missed") context.logger.warn("warmup_missed", { direction: event.direction, jobId: event.jobId, waitWorkerSeconds: wait.seconds });
@@ -65,7 +69,7 @@ type SocketBindings = { incoming?: { socket?: { remoteAddress?: string } } };
  * client. A header with fewer entries falls back to the socket address. With no address at all the key is the shared
  * unknown bucket, which has a low limit.
  */
-function callerOf(request: Context, config: { trustForwardedHeader: boolean; trustedProxyHops: number }): string {
+export function callerOf(request: Context, config: { trustForwardedHeader: boolean; trustedProxyHops: number }): string {
   const entries = (request.req.header("x-forwarded-for") ?? "")
     .split(",")
     .map((entry) => entry.trim())
@@ -88,9 +92,13 @@ function describeJob(job: Job) {
   };
 }
 
-/** Adds `POST /requests`, `GET /requests/:id` and `GET /directions/:direction`. */
+/**
+ * Adds `POST /requests`, `GET /requests/:id` and `GET /directions/:direction`, and the pipeline reads
+ * `GET /progress/:messageId`, `GET /directions/:direction/pipeline` and `GET /benchmarks` (`progress/routes.ts`).
+ */
 export function register(app: Hono, context: BackendModuleContext): void {
   const service = serviceFor(context);
+  registerProgressRoutes(app, context, { callerOf: (request) => callerOf(request, context.config) });
 
   app.post(
     "/requests",
