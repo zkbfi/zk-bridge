@@ -2,6 +2,7 @@
  * Reads Explore needs from the chains themselves, through the user's RPC: a transaction and its receipt, a block, an
  * address's balance, nonce and code. A test replaces the module.
  */
+import { explorerLinks } from "@terminal/config/chain-metadata";
 import { beaconLightClientAbi } from "@zk-bridge/shared";
 import { rpcTransport } from "../app/rpc-transport";
 import { createPublicClient, type Address, type Hex } from "viem";
@@ -43,14 +44,8 @@ export const useChainReader = (): ((chainId: number) => ChainReader | null) => {
   };
 };
 
-/** Block explorers per chain (blocks, transactions and addresses). */
-const EXPLORER_BASES: Readonly<Record<number, string>> = {
-  1: "https://etherscan.io",
-  11155111: "https://sepolia.etherscan.io",
-  369: "https://scan.pulsechain.com",
-  943: "https://scan.v4.testnet.pulsechain.com",
-};
+/** The pages of a chain's block explorers (from the chain metadata) for a transaction, a block or an address. */
+export const explorerLinksOf = (chainId: number, kind: "tx" | "block" | "address", id: string): readonly { readonly name: string; readonly url: string }[] => explorerLinks(chainId, kind, id);
 
-/** A page on a chain's block explorer, or undefined for a chain without one. */
-export const explorerUrl = (chainId: number, kind: "tx" | "block" | "address", id: string): string | undefined =>
-  EXPLORER_BASES[chainId] === undefined ? undefined : `${EXPLORER_BASES[chainId]}/${kind}/${id}`;
+/** A page on a chain's main block explorer, or undefined for a chain without one. */
+export const explorerUrl = (chainId: number, kind: "tx" | "block" | "address", id: string): string | undefined => explorerLinks(chainId, kind, id)[0]?.url;

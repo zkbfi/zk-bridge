@@ -43,8 +43,8 @@ describe('the sepolia-pls943 pair', () => {
     for (const deployment of [{ chain_a: sepolia, chain_b: testnet }, { chain_a: testnet, chain_b: sepolia }]) {
       const config = buildPairConfig('sepolia-pls943', deployment)
       expect(config.label).toBe('Sepolia and PulseChain testnet v4')
-      expect([config.first.name, config.first.chainId, config.first.nativeSymbol]).toEqual(['Sepolia', 11155111, 'ETH'])
-      expect([config.second.name, config.second.chainId, config.second.nativeSymbol]).toEqual(['PulseChain testnet v4', 943, 'tPLS'])
+      expect([config.first.name, config.first.chainId, config.first.nativeSymbol]).toEqual(['Sepolia', 11155111, 'SepETH'])
+      expect([config.second.name, config.second.chainId, config.second.nativeSymbol]).toEqual(['PulseChain testnet v4', 943, 'v4tPLS'])
       expect(config.first.contracts.messageBridge).toBe(getAddress(`0x${'3'.repeat(40)}`))
       expect(config.second.contracts.messageBridge).toBe(getAddress(`0x${'4'.repeat(40)}`))
     }
