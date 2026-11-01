@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { buildFixtureFeed, FIXTURE_NOW } from "@terminal/data/fixtures";
@@ -28,6 +28,47 @@ const open = (props: { readonly docPages?: readonly DocPage[]; readonly indexer?
 };
 
 describe("the command palette, the cases of the first test file leaves out", () => {
+  it("shows under a transfer the links to the same transfer on the other pages, and Open in Explore opens the dapp's page", async () => {
+    const delivered = buildFixtureFeed(FIXTURE_NOW).find((item) => item.kind === "token" && item.status === "delivered")!;
+    const { input, onSelect } = open();
+    await userEvent.click(input);
+    await userEvent.paste(delivered.id);
+    const row = await screen.findByRole("option", { name: /Transfer of / });
+    const links = within(row).getByLabelText("The same on other pages");
+    const anchors = within(links).getAllByRole("link");
+    expect(anchors.map((anchor) => [anchor.textContent, anchor.getAttribute("href")])).toEqual([
+      ["Open in Explore", `#/message/${delivered.id}`],
+      ["Indexer", `https://indexer.zkb.fi/#lookup=${delivered.id}`],
+      ["Status", expect.stringMatching(/^https:\/\/status\.zkb\.fi\/#check=pipeline-/)],
+      ["Backend JSON", `https://prove.zkb.fi/progress/${delivered.id}`],
+    ]);
+    expect(anchors[0]).not.toHaveAttribute("target");
+    expect(anchors[1]).toHaveAttribute("target", "_blank");
+    expect(anchors[1]).toHaveAttribute("rel", "noreferrer");
+    await userEvent.click(anchors[1]!);
+    expect(onSelect).not.toHaveBeenCalled();
+    await userEvent.click(anchors[0]!);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: `transfer:${delivered.id}`, jump: { type: "route", route: { name: "message", messageId: delivered.id } } }));
+  });
+
+  it("shows the block explorer of the chain next to the transaction's other pages", async () => {
+    const { input } = open();
+    await userEvent.click(input);
+    await userEvent.paste(unknownHash);
+    const rows = await screen.findAllByRole("option", { name: /Transaction/ });
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(within(row).getAllByRole("link").map((anchor) => anchor.textContent).slice(0, 3)).toEqual(["Open in Explore", "Indexer", "Status"]);
+    expect(within(rows[0]!).getAllByRole("link").length).toBeGreaterThan(3);
+  });
+
+  it("shows a result without links as one line", async () => {
+    const { input } = open();
+    await userEvent.type(input, "audit");
+    const [row] = await screen.findAllByRole("option", { name: /Audit/ });
+    expect(within(row!).queryByLabelText("The same on other pages")).toBeNull();
+  });
+
   it("searches the documentation pages that the caller gives instead of the real ones", async () => {
     const { input } = open({ docPages: [page("Zebra crossing")] });
     await userEvent.type(input, "zebra");
@@ -48,7 +89,11 @@ describe("the command palette, the cases of the first test file leaves out", () 
     await userEvent.click(input);
     await userEvent.paste(unknownHash);
     expect(await screen.findByText(/knows no message with this identifier or transaction hash/)).toBeInTheDocument();
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([expect.stringContaining(unknownHash)]);
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      expect.stringContaining("If it is on"),
+      expect.stringContaining("If it is on"),
+      expect.stringContaining(unknownHash),
+    ]);
     expect(screen.queryByText(/^Nothing matches/)).toBeNull();
   });
 

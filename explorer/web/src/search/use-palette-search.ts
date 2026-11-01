@@ -2,14 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import { useTokens } from "../app/queries";
 import { useServices } from "../app/services";
 import { DOC_PAGES, type DocPage } from "../docs/docs-index";
-import { searchIdentifiers } from "./identifier-search";
+import { isCrossReferenced, searchCrossReferenced } from "./identifier-search";
 import {
   actionResults,
-  classifyQuery,
   docResults,
   emptyQueryGroups,
   flattenGroups,
   groupResults,
+  linkContextOf,
   pairResults,
   rankResults,
   tokenResults,
@@ -33,7 +33,7 @@ export type PaletteSearch = {
   readonly groups: readonly ResultGroup[];
   /** The results in the order of the arrow keys. */
   readonly flat: readonly SearchResult[];
-  /** True while the indexer answers an identifier lookup. */
+  /** True while the indexer answers a lookup of the shared search. */
   readonly loading: boolean;
   /** A sentence about a failed or empty lookup, or null. */
   readonly problem: string | null;
@@ -43,7 +43,8 @@ type Lookup = { readonly query: string; readonly results: readonly SearchResult[
 
 /**
  * The results of the palette for a query. Views, pairs, tokens, actions and docs come from local lists. A message
- * identifier, a transaction hash and an address also read the indexer.
+ * identifier, a transaction hash, an address, the start of a hash, a number or a release also run through the shared
+ * search, which reads the indexer and gives each result its links to the other surfaces.
  *
  * @param input The query, the recent results and the wallet state.
  */
@@ -51,13 +52,15 @@ export const usePaletteSearch = (input: PaletteSearchInput): PaletteSearch => {
   const { pair, indexer, knownPairs } = useServices();
   const tokens = useTokens(pair.id);
   const [lookup, setLookup] = useState<Lookup | null>(null);
-  const shape = useMemo(() => classifyQuery(input.query), [input.query]);
+  const empty = input.query.trim() === "";
+  const crossReferenced = useMemo(() => isCrossReferenced(input.query), [input.query]);
+  const loadedTokens = tokens.data;
 
   const local = useMemo(
     () => [
       ...viewResults(pair.id),
       ...pairResults(knownPairs),
-      ...tokenResults(tokens.data ?? [], pair),
+      ...tokenResults(tokens.data ?? [], pair, linkContextOf(pair)),
       ...actionResults({ pair, walletConnected: input.walletConnected }),
       ...docResults(input.docPages ?? DOC_PAGES),
     ],
@@ -65,26 +68,29 @@ export const usePaletteSearch = (input: PaletteSearchInput): PaletteSearch => {
   );
 
   useEffect(() => {
-    if (shape.kind !== "hash" && shape.kind !== "address") return;
+    if (!crossReferenced) return;
     let cancelled = false;
-    void searchIdentifiers(shape, { indexer, pair }).then((outcome) => {
+    void searchCrossReferenced(input.query, { indexer, pair, tokens: loadedTokens ?? [] }).then((outcome) => {
       if (!cancelled) setLookup({ query: input.query, results: outcome.results, problem: outcome.problem });
     });
     return () => {
       cancelled = true;
     };
-  }, [shape, indexer, pair, input.query]);
+  }, [crossReferenced, indexer, pair, input.query, loadedTokens]);
 
   return useMemo((): PaletteSearch => {
-    if (shape.kind === "empty") {
+    if (empty) {
       const suggestions = [...viewResults(pair.id), ...actionResults({ pair, walletConnected: input.walletConnected })];
       const groups = emptyQueryGroups(input.recent, suggestions);
       return { groups, flat: flattenGroups(groups), loading: false, problem: null };
     }
     const current = lookup !== null && lookup.query === input.query ? lookup : null;
-    const waiting = (shape.kind === "hash" || shape.kind === "address") && current === null;
-    const ranked = rankResults(input.query, local);
-    const groups = groupResults([...(current?.results ?? []), ...ranked]);
+    const waiting = crossReferenced && current === null;
+    // A token found by its address is both a result of the shared search and a local one: show it once, with its links.
+    const found = current?.results ?? [];
+    const foundIds = new Set(found.map((result) => result.id));
+    const ranked = rankResults(input.query, local).filter((result) => !foundIds.has(result.id));
+    const groups = groupResults([...found, ...ranked]);
     return { groups, flat: flattenGroups(groups), loading: waiting, problem: current?.problem ?? null };
-  }, [shape, lookup, input.query, input.recent, input.walletConnected, local, pair]);
+  }, [empty, crossReferenced, lookup, input.query, input.recent, input.walletConnected, local, pair]);
 };

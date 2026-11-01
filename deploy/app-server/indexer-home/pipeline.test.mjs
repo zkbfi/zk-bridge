@@ -7,6 +7,8 @@ import { runInNewContext } from "node:vm";
 
 const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+// The shared search code (zkb-search.js) runs first, as the browser loads it before the page script.
+const bundle = readFileSync(new URL("./zkb-search.js", import.meta.url), "utf8");
 
 /** The page on a host, with elements by id and a fetch the test answers. */
 function load(hostname, answers = {}) {
@@ -24,6 +26,7 @@ function load(hostname, answers = {}) {
       return { ok: answer.status === 200, status: answer.status, headers: { get: (name) => (answer.headers || {})[name] ?? null }, json: async () => answer.body };
     },
   };
+  runInNewContext(bundle, page);
   runInNewContext(script, page);
   return { page, elements, requests };
 }

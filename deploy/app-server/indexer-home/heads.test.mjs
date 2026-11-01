@@ -6,7 +6,10 @@ import { runInNewContext } from "node:vm";
 
 const html = readFileSync(new URL("./index.html", import.meta.url), "utf8");
 const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+// The shared search code (zkb-search.js) runs first, as the browser loads it before the page script.
+const bundle = readFileSync(new URL("./zkb-search.js", import.meta.url), "utf8");
 const page = { fetch: () => new Promise(() => {}), setInterval: () => 0, document: { getElementById: () => ({}) } };
+runInNewContext(bundle, page);
 runInNewContext(script, page);
 const { headRow } = page;
 
