@@ -7,7 +7,7 @@ import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {AmbMessageCodec} from "../../src/hardened/AmbMessageCodec.sol";
 import {MessageScenes} from "./utils/MessageScenes.sol";
 import {MessageFixtures} from "./utils/MessageFixtures.sol";
-import {MessageRecorder} from "./utils/MessageTargets.sol";
+import {MessageNoop, MessageRecorder} from "./utils/MessageTargets.sol";
 
 /// @notice Delivery tests of the message bridge: what `executeMessage` does with an honest proof. The refusals of bad
 /// proofs are in `MessageBridgeProof.t.sol`.
@@ -59,7 +59,7 @@ contract MessageBridgeDeliveryTest is MessageScenes {
     }
 
     /// Claim: during the call the target sees the sender, the identifier, the source chain and the proven transaction
-    /// hash, and the target gets exactly the gas of the message. Shows: each value equals the independent fixture
+    /// hash. Shows: each value equals the independent fixture
     /// value (the identifier and the hash come from the Python generator). Matters: a target trusts a message by this
     /// context. The transaction hash is the hash of the transaction that the proof reaches, not a value that the executor names.
     function test_deliver_contextShowsTheProvenValuesDuringTheCall() public {
@@ -72,20 +72,24 @@ contract MessageBridgeDeliveryTest is MessageScenes {
         assertEq(call.messageId, named.messageId, "the identifier of the message");
         assertEq(call.sourceChainId, bytes32(uint256(MessageFixtures.SOURCE_CHAIN_ID)), "the source chain, as a word");
         assertEq(call.transactionHash, named.transactionHash, "the proven hash of the source transaction");
-        assertGe(call.gasAtEntry, 500_000 - 200, "the target got the gas that the message asked for");
-        assertLe(call.gasAtEntry, 500_000, "and not more");
     }
 
-    /// Claim: the context is cleared after a delivery, whether the call succeeded or reverted. Shows: all four views are
-    /// zero after a success and after a revert of the target. Matters: a stale context would let a later caller pass as
-    /// the sender of an old message.
+    /// Claim: the context is cleared after a delivery, and after a delivery that reverted. Shows: all four views are
+    /// zero after a success, after a target that reverts and after a target that burns its gas (both deliveries
+    /// revert). Matters: a stale context would let a later caller pass as the sender of an old message.
     function test_deliver_contextIsClearedAfterTheCall() public {
         Scene memory scene = _messageScene(bridge);
         bridge.executeMessage(_messageProof(scene, MessageFixtures.deliver()));
         _assertContextClear();
-        bridge.executeMessage(_messageProof(scene, MessageFixtures.reverting()));
+        (bool reverted,) = address(bridge).call(
+            abi.encodeCall(MessageBridge.executeMessage, (_messageProof(scene, MessageFixtures.reverting())))
+        );
+        assertFalse(reverted);
         _assertContextClear();
-        bridge.executeMessage(_messageProof(scene, MessageFixtures.burning()));
+        (bool burned,) = address(bridge).call{gas: 2_000_000}(
+            abi.encodeCall(MessageBridge.executeMessage, (_messageProof(scene, MessageFixtures.burning())))
+        );
+        assertFalse(burned);
         _assertContextClear();
     }
 
@@ -148,43 +152,45 @@ contract MessageBridgeDeliveryTest is MessageScenes {
         assertEq(recorder.callCount(), 1);
     }
 
-    /// Claim: delivery is final when the target reverts. Shows: the execution does not revert, the status is false, the
-    /// failure data names the data hash, the target and the sender, `AffirmationCompleted` carries false, and the same
-    /// message cannot execute again. Matters: a failed call must not become a second chance for the executor, and the
-    /// failure data lets a downstream contract decide what to do.
-    function test_final_revertingTargetIsDeliveredAsAFailure() public {
+    /// Claim: a target that reverts makes the delivery revert with the error of the target, and the message stays
+    /// undelivered. Shows: `executeMessage` reverts with `Error("target failed")`; the status is `NotDelivered`; no
+    /// failure data exists; after the target changes its mind (its code is replaced), the same proof delivers.
+    /// Matters: the owner's rule, "if anyone can call them and they run out of gas, does it not just revert up the
+    /// chain?": a failed call is never final, so nobody can burn a message by making its call fail.
+    function test_revertUp_revertingTargetRevertsTheDeliveryAndTheMessageWaits() public {
         Scene memory scene = _messageScene(bridge);
         MessageFixtures.Named memory named = MessageFixtures.reverting();
-        _expectCompleted(named, address(reverter), false);
-        bridge.executeMessage(_messageProof(scene, named));
+        MessageBridge.MessageProof memory proof = _messageProof(scene, named);
 
-        assertFalse(bridge.messageCallStatus(named.messageId), "the status records the failure");
-        assertEq(bridge.failedMessageDataHash(named.messageId), keccak256("fail"), "the hash of the data of the call");
-        assertEq(bridge.failedMessageReceiver(named.messageId), address(reverter), "the target");
-        assertEq(bridge.failedMessageSender(named.messageId), MessageFixtures.SENDER, "the sender on the source chain");
+        vm.expectRevert(bytes("target failed"));
+        bridge.executeMessage(proof);
+        assertEq(uint8(bridge.deliveryStatus(named.messageId)), uint8(MessageBridge.DeliveryStatus.NotDelivered));
+        assertFalse(bridge.messageCallStatus(named.messageId), "not delivered");
+        assertEq(bridge.failedMessageDataHash(named.messageId), bytes32(0), "no failure data");
+        assertEq(bridge.failedMessageReceiver(named.messageId), address(0), "no failed receiver");
+        assertEq(bridge.failedMessageSender(named.messageId), address(0), "no failed sender");
+        _assertContextClear();
 
+        vm.etch(address(reverter), address(new MessageNoop()).code);
+        _expectCompleted(named, address(reverter), true);
+        bridge.executeMessage(proof);
+        assertEq(uint8(bridge.deliveryStatus(named.messageId)), uint8(MessageBridge.DeliveryStatus.Succeeded));
         vm.expectRevert(abi.encodeWithSelector(MessageBridge.AlreadyDelivered.selector, named.messageId));
-        bridge.executeMessage(_messageProof(scene, named));
+        bridge.executeMessage(proof);
     }
 
-    /// Claim: a target that burns all of its own gas is a final failure, and the executor is not blamed. Shows: with
-    /// enough gas for the message, the call fails, the failure data is recorded, and the message is final. Matters:
-    /// the executor gave what the sender asked for, so the outcome is the sender's.
-    function test_final_targetThatBurnsItsGasIsAFinalFailure() public {
+    /// Claim: a target that fails with no error data (it burns all its gas) makes the delivery revert with
+    /// `TargetCallFailed`, and the message stays undelivered. Shows: the error names the message; the status is
+    /// `NotDelivered`. Matters: the executor sees why the delivery failed even when the target says nothing.
+    function test_revertUp_targetThatBurnsItsGasRevertsWithTargetCallFailed() public {
         Scene memory scene = _messageScene(bridge);
         MessageFixtures.Named memory named = MessageFixtures.burning();
-        _expectCompleted(named, address(burner), false);
-        bridge.executeMessage(_messageProof(scene, named));
-
-        assertFalse(bridge.messageCallStatus(named.messageId));
-        assertEq(bridge.failedMessageDataHash(named.messageId), keccak256("burn"));
-        assertEq(bridge.failedMessageReceiver(named.messageId), address(burner));
-        assertEq(bridge.failedMessageSender(named.messageId), MessageFixtures.SENDER);
-        vm.expectRevert(abi.encodeWithSelector(MessageBridge.AlreadyDelivered.selector, named.messageId));
-        bridge.executeMessage(_messageProof(scene, named));
+        vm.expectRevert(abi.encodeWithSelector(MessageBridge.TargetCallFailed.selector, named.messageId));
+        bridge.executeMessage{gas: 2_000_000}(_messageProof(scene, named));
+        assertEq(uint8(bridge.deliveryStatus(named.messageId)), uint8(MessageBridge.DeliveryStatus.NotDelivered));
     }
 
-    // ================================================================ the gas guard
+    // ================================================================ gas
 
     function _tryExecute(MessageBridge.MessageProof memory proof, uint256 gas) internal returns (bool ok, bytes memory data) {
         uint256 snapshot = vm.snapshotState();
@@ -205,53 +211,43 @@ contract MessageBridgeDeliveryTest is MessageScenes {
         return low;
     }
 
-    /// Claim: an executor that gives too little gas is refused, and nothing is burnt. Shows: with gas that covers the proof
-    /// but not the gas of the message, `executeMessage` reverts with `InsufficientGas`; the message is still undelivered
-    /// and executes with enough gas. Matters: without the guard the target would get less than the sender asked for,
-    /// fail, and the failure would be final.
-    function test_gasGuard_starvedExecutionIsRefusedAndTheMessageSurvives() public {
+    /// Claim: an executor that gives too little gas only loses its own transaction. Shows: at the least gas that
+    /// delivers, one unit less reverts and leaves the message `NotDelivered`, with the target not called; the least
+    /// gas then delivers. Matters: there is no gas guard and no gas number in the bridge any more, so starvation must
+    /// revert, never record.
+    function test_gas_starvedExecutionRevertsAndTheMessageSurvives() public {
         Scene memory scene = _messageScene(bridge);
         MessageFixtures.Named memory named = MessageFixtures.deliver();
         MessageBridge.MessageProof memory proof = _messageProof(scene, named);
 
-        (bool ok, bytes memory data) = _tryExecute(proof, 650_000);
-        assertFalse(ok, "a starved execution reverts");
-        assertEq(bytes4(data), MessageBridge.InsufficientGas.selector, "and the guard is what refuses it");
-
+        uint256 least = _leastGas(proof);
+        (bool starved,) = address(bridge).call{gas: least - 1}(abi.encodeCall(MessageBridge.executeMessage, (proof)));
+        assertFalse(starved, "one unit less reverts");
         assertEq(recorder.callCount(), 0, "the target was not called");
-        assertFalse(bridge.messageCallStatus(named.messageId));
-        assertEq(bridge.failedMessageReceiver(named.messageId), address(0), "no failure was recorded");
-        bridge.executeMessage(proof);
-        assertTrue(bridge.messageCallStatus(named.messageId), "the message executes with enough gas");
+        assertEq(uint8(bridge.deliveryStatus(named.messageId)), uint8(MessageBridge.DeliveryStatus.NotDelivered));
+
+        (bool done,) = address(bridge).call{gas: least}(abi.encodeCall(MessageBridge.executeMessage, (proof)));
+        assertTrue(done, "the least gas delivers");
+        assertTrue(bridge.messageCallStatus(named.messageId));
     }
 
-    /// Claim: the guard asks for exactly what the call needs. Shows, for a success, a revert and a target that burns all
-    /// its gas: at the least gas that does not revert, the target gets the whole gas of the message and the bookkeeping
-    /// completes (the worst case is a failure, which writes the failure data); one unit of gas less, and the guard
-    /// refuses with `InsufficientGas`, not an out-of-gas in the bookkeeping. Matters: a guard that asked for too
-    /// little could leave the bookkeeping short after a target that burned its gas, and a guard that asked for too
-    /// much would refuse honest executors.
-    function test_gasGuard_leastGasGivesTheTargetAllItsGasAndFinishesTheBookkeeping() public {
+    /// Claim: the target gets all the gas that is left, whatever the gas field of the message says. Shows: the fixture
+    /// carries 500,000 in its gas field; with 3,000,000 supplied, the target sees more than 2,000,000 at its entry.
+    /// Matters: the gas field is kept for the OmniBridge layout only; no number in the message caps the call.
+    function test_gas_theTargetGetsAllTheGasNotTheGasField() public {
         Scene memory scene = _messageScene(bridge);
-        MessageFixtures.Named[3] memory messages =
-            [MessageFixtures.deliver(), MessageFixtures.reverting(), MessageFixtures.burning()];
-        uint256[3] memory gasOfMessage = [uint256(500_000), 300_000, 100_000];
-        for (uint256 i = 0; i < messages.length; i++) {
-            MessageBridge.MessageProof memory proof = _messageProof(scene, messages[i]);
-            uint256 least = _leastGas(proof);
-            (bool ok,) = _tryExecute(proof, least);
-            assertTrue(ok, "the least gas succeeds");
-            (bool starved, bytes memory data) = _tryExecute(proof, least - 1);
-            assertFalse(starved, "one unit less reverts");
-            assertEq(bytes4(data), MessageBridge.InsufficientGas.selector, "because of the guard");
+        bridge.executeMessage{gas: 3_000_000}(_messageProof(scene, MessageFixtures.deliver()));
+        assertGt(_lastCall().gasAtEntry, 2_000_000, "the target got more than the gas field");
+    }
 
-            uint256 snapshot = vm.snapshotState();
-            (bool done,) = address(bridge).call{gas: least}(abi.encodeCall(MessageBridge.executeMessage, (proof)));
-            assertTrue(done);
-            if (i == 0) assertGe(_lastCall().gasAtEntry, gasOfMessage[i] - 200, "the target got the whole gas");
-            assertEq(bridge.failedMessageReceiver(messages[i].messageId) != address(0), i != 0, "the outcome is recorded");
-            vm.revertToState(snapshot);
-        }
+    /// Claim: `deliveryStatus` reads `NotDelivered` before a delivery and `Succeeded` after it. Shows: both values for
+    /// one message. Matters: it is the one place that tells a waiting message from a delivered one.
+    function test_status_movesFromNotDeliveredToSucceeded() public {
+        Scene memory scene = _messageScene(bridge);
+        MessageFixtures.Named memory named = MessageFixtures.deliver();
+        assertEq(uint8(bridge.deliveryStatus(named.messageId)), uint8(MessageBridge.DeliveryStatus.NotDelivered));
+        bridge.executeMessage(_messageProof(scene, named));
+        assertEq(uint8(bridge.deliveryStatus(named.messageId)), uint8(MessageBridge.DeliveryStatus.Succeeded));
     }
 
     // ================================================================ independence
@@ -285,10 +281,11 @@ contract MessageBridgeDeliveryTest is MessageScenes {
         assertEq(recorder.callAt(2).messageId, a.messageId);
     }
 
-    /// Claim: a failed message does not stop the messages after it. Shows: after a reverting message, another one
-    /// executes. Matters: the same independence, for a failure.
+    /// Claim: a message whose delivery fails does not stop the messages after it. Shows: after a reverting delivery,
+    /// another message executes. Matters: the same independence, for a failure.
     function test_independence_aFailedMessageBlocksNothing() public {
         Scene memory scene = _messageScene(bridge);
+        vm.expectRevert(bytes("target failed"));
         bridge.executeMessage(_messageProof(scene, MessageFixtures.reverting()));
         bridge.executeMessage(_messageProof(scene, MessageFixtures.order_a()));
         assertTrue(bridge.messageCallStatus(MessageFixtures.order_a().messageId));

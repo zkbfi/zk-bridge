@@ -45,15 +45,28 @@ contract MessageBridgeSendTest is MessageScenes {
         assertEq(_send(sourceBridge, _payload(), 500_000), first.messageId, "the call returns the identifier");
         Vm.Log[] memory logs = vm.getRecordedLogs();
         assertEq(logs[0].topics[1], first.messageId, "the topic");
-        assertEq(logs[0].data, abi.encode(first.encoded), "the raw data is the event data that the fixture holds in its receipt");
+        assertEq(
+            logs[0].data,
+            abi.encode(_withZeroGasField(first.encoded)),
+            "the raw data is the event data of the fixture, with the gas field zero"
+        );
 
         MessageFixtures.Named memory second = MessageFixtures.confirm();
         vm.expectEmit(true, false, false, true, address(sourceBridge));
-        emit UserRequestForAffirmation(second.messageId, second.encoded);
+        emit UserRequestForAffirmation(second.messageId, _withZeroGasField(second.encoded));
         vm.prank(MessageFixtures.SENDER);
         assertEq(
             sourceBridge.requireToConfirmMessage(MessageFixtures.TARGET_RECORDER, "confirm", 500_000), second.messageId
         );
+    }
+
+    /// @dev The fixtures come from receipts of a bridge that wrote the gas of the message into the gas field (bytes 72
+    /// to 75). This bridge writes zero there and changes nothing else.
+    function _withZeroGasField(bytes memory encoded) internal pure returns (bytes memory copy) {
+        copy = bytes.concat(encoded);
+        for (uint256 i = 72; i < 76; i++) {
+            copy[i] = 0;
+        }
     }
 
     /// Claim: the topic 0 of the event is the hash of the OmniBridge event signature. Shows: the constant equals the
@@ -83,7 +96,7 @@ contract MessageBridgeSendTest is MessageScenes {
         assertEq(sourceBridge.destinationChainId(), CHAIN_B);
         assertEq(bridge.sourceChainId(), CHAIN_B);
         assertEq(bridge.destinationChainId(), CHAIN_A);
-        assertEq(sourceBridge.maxGasPerTx(), 10_000_000);
+        assertEq(sourceBridge.maxGasPerTx(), type(uint32).max, "no ceiling below the width of the gas field");
         assertEq(sourceBridge.messageSender(), address(0));
         assertEq(sourceBridge.messageId(), bytes32(0));
         assertEq(sourceBridge.messageSourceChainId(), bytes32(0));
@@ -96,18 +109,19 @@ contract MessageBridgeSendTest is MessageScenes {
 
     // ================================================================ the limits of a send
 
-    /// Claim: the gas of a message must lie between the floor and the ceiling. Shows: below the floor and above the
-    /// ceiling revert with the exact error, and both limits themselves pass. Matters: a message that asks for more gas
-    /// than a block holds could never execute.
-    function test_send_gasRangeIsEnforced() public {
-        bytes memory low = abi.encodeWithSelector(MessageBridge.GasOutOfRange.selector, 99, 100, 10_000_000);
-        vm.expectRevert(low);
-        _send(sourceBridge, "x", 99);
-        bytes memory high = abi.encodeWithSelector(MessageBridge.GasOutOfRange.selector, 10_000_001, 100, 10_000_000);
-        vm.expectRevert(high);
-        _send(sourceBridge, "x", 10_000_001);
-        _send(sourceBridge, "x", 100);
-        _send(sourceBridge, "x", 10_000_000);
+    /// Claim: the gas argument of a send is ignored, and the gas field of every message is zero. Shows: sends with 0, 1,
+    /// 10,000,001 and the largest uint256 all pass, and each logged message decodes with a gas field of zero. Matters:
+    /// the owner's rule, "there should be no defaults": the bridge carries no gas number, so none can be wrong. Delivery
+    /// gives the target all the gas, and a lack of gas reverts.
+    function test_send_gasArgumentIsIgnoredAndTheGasFieldIsZero() public {
+        uint256[4] memory gases = [uint256(0), 1, 10_000_001, type(uint256).max];
+        for (uint256 i = 0; i < gases.length; i++) {
+            vm.recordLogs();
+            _send(sourceBridge, "x", gases[i]);
+            Vm.Log[] memory logs = vm.getRecordedLogs();
+            (AmbMessageCodec.Header memory header,) = AmbMessageCodec.decode(abi.decode(logs[0].data, (bytes)));
+            assertEq(header.gasLimit, 0, "the gas field is zero");
+        }
     }
 
     /// Claim: call data that starts with the selector of a token transfer or approval is refused, as OmniBridge refuses it.
@@ -240,7 +254,7 @@ contract MessageBridgeSendTest is MessageScenes {
         assertEq(bridge.sendCutoffTimestamp(), 0);
     }
 
-    /// Claim: each zero argument is refused with its name, and the chain checks hold. Shows: the exact error for every
+    /// Claim: each zero argument is refused with its name, and the chain checks hold, and the local chain is read from `block.chainid` (no argument can disagree with it). Shows: the exact error for every
     /// case. Matters: an unset address must fail at deployment, not lock messages later.
     function test_constructor_refusesBadArguments() public {
         vm.chainId(CHAIN_B);
@@ -250,20 +264,19 @@ contract MessageBridgeSendTest is MessageScenes {
         address remoteClient = address(lightClientForA);
 
         vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "lightClient"));
-        new MessageBridge(address(0), CHAIN_B, CHAIN_A, remote, _terms(remoteClient), 0, gate);
+        new MessageBridge(address(0), CHAIN_A, remote, _terms(remoteClient), 0, gate);
         vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "remoteChainId"));
-        new MessageBridge(client, CHAIN_B, 0, remote, _terms(remoteClient), 0, gate);
+        new MessageBridge(client, 0, remote, _terms(remoteClient), 0, gate);
         vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "remoteBridge"));
-        new MessageBridge(client, CHAIN_B, CHAIN_A, address(0), _terms(remoteClient), 0, gate);
+        new MessageBridge(client, CHAIN_A, address(0), _terms(remoteClient), 0, gate);
         vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "depositGate"));
-        new MessageBridge(client, CHAIN_B, CHAIN_A, remote, _terms(remoteClient), 0, address(0));
+        new MessageBridge(client, CHAIN_A, remote, _terms(remoteClient), 0, address(0));
         vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.ZeroValue.selector, "remoteLightClient"));
-        new MessageBridge(client, CHAIN_B, CHAIN_A, remote, _terms(address(0)), 0, gate);
-        vm.expectRevert(abi.encodeWithSelector(BeaconProofVerifier.LocalChainIdMismatch.selector, CHAIN_A, CHAIN_B));
-        new MessageBridge(client, CHAIN_A, CHAIN_B, remote, _terms(remoteClient), 0, gate);
+        new MessageBridge(client, CHAIN_A, remote, _terms(address(0)), 0, gate);
         vm.expectRevert(BeaconProofVerifier.RemoteChainIsLocalChain.selector);
-        new MessageBridge(client, CHAIN_B, CHAIN_B, remote, _terms(remoteClient), 0, gate);
-        new MessageBridge(client, CHAIN_B, CHAIN_A, remote, _terms(remoteClient), 758, gate);
+        new MessageBridge(client, CHAIN_B, remote, _terms(remoteClient), 0, gate);
+        MessageBridge built = new MessageBridge(client, CHAIN_A, remote, _terms(remoteClient), 758, gate);
+        assertEq(built.localChainId(), CHAIN_B, "the local chain is block.chainid at deployment");
     }
 
     // ================================================================ gas

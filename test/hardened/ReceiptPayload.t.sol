@@ -18,7 +18,7 @@ contract ReceiptPayloadBridge is MessageBridge {
         BridgeTerms memory terms,
         uint64 capellaEraValue,
         address gate
-    ) MessageBridge(lightClient, localChainId, remoteChainId, remoteBridgeAddress, terms, capellaEraValue, gate) {}
+    ) MessageBridge(lightClient, remoteChainId, remoteBridgeAddress, terms, capellaEraValue, gate) {}
 
     /// @dev The bytes that the payload item covers, and its length.
     function payloadBytes(bytes memory receipt) external pure returns (bytes memory) {

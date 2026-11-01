@@ -570,7 +570,6 @@ contract DeployBridge is Script {
         return address(
             new MessageBridge(
                 lightClient,
-                chain.chainId,
                 deployment.remoteChainId,
                 deployment.remoteBridge,
                 MessageBridge.BridgeTerms({
@@ -600,7 +599,6 @@ contract DeployBridge is Script {
                 TokenMediator.MediatorTerms({
                     bridge: bridge,
                     remoteMediator: deployment.remoteMediator,
-                    remoteChainId: deployment.remoteChainId,
                     flowLimiter: chain.flowLimiter,
                     remoteChainName: chain.remoteChainName
                 })

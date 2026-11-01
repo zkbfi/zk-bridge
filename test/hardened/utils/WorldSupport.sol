@@ -67,7 +67,6 @@ abstract contract WorldSupport is GateSupport, DynamicProofs {
         vm.chainId(CHAIN_A);
         bridgeA = new MessageBridge(
             address(lightClientForA),
-            CHAIN_A,
             CHAIN_B,
             predictedBridgeB,
             MessageBridge.BridgeTerms(0, address(lightClientForB), type(uint64).max),
@@ -79,7 +78,6 @@ abstract contract WorldSupport is GateSupport, DynamicProofs {
         vm.chainId(CHAIN_B);
         bridgeB = new MessageBridge(
             address(lightClientForB),
-            CHAIN_B,
             CHAIN_A,
             predictedBridgeA,
             MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max),
@@ -106,7 +104,6 @@ abstract contract WorldSupport is GateSupport, DynamicProofs {
     {
         terms.bridge = bridge_;
         terms.remoteMediator = remoteMediator;
-        terms.remoteChainId = remoteChainId;
         terms.remoteChainName = remoteChainId == CHAIN_A ? "Chain A" : "Chain B";
     }
 

@@ -5,7 +5,7 @@ import {console2} from "forge-std/console2.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
-import {MediatorFixture, MockAMB, RecordingReceiver} from "./utils/MediatorSupport.sol";
+import {MediatorFixture, MockAMB, RecordingReceiver, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 
 /// @notice A target that does nothing. It gives the baseline cost of a delivery through the mock bridge.
 contract NoopTarget {
@@ -21,8 +21,13 @@ contract NoopTarget {
 /// message bridge has its own cost for both steps, which is not in these figures. Each correction is accurate to a few
 /// thousand gas, because the mock slots are warm in the second measure and may be cold in the first.
 contract TokenMediatorGasTest is MediatorFixture {
-    /// @dev The share of its limit that a delivery may use. The rest is the margin for cold storage and token variety.
+    /// @dev The share of its budget that a delivery may use. The rest is the margin for cold storage and token variety.
     uint256 internal constant MAXIMUM_SHARE_PERCENT = 70;
+    /// @dev Regression budgets of this report. They are the old gas defaults of the mediator, which no message carries
+    /// any more: a delivery gets all the gas of the executor. They only make a large change of cost show up.
+    uint256 internal constant DEPLOY_BUDGET = 2_000_000;
+    uint256 internal constant RELEASE_BUDGET = 250_000;
+    uint256 internal constant CALL_BUDGET = 1_000_000;
 
     NoopTarget internal noop;
     /// @dev A bridge with its own storage, so measuring the cost of a send does not add messages to the real ones.
@@ -60,7 +65,7 @@ contract TokenMediatorGasTest is MediatorFixture {
         );
 
         // Delivery on the other chain: the first message deploys the copy, later messages mint.
-        uint256 deployLimit = mediatorB.DEPLOY_GAS_LIMIT();
+        uint256 deployLimit = DEPLOY_BUDGET;
         console2.log("delivery: deployAndHandleBridgedTokens, first:", _gasOfDeliveryAtoB(0, deployLimit));
         console2.log("delivery: deployAndHandleBridgedTokens, later:", _gasOfDeliveryAtoB(1, deployLimit));
         console2.log("delivery: deployAndHandle..., second token (second copy): ", _gasOfDeliveryAtoB(2, deployLimit));
@@ -76,7 +81,7 @@ contract TokenMediatorGasTest is MediatorFixture {
         console2.log("relayTokens, bridged copy (burn):                         ", total - _mockSendCost(ambB, 0));
         console2.log(
             "delivery: handleNativeTokens (unlock):                    ",
-            _gasOfDeliveryBtoA(0, mediatorA.RELEASE_GAS_LIMIT())
+            _gasOfDeliveryBtoA(0, RELEASE_BUDGET)
         );
 
         // After the return trip the short form applies.
@@ -85,19 +90,19 @@ contract TokenMediatorGasTest is MediatorFixture {
         );
         console2.log(
             "delivery: handleBridgedTokens (mint, short form):         ",
-            _gasOfDeliveryAtoB(3, mediatorB.RELEASE_GAS_LIMIT())
+            _gasOfDeliveryAtoB(3, RELEASE_BUDGET)
         );
 
         // With a call.
         RecordingReceiver receiver = new RecordingReceiver();
         vm.prank(alice);
         gasBefore = gasleft();
-        mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 1 ether, hex"0102");
+        mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 1 ether, hex"0102", TEST_CALLBACK_GAS);
         total = gasBefore - gasleft();
         console2.log(
             "relayTokensAndCall, native, receiver is a contract:       ", total - _mockSendCost(ambA, _lastIndexA())
         );
-        uint256 callLimit = mediatorB.RELEASE_GAS_LIMIT() + mediatorB.CALLBACK_GAS_LIMIT();
+        uint256 callLimit = CALL_BUDGET;
         console2.log("delivery: handleBridgedTokensAndCall (mint and callback): ", _gasOfDeliveryAtoB(4, callLimit));
     }
 
@@ -122,7 +127,7 @@ contract TokenMediatorGasTest is MediatorFixture {
         (bool ok,) = _deliverAtoB(index);
         used = gasBefore - gasleft() - deliveryBaseline;
         assertTrue(ok);
-        assertLt(used * 100, limit * MAXIMUM_SHARE_PERCENT, "the delivery fits its limit with a margin");
+        assertLt(used * 100, limit * MAXIMUM_SHARE_PERCENT, "the delivery fits its budget with a margin");
     }
 
     function _gasOfDeliveryBtoA(uint256 index, uint256 limit) private returns (uint256 used) {
@@ -130,6 +135,6 @@ contract TokenMediatorGasTest is MediatorFixture {
         (bool ok,) = _deliverBtoA(index);
         used = gasBefore - gasleft() - deliveryBaseline;
         assertTrue(ok);
-        assertLt(used * 100, limit * MAXIMUM_SHARE_PERCENT, "the delivery fits its limit with a margin");
+        assertLt(used * 100, limit * MAXIMUM_SHARE_PERCENT, "the delivery fits its budget with a margin");
     }
 }

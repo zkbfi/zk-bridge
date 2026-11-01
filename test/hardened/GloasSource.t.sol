@@ -158,7 +158,7 @@ contract GloasSourceTest is MessageScenes {
             anchor.slot, SSZ.hashTreeRootMemory(anchor), keccak256("committee"), keccak256("next")
         );
         MessageBridge real = new MessageBridge(
-            address(client), 943, 11_155_111, emitter,
+            address(client), 11_155_111, emitter,
             MessageBridge.BridgeTerms(0, makeAddr("remote light client"), 353_024 * 32), 222, address(0x6a7e)
         );
         // The Sepolia state layout (352 for block_roots) is a validated row. Seed it as the fixtures harness does.
@@ -207,10 +207,10 @@ contract GloasSourceTest is MessageScenes {
         });
     }
 
-    /// @dev Writes one `block_roots` layout row (slot 6 of the bridge storage) that covers every slot.
+    /// @dev Writes one `block_roots` layout row (slot 4 of the bridge storage) that covers every slot.
     function _seedStateLayout(address target, uint256 gindex) internal {
-        bytes32 base = keccak256(abi.encode(uint256(6)));
-        vm.store(target, bytes32(uint256(6)), bytes32(uint256(1)));
+        bytes32 base = keccak256(abi.encode(uint256(4)));
+        vm.store(target, bytes32(uint256(4)), bytes32(uint256(1)));
         vm.store(target, base, bytes32(gindex));
         vm.store(target, bytes32(uint256(base) + 1), bytes32(uint256(0) | (uint256(type(uint64).max) << 64)));
     }

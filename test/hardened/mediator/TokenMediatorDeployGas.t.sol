@@ -4,22 +4,19 @@ pragma solidity ^0.8.24;
 import {Vm} from "forge-std/Vm.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {AmbMessageCodec} from "../../../src/hardened/AmbMessageCodec.sol";
+import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {BridgedToken} from "../../../src/hardened/mediator/BridgedToken.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 import {WorldSupport} from "../utils/WorldSupport.sol";
-import {RecordingReceiver} from "./utils/MediatorSupport.sol";
+import {RecordingReceiver, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 
-/// @notice The first message of a native token carries its name and its symbol, and the copy stores both. The cost of
-/// the deployment grows with their length: measured at about 1,058,000 to 1,153,000 gas for a short name and 1,142 to 1,419
-/// gas for each further byte of name and symbol together. A fixed limit of 2,000,000 gas ran out at a name of about 627 bytes, and
-/// then every later message of that token failed. The tests run on the real `MessageBridge`, where the limit of the
-/// message is the gas that the call gets.
+/// @notice The first message of a native token carries its name and its symbol, and the copy stores both, so the
+/// deployment costs about 1,060,000 to 1,160,000 gas for a short name and 1,140 to 1,420 gas for each further byte. The
+/// mediator once gave this message a gas limit that grew with the name, and refused names that needed more than the
+/// bridge allowed. Now the message carries no gas number: the executor brings the gas, and too little gas reverts the
+/// delivery, which can run again. These tests run on the real `MessageBridge`.
 contract TokenMediatorDeployGasTest is WorldSupport {
     uint256 internal constant AMOUNT = 10 ether;
-    /// @dev The rule that the mediator documents: a base and a gas amount for each byte of name and symbol, with a
-    /// margin over the measured 1,153,000 and 1,419. Written out here so a change to the rule fails a test.
-    uint256 internal constant EXPECTED_BASE = 1_300_000;
-    uint256 internal constant EXPECTED_PER_BYTE = 1_600;
 
     function _text(uint256 length, bytes1 letter) internal pure returns (string memory) {
         bytes memory text = new bytes(length);
@@ -27,11 +24,6 @@ contract TokenMediatorDeployGasTest is WorldSupport {
             text[i] = letter;
         }
         return string(text);
-    }
-
-    function _expectedLimit(uint256 nameLength, uint256 symbolLength) internal pure returns (uint256) {
-        uint256 computed = EXPECTED_BASE + EXPECTED_PER_BYTE * (nameLength + symbolLength);
-        return computed > 2_000_000 ? computed : 2_000_000;
     }
 
     function _tokenWith(uint256 nameLength, uint256 symbolLength) internal returns (MockERC20 token) {
@@ -49,22 +41,45 @@ contract TokenMediatorDeployGasTest is WorldSupport {
         return vm.getRecordedLogs();
     }
 
-    function _gasLimitOfMessage(Vm.Log[] memory recorded) internal view returns (uint256) {
+    function _gasFieldOf(Vm.Log[] memory recorded) internal view returns (uint256) {
         (AmbMessageCodec.Header memory header,) = _messageOf(recorded, bridgeA);
         return header.gasLimit;
     }
 
+    /// @dev Runs the proof on chain B with exactly `gas` and reports whether the call went through. The state is kept.
+    function _executeWithGas(Transit memory transit, uint256 gas) internal returns (bool ok) {
+        vm.chainId(CHAIN_B);
+        (ok,) = address(bridgeB).call{gas: gas}(abi.encodeCall(MessageBridge.executeMessage, (transit.proof)));
+    }
+
+    /// Claim: the first send of a token needs no gas number. Shows: the message carries zero in its gas field; a
+    /// delivery with 600,000 gas (too little for the copy) reverts and leaves the message undelivered with no copy; the
+    /// same proof with 3,000,000 gas deploys the copy and pays the receiver. Matters: the owner's rule, "if anyone can
+    /// call them and they run out of gas, does it not just revert up the chain?": the copy deployment needs no
+    /// special limit, because starving it costs nothing but the executor's own transaction.
+    function test_aFirstSendNeedsNoGasNumber() public {
+        MockERC20 token = _tokenWith(5, 3);
+        Vm.Log[] memory recorded = _relay(token);
+        assertEq(_gasFieldOf(recorded), 0, "the message carries no gas number");
+        Transit memory transit = _proveForB(recorded);
+
+        assertFalse(_executeWithGas(transit, 600_000), "too little gas reverts");
+        assertFalse(bridgeB.messageCallStatus(transit.messageId), "the message waits");
+        assertEq(mediatorB.bridgedTokenAddress(address(token)), address(0), "no copy yet");
+
+        assertTrue(_executeWithGas(transit, 3_000_000), "enough gas delivers");
+        address copy = mediatorB.bridgedTokenAddress(address(token));
+        assertEq(BridgedToken(copy).balanceOf(bob), AMOUNT, "the receiver holds the amount");
+    }
+
     /// Claim: a token with a 5,000-byte name deploys its copy through the real bridge, and a second message of the same
     /// token delivers too. Shows: the call status of the bridge is true for both, the copy has the full name and the
-    /// symbol, and the receiver holds both amounts. The limit of the message is the rule: 1,300,000 plus 1,600 for each
-    /// byte of name and symbol. Matters: before the rule, the limit was 2,000,000, the deployment ran out of gas at about
-    /// 627 bytes, the bridge marked the message as failed for good, and the tokens stayed locked.
+    /// symbol, and the receiver holds both amounts. Matters: a fixed limit once ran out at about 627 bytes and made the
+    /// message fail for good; with no limit the executor brings what the name needs.
     function test_aFiveThousandByteNameDeploysThroughTheRealBridge() public {
         MockERC20 token = _tokenWith(5_000, 3);
 
-        Vm.Log[] memory first = _relay(token);
-        assertEq(_gasLimitOfMessage(first), _expectedLimit(5_000, 3), "the limit follows the length");
-        Transit memory firstTransit = _deliverToB(first);
+        Transit memory firstTransit = _deliverToB(_relay(token));
         assertTrue(bridgeB.messageCallStatus(firstTransit.messageId), "the deployment succeeded");
 
         address copy = mediatorB.bridgedTokenAddress(address(token));
@@ -80,52 +95,26 @@ contract TokenMediatorDeployGasTest is WorldSupport {
         assertEq(mediatorA.mediatorBalance(address(token)), 2 * AMOUNT, "the record on chain A");
     }
 
-    function _lengths() internal pure returns (uint256[2][5] memory) {
-        return [[uint256(3), 3], [uint256(600), 3], [uint256(700), 3], [uint256(3), 1_000], [uint256(400), 400]];
-    }
-
-    /// Claim: the limit is the default of 2,000,000 for a short name, and it grows with the name and the symbol
-    /// together. Shows: lengths of 3 and 3, 600 and 3 (still below the default, so 2,000,000), 700 and 3, 3 and 1,000,
-    /// and 400 and 400 give the exact rule. Matters: the symbol is stored too, so it counts the same as the name.
-    function test_theDefaultLimitGrowsWithTheNameAndTheSymbol() public {
-        uint256[2][5] memory lengths = _lengths();
-        for (uint256 i = 0; i < lengths.length; i++) {
-            MockERC20 token = _tokenWith(lengths[i][0], lengths[i][1]);
-            assertEq(
-                _gasLimitOfMessage(_relay(token)),
-                _expectedLimit(lengths[i][0], lengths[i][1]),
-                "the limit of the message"
-            );
-        }
-        assertEq(_expectedLimit(3, 3), 2_000_000, "short names keep the default");
-        assertGt(_expectedLimit(700, 3), 2_000_000, "long names get more");
-    }
-
-    /// Claim: a copy deploys at every one of those lengths with the limit of the rule, on the real bridge. Shows: the
-    /// call status of the bridge is true for each. Matters: the margin of the rule is a margin of gas, so this test
-    /// needs the optimized bytecode. `forge coverage` compiles without the optimizer and its instrumentation adds gas,
-    /// so `script/coverage-check.sh` runs this test in its second step, as it does for the other gas budget tests.
-    function test_gasOfEveryLengthDeploysWithinTheRule() public {
-        uint256[2][5] memory lengths = _lengths();
-        for (uint256 i = 0; i < lengths.length; i++) {
-            MockERC20 token = _tokenWith(lengths[i][0], lengths[i][1]);
-            Transit memory transit = _deliverToB(_relay(token));
-            assertTrue(bridgeB.messageCallStatus(transit.messageId), "every length deploys");
-        }
-    }
-
-    /// Claim: a first message with a call adds the callback limit to the deploy limit that follows the length. Shows:
-    /// the limit of the message and the callback of the receiver after the deployment.
-    function test_aDeployWithACallAddsTheCallbackLimit() public {
+    /// Claim: a first message with a call carries the callback gas of the sender and nothing else. Shows: the gas field
+    /// is zero, the last argument of the payload is the callback gas, and the callback of the receiver runs after the deployment.
+    function test_aDeployWithACallCarriesOnlyTheCallbackGas() public {
         MockERC20 token = _tokenWith(2_000, 3);
         RecordingReceiver receiver = new RecordingReceiver();
         vm.chainId(CHAIN_A);
         vm.recordLogs();
         vm.prank(alice);
-        mediatorA.relayTokensAndCall(address(token), address(receiver), AMOUNT, hex"abcd");
+        mediatorA.relayTokensAndCall(address(token), address(receiver), AMOUNT, hex"abcd", TEST_CALLBACK_GAS);
         Vm.Log[] memory recorded = vm.getRecordedLogs();
 
-        assertEq(_gasLimitOfMessage(recorded), _expectedLimit(2_000, 3) + 750_000, "deploy limit plus callback limit");
+        (AmbMessageCodec.Header memory header, bytes memory data) = _messageOf(recorded, bridgeA);
+        assertEq(header.gasLimit, 0, "the gas field is zero");
+        // The callback gas is the eighth argument: the eighth word of the head, after the selector.
+        uint256 gasWord;
+        assembly {
+            gasWord := mload(add(data, add(36, mul(7, 32))))
+        }
+        assertEq(gasWord, TEST_CALLBACK_GAS, "the payload carries the callback gas as its last argument");
+
         Transit memory transit = _deliverToB(recorded);
         assertTrue(bridgeB.messageCallStatus(transit.messageId), "delivered");
         assertEq(receiver.calls(), 1, "the callback ran");
@@ -133,21 +122,13 @@ contract TokenMediatorDeployGasTest is WorldSupport {
         assertEq(BridgedToken(mediatorB.bridgedTokenAddress(address(token))).balanceOf(address(receiver)), AMOUNT);
     }
 
-    /// Claim: a name so long that the deployment needs more than the maximum of the bridge is refused at the source,
-    /// before any token moves. Shows: the error carries the limit that the rule asks for and the maximum of 10,000,000.
-    /// Matters: the sender learns at once, and does not lock tokens that no message can deploy.
-    function test_aNameBeyondTheBridgeMaximumIsRefusedAtTheSource() public {
+    /// Claim: a name that once needed more than the old bridge maximum of 10,000,000 gas is no longer refused at the
+    /// source, and its copy deploys when the executor brings the gas. Shows: a 9,000-byte name relays, and delivers.
+    /// Matters: the source has no gas rule left that could refuse a token.
+    function test_aNineThousandByteNameRelaysAndDeploys() public {
         MockERC20 token = _tokenWith(9_000, 3);
-        uint256 balanceBefore = token.balanceOf(alice);
-        vm.chainId(CHAIN_A);
-        vm.prank(alice);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                TokenMediator.GasLimitAboveBridgeMaximum.selector, EXPECTED_BASE + EXPECTED_PER_BYTE * 9_003, 10_000_000
-            )
-        );
-        mediatorA.relayTokens(address(token), bob, AMOUNT);
-        assertEq(token.balanceOf(alice), balanceBefore, "nothing moved");
-        assertEq(mediatorA.mediatorBalance(address(token)), 0, "nothing recorded");
+        Transit memory transit = _deliverToB(_relay(token));
+        assertTrue(bridgeB.messageCallStatus(transit.messageId), "delivered");
+        assertEq(BridgedToken(mediatorB.bridgedTokenAddress(address(token))).balanceOf(bob), AMOUNT);
     }
 }

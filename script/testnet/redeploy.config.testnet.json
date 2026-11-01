@@ -1,0 +1,25 @@
+{
+  "_notes": [
+    "Input of script/hardened/RedeployLayers.s.sol for the redeploy of 2026-11 (docs/redeploy-2026-11-gas.md).",
+    "previous*: the contracts that run now, from deploy/deployments/sepolia-pls943.json. The script reads from them every value that the new contracts keep (light clients, gates, Capella era, Gloas slot, cutoff, flow limiter, home chain name, wrapped native token, reward and failed delivery addresses).",
+    "deployerNonce: read it with `cast nonce <deployer> --rpc-url <alias>` right before the run. The script refuses a different nonce, because the bridges and the mediators name their twins on the other chain by predicted address.",
+    "Foundry resolves rpcAlias from FOUNDRY_RPC_ENDPOINTS, as for DeployBridge (docs/testnet-run.md). Never write a key into this file."
+  ],
+  "deployer": "0x444b15380A4560555326158D6799914186937Ec2",
+  "chainA": {
+    "rpcAlias": "sepolia",
+    "chainId": "11155111",
+    "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_SEPOLIA",
+    "previousBridge": "0xb01856abef5b971019f1d25630450cc6bcbafb21",
+    "previousMediator": "0x1dbbcc0bc25de5f6ae122fb0009b3ee4931fd958",
+    "previousRouter": "0x759b764d7fe6e0adc97cfd00eca886ff53f6a329"
+  },
+  "chainB": {
+    "rpcAlias": "pulsechain_testnet_v4",
+    "chainId": "943",
+    "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_943",
+    "previousBridge": "0xf59dfaa7fbbb87c126a58dc67b89c510f9031fd1",
+    "previousMediator": "0xb4ba2fd95ba839d2d148082f4d92631b3a7444ae",
+    "previousRouter": "0x988a6160b5580895ea15a080a8d4ea763cf6538f"
+  }
+}

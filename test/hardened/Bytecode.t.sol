@@ -58,7 +58,6 @@ contract BytecodeTest is MessageScenes {
     function _mediatorTerms() private returns (TokenMediator.MediatorTerms memory terms) {
         terms.bridge = address(bridge);
         terms.remoteMediator = makeAddr("remote mediator");
-        terms.remoteChainId = CHAIN_A;
         terms.remoteChainName = "Chain A";
     }
 

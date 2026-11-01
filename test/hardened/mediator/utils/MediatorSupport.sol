@@ -85,20 +85,33 @@ contract MockAMB is IAMB {
         return requireToPassMessage(target, data, gasLimit);
     }
 
-    /// @notice Delivers message `index` of `source` on this chain.
+    /// @notice Delivers message `index` of `source` on this chain with all the gas that is left, as the real bridge
+    /// does. It reports the result instead of reverting: `ok == false` stands for a delivery that the real bridge
+    /// reverts, which leaves the message undelivered.
     function deliver(MockAMB source, uint256 index) public returns (bool ok, bytes memory returned) {
+        return deliverWithGas(source, index, gasleft());
+    }
+
+    /// @notice Delivers message `index` of `source` and gives the target at most `gas`.
+    function deliverWithGas(MockAMB source, uint256 index, uint256 gas)
+        public
+        returns (bool ok, bytes memory returned)
+    {
         Sent memory message = source.messageAt(index);
-        return
-            execute(
-                message.target, message.data, message.sender, bytes32(source.chainId()), message.id, message.gasLimit
-            );
+        return execute(message.target, message.data, message.sender, bytes32(source.chainId()), message.id, gas);
     }
 
     /// @notice The entry that the delivery router calls. The mock reads no proof: it takes the source bridge and the message
-    /// index from `abi.encode(source, index)` in the `executionHeaderRlp` field (see `proofOf`).
+    /// index from `abi.encode(source, index)` in the `executionHeaderRlp` field (see `proofOf`). As the real bridge, it
+    /// reverts with the error of the target when the delivery fails.
     function executeMessage(MessageBridge.MessageProof calldata proof) external {
         (MockAMB source, uint256 index) = abi.decode(proof.executionHeaderRlp, (MockAMB, uint256));
-        deliver(source, index);
+        (bool ok, bytes memory returned) = deliver(source, index);
+        if (!ok) {
+            assembly {
+                revert(add(returned, 32), mload(returned))
+            }
+        }
     }
 
     /// @notice A proof that names message `index` of `source`, in the form that `executeMessage` reads.
@@ -122,9 +135,14 @@ contract MockAMB is IAMB {
         messageSender = address(0);
         messageSourceChainId = bytes32(0);
         messageId = bytes32(0);
-        emit AffirmationCompleted(sender, target, id, ok);
+        // The real bridge reverts a failed delivery, so it logs only a delivery that went through.
+        if (ok) emit AffirmationCompleted(sender, target, id, true);
     }
 }
+
+/// @dev The gas that the tests give a callback when the gas itself is not what they test: enough for the router and for
+/// the recording receivers.
+uint256 constant TEST_CALLBACK_GAS = 1_000_000;
 
 /// @notice A receiver that records the callback of a `...AndCall` delivery. It can be told to revert.
 contract RecordingReceiver {
@@ -360,7 +378,6 @@ abstract contract MediatorFixture is Test {
 
     /// @dev Terms with no limiter. The fixture fills in the bridge and the remote mediator.
     function _noTerms() internal pure returns (TokenMediator.MediatorTerms memory terms) {
-        terms.remoteChainId = 1;
         terms.remoteChainName = "Chain";
     }
 
@@ -374,11 +391,9 @@ abstract contract MediatorFixture is Test {
         address predictedB = vm.computeCreateAddress(address(this), nonce + 1);
         termsA.bridge = address(ambA);
         termsA.remoteMediator = predictedB;
-        termsA.remoteChainId = CHAIN_B;
         termsA.remoteChainName = nameOfChainB;
         termsB.bridge = address(ambB);
         termsB.remoteMediator = predictedA;
-        termsB.remoteChainId = CHAIN_A;
         termsB.remoteChainName = nameOfChainA;
         mediatorA = new TokenMediator(termsA);
         mediatorB = new TokenMediator(termsB);

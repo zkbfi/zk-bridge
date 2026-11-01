@@ -130,7 +130,6 @@ contract DepositOpeningTest is MessageScenes {
         vm.chainId(CHAIN_A);
         MessageBridge other = new MessageBridge(
             address(lightClientForA),
-            CHAIN_A,
             CHAIN_B,
             DESTINATION_BRIDGE,
             MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max),

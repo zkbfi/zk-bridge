@@ -116,6 +116,9 @@ contract BridgeWorldTest is WorldSupport {
         recorded = vm.getRecordedLogs();
     }
 
+    /// @dev The gas that a relay with a call gives the callback in these tests: enough for the router and the receivers.
+    uint256 internal constant CALLBACK_GAS = 1_000_000;
+
     /// @dev Records the logs of a relay with a call on chain A.
     function _relayAndCallFromA(address sender, address receiver, uint256 value, bytes memory data)
         internal
@@ -124,7 +127,7 @@ contract BridgeWorldTest is WorldSupport {
         vm.chainId(CHAIN_A);
         vm.recordLogs();
         vm.prank(sender);
-        mediatorA.relayTokensAndCall(address(nativeToken), receiver, value, data);
+        mediatorA.relayTokensAndCall(address(nativeToken), receiver, value, data, CALLBACK_GAS);
         return vm.getRecordedLogs();
     }
 
@@ -275,8 +278,8 @@ contract BridgeWorldTest is WorldSupport {
         _failingReceiverIsFinal(application, receiver);
     }
 
-    /// @dev A message to a receiver that reverts. The bridge marks it final: failed, never repeated, with the data that
-    /// OmniBridge keeps.
+    /// @dev A message to a receiver that reverts. The delivery reverts with the error of the receiver and the message
+    /// waits: no failure data, nothing changed, and the same proof can run again.
     function _failingReceiverIsFinal(WorldApplication application, WorldReceiver receiver) internal {
         bytes memory data = abi.encodeCall(WorldReceiver.refuse, ());
         vm.chainId(CHAIN_A);
@@ -284,15 +287,16 @@ contract BridgeWorldTest is WorldSupport {
         bytes32 id = application.send(bridgeA, address(receiver), data, 300_000);
         Vm.Log[] memory recorded = vm.getRecordedLogs();
 
-        Transit memory transit = _deliverToB(recorded);
-
-        assertFalse(bridgeB.messageCallStatus(id), "the call failed");
-        assertEq(bridgeB.failedMessageDataHash(id), keccak256(data), "the data hash of the failure");
-        assertEq(bridgeB.failedMessageReceiver(id), address(receiver), "the receiver of the failure");
-        assertEq(bridgeB.failedMessageSender(id), address(application), "the sender of the failure");
-        vm.expectRevert(abi.encodeWithSelector(MessageBridge.AlreadyDelivered.selector, id));
+        Transit memory transit = _proveForB(recorded);
+        vm.chainId(CHAIN_B);
+        vm.expectRevert(bytes("the receiver refuses"));
         bridgeB.executeMessage(transit.proof);
-        assertEq(receiver.calls(), 1, "the failed message did not change the receiver");
+
+        assertFalse(bridgeB.messageCallStatus(id), "the message waits");
+        assertEq(bridgeB.failedMessageDataHash(id), bytes32(0), "no failure data");
+        assertEq(receiver.calls(), 1, "the failed delivery did not change the receiver");
+        vm.expectRevert(bytes("the receiver refuses"));
+        bridgeB.executeMessage(transit.proof);
     }
 
     /// Claim: a delivery through the delivery router pays a tip to the reward address, and plain execution pays none. All
@@ -300,7 +304,7 @@ contract BridgeWorldTest is WorldSupport {
     /// in the bridged copy and the recipient holds the rest. With a gas based fee the reward address is paid from the measured gas:
     /// positive, below the cap, and bounded by the fee of the gas that the caller supplied (4,000,000, set with an explicit gas amount). A small cap binds. Plain
     /// `executeMessage` of the same kind of message pays no fee. Matters: the router relies on the callback order and on
-    /// the gas rule of the bridge. Only the real bridge forwards exactly the gas of the message.
+    /// the gas rule of the mediator, which gives the callback exactly the callback gas of the relay.
     function test_deliveryRouterPaysTheRewardAddressThroughTheRealBridge() public {
         MockWrappedNative wrapped = new MockWrappedNative();
         DeliveryRouter router = new DeliveryRouter(
@@ -370,7 +374,7 @@ contract BridgeWorldTest is WorldSupport {
         pure
         returns (bytes memory)
     {
-        return abi.encode(DeliveryRouter.FeeDirector(recipient, settings, limit, multiplier));
+        return abi.encode(DeliveryRouter.FeeDirector(recipient, settings, limit, multiplier, 0));
     }
 
     function _fixedFee(DeliveryRouter router, address copy) internal {
@@ -404,14 +408,15 @@ contract BridgeWorldTest is WorldSupport {
         address recipient = makeAddr("recipient, gas based fee");
         uint256 value = 100 ether;
         uint256 cap = 1 ether;
-        DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(recipient, 0, cap, 1 ether);
+        DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(recipient, 0, cap, 1 ether, 0);
         Vm.Log[] memory recorded = _relayAndCallFromA(alice, address(router), value, abi.encode(director));
         Transit memory transit = _proveForB(recorded);
 
         vm.chainId(CHAIN_B);
         uint256 heldBefore = BridgedToken(copy).balanceOf(router.rewardAddress());
-        // The caller supplies an exact amount. The real bridge forwards only the gas limit of the message, so the router
-        // measures the supplied gas less what the bridge held back, plus the work in between.
+        // The caller supplies an exact amount. The callback runs with exactly the callback gas of the relay, and the
+        // bridge and the mediator keep the rest, so the router measures the supplied gas less the callback gas, plus
+        // the work in between.
         uint256 supplied = 4_000_000;
         vm.prank(bob, bob);
         router.executeMessage{gas: supplied}(transit.proof);
@@ -422,11 +427,10 @@ contract BridgeWorldTest is WorldSupport {
         assertEq(
             paid + BridgedToken(copy).balanceOf(recipient), value, "the recipient and the reward address hold the value"
         );
-        // The measure is at most the supplied gas, and at least the supplied gas less the gas limit of the message and
-        // a margin for the entry. The tip is the fee of that measure, in whole gas prices.
-        uint256 gasLimitOfTheMessage = mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT();
+        // The measure is at most the supplied gas, and at least the supplied gas less the callback gas and a margin for
+        // the entry. The tip is the fee of that measure, in whole gas prices.
         (uint256 upper,) = router.feeInfo(copy, value, supplied, director);
-        (uint256 lower,) = router.feeInfo(copy, value, supplied - gasLimitOfTheMessage - 30_000, director);
+        (uint256 lower,) = router.feeInfo(copy, value, supplied - CALLBACK_GAS - 30_000, director);
         assertEq(paid % 1 gwei, 0, "the unit is the gas price");
         assertLe(paid, upper, "the tip does not exceed the fee of the supplied gas");
         assertGe(paid, lower, "the tip follows the gas that the call measured");

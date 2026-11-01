@@ -20,7 +20,7 @@ contract VerifierDecodingHarness is MessageBridge {
         BridgeTerms memory terms,
         uint64 capellaEraValue,
         address gate
-    ) MessageBridge(lightClient, localChainId, remoteChainId, remoteBridgeAddress, terms, capellaEraValue, gate) {}
+    ) MessageBridge(lightClient, remoteChainId, remoteBridgeAddress, terms, capellaEraValue, gate) {}
 
     function headerRoot(bytes calldata headerRlp, uint256 field) external pure returns (bytes32) {
         return _headerRoot(RLPReader.readList(headerRlp), field);

@@ -4,10 +4,11 @@ pragma solidity ^0.8.24;
 import {console2} from "forge-std/console2.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
+import {ExactGasCall} from "../../../src/hardened/mediator/ExactGasCall.sol";
 import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
-import {MediatorFixture, MockWrappedNative} from "./utils/MediatorSupport.sol";
+import {MediatorFixture, MockWrappedNative, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 import {CallBurner, CallRecorder} from "./utils/CallTargets.sol";
 
 /// @notice Measures the gas of a whole delivery through the delivery router: the bridge execution, the mediator release,
@@ -41,9 +42,9 @@ contract DeliveryRouterGasTest is MediatorFixture {
     }
 
     function _send(uint256 settings, uint256 limit, uint256 multiplier) private returns (uint256) {
-        DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(makeAddr("recipient"), settings, limit, multiplier);
+        DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(makeAddr("recipient"), settings, limit, multiplier, 0);
         vm.prank(alice);
-        mediatorB.relayTokensAndCall(address(tokenB), address(router), 100 ether, abi.encode(director));
+        mediatorB.relayTokensAndCall(address(tokenB), address(router), 100 ether, abi.encode(director), TEST_CALLBACK_GAS);
         return _lastIndexB();
     }
 
@@ -86,43 +87,53 @@ contract DeliveryRouterGasTest is MediatorFixture {
         return new DeliveryRouter(ITokenMediator(address(this)), IWETH(address(wrapped)), reward, reward);
     }
 
-    /// Claim: the reserve of 10,000 gas that the router keeps for the call after a delivery is more than twice what the
-    /// router needs after the call. Shows: with a burning target, 500,000 gas supplied and a router that runs a
-    /// direct delivery, the gas that comes back to the caller is measured, and the need (reserve less returned gas)
-    /// is logged. The measure includes the cost of the call into the router, so the need is a little too high. This
-    /// holds while 1/64 of the gas at the call is below the reserve, which is true below 640,000 gas. Matters: a
-    /// reserve that is too small lets the burning target starve the exit of the callback; one that is far too
-    /// large wastes the gas of the deliverer.
+    /// Claim: the reserve of 10,000 gas that the router keeps after the call covers the work after the call, with room.
+    /// Shows: with a burning target and a call gas of 200,000, the least gas at which the callback finishes is also the
+    /// least gas that passes the check before the call (one unit less reverts with `InsufficientGas`, not with a lack
+    /// of gas after the call), so the reserve covers the work after the call. Matters:
+    /// a reserve that is too small would let a burning target starve the exit of the callback; one that is far too
+    /// large asks the sender for gas that nothing uses.
     function test_theReserveOfTheCallCoversTheWorkAfterTheCallWithRoom() public {
         MockERC20 token = new MockERC20("Harness", "HRN");
         DeliveryRouter harness = _harnessRouter(new MockWrappedNative());
         CallBurner burner = new CallBurner();
         address recipient = makeAddr("recipient");
         token.mint(address(harness), 100 ether);
-        // The recipient exists already, so the payment before the call is not the first one to a new account.
         token.mint(recipient, 1);
+        uint256 callGas = 200_000;
         bytes memory data = bytes.concat(
-            abi.encode(DeliveryRouter.FeeDirector(recipient, harness.FIXED_FEE(), 1 ether, 0)),
+            abi.encode(DeliveryRouter.FeeDirector(recipient, harness.FIXED_FEE(), 1 ether, 0, callGas)),
             abi.encodePacked(address(burner)),
             hex"01"
         );
         bytes memory payload = abi.encodeCall(DeliveryRouter.onTokenBridged, (address(token), 100 ether, data));
         uint256 reserve = harness.CALL_GAS_RESERVE();
-        // Warm the router, so the measure does not count the first access to its address.
-        harness.CALL_GAS_RESERVE();
+        uint256 low = _leastGasThatFinishes(address(harness), payload, callGas);
+        uint256 probe = vm.snapshotState();
+        (bool starved, bytes memory error) = address(harness).call{gas: low - 1}(payload);
+        vm.revertToState(probe);
+        assertFalse(starved);
+        assertEq(bytes4(error), ExactGasCall.InsufficientGas.selector, "the check before the call binds, not the exit");
 
-        uint256 gasBefore = gasleft();
-        (bool succeeded,) = address(harness).call{gas: 500_000}(payload);
-        uint256 gasAfter = gasleft();
-
+        (bool succeeded,) = address(harness).call{gas: low}(payload);
         assertTrue(succeeded, "the delivery finished");
         assertEq(token.balanceOf(recipient), 1 + 100 ether, "the payment stands, with no tip on a direct delivery");
-        uint256 returned = 500_000 - (gasBefore - gasAfter);
-        uint256 need = reserve - returned;
-        console2.log("gas returned to the caller after the burn:", returned);
-        console2.log("gas of the reserve that the router needs after the call:", need);
+        console2.log("least gas of the callback with a burning call of 200,000 gas:", low);
         console2.log("reserve:", reserve);
-        assertLt(need * 2, reserve, "the router needs less than half of the reserve");
+    }
+
+    /// @dev The least gas with which a call of `payload` to `target` finishes. Found by bisection from `low`.
+    function _leastGasThatFinishes(address target, bytes memory payload, uint256 low) private returns (uint256) {
+        uint256 high = 1_000_000;
+        while (low < high) {
+            uint256 middle = (low + high) / 2;
+            uint256 snapshot = vm.snapshotState();
+            (bool done,) = target.call{gas: middle}(payload);
+            vm.revertToState(snapshot);
+            if (done) high = middle;
+            else low = middle + 1;
+        }
+        return low;
     }
 
     /// @dev Runs one gas based delivery in the harness with the starting gas equal to the supplied gas, and returns the
@@ -174,7 +185,7 @@ contract DeliveryRouterGasTest is MediatorFixture {
         DeliveryRouter harness = _harnessRouter(new MockWrappedNative());
         address recipient = makeAddr("fresh recipient");
         token.mint(address(harness), 1_000_000 ether);
-        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(recipient, 0, type(uint128).max, 1 ether));
+        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(recipient, 0, type(uint128).max, 1 ether, 0));
 
         uint256 afterMeasure = _gasAfterTheMeasure(harness, address(token), 1_000_000 ether, recipient, data);
         console2.log("token payout, gas after the measure (upper bound):", afterMeasure);
@@ -201,7 +212,7 @@ contract DeliveryRouterGasTest is MediatorFixture {
         vm.deal(recipient, 1 wei);
         vm.deal(harness.rewardAddress(), 1 wei);
         _fundWithWrapped(wrapped, harness, 100 ether);
-        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(recipient, harness.UNWRAP(), type(uint128).max, 1 ether));
+        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(recipient, harness.UNWRAP(), type(uint128).max, 1 ether, 0));
 
         uint256 afterMeasure = _gasAfterTheMeasure(harness, address(wrapped), 100 ether, recipient, data);
         console2.log("native payout to existing accounts, gas after the measure (upper bound):", afterMeasure);
@@ -219,7 +230,7 @@ contract DeliveryRouterGasTest is MediatorFixture {
         DeliveryRouter harness = _harnessRouter(wrapped);
         address recipient = makeAddr("new recipient");
         _fundWithWrapped(wrapped, harness, 100 ether);
-        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(recipient, harness.UNWRAP(), type(uint128).max, 1 ether));
+        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(recipient, harness.UNWRAP(), type(uint128).max, 1 ether, 0));
 
         uint256 afterMeasure = _gasAfterTheMeasure(harness, address(wrapped), 100 ether, recipient, data);
         console2.log("native payout to new accounts, gas after the measure (upper bound):", afterMeasure);
@@ -237,7 +248,7 @@ contract DeliveryRouterGasTest is MediatorFixture {
         address recipient = makeAddr("new recipient only");
         vm.deal(harness.rewardAddress(), 1 wei);
         _fundWithWrapped(wrapped, harness, 100 ether);
-        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(recipient, harness.UNWRAP(), type(uint128).max, 1 ether));
+        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(recipient, harness.UNWRAP(), type(uint128).max, 1 ether, 0));
 
         uint256 afterMeasure = _gasAfterTheMeasure(harness, address(wrapped), 100 ether, recipient, data);
         console2.log("native payout to a new recipient, funded reward address (upper bound):", afterMeasure);

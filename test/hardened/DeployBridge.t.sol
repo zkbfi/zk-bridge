@@ -1050,18 +1050,18 @@ contract DeployBridgeTest is Test {
         script.parseConfig(vm.replace(json, vm.toString(feeFailedDelivery), vm.toString(address(0))));
     }
 
-    /// Claim: the deployed bridge lets through at least the gas that its mediator asks for. Shows: for each side,
-    /// `maxGasPerTx` of the deployed bridge is not below `DEPLOY_GAS_LIMIT + CALLBACK_GAS_LIMIT` of the deployed mediator.
-    /// Matters: the mediator constructor refuses a bridge below that number (`GasLimitAboveBridgeMaximum`). The script
-    /// cannot cause it with the real bridge, and this test fails if a change of either contract breaks the pair.
-    function test_deployedBridgeLetsThroughTheGasThatTheMediatorNeeds() public {
+    /// Claim: each deployed mediator reads the other chain from its own bridge. Shows: for each side, the mediator's
+    /// `remoteChainId` equals the bridge's `remoteChainId` and `destinationChainId`, and the bridge's `localChainId` is
+    /// the chain it was deployed on. Matters: the identifier is no longer passed twice, so the two cannot disagree.
+    function test_deployedMediatorReadsTheOtherChainFromItsBridge() public {
         _deployBoth();
         address[2] memory mediators = [deployedA.mediator, deployedB.mediator];
         address[2] memory bridges = [deployedA.bridge, deployedB.bridge];
         for (uint256 i = 0; i < 2; i++) {
             TokenMediator mediator = TokenMediator(mediators[i]);
-            uint256 needed = mediator.DEPLOY_GAS_LIMIT() + mediator.CALLBACK_GAS_LIMIT();
-            assertGe(MessageBridge(bridges[i]).maxGasPerTx(), needed);
+            MessageBridge bridge = MessageBridge(bridges[i]);
+            assertEq(mediator.remoteChainId(), bridge.remoteChainId(), "the mediator takes the remote chain of the bridge");
+            assertEq(bridge.destinationChainId(), bridge.remoteChainId(), "the interface view agrees");
             assertEq(address(mediator.bridgeContract()), bridges[i], "control: the mediator reads this bridge");
         }
     }
@@ -1295,7 +1295,6 @@ contract DeployBridgeTest is Test {
     ) internal returns (MessageBridge) {
         return new MessageBridge(
             deployed.lightClient,
-            1,
             369,
             remoteBridge,
             MessageBridge.BridgeTerms(cutoff, remoteLightClient, type(uint64).max),
@@ -1313,7 +1312,6 @@ contract DeployBridgeTest is Test {
         return TokenMediator.MediatorTerms({
             bridge: bridge,
             remoteMediator: d.remoteMediator,
-            remoteChainId: d.remoteChainId,
             flowLimiter: d.chain.flowLimiter,
             remoteChainName: d.chain.remoteChainName
         });
@@ -1422,13 +1420,6 @@ contract DeployBridgeTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.mediatorContractOnOtherSide")
         );
-        script.verifyDeployment(d, deployed);
-
-        (d, deployed) = _honestChainA();
-        terms = _mediatorTerms(d, deployed.bridge);
-        terms.remoteChainId = 56;
-        _swapMediator(d, deployed, new TokenMediator(terms));
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.remoteChainId"));
         script.verifyDeployment(d, deployed);
 
         // A second bridge with the same settings is a different contract, so the mediator names the wrong bridge.
@@ -1618,8 +1609,8 @@ contract DeployBridgeTest is Test {
     function test_HB01_postDeployAssertionsCatchLayoutsThatDoNotStartEmpty() public {
         (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
         address honestBridge = deployed.bridge;
-        // Storage slots 6, 7 and 8 hold the three layout arrays (see `forge inspect MessageBridge storageLayout`).
-        for (uint256 slot = 6; slot <= 8; slot++) {
+        // Storage slots 4, 5 and 6 hold the three layout arrays (see `forge inspect MessageBridge storageLayout`).
+        for (uint256 slot = 4; slot <= 6; slot++) {
             MessageBridge fresh =
                 _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 0, d.chain.lightClient.capellaEra);
             vm.store(address(fresh), bytes32(slot), bytes32(uint256(1)));

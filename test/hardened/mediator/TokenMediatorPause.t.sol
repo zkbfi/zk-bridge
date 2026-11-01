@@ -143,7 +143,7 @@ contract TokenMediatorPauseTest is WorldSupport {
 
     /// Claim: a contract sender that calls a relay function names the receiver and nothing else, and the sender adds
     /// no address to the payload. Shows: Multicall3 holds tokens and relays through `aggregate3`, once with
-    /// `relayTokens` and once with a gas limit. Both messages carry the same payload: the receiver is bob. Matters:
+    /// `relayTokens`, twice. Both messages carry the same payload: the receiver is bob. Matters:
     /// the mediator never pays the sender on the other chain, so a contract sender need not exist there.
     function test_aContractSenderAddsNoAddressToThePayload() public {
         DenyListToken token = new DenyListToken();
@@ -162,9 +162,7 @@ contract TokenMediatorPauseTest is WorldSupport {
         calls[2] = Multicall3.Call3(
             address(mediatorA),
             false,
-            abi.encodeWithSignature(
-                "relayTokens(address,address,uint256,uint256)", address(token), bob, AMOUNT, uint256(2_500_000)
-            )
+            abi.encodeWithSignature("relayTokens(address,address,uint256)", address(token), bob, AMOUNT)
         );
         vm.chainId(CHAIN_A);
         vm.recordLogs();
@@ -184,7 +182,7 @@ contract TokenMediatorPauseTest is WorldSupport {
             TokenMediator.deployAndHandleBridgedTokens.selector, address(token), "Deny", "DENY", uint8(18), bob, AMOUNT
         );
         assertEq(first, expected, "relayTokens: the receiver is the only address");
-        assertEq(second, expected, "relayTokens with a gas limit: the same payload");
+        assertEq(second, expected, "a second relay: the same payload");
         assertEq(token.balanceOf(address(multicall)), 0, "Multicall3 sent both amounts");
         assertEq(mediatorA.mediatorBalance(address(token)), 2 * AMOUNT, "the record");
     }

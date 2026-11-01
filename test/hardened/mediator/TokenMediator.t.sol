@@ -14,8 +14,7 @@ import {
     DenyListToken,
     DecimalsToken,
     NamelessToken,
-    HookToken
-} from "./utils/MediatorSupport.sol";
+    HookToken, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 
 /// @notice Tests of the token mediator: the two directions, the first message that deploys the copy, the accounting,
 /// the callers that may trigger a release, the callback, and the path of a release that fails.
@@ -44,7 +43,7 @@ contract TokenMediatorTest is MediatorFixture {
         MockAMB.Sent memory message = ambA.messageAt(0);
         assertEq(message.target, address(mediatorB), "the target is the mediator on the other chain");
         assertEq(message.sender, address(mediatorA));
-        assertEq(message.gasLimit, mediatorA.DEPLOY_GAS_LIMIT());
+        assertEq(message.gasLimit, 0, "the mediator asks the bridge for no gas");
         assertEq(_selectorOf(message.data), TokenMediator.deployAndHandleBridgedTokens.selector);
 
         address predicted = mediatorB.tokenFactory().predictAddress(CHAIN_A, address(tokenA));
@@ -155,7 +154,7 @@ contract TokenMediatorTest is MediatorFixture {
             abi.encodeWithSelector(TokenMediator.handleNativeTokens.selector, address(tokenA), bob, 150 ether),
             "the payload is the OmniBridge payload"
         );
-        assertEq(message.gasLimit, mediatorB.RELEASE_GAS_LIMIT());
+        assertEq(message.gasLimit, 0, "the mediator asks the bridge for no gas");
 
         (bool ok,) = _deliverBtoA(0);
         assertTrue(ok);
@@ -180,7 +179,7 @@ contract TokenMediatorTest is MediatorFixture {
             message.data,
             abi.encodeWithSelector(TokenMediator.handleBridgedTokens.selector, address(tokenA), alice, 10 ether)
         );
-        assertEq(message.gasLimit, mediatorA.RELEASE_GAS_LIMIT());
+        assertEq(message.gasLimit, 0, "the mediator asks the bridge for no gas");
         (bool ok,) = _deliverAtoB(1);
         assertTrue(ok);
     }
@@ -379,9 +378,9 @@ contract TokenMediatorTest is MediatorFixture {
     function test_relayTokensAndCallCallsTheReceiverOnDelivery() public {
         RecordingReceiver receiver = new RecordingReceiver();
         vm.prank(alice);
-        mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 100 ether, "hello");
+        mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 100 ether, "hello", TEST_CALLBACK_GAS);
         MockAMB.Sent memory message = ambA.messageAt(0);
-        assertEq(message.gasLimit, mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT());
+        assertEq(message.gasLimit, 0, "the mediator asks the bridge for no gas");
         assertEq(_selectorOf(message.data), TokenMediator.deployAndHandleBridgedTokensAndCall.selector);
 
         (bool ok,) = _deliverAtoB(0);
@@ -397,7 +396,7 @@ contract TokenMediatorTest is MediatorFixture {
     function test_relayTokensAndCallCallsEvenWithEmptyData() public {
         RecordingReceiver receiver = new RecordingReceiver();
         vm.prank(alice);
-        mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 1 ether, "");
+        mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 1 ether, "", TEST_CALLBACK_GAS);
         (bool ok,) = _deliverAtoB(0);
         assertTrue(ok);
         assertEq(receiver.calls(), 1, "OmniBridge calls the receiver when the entry is relayTokensAndCall");
@@ -416,7 +415,7 @@ contract TokenMediatorTest is MediatorFixture {
         address copy = _copyOf(address(tokenA));
         vm.startPrank(bob);
         IERC20(copy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokensAndCall(copy, address(receiver), 4 ether, hex"c0ffee");
+        mediatorB.relayTokensAndCall(copy, address(receiver), 4 ether, hex"c0ffee", TEST_CALLBACK_GAS);
         vm.stopPrank();
         assertEq(_selectorOf(ambB.messageAt(0).data), TokenMediator.handleNativeTokensAndCall.selector);
 
@@ -432,7 +431,7 @@ contract TokenMediatorTest is MediatorFixture {
         RecordingReceiver receiver = new RecordingReceiver();
         receiver.setRefuse(true);
         vm.prank(alice);
-        mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 5 ether, "x");
+        mediatorA.relayTokensAndCall(address(tokenA), address(receiver), 5 ether, "x", TEST_CALLBACK_GAS);
 
         bytes32 id = ambA.messageAt(0).id;
         address predicted = mediatorB.tokenFactory().predictAddress(CHAIN_A, address(tokenA));
@@ -449,7 +448,7 @@ contract TokenMediatorTest is MediatorFixture {
     function test_relayTokensAndCallSendsTheCallFormEvenWithEmptyData() public {
         vm.startPrank(alice);
         mediatorA.relayTokens(address(tokenA), bob, 1 ether);
-        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, "");
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, "", TEST_CALLBACK_GAS);
         vm.stopPrank();
         assertEq(_selectorOf(ambA.messageAt(0).data), TokenMediator.deployAndHandleBridgedTokens.selector);
         assertEq(_selectorOf(ambA.messageAt(1).data), TokenMediator.deployAndHandleBridgedTokensAndCall.selector);
@@ -578,12 +577,72 @@ contract TokenMediatorTest is MediatorFixture {
         RecordingReceiver receiver = new RecordingReceiver();
 
         vm.prank(bob);
-        copy.transferAndCall(address(mediatorB), 40 ether, abi.encodePacked(address(receiver), hex"1234"));
+        copy.transferAndCall(
+            address(mediatorB), 40 ether, abi.encodePacked(address(receiver), uint256(TEST_CALLBACK_GAS), hex"1234")
+        );
         MockAMB.Sent memory message = ambB.messageAt(0);
-        assertEq(_selectorOf(message.data), TokenMediator.handleNativeTokensAndCall.selector);
+        assertEq(
+            message.data,
+            abi.encodeWithSelector(
+                TokenMediator.handleNativeTokensAndCall.selector,
+                address(tokenA),
+                address(receiver),
+                40 ether,
+                hex"1234",
+                TEST_CALLBACK_GAS
+            ),
+            "the receiver, then the callback gas word, then the callback data"
+        );
         _deliverBtoA(0);
         assertEq(receiver.lastData(), hex"1234");
         assertEq(receiver.lastValue(), 40 ether);
+    }
+
+    /// Claim: ERC-677 data of a receiver and a callback gas word with nothing after it asks for a call with empty data.
+    /// Shows: the message is `handleNativeTokensAndCall` with empty data and the gas. Matters: the same as
+    /// `relayTokensAndCall` with empty data, which calls the receiver.
+    function test_onTokenTransferWithAReceiverAndAGasWordCallsWithEmptyData() public {
+        _bridgeAtoB(alice, address(tokenA), bob, 100 ether);
+        BridgedToken copy = BridgedToken(_copyOf(address(tokenA)));
+        vm.prank(bob);
+        copy.transferAndCall(address(mediatorB), 1 ether, abi.encodePacked(carol, uint256(70_000)));
+        assertEq(
+            ambB.messageAt(0).data,
+            abi.encodeWithSelector(
+                TokenMediator.handleNativeTokensAndCall.selector, address(tokenA), carol, 1 ether, "", uint256(70_000)
+            )
+        );
+    }
+
+    /// Claim: ERC-677 data longer than a receiver and shorter than a receiver with a gas word is refused, and so is a gas
+    /// word of zero. Shows: 21 and 51 bytes revert with `MalformedTransferData` and the length; a zero gas word reverts
+    /// with `ZeroCallbackGas`; no message is sent. Matters: there is no default gas for a callback, and a cut word must
+    /// not be read as a small gas number.
+    function test_onTokenTransferRefusesACutGasWordAndAZeroGas() public {
+        _bridgeAtoB(alice, address(tokenA), bob, 100 ether);
+        BridgedToken copy = BridgedToken(_copyOf(address(tokenA)));
+        // The copy wraps the error of the callback in its own, so the test moves the tokens and then makes the call of
+        // the copy itself, to read the error of the mediator.
+        vm.prank(bob);
+        copy.transfer(address(mediatorB), 1 ether);
+        vm.startPrank(address(copy));
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.MalformedTransferData.selector, 21));
+        mediatorB.onTokenTransfer(bob, 1 ether, abi.encodePacked(carol, hex"01"));
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.MalformedTransferData.selector, 51));
+        mediatorB.onTokenTransfer(bob, 1 ether, abi.encodePacked(carol, bytes31(0)));
+        vm.expectRevert(TokenMediator.ZeroCallbackGas.selector);
+        mediatorB.onTokenTransfer(bob, 1 ether, abi.encodePacked(carol, uint256(0), hex"01"));
+        vm.stopPrank();
+        assertEq(ambB.sentCount(), 0, "no message");
+    }
+
+    /// Claim: `relayTokensAndCall` refuses a callback gas of zero. Shows: the revert and no message. Matters: the owner's
+    /// rule, "there should be no defaults".
+    function test_relayTokensAndCallRefusesZeroCallbackGas() public {
+        vm.prank(alice);
+        vm.expectRevert(TokenMediator.ZeroCallbackGas.selector);
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, "x", 0);
+        assertEq(ambA.sentCount(), 0);
     }
 
     function test_onTokenTransferWithNoReceiverSendsToTheSender() public {
@@ -663,7 +722,6 @@ contract TokenMediatorTest is MediatorFixture {
         TokenMediator.MediatorTerms memory terms = _noTerms();
         terms.bridge = address(ambA);
         terms.remoteMediator = address(mediatorB);
-        terms.remoteChainId = CHAIN_B;
 
         terms.bridge = address(0xdead);
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.ZeroValue.selector, "bridge"));
@@ -675,33 +733,30 @@ contract TokenMediatorTest is MediatorFixture {
         new TokenMediator(terms);
         terms.remoteMediator = address(mediatorB);
 
-        terms.remoteChainId = 0;
+        // The other chain comes from the bridge, so a bridge with no destination chain is refused.
+        terms.bridge = address(new MockAMB(CHAIN_A, 0));
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.ZeroValue.selector, "remoteChainId"));
         new TokenMediator(terms);
-        terms.remoteChainId = CHAIN_B;
+        terms.bridge = address(ambA);
+        assertEq(new TokenMediator(terms).remoteChainId(), CHAIN_B, "the other chain is read from the bridge");
 
         terms.remoteChainName = "";
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.ZeroValue.selector, "remoteChainName"));
         new TokenMediator(terms);
     }
 
-    /// Claim: a mediator refuses a bridge that allows less gas per message than the mediator's largest message asks for.
-    /// Shows: with the ceiling one below the largest limit the constructor reverts, and with the ceiling at the largest
-    /// limit it works. Matters: such a mediator would send messages that the bridge refuses, so no relay of a new token
-    /// would ever succeed. The deploy script must fail early, not at the first relay.
-    function test_constructorRefusesABridgeWithTooLittleGasPerMessage() public {
-        TokenMediator.MediatorTerms memory terms = _noTerms();
-        terms.bridge = address(ambA);
-        terms.remoteMediator = address(mediatorB);
-        terms.remoteChainId = CHAIN_B;
-        uint256 largest = mediatorA.DEPLOY_GAS_LIMIT() + mediatorA.CALLBACK_GAS_LIMIT();
-
-        ambA.setMaxGasPerTx(largest - 1);
-        vm.expectRevert(abi.encodeWithSelector(TokenMediator.GasLimitAboveBridgeMaximum.selector, largest, largest - 1));
-        new TokenMediator(terms);
-
-        ambA.setMaxGasPerTx(largest);
-        new TokenMediator(terms);
+    /// Claim: the home chain name is kept in immutables and read back exactly, up to 32 bytes; a longer name is refused
+    /// at deployment. Shows: names of 0, 1, 7 and 32 bytes come back from `homeChainName()` unchanged, and 33 bytes
+    /// revert with `HomeChainNameTooLong(33)`. Matters: the name is part of the code, not of the storage, so it must
+    /// fit one word, and a cut name would rename every copy for good.
+    function test_theHomeChainNameIsImmutableAndAtMost32Bytes() public {
+        string[4] memory names = ["", "A", "Chain B", "abcdefghijklmnopqrstuvwxyz012345"];
+        for (uint256 i = 0; i < names.length; i++) {
+            TokenFactory factory = new TokenFactory(address(this), names[i]);
+            assertEq(factory.homeChainName(), names[i], "read back exactly");
+        }
+        vm.expectRevert(abi.encodeWithSelector(TokenFactory.HomeChainNameTooLong.selector, 33));
+        new TokenFactory(address(this), "abcdefghijklmnopqrstuvwxyz0123456");
     }
 
     // ------------------------------------------------------------------------------------------------ helpers
@@ -711,14 +766,14 @@ contract TokenMediatorTest is MediatorFixture {
         address token = address(tokenA);
         calls = new bytes[](6);
         calls[0] = abi.encodeWithSelector(TokenMediator.handleNativeTokens.selector, token, bob, 1);
-        calls[1] = abi.encodeWithSelector(TokenMediator.handleNativeTokensAndCall.selector, token, bob, 1, hex"01");
+        calls[1] = abi.encodeWithSelector(TokenMediator.handleNativeTokensAndCall.selector, token, bob, 1, hex"01", 1);
         calls[2] = abi.encodeWithSelector(TokenMediator.handleBridgedTokens.selector, token, bob, 1);
-        calls[3] = abi.encodeWithSelector(TokenMediator.handleBridgedTokensAndCall.selector, token, bob, 1, hex"01");
+        calls[3] = abi.encodeWithSelector(TokenMediator.handleBridgedTokensAndCall.selector, token, bob, 1, hex"01", 1);
         calls[4] = abi.encodeWithSelector(
             TokenMediator.deployAndHandleBridgedTokens.selector, token, "N", "S", uint8(18), bob, 1
         );
         calls[5] = abi.encodeWithSelector(
-            TokenMediator.deployAndHandleBridgedTokensAndCall.selector, token, "N", "S", uint8(18), bob, 1, hex"01"
+            TokenMediator.deployAndHandleBridgedTokensAndCall.selector, token, "N", "S", uint8(18), bob, 1, hex"01", 1
         );
     }
 }

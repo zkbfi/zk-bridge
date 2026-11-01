@@ -220,9 +220,6 @@ abstract contract BeaconProofVerifier {
     /// @notice A constructor argument is zero.
     error ZeroValue(string name);
 
-    /// @notice The local chain identifier differs from `block.chainid`.
-    error LocalChainIdMismatch(uint64 configured, uint256 actual);
-
     /// @notice The remote chain is the local chain.
     error RemoteChainIsLocalChain();
 

@@ -6,7 +6,7 @@ import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol"
 import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
-import {MediatorFixture} from "./utils/MediatorSupport.sol";
+import {MediatorFixture, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 import {MedReentryToken, MedDenyListWrappedNative} from "./utils/MedMocks.sol";
 
 /// @notice A payout hook of a recipient can call the bridge and deliver another message while a delivery runs. The
@@ -39,18 +39,27 @@ contract DeliveryRouterReentryTest is MediatorFixture {
         copy = _copyOf(address(token));
     }
 
+    uint256 private _sent;
+
     function _terms(address to, uint256 settings, uint256 limit, uint256 multiplier)
         internal
         pure
         returns (bytes memory)
     {
-        return abi.encode(DeliveryRouter.FeeDirector(to, settings, limit, multiplier));
+        return abi.encode(DeliveryRouter.FeeDirector(to, settings, limit, multiplier, 0));
     }
 
+    /// @dev The callback gas of an outer message. A nested message runs inside the callback of the outer one, so it must
+    /// fit: its callback gets `NESTED_CALLBACK_GAS`, and the outer callback has room for it and for the outer work.
+    uint256 internal constant OUTER_CALLBACK_GAS = 3_000_000;
+    uint256 internal constant NESTED_CALLBACK_GAS = 300_000;
+
     function _send(bytes memory data, uint256 value) internal returns (uint256) {
+        // The first message of a test is the outer one, the next is nested.
+        uint256 callbackGas = _sent++ == 0 ? OUTER_CALLBACK_GAS : NESTED_CALLBACK_GAS;
         vm.startPrank(alice);
         IERC20(copy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokensAndCall(copy, address(router), value, data);
+        mediatorB.relayTokensAndCall(copy, address(router), value, data, callbackGas);
         vm.stopPrank();
         return _lastIndexB();
     }

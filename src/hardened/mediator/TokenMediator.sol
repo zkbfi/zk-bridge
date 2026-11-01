@@ -11,6 +11,7 @@ import {IBurnableMintableERC677Token} from "./IBurnableMintableERC677Token.sol";
 import {IERC20Receiver} from "./IERC20Receiver.sol";
 import {TokenFactory} from "./TokenFactory.sol";
 import {TokenReader} from "./TokenReader.sol";
+import {ExactGasCall} from "./ExactGasCall.sol";
 
 /// @title TokenMediator
 /// @notice Moves tokens across the message bridge, with the interface of the OmniBridge multi-token mediator
@@ -34,11 +35,15 @@ import {TokenReader} from "./TokenReader.sol";
 /// token, a token with a negative rebase) can leave the record above the real balance, and then releases fail. The
 /// mediator has no function to correct a record, because it has no owner.
 ///
-/// Delivery of a release. The message bridge marks a message delivered whether or not the call succeeds, so a handler
-/// that reverts loses the tokens for good. So a handler does not revert on a token or a limiter that refuses the
-/// recipient. It tries the recipient once. When the recipient cannot take the tokens, it emits `ReleaseFailed` and
-/// stops. The release is final: there is no claim, no retry and no payee but the recipient. A fallback payee belongs
-/// in a router, as an option. If tokens get stuck, they are stuck for good.
+/// Delivery of a release. The message bridge delivers a message only when the handler succeeds: a handler that
+/// reverts leaves the message undelivered, and anyone can deliver it again. The rule at every call that the mediator
+/// makes during a release is the same: not enough gas reverts the whole delivery (it can run again with more gas); a
+/// callee that says no is recorded and the delivery completes. So a handler does not revert on a token or a limiter
+/// that refuses the recipient: it tries the recipient once, and when the recipient cannot take the tokens it emits
+/// `ReleaseFailed` and stops. That release is final: there is no claim, no retry and no payee but the recipient. A
+/// fallback payee belongs in a router, as an option. A token or a limiter that fails after it used up all the gas that
+/// it got is read as a lack of gas, not as a refusal, and the delivery reverts. A token that burns all the gas of
+/// every transfer therefore keeps its release undelivered until it stops doing that.
 ///
 /// A failed release and the books. The other chain burned its copies, or locked its native tokens, when it sent the
 /// message, so the failed release leaves nothing owed. For a native token, the record falls by the value of every
@@ -47,14 +52,19 @@ import {TokenReader} from "./TokenReader.sol";
 /// failed release mints nothing. Only an invalid recipient (the zero address) can make a mint fail, and a sender cannot
 /// name it, so the case needs a forged message. Then the native tokens stay locked on the other chain. A transfer
 /// attempt gets the gas that is left, less `TRANSFER_GAS_RESERVE`, so a token that burns all its gas still leaves
-/// enough for the event.
+/// enough gas to tell that case apart and revert.
 ///
-/// Gas. The sender chooses the gas limit of a message: zero gives the default of the message kind, and a value below that default is refused.
-/// The default of a first message grows with the length of the name and the symbol of the token.
+/// Gas. The mediator has no gas rules and no defaults. The message bridge gives a handler all the gas that the executor
+/// brings, and an executor that brings too little only loses its own transaction. The one gas number is the gas of the
+/// callback: a sender of a relay with a call states `callbackGas`, the message carries it, and the handler on the other
+/// chain calls `onTokenBridged` with exactly that gas (see `ExactGasCall`). The gas guarantee is the same for every
+/// receiver contract: the mediator knows no router.
 ///
 /// Divergences from OmniBridge. The handlers also check `messageSourceChainId`. `deploy` takes the native token.
 /// Tokens are not registered by an owner. There are no limits, no failed message fix and no claim of stray tokens.
-/// The mediator charges no fee.
+/// The mediator charges no fee. A relay with a call states the gas of the callback, so `relayTokensAndCall` takes a
+/// `callbackGas` argument, the three `...AndCall` handlers take it after `data`, and the ERC-677 data of a call carries
+/// it after the receiver. The relay with a call and no gas argument of OmniBridge does not exist here.
 contract TokenMediator is ITokenMediator, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -63,14 +73,12 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     /// @param remoteMediator The mediator on the other chain. It is the only account whose messages the mediator
     /// accepts. With deployment from the same account and the same nonce on both chains, it has the address of this
     /// mediator.
-    /// @param remoteChainId The identifier of the other chain. A message must come from this chain.
     /// @param flowLimiter The flow limiter. Zero means no limiter from the start. Nothing can set one later.
     /// @param remoteChainName The name of the other chain, for example `Ethereum`. A bridged copy takes it in its name.
     /// It cannot be empty and it cannot change.
     struct MediatorTerms {
         address bridge;
         address remoteMediator;
-        uint256 remoteChainId;
         address flowLimiter;
         string remoteChainName;
     }
@@ -87,13 +95,13 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
         Bridged
     }
 
-    /// @dev What the sender asks for in one relay. `requestedGasLimit` is zero when the sender asks for the default.
+    /// @dev What the sender asks for in one relay. `callbackGas` is the gas of the callback, zero for a plain relay.
     struct Relay {
         address token;
         address receiver;
         bytes data;
         CallMode mode;
-        uint256 requestedGasLimit;
+        uint256 callbackGas;
     }
 
     /// @dev What the first message of a native token carries for the name of its copy.
@@ -103,12 +111,13 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
         uint8 decimals;
     }
 
-    /// @dev What a handler delivers.
+    /// @dev What a handler delivers. `callbackGas` is the gas of the callback, zero for a plain delivery.
     struct Delivery {
         address recipient;
         uint256 value;
         bytes data;
         CallMode mode;
+        uint256 callbackGas;
     }
 
     /// @dev The record of a native token, in one storage slot.
@@ -121,32 +130,15 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
         bool deployAcknowledged;
     }
 
-    /// @notice The gas that the message bridge gives the call of a release of tokens.
-    uint256 public constant RELEASE_GAS_LIMIT = 250_000;
-    /// @notice The extra gas for the callback of a release with a call.
-    uint256 public constant CALLBACK_GAS_LIMIT = 750_000;
-    /// @notice The gas that the message bridge gives the call that deploys a bridged copy and releases tokens.
-    uint256 public constant DEPLOY_GAS_LIMIT = 2_000_000;
-
-    /// @notice The base of the gas rule for the first message of a token. Measured with `forge test`: the
-    /// deployment of a copy with a short name costs 1,058,000 gas when each call is its own transaction
-    /// (`--isolate`) and 1,153,000 gas when the whole test is one transaction. The base adds a margin for the name of
-    /// the home chain and for a compiler change.
-    uint256 public constant DEPLOY_GAS_BASE = 1_300_000;
-    /// @notice The gas for each byte of name and symbol together in the first message of a token. The copy stores both
-    /// texts, and the factory holds them while it deploys: four writes to a new storage slot for each 32 bytes. The
-    /// measured cost is 1,142 gas for each byte with `--isolate` and 1,419 in one transaction. The rule uses 1,600.
-    /// With the base it is above `DEPLOY_GAS_LIMIT` from 437 bytes, and it reaches the maximum of the bridge at 5,437
-    /// bytes.
-    uint256 public constant DEPLOY_GAS_PER_BYTE = 1_600;
-
     /// @notice The gas that a release keeps back when it calls a native token. Each transfer attempt gets the gas
-    /// that is left, less this reserve. The reserve pays for what runs after the last attempt: the return of the
-    /// amount to the record and the event of a failed release. Without it a token that
-    /// burns all its gas leaves only 1/64 of the gas, the handler cannot emit the event and it reverts. The bridge
-    /// marks the message as delivered even then, so the tokens would be lost. The figure comes from the gas report of
+    /// that is left, less this reserve. The reserve pays for what runs after the attempt: the check that tells a lack
+    /// of gas from a refusal, and the event of a failed release. The figure comes from the gas report of
     /// `TokenMediatorHostileGas` and has a margin: see `docs/hardened-build-contract.md`.
     uint256 public constant TRANSFER_GAS_RESERVE = 60_000;
+
+    /// @notice The gas that the mediator keeps for itself after the callback: the event of a failed callback and the
+    /// return to the bridge. A delivery must have the gas of the callback, its 63/64 share and this reserve.
+    uint256 public constant CALLBACK_GAS_RESERVE = 10_000;
 
     /// @notice The text between the name of a native token and the name of its home chain, in the name of a bridged
     /// copy. The copy of `Wrapped Ether` from Ethereum is `Wrapped Ether from Ethereum`.
@@ -154,6 +146,11 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     /// @notice The prefix that a bridged copy adds to the symbol of its native token, with no separator. The copy of
     /// `WETH` is `zWETH`.
     string public constant SYMBOL_PREFIX = "z";
+
+    /// @dev The length of the receiver at the start of the ERC-677 data.
+    uint256 private constant RECEIVER_LENGTH = 20;
+    /// @dev Where the callback data starts in the ERC-677 data: after the receiver and the callback gas word.
+    uint256 private constant CALL_DATA_START = 52;
 
     /// @notice The caller of a handler is not the message bridge.
     error NotBridge(address caller);
@@ -163,11 +160,13 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     error WrongSourceChain(bytes32 expected, bytes32 actual);
     /// @notice A constructor argument is zero.
     error ZeroValue(string name);
-    /// @notice The largest message of the mediator asks for more gas than the message bridge allows in one call.
-    error GasLimitAboveBridgeMaximum(uint256 gasLimit, uint256 maximum);
-    /// @notice The sender asked for a gas limit above zero and below the default of the message kind. The handler on the
-    /// other chain could run out of gas, so the message is never sent.
-    error GasLimitBelowMinimum(uint256 gasLimit, uint256 minimum);
+    /// @notice A relay with a call states no gas for the callback. There is no default.
+    error ZeroCallbackGas();
+    /// @notice The ERC-677 data is longer than a receiver and shorter than a receiver and the callback gas.
+    error MalformedTransferData(uint256 length);
+    /// @notice A token, the copy or the flow limiter failed after it used up the gas that it got during a release. The
+    /// delivery reverts, so it can run again with more gas.
+    error ReleaseOutOfGas(address token);
     /// @notice Only the flow limiter may detach itself. After a detach nobody can.
     error NotFlowLimiter(address caller);
     /// @notice The receiver on the other chain is the zero address, or the mediator on the other chain.
@@ -200,7 +199,8 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     /// @notice Emitted when the recipient could not receive a release, or the flow limiter refused it. The release is
     /// final: nothing was paid, and nothing can pay it later.
     event ReleaseFailed(address indexed token, address indexed recipient, uint256 value, bytes32 indexed messageId);
-    /// @notice Emitted when the `onTokenBridged` call on a recipient fails. The tokens stay with the recipient.
+    /// @notice Emitted when the `onTokenBridged` call on a recipient fails with the gas that the message gave it. The
+    /// tokens stay with the recipient.
     event CallbackFailed(address indexed token, address indexed recipient, bytes32 indexed messageId);
     /// @notice Emitted when the flow limiter detaches itself. The mediator never calls it again.
     event FlowLimiterDetached(address indexed limiter);
@@ -209,7 +209,7 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     IAMB public immutable bridgeContract;
     /// @notice The mediator on the other chain.
     address public immutable mediatorContractOnOtherSide;
-    /// @notice The identifier of the other chain.
+    /// @notice The identifier of the other chain, read from the bridge at deployment.
     uint256 public immutable remoteChainId;
     /// @notice The factory that deploys the bridged copies. The mediator deploys it in its constructor.
     TokenFactory public immutable tokenFactory;
@@ -227,20 +227,18 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     /// and no relay, and a release during the pull is refused (the pull measures a balance difference).
     bool private _pulling;
 
-    /// @param terms The terms at deployment. See `MediatorTerms`.
+    /// @param terms The terms at deployment. See `MediatorTerms`. The identifier of the other chain is not a term: the
+    /// constructor reads it once from `destinationChainId()` of the bridge, so the two cannot disagree.
     constructor(MediatorTerms memory terms) {
         if (terms.bridge.code.length == 0) revert ZeroValue("bridge");
-        // A message that asks for more than `maxGasPerTx` is refused at the send, so no relay would ever work.
-        uint256 largestGasLimit = DEPLOY_GAS_LIMIT + CALLBACK_GAS_LIMIT;
-        uint256 bridgeMaximum = IAMB(terms.bridge).maxGasPerTx();
-        if (largestGasLimit > bridgeMaximum) revert GasLimitAboveBridgeMaximum(largestGasLimit, bridgeMaximum);
         if (terms.remoteMediator == address(0)) revert ZeroValue("remoteMediator");
-        if (terms.remoteChainId == 0) revert ZeroValue("remoteChainId");
         if (bytes(terms.remoteChainName).length == 0) revert ZeroValue("remoteChainName");
+        uint256 remoteChainId_ = IAMB(terms.bridge).destinationChainId();
+        if (remoteChainId_ == 0) revert ZeroValue("remoteChainId");
 
         bridgeContract = IAMB(terms.bridge);
         mediatorContractOnOtherSide = terms.remoteMediator;
-        remoteChainId = terms.remoteChainId;
+        remoteChainId = remoteChainId_;
         tokenFactory = _createFactory(terms.remoteChainName);
         flowLimiter = IFlowLimiter(terms.flowLimiter);
     }
@@ -266,44 +264,33 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
         _pullAndBridge(Relay(token, receiver, "", CallMode.Plain, 0), value);
     }
 
-    /// @notice Relays tokens of the caller to `receiver`, with a gas limit that the caller chooses. New: OmniBridge has
-    /// no such function, because its owner sets the gas limits.
-    /// @dev A `gasLimit` of zero gives the default of the message kind, and that default is also the minimum. The
-    /// default of the first message of a token grows with the length of its name and symbol. A value above zero and
-    /// below the default reverts with `GasLimitBelowMinimum`. A value above the maximum of the message bridge reverts
-    /// with `GasLimitAboveBridgeMaximum`. Otherwise the message carries exactly `gasLimit`.
-    /// @param gasLimit The gas that the call on the other chain gets, or zero for the default.
-    function relayTokens(address token, address receiver, uint256 value, uint256 gasLimit) external nonReentrant {
-        _pullAndBridge(Relay(token, receiver, "", CallMode.Plain, gasLimit), value);
-    }
-
     /// @notice Relays tokens of the caller to the caller on the other chain.
     function relayTokens(address token, uint256 value) external nonReentrant {
         _pullAndBridge(Relay(token, msg.sender, "", CallMode.Plain, 0), value);
     }
 
-    /// @notice Relays tokens to `receiver` and calls `onTokenBridged(token, value, data)` on it, even when `data` is
-    /// empty, as OmniBridge does.
-    function relayTokensAndCall(address token, address receiver, uint256 value, bytes calldata data)
-        external
-        nonReentrant
-    {
-        _pullAndBridge(Relay(token, receiver, data, CallMode.WithCall, 0), value);
-    }
-
-    /// @notice Relays tokens and calls `receiver`, with a gas limit that the caller chooses. The rule of the gas limit
-    /// is the one of `relayTokens` with a gas limit.
-    /// @param gasLimit The gas that the call on the other chain gets, or zero for the default.
-    function relayTokensAndCall(address token, address receiver, uint256 value, bytes calldata data, uint256 gasLimit)
-        external
-        nonReentrant
-    {
-        _pullAndBridge(Relay(token, receiver, data, CallMode.WithCall, gasLimit), value);
+    /// @notice Relays tokens to `receiver` and calls `onTokenBridged(token, value, data)` on it with exactly
+    /// `callbackGas`, even when `data` is empty, as OmniBridge calls. New: the gas of the callback is the sender's, and
+    /// there is no default.
+    /// @dev On the other chain, a delivery that cannot give the callback `callbackGas` (63/64 rule included) reverts and
+    /// can run again with more gas. A callback that fails with that gas emits `CallbackFailed`, and the tokens stay
+    /// with `receiver`. A `callbackGas` of zero reverts with `ZeroCallbackGas`.
+    /// @param callbackGas The gas that `onTokenBridged` gets on the other chain.
+    function relayTokensAndCall(
+        address token,
+        address receiver,
+        uint256 value,
+        bytes calldata data,
+        uint256 callbackGas
+    ) external nonReentrant {
+        _pullAndBridge(Relay(token, receiver, data, CallMode.WithCall, callbackGas), value);
     }
 
     /// @notice The transfer callback of a token with `transferAndCall`. The token has moved `value` to the mediator
-    /// already. `data` of 20 bytes or more starts with the receiver on the other chain, and the rest is passed to
-    /// `onTokenBridged`. Shorter data means the receiver is `from`, with no callback.
+    /// already. `data` shorter than 20 bytes means the receiver is `from`, with no callback. `data` of exactly 20 bytes
+    /// is the receiver on the other chain, with no callback. Longer `data` is the receiver, then one 32 byte word with
+    /// the gas of the callback, then the bytes passed to `onTokenBridged` (they may be empty). `data` between 21 and 51
+    /// bytes reverts with `MalformedTransferData`.
     /// @dev A token that calls this function while `relayTokens` pulls from a sender gets true and no relay.
     /// The call is refused when the balance of the mediator does not show the transfer, so a token cannot report
     /// tokens that it did not move.
@@ -320,31 +307,38 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
 
     /// @notice Releases a native token of this chain.
     function handleNativeTokens(address token, address recipient, uint256 value) external onlyRemoteMediator {
-        _handleNative(token, Delivery(recipient, value, "", CallMode.Plain));
+        _handleNative(token, Delivery(recipient, value, "", CallMode.Plain, 0));
     }
 
-    /// @notice Releases a native token and calls the recipient.
-    function handleNativeTokensAndCall(address token, address recipient, uint256 value, bytes memory data)
-        external
-        onlyRemoteMediator
-    {
-        _handleNative(token, Delivery(recipient, value, data, CallMode.WithCall));
+    /// @notice Releases a native token and calls the recipient with `callbackGas`.
+    function handleNativeTokensAndCall(
+        address token,
+        address recipient,
+        uint256 value,
+        bytes memory data,
+        uint256 callbackGas
+    ) external onlyRemoteMediator {
+        _handleNative(token, Delivery(recipient, value, data, CallMode.WithCall, callbackGas));
     }
 
     /// @notice Mints the bridged copy of a native token of the other chain. The copy must exist.
     function handleBridgedTokens(address token, address recipient, uint256 value) external onlyRemoteMediator {
-        _handleBridged(token, Delivery(recipient, value, "", CallMode.Plain));
+        _handleBridged(token, Delivery(recipient, value, "", CallMode.Plain, 0));
     }
 
-    /// @notice Mints the bridged copy and calls the recipient.
-    function handleBridgedTokensAndCall(address token, address recipient, uint256 value, bytes memory data)
-        external
-        onlyRemoteMediator
-    {
-        _handleBridged(token, Delivery(recipient, value, data, CallMode.WithCall));
+    /// @notice Mints the bridged copy and calls the recipient with `callbackGas`.
+    function handleBridgedTokensAndCall(
+        address token,
+        address recipient,
+        uint256 value,
+        bytes memory data,
+        uint256 callbackGas
+    ) external onlyRemoteMediator {
+        _handleBridged(token, Delivery(recipient, value, data, CallMode.WithCall, callbackGas));
     }
 
-    /// @notice Deploys the bridged copy when it does not exist, then mints it. The first message for a token.
+    /// @notice Deploys the bridged copy when it does not exist, then mints it. The first message for a token. It needs
+    /// no gas number: the executor brings the gas of the deployment.
     function deployAndHandleBridgedTokens(
         address token,
         string calldata name,
@@ -354,10 +348,10 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
         uint256 value
     ) external onlyRemoteMediator {
         address copy = _copyOrDeploy(token, name, symbol, decimals);
-        _receive(Side.Bridged, copy, Delivery(recipient, value, "", CallMode.Plain));
+        _receive(Side.Bridged, copy, Delivery(recipient, value, "", CallMode.Plain, 0));
     }
 
-    /// @notice Deploys the bridged copy when it does not exist, mints it and calls the recipient.
+    /// @notice Deploys the bridged copy when it does not exist, mints it and calls the recipient with `callbackGas`.
     function deployAndHandleBridgedTokensAndCall(
         address token,
         string calldata name,
@@ -365,10 +359,11 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
         uint8 decimals,
         address recipient,
         uint256 value,
-        bytes calldata data
+        bytes calldata data,
+        uint256 callbackGas
     ) external onlyRemoteMediator {
         address copy = _copyOrDeploy(token, name, symbol, decimals);
-        _receive(Side.Bridged, copy, Delivery(recipient, value, data, CallMode.WithCall));
+        _receive(Side.Bridged, copy, Delivery(recipient, value, data, CallMode.WithCall, callbackGas));
     }
 
     // ---------------------------------------------------------------------------------------------------------
@@ -438,40 +433,53 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
 
     /// @dev The ERC-677 entry: the tokens are here already. It requires that the balance shows them.
     function _acceptTransfer(address token, address from, uint256 value, bytes memory data) private nonReentrant {
-        address receiver = from;
-        bytes memory payload = new bytes(0);
-        if (data.length >= 20) {
-            receiver = address(bytes20(data));
-            payload = _dropAddress(data);
-        }
         uint256 accounted = _native[token].balance;
         uint256 balance = IERC20(token).balanceOf(address(this));
         if (balance < accounted + value) {
             revert UnbackedTransfer(token, value, balance > accounted ? balance - accounted : 0);
         }
-        _bridge(Relay(token, receiver, payload, _modeOf(payload), 0), from, value);
+        _bridge(_relayOf(token, from, data), from, value);
     }
 
-    /// @dev Asks the limiter, locks or burns, and sends the message.
+    /// @dev Reads the ERC-677 data: nothing, a receiver, or a receiver with the callback gas and the callback data.
+    function _relayOf(address token, address from, bytes memory data) private pure returns (Relay memory relay) {
+        relay.token = token;
+        if (data.length < RECEIVER_LENGTH) {
+            relay.receiver = from;
+            return relay;
+        }
+        relay.receiver = address(bytes20(data));
+        if (data.length == RECEIVER_LENGTH) return relay;
+        if (data.length < CALL_DATA_START) revert MalformedTransferData(data.length);
+        uint256 callbackGas;
+        assembly ("memory-safe") {
+            callbackGas := mload(add(data, add(32, RECEIVER_LENGTH)))
+        }
+        relay.data = _tail(data, CALL_DATA_START);
+        relay.mode = CallMode.WithCall;
+        relay.callbackGas = callbackGas;
+    }
+
+    /// @dev Asks the limiter, locks or burns, and sends the message. The message asks the bridge for no gas.
     function _bridge(Relay memory relay, address from, uint256 value) private {
         if (relay.receiver == address(0) || relay.receiver == mediatorContractOnOtherSide) {
             revert InvalidReceiver(relay.receiver);
         }
         if (value == 0) revert ZeroAmount();
+        if (relay.mode == CallMode.WithCall && relay.callbackGas == 0) revert ZeroCallbackGas();
         IFlowLimiter limiter = flowLimiter;
         if (address(limiter) != address(0)) limiter.checkDeposit(relay.token, from, value);
 
         address nativeToken = nativeTokenAddress[relay.token];
-        (bytes memory payload, uint256 defaultGasLimit) =
+        bytes memory payload =
             nativeToken == address(0) ? _lockAndEncode(relay, value) : _burnAndEncode(relay, nativeToken, value);
-        uint256 gasLimit = _chooseGasLimit(relay.requestedGasLimit, defaultGasLimit);
-        bytes32 messageId = bridgeContract.requireToPassMessage(mediatorContractOnOtherSide, payload, gasLimit);
+        bytes32 messageId = bridgeContract.requireToPassMessage(mediatorContractOnOtherSide, payload, 0);
         emit TokensBridgingInitiated(relay.token, from, value, messageId);
     }
 
     /// @dev A native token: records the lock and builds the message that mints, or unlocks, on the other chain. Until
     /// the other chain proves the copy exists, the message deploys it.
-    function _lockAndEncode(Relay memory relay, uint256 value) private returns (bytes memory, uint256) {
+    function _lockAndEncode(Relay memory relay, uint256 value) private returns (bytes memory) {
         NativeRecord memory record = _native[relay.token];
         uint256 newBalance = record.balance + value;
         if (newBalance > type(uint240).max) revert MediatorBalanceOverflow(relay.token);
@@ -482,72 +490,61 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     }
 
     /// @dev A bridged copy: burns it and builds the message that unlocks the native token on the other chain.
-    function _burnAndEncode(Relay memory relay, address nativeToken, uint256 value)
-        private
-        returns (bytes memory, uint256)
-    {
+    function _burnAndEncode(Relay memory relay, address nativeToken, uint256 value) private returns (bytes memory) {
         IBurnableMintableERC677Token(relay.token).burn(value);
         if (relay.mode == CallMode.WithCall) {
-            return (
-                abi.encodeWithSelector(
-                    this.handleNativeTokensAndCall.selector, nativeToken, relay.receiver, value, relay.data
-                ),
-                RELEASE_GAS_LIMIT + CALLBACK_GAS_LIMIT
+            return abi.encodeWithSelector(
+                this.handleNativeTokensAndCall.selector,
+                nativeToken,
+                relay.receiver,
+                value,
+                relay.data,
+                relay.callbackGas
             );
         }
-        return (
-            abi.encodeWithSelector(this.handleNativeTokens.selector, nativeToken, relay.receiver, value),
-            RELEASE_GAS_LIMIT
-        );
+        return abi.encodeWithSelector(this.handleNativeTokens.selector, nativeToken, relay.receiver, value);
     }
 
-    /// @dev The short form message for a native token whose copy exists. It is the OmniBridge payload, byte for byte.
-    function _encodeBridged(Relay memory relay, uint256 value) private pure returns (bytes memory, uint256) {
+    /// @dev The short form message for a native token whose copy exists. Without a call it is the OmniBridge payload,
+    /// byte for byte.
+    function _encodeBridged(Relay memory relay, uint256 value) private pure returns (bytes memory) {
         if (relay.mode == CallMode.WithCall) {
-            return (
-                abi.encodeWithSelector(
-                    this.handleBridgedTokensAndCall.selector, relay.token, relay.receiver, value, relay.data
-                ),
-                RELEASE_GAS_LIMIT + CALLBACK_GAS_LIMIT
+            return abi.encodeWithSelector(
+                this.handleBridgedTokensAndCall.selector,
+                relay.token,
+                relay.receiver,
+                value,
+                relay.data,
+                relay.callbackGas
             );
         }
-        return (
-            abi.encodeWithSelector(this.handleBridgedTokens.selector, relay.token, relay.receiver, value),
-            RELEASE_GAS_LIMIT
-        );
+        return abi.encodeWithSelector(this.handleBridgedTokens.selector, relay.token, relay.receiver, value);
     }
 
-    /// @dev The first message for a native token: it carries the name, the symbol and the decimals. The default gas
-    /// limit grows with the length of the name and the symbol, because the copy stores both.
-    function _encodeDeploy(Relay memory relay, uint256 value) private view returns (bytes memory, uint256) {
+    /// @dev The first message for a native token: it carries the name, the symbol and the decimals.
+    function _encodeDeploy(Relay memory relay, uint256 value) private view returns (bytes memory) {
         Metadata memory metadata = _readMetadata(relay.token);
-        uint256 gasLimit = _deployGasLimitOf(metadata, relay.mode);
         if (relay.mode == CallMode.WithCall) {
-            return (
-                abi.encodeWithSelector(
-                    this.deployAndHandleBridgedTokensAndCall.selector,
-                    relay.token,
-                    metadata.name,
-                    metadata.symbol,
-                    metadata.decimals,
-                    relay.receiver,
-                    value,
-                    relay.data
-                ),
-                gasLimit
-            );
-        }
-        return (
-            abi.encodeWithSelector(
-                this.deployAndHandleBridgedTokens.selector,
+            return abi.encodeWithSelector(
+                this.deployAndHandleBridgedTokensAndCall.selector,
                 relay.token,
                 metadata.name,
                 metadata.symbol,
                 metadata.decimals,
                 relay.receiver,
-                value
-            ),
-            gasLimit
+                value,
+                relay.data,
+                relay.callbackGas
+            );
+        }
+        return abi.encodeWithSelector(
+            this.deployAndHandleBridgedTokens.selector,
+            relay.token,
+            metadata.name,
+            metadata.symbol,
+            metadata.decimals,
+            relay.receiver,
+            value
         );
     }
 
@@ -559,37 +556,11 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
         metadata.decimals = TokenReader.readDecimals(token);
     }
 
-    /// @dev The default gas limit of a deploy message: the larger of `DEPLOY_GAS_LIMIT` and the rule of
-    /// `DEPLOY_GAS_BASE` plus `DEPLOY_GAS_PER_BYTE` for each byte of name and symbol. The callback limit comes on top
-    /// when the message calls the receiver.
-    function _deployGasLimitOf(Metadata memory metadata, CallMode mode) private pure returns (uint256 gasLimit) {
-        gasLimit = DEPLOY_GAS_LIMIT;
-        uint256 textLength = bytes(metadata.name).length + bytes(metadata.symbol).length;
-        uint256 needed = DEPLOY_GAS_BASE + DEPLOY_GAS_PER_BYTE * textLength;
-        if (needed > gasLimit) gasLimit = needed;
-        if (mode == CallMode.WithCall) gasLimit += CALLBACK_GAS_LIMIT;
-    }
-
-    /// @dev The gas limit of a message. A request of zero gives the default of the message kind. A request below the
-    /// default reverts with `GasLimitBelowMinimum`, because a handler that gets less gas than its own work needs fails
-    /// for good. A value above the maximum of the message bridge reverts with the mediator error, and not with the
-    /// error of the bridge that does not name the rule.
-    function _chooseGasLimit(uint256 requested, uint256 defaultGasLimit) private view returns (uint256 gasLimit) {
-        if (requested != 0 && requested < defaultGasLimit) revert GasLimitBelowMinimum(requested, defaultGasLimit);
-        gasLimit = requested == 0 ? defaultGasLimit : requested;
-        uint256 bridgeMaximum = bridgeContract.maxGasPerTx();
-        if (gasLimit > bridgeMaximum) revert GasLimitAboveBridgeMaximum(gasLimit, bridgeMaximum);
-    }
-
-    function _modeOf(bytes memory data) private pure returns (CallMode) {
-        return data.length > 0 ? CallMode.WithCall : CallMode.Plain;
-    }
-
-    /// @dev The data of `onTokenTransfer` without its first 20 bytes.
-    function _dropAddress(bytes memory data) private pure returns (bytes memory rest) {
-        rest = new bytes(data.length - 20);
+    /// @dev The bytes of `data` from `start` on.
+    function _tail(bytes memory data, uint256 start) private pure returns (bytes memory rest) {
+        rest = new bytes(data.length - start);
         for (uint256 i = 0; i < rest.length; i++) {
-            rest[i] = data[i + 20];
+            rest[i] = data[i + start];
         }
     }
 
@@ -663,8 +634,9 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     }
 
     /// @dev Tries the recipient once. When the recipient cannot take the release, or the flow limiter refuses it, it
-    /// emits `ReleaseFailed` and stops. It never reverts on a refusal, because a revert would lose the tokens: the
-    /// bridge marks the message delivered anyway. The mediator pays no account but the recipient.
+    /// emits `ReleaseFailed` and stops. It never reverts on a refusal, so a refusal cannot hold the message back. It
+    /// reverts on a lack of gas, so an executor cannot turn a lack of gas into a refusal. The mediator pays no account
+    /// but the recipient.
     /// @return paid Whether the recipient received the tokens.
     function _pay(Side side, address token, Delivery memory delivery, bytes32 messageId) private returns (bool paid) {
         bool allowed = _limiterAllows(token, delivery.recipient, delivery.value, messageId);
@@ -673,13 +645,16 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
         return false;
     }
 
-    /// @dev Asks the flow limiter about a release. A refusal of any kind, a revert or a lack of gas, answers false.
+    /// @dev Asks the flow limiter about a release. A revert answers false. A failure that used up the gas reverts the
+    /// delivery with `ReleaseOutOfGas`.
     function _limiterAllows(address token, address recipient, uint256 value, bytes32 messageId) private returns (bool) {
         IFlowLimiter limiter = flowLimiter;
         if (address(limiter) == address(0)) return true;
+        uint256 gasBefore = gasleft();
         try limiter.checkWithdrawal(token, recipient, value, messageId) {
             return true;
         } catch {
+            _revertIfOutOfGas(token, gasBefore, 0);
             return false;
         }
     }
@@ -689,9 +664,11 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     /// @return Whether `to` received the tokens.
     function _tryRelease(Side side, address token, address to, uint256 value) private returns (bool) {
         if (side == Side.Native) return _transferWithinReserve(IERC20(token), to, value);
+        uint256 gasBefore = gasleft();
         try IBurnableMintableERC677Token(token).mint(to, value) returns (bool minted) {
             return minted;
         } catch {
+            _revertIfOutOfGas(token, gasBefore, 0);
             return false;
         }
     }
@@ -699,11 +676,11 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
     /// @dev A transfer that cannot take the gas that the handler needs afterwards. The call gets the gas that is left,
     /// less `TRANSFER_GAS_RESERVE`, and fails when the token needs more. It reads the answer as `SafeERC20` does: the
     /// token must return true, or return nothing and have code. It reads 32 bytes of the answer at most, so a token
-    /// cannot spend the reserve on a large answer. It returns false, with no call, when the gas left is not above the
-    /// reserve.
+    /// cannot spend the reserve on a large answer. A gas left that is not above the reserve, and a failed call that
+    /// used up its gas, revert the delivery with `ReleaseOutOfGas`.
     function _transferWithinReserve(IERC20 token, address to, uint256 value) private returns (bool success) {
         uint256 available = gasleft();
-        if (available <= TRANSFER_GAS_RESERVE) return false;
+        if (available <= TRANSFER_GAS_RESERVE) revert ReleaseOutOfGas(address(token));
         uint256 gasCap = available - TRANSFER_GAS_RESERVE;
         bytes4 selector = IERC20.transfer.selector;
         assembly ("memory-safe") {
@@ -717,15 +694,26 @@ contract TokenMediator is ITokenMediator, ReentrancyGuard {
             }
             mstore(0x40, freePointer)
         }
+        if (!success) _revertIfOutOfGas(address(token), available, TRANSFER_GAS_RESERVE);
+    }
+
+    /// @dev Tells a lack of gas from a refusal, after a call that failed. A call that runs out of gas leaves the caller
+    /// one 64th of the gas before the call, or the part that the caller held back (`reserve`), whichever is larger.
+    /// A call that refused with gas to spare leaves more. So a gas left at or below `gasBefore / 64 + reserve` reverts
+    /// with `ReleaseOutOfGas`: the callee used up what it got, and more gas may change the outcome.
+    function _revertIfOutOfGas(address token, uint256 gasBefore, uint256 reserve) private view {
+        if (gasleft() <= gasBefore / 64 + reserve) revert ReleaseOutOfGas(token);
     }
 
     /// @dev Calls `onTokenBridged` on the account that received the tokens, as OmniBridge does: only a contract is
-    /// called, and a failure changes nothing.
+    /// called. The call gets exactly the gas of the message (`ExactGasCall`): not enough gas reverts the delivery, and a
+    /// callback that fails with its gas emits `CallbackFailed` and changes nothing else.
     function _callback(address receiver, address token, Delivery memory delivery, bytes32 messageId) private {
         if (receiver.code.length == 0) return;
-        (bool ok,) = receiver.call(
-            abi.encodeWithSelector(IERC20Receiver.onTokenBridged.selector, token, delivery.value, delivery.data)
-        );
-        if (!ok) emit CallbackFailed(token, receiver, messageId);
+        bytes memory callData =
+            abi.encodeWithSelector(IERC20Receiver.onTokenBridged.selector, token, delivery.value, delivery.data);
+        if (!ExactGasCall.callWithExactGas(receiver, delivery.callbackGas, CALLBACK_GAS_RESERVE, callData, 0)) {
+            emit CallbackFailed(token, receiver, messageId);
+        }
     }
 }

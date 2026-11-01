@@ -15,6 +15,7 @@ import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol"
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
 import {Multicall3} from "../../../src/hardened/vendor/multicall3/Multicall3.sol";
 import {WorldSupport} from "../utils/WorldSupport.sol";
+import {TEST_CALLBACK_GAS} from "../mediator/utils/MediatorSupport.sol";
 
 /// @dev What a sent message asks the destination to do.
 enum SentKind {
@@ -190,7 +191,7 @@ contract RealBridgeHandler is WorldSupport {
         _fundAndApproveOnA(amount);
         vm.recordLogs();
         vm.prank(alice);
-        mediatorA.relayTokensAndCall(address(nativeToken), address(routerB), amount, data);
+        mediatorA.relayTokensAndCall(address(nativeToken), address(routerB), amount, data, TEST_CALLBACK_GAS);
         routerSends++;
         _store(vm.getRecordedLogs(), true, SentKind.TokenToRouter, amount, tip);
     }
@@ -220,7 +221,7 @@ contract RealBridgeHandler is WorldSupport {
         _approveCopy(holder, copyToken);
         vm.recordLogs();
         vm.prank(holder);
-        mediatorB.relayTokensAndCall(copyToken, address(routerA), amount, data);
+        mediatorB.relayTokensAndCall(copyToken, address(routerA), amount, data, TEST_CALLBACK_GAS);
         routerSends++;
         copyBackSends++;
         _store(vm.getRecordedLogs(), false, SentKind.TokenToRouter, amount, tip);
@@ -352,11 +353,11 @@ contract RealBridgeHandler is WorldSupport {
         if (modeSeed % 2 == 0) {
             uint256 multiplier = bound(tipSeed, 0.001 ether, 0.05 ether);
             tip = amount * multiplier / 1 ether;
-            data = abi.encode(DeliveryRouter.FeeDirector(receiver, router.MULTIPLIER_OF_TOTAL(), 0, multiplier));
+            data = abi.encode(DeliveryRouter.FeeDirector(receiver, router.MULTIPLIER_OF_TOTAL(), 0, multiplier, 0));
             return (data, tip);
         }
         tip = bound(tipSeed, 1, amount);
-        data = abi.encode(DeliveryRouter.FeeDirector(receiver, router.FIXED_FEE(), tip, 0));
+        data = abi.encode(DeliveryRouter.FeeDirector(receiver, router.FIXED_FEE(), tip, 0, 0));
     }
 
     /// @dev Builds the proof of the message among the recorded logs and stores it.

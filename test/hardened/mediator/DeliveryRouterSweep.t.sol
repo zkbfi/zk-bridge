@@ -8,7 +8,7 @@ import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol"
 import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
-import {MediatorFixture, MockWrappedNative} from "./utils/MediatorSupport.sol";
+import {MediatorFixture, MockWrappedNative, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 import {MedHookedDenyListToken} from "./utils/MedMocks.sol";
 
 /// @notice The sweep recovers what reached the router with no callback and no record: a plain relay that names the
@@ -60,9 +60,9 @@ contract DeliveryRouterSweepTest is MediatorFixture {
     function _stickAHandOff(uint256 value) internal {
         token.setDenied(recipient, true);
         token.setDenied(failedDelivery, true);
-        bytes memory terms = abi.encode(DeliveryRouter.FeeDirector(recipient, router.FIXED_FEE(), 5 ether, 0));
+        bytes memory terms = abi.encode(DeliveryRouter.FeeDirector(recipient, router.FIXED_FEE(), 5 ether, 0, 0));
         vm.prank(alice);
-        mediatorB.relayTokensAndCall(copy, address(router), value, terms);
+        mediatorB.relayTokensAndCall(copy, address(router), value, terms, TEST_CALLBACK_GAS);
         uint256 index = _lastIndexB();
         vm.prank(bob, bob);
         router.executeMessage(ambA.proofOf(ambB, index));
@@ -179,9 +179,9 @@ contract DeliveryRouterSweepTest is MediatorFixture {
     /// not move balances that a delivery counts on.
     function test_aSweepFromAPayoutHookIsRefusedWhileADeliveryRuns() public {
         _plainRelayToRouter(4 ether);
-        bytes memory terms = abi.encode(DeliveryRouter.FeeDirector(recipient, 0, 0, 0));
+        bytes memory terms = abi.encode(DeliveryRouter.FeeDirector(recipient, 0, 0, 0, 0));
         vm.prank(alice);
-        mediatorB.relayTokensAndCall(copy, address(router), 50 ether, terms);
+        mediatorB.relayTokensAndCall(copy, address(router), 50 ether, terms, TEST_CALLBACK_GAS);
         uint256 index = _lastIndexB();
         token.arm(recipient, address(router), abi.encodeCall(DeliveryRouter.sweep, (address(token))));
 

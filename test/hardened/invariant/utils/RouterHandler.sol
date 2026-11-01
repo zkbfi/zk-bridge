@@ -8,7 +8,7 @@ import {DeliveryRouter} from "../../../../src/hardened/mediator/DeliveryRouter.s
 import {TokenMediator} from "../../../../src/hardened/mediator/TokenMediator.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Multicall3} from "../../../../src/hardened/vendor/multicall3/Multicall3.sol";
-import {MockAMB} from "../../mediator/utils/MediatorSupport.sol";
+import {MockAMB, TEST_CALLBACK_GAS} from "../../mediator/utils/MediatorSupport.sol";
 import {MessageReading} from "./MessageReading.sol";
 import {RouterWorld} from "./RouterWorld.sol";
 
@@ -73,8 +73,8 @@ contract RouterHandler is RouterWorld {
     /// @dev The fixed overhead that a gas based tip adds to the measured gas, at its largest (the token payout).
     uint256 internal constant GAS_OVERHEAD_BOUND = 100_000;
     /// @dev The gas that the caller of a router supplies. The router measures from the entry of `executeMessage`, so it
-    /// can measure no more than this, and the handler bounds a gas based tip by it. It exceeds the largest gas limit of a
-    /// message (2,750,000), so the bridge always gets what it asks for.
+    /// can measure no more than this, and the handler bounds a gas based tip by it. It exceeds the largest callback gas
+    /// of the handler's messages (3,000,000 for the outer message of a reentry), so every callback gets its gas.
     uint256 internal constant SUPPLIED_GAS = 5_000_000;
     uint256 internal constant BATCH_SIZE = 4;
     bytes32 internal constant COMPLETED_TOPIC = keccak256("AffirmationCompleted(address,address,bytes32,bool)");
@@ -306,8 +306,11 @@ contract RouterHandler is RouterWorld {
         if (!_stockCopies(sender, outerAmount + nestedAmount)) return;
 
         address nestedReceiver = actors[(shapeSeed >> 4) % actors.length];
-        uint256 outerId = _sendBack(sender, router, _reentryTerms(reenterer, shapeSeed, outerAmount), outerAmount);
-        uint256 nestedId = _sendBack(sender, router, _nestedData(nestedReceiver, shapeSeed, nestedAmount), nestedAmount);
+        // The nested message runs inside the callback of the outer one, so the outer callback gas leaves room for it.
+        uint256 outerId =
+            _sendBack(sender, router, _reentryTerms(reenterer, shapeSeed, outerAmount), outerAmount, 3_000_000);
+        uint256 nestedId =
+            _sendBack(sender, router, _nestedData(nestedReceiver, shapeSeed, nestedAmount), nestedAmount, 300_000);
         _runReentrant(Reentry(router, outerId, nestedId, nestedReceiver, shapeSeed, pathSeed, priceSeed));
     }
 
@@ -418,7 +421,7 @@ contract RouterHandler is RouterWorld {
     }
 
     /// @dev Sends copies from chain B to `router` on chain A with `data`, and records the message.
-    function _sendBack(address sender, DeliveryRouter router, bytes memory data, uint256 amount)
+    function _sendBack(address sender, DeliveryRouter router, bytes memory data, uint256 amount, uint256 callbackGas)
         private
         returns (uint256)
     {
@@ -426,7 +429,7 @@ contract RouterHandler is RouterWorld {
         vm.prank(sender);
         IERC20Transfer(copy).approve(address(mediatorB), amount);
         vm.prank(sender);
-        try mediatorB.relayTokensAndCall(copy, address(router), amount, data) {}
+        try mediatorB.relayTokensAndCall(copy, address(router), amount, data, callbackGas) {}
         catch {
             _violate("a relay of the reentry test reverted");
         }
@@ -439,7 +442,7 @@ contract RouterHandler is RouterWorld {
         uint256 shape = shapeSeed % 4;
         uint256 settings = shape == 0 ? 1 : shape == 1 ? 8 : shape == 2 ? 0 : 4;
         uint256 multiplier = shape == 1 ? 0.1 ether : 1 ether;
-        return abi.encode(DeliveryRouter.FeeDirector(receiver, settings, amount / 10, multiplier));
+        return abi.encode(DeliveryRouter.FeeDirector(receiver, settings, amount / 10, multiplier, 0));
     }
 
     /// @dev The data of the second message: terms (shape 0 and 1 of `shapeSeed >> 2`), the legacy receiver, or no known shape.
@@ -590,7 +593,7 @@ contract RouterHandler is RouterWorld {
                 return _refused("a plain relay reverted");
             }
         }
-        try mediator.relayTokensAndCall(token, target, plan.amount, data) {
+        try mediator.relayTokensAndCall(token, target, plan.amount, data, TEST_CALLBACK_GAS) {
             return true;
         } catch {
             return _refused("a relay with a call reverted");
@@ -616,9 +619,9 @@ contract RouterHandler is RouterWorld {
         return abi.encode(_director(plan, _invalidOr(plan, receiver)));
     }
 
-    /// @dev A length that is neither 20 nor the four words of the terms.
+    /// @dev A length that is neither 20 nor the five words of the terms.
     function _oddLengthFor(uint256 detail) private pure returns (uint256) {
-        uint256[5] memory lengths = [uint256(1), 7, 19, 21, 127];
+        uint256[5] memory lengths = [uint256(1), 7, 19, 21, 159];
         return lengths[uint8(detail >> 152) % lengths.length];
     }
 
@@ -651,7 +654,7 @@ contract RouterHandler is RouterWorld {
                 return _refused("wrapAndRelayTokens with a receiver reverted");
             }
         }
-        try router.relayTokensAndCall{value: plan.amount}(receiver, abi.encodePacked(receiver)) {
+        try router.relayTokensAndCall{value: plan.amount}(receiver, abi.encodePacked(receiver), TEST_CALLBACK_GAS) {
             return true;
         } catch {
             return _refused("relayTokensAndCall of the delivery router reverted");
@@ -669,7 +672,7 @@ contract RouterHandler is RouterWorld {
         uint256 limitKind = uint8(detail >> 48) % 4;
         uint256 limit = limitKind == 0 ? plan.amount : limitKind == 1 ? 0 : bound(detail >> 56, 0, plan.amount);
         uint256 multiplier = shape == 1 ? bound(detail >> 120, 0, 1.5e18) : bound(detail >> 120, 0, 5e18);
-        return DeliveryRouter.FeeDirector(receiver, settings, limit, multiplier);
+        return DeliveryRouter.FeeDirector(receiver, settings, limit, multiplier, 0);
     }
 
     function _refused(string memory reason) private returns (bool) {
@@ -758,7 +761,7 @@ contract RouterHandler is RouterWorld {
         // address.
         DeliveryRouter router = DeliveryRouter(payable(reading.recipient));
         if (reading.callData.length == 20) return _deliverableOr(router, universe, address(bytes20(reading.callData)));
-        if (reading.callData.length != 128) return router.failedDeliveryAddress();
+        if (reading.callData.length != 160) return router.failedDeliveryAddress();
         return _deliverableOr(router, universe, abi.decode(reading.callData, (DeliveryRouter.FeeDirector)).recipient);
     }
 
@@ -972,7 +975,7 @@ contract RouterHandler is RouterWorld {
     function _tipCap(Item memory item, uint256 j) private view returns (uint256) {
         if (item.executor == address(0) || item.executor != item.reading.recipient) return 0;
         if (item.executor != address(deliveryRouterAt(chainOfToken(item.universe), j))) return 0;
-        if (item.reading.callData.length != 128) return 0;
+        if (item.reading.callData.length != 160) return 0;
         DeliveryRouter.FeeDirector memory director = abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector));
         return _directorCap(director, item.reading.value);
     }
@@ -1031,7 +1034,7 @@ contract RouterHandler is RouterWorld {
 
     /// @dev A message with terms to a delivery router, paid in the token and not in the coin.
     function _isTokenPayoutByARouter(Item memory item) private view returns (bool) {
-        if (item.reading.callData.length != 128) return false;
+        if (item.reading.callData.length != 160) return false;
         if (!_isDeliveryRouter(item.reading.recipient, chainOfToken(item.universe))) return false;
         DeliveryRouter.FeeDirector memory director = abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector));
         return !(director.settings & 2 != 0 && isWrappedNativeOfItsChain(item.universe));
@@ -1067,7 +1070,7 @@ contract RouterHandler is RouterWorld {
         bool legacyToRouter =
             item.reading.callData.length == 20 && _isDeliveryRouter(item.reading.recipient, destination);
         if (legacyToRouter && !isWrappedNativeOfItsChain(item.universe)) legacyTokenPayouts++;
-        if (item.reading.callData.length == 128 && _isDeliveryRouter(item.reading.recipient, destination)) {
+        if (item.reading.callData.length == 160 && _isDeliveryRouter(item.reading.recipient, destination)) {
             bool attributed = item.executor == item.reading.recipient;
             bool invalid = _isInvalid(
                 abi.decode(item.reading.callData, (DeliveryRouter.FeeDirector)).recipient, item.reading.recipient
