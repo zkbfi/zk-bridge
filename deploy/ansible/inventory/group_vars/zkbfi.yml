@@ -92,6 +92,10 @@ zkb_bot_required_files:
     - traffic/bots.env
     - traffic/traffic.env
     - deployment.json
+  status:
+    - status/status.json
+    - status/status.env
+    - deployment.json
 
 # The journal events that tell whether the publisher is in the middle of a paid proof (explorer/bots/src/publisher).
 zkb_publisher_events: proving_started|proof_made|nothing_to_prove|proof_discarded

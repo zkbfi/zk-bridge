@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "listen": { "host": "127.0.0.1", "port": 8790 },
+  "databasePath": "/var/lib/zk-bridge-status/status.sqlite",
+  "pair": "sepolia-pls943",
+  "deploymentFile": "/etc/zk-bridge/deployment.json",
+  "intervalSeconds": 60,
+  "timeoutSeconds": 20,
+  "slowSeconds": 3,
+  "retentionDays": 30,
+  "services": {
+    "indexerLocal": "http://127.0.0.1:42069",
+    "indexerPublic": "https://indexer.example.org",
+    "backendLocal": "http://127.0.0.1:8787",
+    "backendPublic": "https://prove.example.org",
+    "webhookPublic": "https://webhook.example.org",
+    "gateway": "https://gateway.example.org",
+    "sites": { "next": "https://next.example.org", "main": "https://www.example.org" }
+  },
+  "units": [
+    { "name": "zk-bridge-backend" },
+    { "name": "zk-bridge-indexer" },
+    { "name": "zk-bridge-runner" },
+    { "name": "zk-bridge-traffic", "optional": true },
+    { "name": "zk-bridge-ipfs" },
+    { "name": "zk-bridge-keepalive.timer" }
+  ],
+  "chains": {
+    "11155111": {
+      "label": "Sepolia",
+      "symbol": "ETH",
+      "rpcUrl": "env:STATUS_RPC_URL_11155111",
+      "beaconUrl": "env:STATUS_BEACON_URL_11155111",
+      "maxBlockAgeSeconds": 120,
+      "maxFinalizedAgeSeconds": 1800
+    },
+    "943": {
+      "label": "PulseChain testnet",
+      "symbol": "tPLS",
+      "rpcUrl": "env:STATUS_RPC_URL_943",
+      "beaconUrl": "env:STATUS_BEACON_URL_943"
+    }
+  },
+  "lightClients": { "keepAliveSeconds": 43200, "marginSeconds": 21600 },
+  "pipeline": { "maxUndeliveredAgeSeconds": 7200, "maxJobSeconds": 3600 },
+  "runpod": { "endpointId": "yourendpointid", "apiKey": "env:RUNPOD_API_KEY" },
+  "wallets": [
+    { "name": "runner", "address": "0x0000000000000000000000000000000000000001", "low": { "11155111": "0.05", "943": "1000" } },
+    { "name": "deployer", "address": "0x0000000000000000000000000000000000000002", "low": { "11155111": "0.05", "943": "1000" } },
+    { "name": "traffic", "address": "0x0000000000000000000000000000000000000003", "low": { "11155111": "0.05", "943": "1000" } }
+  ]
+}

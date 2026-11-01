@@ -80,6 +80,7 @@ check_unit indexer zkb_indexer /var/lib/zk-bridge-indexer indexer indexer
 check_unit publisher zkb_publisher /var/lib/zk-bridge-publisher publisher bots
 check_unit runner zkb_runner /var/lib/zk-bridge-runner runner bots
 check_unit traffic zkb_traffic /var/lib/zk-bridge-traffic traffic bots
+check_unit status zkb_status /var/lib/zk-bridge-status status status
 
 # The wallet key: only the runner's user can read it. The publisher runs as another user, so it can read neither the
 # file nor the runner's environment in /proc.
@@ -164,11 +165,13 @@ for name in backend indexer; do
 done
 # The backend and the indexer go through the upstream snippets (blue/green). The only proxy written in the Caddyfile is
 # the IPFS gateway, which has one node and no green.
-if grep -E '^[[:space:]]*reverse_proxy' "$DIR/Caddyfile" | grep -vqF '{$ZKB_IPFS_GATEWAY_PORT:8080}'; then
-  fail "Caddyfile: only the IPFS gateway may reverse_proxy directly"
+# The status service is the same: one process on one port.
+if grep -E '^[[:space:]]*reverse_proxy' "$DIR/Caddyfile" | grep -vF -e '{$ZKB_IPFS_GATEWAY_PORT:8080}' -e '{$ZKB_STATUS_PORT:8790}' | grep -q .; then
+  fail "Caddyfile: only the IPFS gateway and the status service may reverse_proxy directly"
 else
-  pass "Caddyfile: only the IPFS gateway proxies directly"
+  pass "Caddyfile: only the IPFS gateway and the status service proxy directly"
 fi
+if grep -qE '^[[:space:]]*reverse_proxy 127\.0\.0\.1:\{\$ZKB_STATUS_PORT:8790\}$' "$DIR/Caddyfile"; then pass "Caddyfile: status.zkb.fi proxies to the status port"; else fail "Caddyfile: no proxy to the status port"; fi
 # The snippets that caddy.yml writes give the routing the Caddyfile had before: the same ports, and no other behaviour.
 if grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_INDEXER_PORT:{{ zkb_default_indexer_port }}}' "$ANSIBLE_DIR/templates/indexer-normal.caddy.j2" \
   && grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_BACKEND_PORT:{{ zkb_default_backend_port }}}' "$ANSIBLE_DIR/templates/backend-normal.caddy.j2" \
