@@ -155,18 +155,37 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
   source's finality unless the head has aged past the keep-alive age. A message that a proof already posted to the board
   covers, while that proof still starts at the head, starts nothing. One finalized header starts at most one job, and
   no job starts while one runs.
-- **Warm-up.** Shortly before a proof is expected (45 s before the expected finality of a sent message, or once before a
-  period handoff that the next finality makes due), the backend calls `GET <first endpoint>/ping` with that endpoint's key, if it has one.
-  One ping per direction is outstanding at most, and it waits up to `warmup.pingTimeoutSeconds` (300 s) because the
-  load-balancing endpoint holds it while a worker starts. Before a message it repeats every 30 s after an answer until
-  90 s past the expected finality, and a 200 (warm) ends the session. At most one session per direction in 5 minutes,
-  and never while a job runs. A ping that times out is logged as `warmup_ping_timeout` (info) and no new session starts
-  for 5 minutes. Set the endpoint's idle timeout to cover the prover's preparation (60 s is the documented value,
-  docs/gpu-prover.md).
+- **Warm-up.** The backend wakes the remote prover (`GET <first endpoint>/ping`, with that endpoint's key if it has one) a learned
+  lead time before a proof is expected, and keeps the worker warm until the job starts.
+  - *When a proof is expected:* at the expected finality of each sent message (the start of epoch e + 3, plus one
+    slot), and when the source's finality crosses into a new sync-committee period and so makes a handoff due (about
+    two epochs after the border, not when the clock crosses it). A keep-alive of the age rule gets no warm-up.
+  - *Lead time:* the p90 (`warmup.leadP`) of the last 20 (`leadObservations`) observed times to a ready worker,
+    clamped to 30 to 600 s; 90 s until there is one. Observations, kept in the `warmup_observations` table: the time
+    from a session's first ping to its first ready answer (200), when that took 5 s or more (a faster one found a
+    worker that was up already); the time a ping waited before it timed out (a cold start at least that long); and
+    `wait_worker_ms` of a job that met a cold worker (`not_ready_count` above 0) while no warm-up ran.
+  - *Session:* one per direction, started at the due time minus the lead time. One ping is outstanding at most; it
+    waits up to `pingTimeoutSeconds` (300 s), because the load-balancing endpoint holds it while a worker starts. Until
+    a worker answers ready, the ping repeats every 30 s after an answer. Once ready, a ping 40 s after the last ready
+    answer (`holdIntervalSeconds`, under the endpoint's 60 s idle timeout) keeps the worker; a ping to a warm worker
+    answers at once. A hold not answered ready, or failed, is followed by the next no sooner than 30 s later. The session ends when the job starts (`warmup_used`), when the message is delivered or covered,
+    when the due time is past by 90 s (`graceSeconds`), or when the daily cap is spent (each `warmup_wasted`). A ping
+    that times out ends the session, and no new one starts for 5 minutes. Sessions are kept in `warmup_sessions`; a
+    restart ends the ones left open.
+  - *Cost cap:* at most `dailyCapSeconds` (1 hour) of sessions in any 24 hours, both directions together. Over it, no
+    session starts (`warmup_capped`, once per target) and a warm one stops at its next hold.
+  - *Not done:* the backend never changes the endpoint's `workersMin`; the server holds no RunPod management key.
+    Set the endpoint's idle timeout to 60 s (docs/gpu-prover.md); `holdIntervalSeconds` must stay below it.
 - **The log.** `finality_seen` (slot, `source` sse or poll, `latencyMs` from the start of the signature slot),
   `proof_due` (why), `proof_not_due` (why, at debug level unless signatures are short or the light client is stranded),
-  `job_started` (`reason: "finality"`, `latencyMs` from the arrival of the finality event; the aim is under 5 s) and
-  `warmup_ping` (the status only; the address and the key never appear), `warmup_ping_timeout`.
+  `job_started` (`reason: "finality"`, `latencyMs` from the arrival of the finality event; the aim is under 5 s), and
+  for the warm-up: `warmup_scheduled` (why, `dueAt`, `leadSeconds`, `leadBasis` default or observed), `warmup_ping`
+  (a non-ready answer: the status only; the address and the key never appear), `warmup_ready` (`readySeconds`, `cold`),
+  `warmup_held` (`holds`, `secondsToDue`), `warmup_used` (`warmSeconds`, `readyBeforeDueSeconds`), `warmup_wasted`
+  (`reason` covered, grace or cap, `warmSeconds`), `warmup_capped`, `warmup_ping_timeout`, `warmup_ping_failed`, and
+  from a finished job `warmup_observed` (a cold start learned from `wait_worker_ms`) or `warmup_missed` (a job met a
+  cold worker although a warm-up ran). The sum of `warmSeconds` is what the warm-ups cost.
 
 Settings, all optional (`watch` in the configuration file):
 
@@ -178,8 +197,13 @@ Settings, all optional (`watch` in the configuration file):
 | `pollSeconds` | one slot of the source chain | The poll interval while no stream runs. |
 | `scanSeconds` | 15 | How often the warm-up looks at the sent messages. |
 | `warmup.enabled` | `true` | `false` sends no ping. |
-| `warmup.leadSeconds`, `intervalSeconds`, `graceSeconds`, `minGapSeconds` | 45, 30, 90, 300 | The warm-up timing above. |
+| `warmup.leadP`, `leadObservations` | 0.9, 20 | The quantile of the newest observations that the lead time takes. |
+| `warmup.defaultLeadSeconds`, `minLeadSeconds`, `maxLeadSeconds` | 90, 30, 600 | The lead time without observations, and its bounds. |
+| `warmup.holdIntervalSeconds` | 40 | The ping that keeps a warm worker, after its last ready answer. Below the endpoint's idle timeout. |
+| `warmup.intervalSeconds`, `graceSeconds`, `minGapSeconds` | 30, 90, 300 | Ping again while no worker is ready; end after the due time; the pause after a timed-out ping. |
+| `warmup.dailyCapSeconds` | 3600 | The most warm-up seconds in any 24 hours, both directions together. |
 | `warmup.pingTimeoutSeconds` | 300 | How long one ping may wait for a cold worker. |
+| `warmup.leadSeconds` | none | The fixed lead time of before 2026-11-01. Still accepted; it does nothing and the start log warns (`config_ignored`). |
 
 The keep-alive timer (docs/testnet-run.md, "Keeping the light clients alive") stays as the backstop.
 

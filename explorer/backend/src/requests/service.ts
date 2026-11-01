@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Hex } from "viem";
 import type { ProofDirection } from "@zk-bridge/shared";
-import { CommandTimeoutError, ProverCommandError, type ProverBinary } from "@zk-bridge/shared/prover";
+import { CommandTimeoutError, ProverCommandError, type ProveOutcome, type ProverBinary, type ProveTiming } from "@zk-bridge/shared/prover";
 import type { Logger } from "../logger.ts";
 import { UNKNOWN_CALLER } from "./caller.ts";
 import type { Storage } from "../storage.ts";
@@ -98,6 +98,11 @@ export interface RequestServiceInput {
   /** A proving job older than this many milliseconds counts as lost. Use the prover limit. */
   readonly proverTimeoutMilliseconds: number;
   readonly logger: Logger;
+  /**
+   * Told of each proof the prover made, with its `prove_timing` fields (null from an older prover). The warm-up learns
+   * from it how long a cold worker takes. `startedAt`: when the job started proving, in milliseconds since 1970.
+   */
+  readonly onProved?: (event: { readonly jobId: string; readonly direction: ProofDirection; readonly startedAt: number; readonly timing: ProveTiming | null }) => void;
 }
 
 /** A reason for a failed job that is safe to show: it holds no path, no endpoint and no prover output. */
@@ -121,8 +126,10 @@ export function createRequestService(input: RequestServiceInput): RequestService
     // A job that is no longer queued (or proving without a proof after a restart) must not start the prover.
     const claimed = updateJob(storage, jobId, { status: "proving" }, now(), ["queued", "proving"]);
     if (!claimed) return;
+    const startedAt = now();
+    let outcome: ProveOutcome;
     try {
-      const outcome = await input.proverForJob(jobId).prove({ direction });
+      outcome = await input.proverForJob(jobId).prove({ direction });
       if (outcome.kind === "up-to-date") {
         updateJob(storage, jobId, { status: "on-chain" }, now(), ["proving"]);
         return;
@@ -133,6 +140,13 @@ export function createRequestService(input: RequestServiceInput): RequestService
     } catch (error) {
       logger.warn("job_failed", { jobId, direction, error });
       updateJob(storage, jobId, { status: "failed", error: describeFailure(error) }, now(), ["proving"]);
+      return;
+    }
+    // Outside the job's own handling: a failure here never fails the job.
+    try {
+      input.onProved?.({ jobId, direction, startedAt, timing: outcome.timing ?? null });
+    } catch (error) {
+      logger.warn("job_proved_note_failed", { jobId, direction, error });
     }
   }
 

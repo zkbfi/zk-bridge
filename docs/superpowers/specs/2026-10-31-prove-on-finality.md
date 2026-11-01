@@ -61,3 +61,47 @@ started a worker for each. The rule now (commit c8663d76):
   the indexer's check.
 - **Warm-up:** one ping at a time per direction, waiting up to 300 s (`warmup.pingTimeoutSeconds`), only before a sent
   message's finality or a due handoff; a 200 ends the session, a timeout is logged at info and not repeated at once.
+
+## Adaptive warm-up, 2026-11-01
+
+Owner, verbatim:
+
+- "it also seems to me that we should be able to "warm" a prover before the finalization actually occurs. if we have known cold starts or we can see ahead of time that the indexer has bridges that will be ready to prove upon, then we should be able to time that fairly well, right?"
+- "the proof should start running within seconds of the finalization/ sufficient signatures"
+- "try to reduce costs wherever you can"
+
+Before: one ping 45 s before the expected finality. Measured cold starts run from about 24 s (image cached) to about
+400 s (a 20 GB image pull), and the endpoint's 60 s idle timeout stops a worker woken more than a minute early, so a
+fixed lead was either too short for a pull or too long to hold. A warm RTX 5090 proves in about 36 s.
+
+The rule now (branch `feat/adaptive-warmup`; code in `explorer/backend/src/watch/warmup.ts`, `warmup-store.ts`,
+`decide.ts` `warmupPlan`, `watcher.ts`):
+
+- **Learn the cold start.** The backend database keeps observed times to a ready worker (`warmup_observations`): a
+  warm-up session's first ping to its first 200 when that took 5 s or more; the wait of a ping that timed out (a lower
+  bound); and the prover's `wait_worker_ms` (`prove_timing`, returned with the proof) of a job with `not_ready_count`
+  above 0 while no warm-up session ran. Lead time = p90 (nearest rank) of the newest 20, clamped to [30 s, 600 s];
+  90 s until there is one. Both directions share the observations: one endpoint serves both.
+- **Look ahead.** Due times: each sent message's expected finality (start of epoch e + 3, plus one slot), and the
+  finality that carries the source into the next period for a handoff, looked for as far ahead as the lead time. The
+  handoff target is when finality crosses the border (about two epochs after it), not when the clock does: before
+  this change the target sat at the border, about 11 to 13 minutes before the prover could take the handoff. A session
+  starts at due time minus lead time.
+- **Hold it warm.** After the first 200 the worker is kept with a ping `holdIntervalSeconds` (40 s) after the last 200,
+  on its own timer, below the 60 s idle timeout (after a hold not answered ready, the next waits 30 s). One ping outstanding per direction at most; one session per
+  direction. The session ends when the job starts (`warmup_used`), when its messages are delivered or covered, when the
+  due time is past by `graceSeconds` (90 s), or at the daily cap (`warmup_wasted` with the reason).
+- **Cost guard.** `dailyCapSeconds` (3600) of sessions in any 24 hours, both directions together; over it no session
+  starts (`warmup_capped`) and a warm one stops at its next hold. No warm-up for a keep-alive that is not a handoff
+  (unchanged). Every session is a row in `warmup_sessions` (lead, due, start, ready, end, outcome), and the log carries
+  `warmup_scheduled`, `warmup_ready`, `warmup_held`, `warmup_used`, `warmup_wasted`, `warmup_observed`,
+  `warmup_missed`, so the warm seconds and their use can be audited.
+- **Not done, and the trade-off.** The backend does not raise the endpoint's `workersMin` ahead of a proof: the server
+  holds no RunPod management key, only the key that calls the endpoint. A warm worker held by `workersMin` would cost
+  less in pings but bills for every idle second until something lowers it again. So a 400 s image pull is covered only by a lead time learned from it (up to 600 s), and a
+  held worker is kept by pings alone. The one assumption to check on the server: that a `/ping` through the
+  load-balancing endpoint counts as a request for the worker's idle timeout. `warmup_used` followed by a job with
+  `not_ready_count` above 0 (`warmup_missed`) would show it does not; then the hold needs a cheap real request instead.
+- **Config:** `watch.warmup` in backend.json: `enabled`, `leadP`, `leadObservations`, `defaultLeadSeconds`,
+  `minLeadSeconds`, `maxLeadSeconds`, `holdIntervalSeconds`, `intervalSeconds`, `graceSeconds`, `minGapSeconds`,
+  `dailyCapSeconds`, `pingTimeoutSeconds`. The old `leadSeconds` still loads and does nothing (`config_ignored`).

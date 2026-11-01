@@ -7,6 +7,7 @@ import { UNKNOWN_CALLER, callerKey } from "./caller.ts";
 import { findActiveJob, findLatestJob, getJob, getRequest, type Job } from "./jobs.ts";
 import { createRequestService, type RequestService } from "./service.ts";
 import { startWatch } from "../watch/module.ts";
+import { createWarmupStore, noteJobWorkerWait } from "../watch/warmup-store.ts";
 
 /** The largest request body in bytes. A real body is under 300 bytes. */
 export const MAXIMUM_BODY_BYTES = 4096;
@@ -45,6 +46,12 @@ function serviceFor(context: BackendModuleContext): RequestService {
     limits: context.config.limits,
     proverTimeoutMilliseconds: context.config.prover.timeoutSeconds * 1000,
     logger: context.logger,
+    // A job that met a cold worker tells the warm-up how long a cold start takes.
+    onProved: (event) => {
+      const wait = noteJobWorkerWait(createWarmupStore(context.storage), { direction: event.direction, startedAt: event.startedAt, timing: event.timing, at: context.now() });
+      if (wait.kind === "cold") context.logger.info("warmup_observed", { direction: event.direction, source: "job", jobId: event.jobId, seconds: wait.seconds });
+      if (wait.kind === "missed") context.logger.warn("warmup_missed", { direction: event.direction, jobId: event.jobId, waitWorkerSeconds: wait.seconds });
+    },
   });
   services.set(context, created);
   return created;

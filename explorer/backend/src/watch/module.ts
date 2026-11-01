@@ -15,6 +15,7 @@ import type { RequestService } from "../requests/service.ts";
 import { MIN_PARTICIPANTS } from "./decide.ts";
 import { createFinalityFeed } from "./feed.ts";
 import { createDirectionWatcher, type ListedMessage } from "./watcher.ts";
+import { createWarmupStore } from "./warmup-store.ts";
 
 /** How long one beacon or indexer read of the watcher may take, in milliseconds. Short: the watcher races the clock. */
 export const WATCH_READ_TIMEOUT_MILLISECONDS = 10_000;
@@ -102,6 +103,12 @@ export async function startWatch(input: { context: BackendModuleContext; service
   const get: JsonGet = (url) => fetchJsonGet(fetchFunction(), WATCH_READ_TIMEOUT_MILLISECONDS)(url);
   const readFacts = input.dependencies?.readLightClient ?? ((side: PairSide) => readLightClient(createPublicClient({ transport: http(side.rpcUrl) }), side.contracts.lightClient));
   const ping = config.watch.warmup.enabled ? (context.pingProver ?? null) : null;
+  const { leadSeconds: ignoredLead, ...warmup } = config.watch.warmup;
+  if (ignoredLead !== undefined) logger.warn("config_ignored", { key: "watch.warmup.leadSeconds", detail: "the lead time is learned now; set defaultLeadSeconds, minLeadSeconds and maxLeadSeconds instead" });
+  const warmupStore = createWarmupStore(context.storage);
+  // A session open from before this start ran in a process that is gone: end it so the daily cap stops counting it.
+  const closed = warmupStore.closeOpenSessions(context.now());
+  if (closed > 0) logger.info("warmup_sessions_closed", { count: closed });
   const stoppers: Array<() => Promise<void>> = [];
   for (const direction of directions) {
     const { source, destination } = sidesOf(pair, direction);
@@ -119,7 +126,8 @@ export async function startWatch(input: { context: BackendModuleContext; service
       ping,
       policy: { ...DEFAULT_POLICY, keepAliveSeconds: config.limits.keepAliveSeconds },
       minParticipants: MIN_PARTICIPANTS,
-      warmup: config.watch.warmup,
+      warmup,
+      warmupStore,
       maxRetrySeconds: MAX_RETRY_SECONDS,
       logger,
       now: context.now,
@@ -150,7 +158,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
       await watcher.stop();
     });
   }
-  logger.info("watch_started", { directions, sse: config.watch.sse, warmup: ping !== null });
+  logger.info("watch_started", { directions, sse: config.watch.sse, warmup: ping !== null, lead: warmupStore.lead(warmup) });
   return async () => {
     await Promise.all(stoppers.map((stop) => stop()));
   };

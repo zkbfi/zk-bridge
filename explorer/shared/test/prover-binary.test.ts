@@ -84,7 +84,7 @@ async function setup(answer: { code: number; stdout?: string; stderr?: string },
 describe("prove", () => {
   it("runs the binary with the route and the file, and returns the proof package", async () => {
     const { binary, seen, directory } = await setup({ code: 0, stdout: `${JSON.stringify(proofPackage)}\n` }, { secret: true });
-    expect(await binary.prove({ direction: "first-to-second" })).toEqual({ kind: "proof", proofPackage });
+    expect(await binary.prove({ direction: "first-to-second" })).toEqual({ kind: "proof", proofPackage, timing: null });
     const { spec, configText, configMode, configPath } = seen[0]!;
     expect(spec.command).toBe("/bin/zk-bridge-prover");
     expect(spec.args).toEqual(["--config", configPath, "prove", "--route", "ethereum_to_pulsechain", "--to", "stdout"]);
@@ -106,7 +106,9 @@ describe("prove", () => {
       "ts=10 level=info event=proof_handed_off new_head_slot=164",
     ].join("\n");
     const { binary, events } = await setup({ code: 0, stdout: JSON.stringify(proofPackage), stderr });
-    await binary.prove({ direction: "first-to-second" });
+    const outcome = await binary.prove({ direction: "first-to-second" });
+    // The timing comes back with the proof too: the backend's warm-up learns the cold start from it.
+    expect(outcome).toMatchObject({ kind: "proof", timing: { wait_worker_ms: 60000, not_ready_count: 2 } });
     const logged = events().find((event) => event.event === "job_proved");
     expect(logged).toEqual({
       level: "info",

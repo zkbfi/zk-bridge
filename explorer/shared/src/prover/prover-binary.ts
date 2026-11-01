@@ -13,7 +13,7 @@ import {
   type EvidencePackage,
   type ProofPackage,
 } from "./packages.js";
-import { parseProveTiming } from "./prove-timing.js";
+import { parseProveTiming, type ProveTiming } from "./prove-timing.js";
 import { describeRoute, renderProverConfig, type BackendSection, type HandoffSection } from "./prover-config.js";
 
 /** The exit code of `prove` when the starting head already is the newest final header. */
@@ -21,7 +21,8 @@ export const EXIT_UP_TO_DATE = 3;
 
 /** The result of one `prove` run. */
 export type ProveOutcome =
-  | { readonly kind: "proof"; readonly proofPackage: ProofPackage }
+  /** `timing`: the prover's `prove_timing` fields, or null from an older prover that writes none. */
+  | { readonly kind: "proof"; readonly proofPackage: ProofPackage; readonly timing?: ProveTiming | null }
   | { readonly kind: "up-to-date" };
 
 /** A prover command failed. `detail` holds the tail of its standard error. The logger redacts it before it is written. */
@@ -172,7 +173,7 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary {
           timingReported: timing !== null,
           ...timing,
         });
-        return { kind: "proof", proofPackage: parsed.data } as const;
+        return { kind: "proof", proofPackage: parsed.data, timing } as const;
       });
     },
     async evidence(request) {
