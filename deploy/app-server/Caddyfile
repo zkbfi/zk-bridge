@@ -54,6 +54,15 @@ import /etc/caddy/upstreams/indexer.caddy
 	import not_found
 }
 
+# The IPFS gateway of the release archives: gateway.zkb.fi/ipfs/<cid>. The node serves only its own pins (NoFetch).
+{$ZKB_GATEWAY_HOST:gateway.zkb.fi} {
+	@ipfs path /ipfs/*
+	handle @ipfs {
+		reverse_proxy 127.0.0.1:{$ZKB_IPFS_GATEWAY_PORT:8080}
+	}
+	import not_found
+}
+
 {$ZKB_INDEXER_HOST} {
 	@routes path /health /ready /api/* /graphql /graphql/*
 	handle @routes {

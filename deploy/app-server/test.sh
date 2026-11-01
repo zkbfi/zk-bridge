@@ -162,7 +162,13 @@ ANSIBLE_DIR="$DIR/../ansible"
 for name in backend indexer; do
   if grep -qxF "import /etc/caddy/upstreams/$name.caddy" "$DIR/Caddyfile"; then pass "Caddyfile imports $name.caddy"; else fail "Caddyfile imports $name.caddy"; fi
 done
-lacks Caddyfile '^[[:space:]]*reverse_proxy'
+# The backend and the indexer go through the upstream snippets (blue/green). The only proxy written in the Caddyfile is
+# the IPFS gateway, which has one node and no green.
+if grep -E '^[[:space:]]*reverse_proxy' "$DIR/Caddyfile" | grep -vqF '{$ZKB_IPFS_GATEWAY_PORT:8080}'; then
+  fail "Caddyfile: only the IPFS gateway may reverse_proxy directly"
+else
+  pass "Caddyfile: only the IPFS gateway proxies directly"
+fi
 # The snippets that caddy.yml writes give the routing the Caddyfile had before: the same ports, and no other behaviour.
 if grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_INDEXER_PORT:{{ zkb_default_indexer_port }}}' "$ANSIBLE_DIR/templates/indexer-normal.caddy.j2" \
   && grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_BACKEND_PORT:{{ zkb_default_backend_port }}}' "$ANSIBLE_DIR/templates/backend-normal.caddy.j2" \
