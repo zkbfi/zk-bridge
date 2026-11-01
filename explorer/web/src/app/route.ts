@@ -316,7 +316,10 @@ export type BridgeQuery = {
   readonly receiver?: string;
   readonly mode?: "plain" | "call";
   readonly data?: string;
-  readonly gasLimit?: string;
+  /** The exact gas that the follow-up call of a delivery router gets. A link carries it as `bridge.callGas`. */
+  readonly callGas?: string;
+  /** The exact gas of `onTokenBridged` for a relay with a call to a receiver that is not the router. A link carries it as `bridge.callbackGas`. */
+  readonly callbackGas?: string;
   readonly callTarget?: string;
   readonly callData?: string;
   readonly tip?: TipQuery;
@@ -327,7 +330,6 @@ export type MessageQuery = {
   readonly chain?: "first" | "second";
   readonly target?: string;
   readonly data?: string;
-  readonly gas?: string;
 };
 
 /** The dialog that is open, with its form. */
@@ -367,9 +369,9 @@ const tokenChoiceInLink = (choice: string): string => (choice.endsWith(":native"
  * @param hash The address's hash.
  */
 export const linkNamesNativeOldWay = (hash: string): boolean => /[?&]bridge\.token=([a-z]+(:|%3A))?native(&|$)/i.test(hash);
-const BRIDGE_KEYS = ["token", "amount", "receiver", "mode", "data", "gas", "callTarget", "callData"] as const;
+const BRIDGE_KEYS = ["token", "amount", "receiver", "mode", "data", "callGas", "callbackGas", "callTarget", "callData"] as const;
 const TIP_KEYS = ["mode", "percent", "fixed", "margin", "gas", "ceiling", "cap", "price", "router", "native"] as const;
-const MESSAGE_KEYS = ["from", "target", "data", "gas"] as const;
+const MESSAGE_KEYS = ["from", "target", "data"] as const;
 
 /** Whether a query parameter belongs to the overlay rather than to the route. */
 export const isOverlayKey = (name: string): boolean => name === "dialog" || name.startsWith("bridge.") || name.startsWith("tip.") || name.startsWith("msg.");
@@ -401,7 +403,8 @@ const bridgeOf = (params: URLSearchParams): BridgeQuery => {
     ...optional("receiver", hexText(get("receiver"), 40)),
     ...optional("mode", oneOf(["plain", "call"] as const, get("mode"))),
     ...optional("data", hexText(get("data"), MAXIMUM_DATA_DIGITS)),
-    ...optional("gasLimit", digitsText(get("gas"))),
+    ...optional("callGas", digitsText(get("callGas"))),
+    ...optional("callbackGas", digitsText(get("callbackGas"))),
     ...optional("callTarget", hexText(get("callTarget"), 40)),
     ...optional("callData", hexText(get("callData"), MAXIMUM_DATA_DIGITS)),
     ...(Object.keys(tip).length === 0 ? {} : { tip }),
@@ -414,7 +417,6 @@ const messageOf = (params: URLSearchParams): MessageQuery => {
     ...optional("chain", oneOf(["first", "second"] as const, get("from"))),
     ...optional("target", hexText(get("target"), 40)),
     ...optional("data", hexText(get("data"), MAXIMUM_DATA_DIGITS)),
-    ...optional("gas", digitsText(get("gas"))),
   };
 };
 
@@ -437,7 +439,7 @@ export const parseOverlay = (hash: string): Overlay => {
 
 /** Writes the bridge and wrap form's fields that differ from the defaults (`bridge.*`, `tip.*`). */
 const writeBridge = (params: URLSearchParams, bridge: BridgeQuery): void => {
-  const { token, amount, receiver, mode, data, gasLimit, callTarget, callData, tip } = bridge;
+  const { token, amount, receiver, mode, data, callGas, callbackGas, callTarget, callData, tip } = bridge;
   const set = (key: (typeof BRIDGE_KEYS)[number], value: string | undefined): void => {
     if (value !== undefined) params.set(`bridge.${key}`, value);
   };
@@ -446,7 +448,8 @@ const writeBridge = (params: URLSearchParams, bridge: BridgeQuery): void => {
   set("receiver", receiver);
   set("mode", mode);
   set("data", data);
-  set("gas", gasLimit);
+  set("callGas", callGas);
+  set("callbackGas", callbackGas);
   set("callTarget", callTarget);
   set("callData", callData);
   if (tip !== undefined) {
@@ -471,11 +474,10 @@ const writeOverlay = (params: URLSearchParams, overlay: Overlay): void => {
   params.set("dialog", overlay.dialog);
   if (overlay.dialog === "bridge" || overlay.dialog === "wrap") writeBridge(params, overlay.bridge);
   if (overlay.dialog === "message") {
-    const { chain, target, data, gas } = overlay.message;
+    const { chain, target, data } = overlay.message;
     if (chain !== undefined) params.set("msg.from", chain);
     if (target !== undefined) params.set("msg.target", target);
     if (data !== undefined) params.set("msg.data", data);
-    if (gas !== undefined) params.set("msg.gas", gas);
   }
 };
 
@@ -534,7 +536,8 @@ export const linkedFields = (overlay: Overlay, account: string | null): readonly
     [bridge.callTarget, "call target"],
     [bridge.callData, "call data"],
     [bridge.data, "data for the receiver"],
-    [bridge.gasLimit, "gas for the call"],
+    [bridge.callGas, "gas for the call"],
+    [bridge.callbackGas, "gas for the callback"],
     [tip.mode, "tip kind"],
     [tip.percentText, "tip percentage"],
     [tip.fixedText, "fixed tip"],
@@ -547,7 +550,6 @@ export const linkedFields = (overlay: Overlay, account: string | null): readonly
     [tip.payoutNative, "tip paid in the native coin"],
     [message.target, "target contract"],
     [message.data, "message data"],
-    [message.gas, "gas for the call"],
   ];
   for (const [value, label] of named) if (value !== undefined && value !== "") fields.push(label);
   return fields;

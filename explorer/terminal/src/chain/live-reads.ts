@@ -2,7 +2,6 @@
  * Live reads from the chains: balances and allowances. They use the RPC endpoints,
  * not the indexer, because a value that a transaction depends on must be current.
  */
-import { readRelayGasFacts, type RelayGasFacts } from '@zk-bridge/shared'
 import { erc20Abi, isAddress, getAddress, zeroAddress, type Abi, type Address } from 'viem'
 import type { ChainConfig, TokenInfo } from '../model/types'
 import { deliveryRouterAbi } from '../tx/abis'
@@ -24,8 +23,6 @@ export interface TokenPosition {
   readonly balance: bigint
   /** The allowance the account gave the token mediator. */
   readonly allowance: bigint
-  /** What the mediator says about the kind of the first message of a relay of this token. */
-  readonly relayGas: RelayGasFacts
 }
 
 /** The live state of one chain for the connected account. */
@@ -70,12 +67,11 @@ async function readPosition(
 ): Promise<TokenPosition> {
   const { chain, account, token } = input
   const mediator = chain.contracts.tokenMediator
-  const [balance, allowance, relayGas] = await Promise.all([
+  const [balance, allowance] = await Promise.all([
     readBigint(client, { address: token.address, abi: erc20Abi, functionName: 'balanceOf', args: [account] }),
     readBigint(client, { address: token.address, abi: erc20Abi, functionName: 'allowance', args: [account, mediator] }),
-    readRelayGasFacts(client, { mediator, token: token.address }),
   ])
-  return { token, balance, allowance, relayGas }
+  return { token, balance, allowance }
 }
 
 async function readBigint(

@@ -50,7 +50,7 @@ export const evidencePackageSchema = z
       .passthrough(),
     destination: z.object({ chainId: z.number().int(), bridge: addressSchema, lightClient: addressSchema }).passthrough(),
     anchor: z.object({ slot: z.number().int().nonnegative(), root: hashSchema }).passthrough(),
-    deliveryStatus: z.enum(["notDelivered", "succeeded", "failed"]),
+    deliveryStatus: z.enum(["notDelivered", "succeeded"]),
     alreadyDelivered: z.boolean(),
     execute: z.object({ to: addressSchema, data: hexSchema }).passthrough(),
     prerequisites: z.array(prerequisiteSchema),

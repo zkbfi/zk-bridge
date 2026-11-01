@@ -7,7 +7,7 @@ import { buildFixtureContext } from "../helpers";
 
 const usdc = FIXTURE_TOKENS[0]!;
 const receiver = getAddress(`0x${"cd".repeat(20)}`);
-const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => ({ token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", gasLimit: "", ...overrides });
+const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => ({ token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", callGas: "", callbackGas: "", ...overrides });
 
 describe("planBridgeSteps: input that cannot work", () => {
   it("says what is wrong with an amount that is not a number", async () => {

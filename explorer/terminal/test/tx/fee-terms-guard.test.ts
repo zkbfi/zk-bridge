@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { decodeFeeDirector, requestedPayoutOf, settingsOf } from '@zk-bridge/shared'
+import { decodeFeeDirector, requestedPayoutOf, routerCallbackGas, settingsOf } from '@zk-bridge/shared'
+import { decodeKnownCall } from '../../src/tx/decode'
 import { buildBridgeSteps } from '../../src/app/actions'
 import { createFixtureChainAccess } from '../../src/chain/fixture-chain-access'
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS, buildFixtureDeliveryCost, FIXTURE_NOW } from '../../src/data/fixtures'
@@ -11,8 +12,8 @@ const router = FIXTURE_PAIR.second.contracts.deliveryRouter!
 const target = { router, destination: FIXTURE_PAIR.second, destinationToken: usdc.counterpart }
 const person = '0x00000000000000000000000000000000000000d1'
 const word = (address: string) => address.slice(2).toLowerCase().padStart(64, '0')
-const directorFor = (recipient: string) => `0x${word(recipient)}${'0'.repeat(63)}8${'0'.repeat(64)}${'0'.repeat(63)}5`
-const director = (recipient: string) => ({ recipient: recipient as `0x${string}`, settings: 8n, limit: 0n, multiplier: 5n })
+const directorFor = (recipient: string) => `0x${word(recipient)}${'0'.repeat(63)}8${'0'.repeat(64)}${'0'.repeat(63)}5${'0'.repeat(64)}`
+const director = (recipient: string) => ({ recipient: recipient as `0x${string}`, settings: 8n, limit: 0n, multiplier: 5n, callGas: 0n })
 
 async function stepsFor(values: Record<string, string>, pair = FIXTURE_PAIR) {
   const snapshots = await createFixtureChainAccess(pair).readSnapshots({ account: FIXTURE_ACCOUNT, tokens: FIXTURE_TOKENS })
@@ -50,8 +51,7 @@ describe('a hand written relay to a delivery router', () => {
     for (const data of ['', '0x1234', `${directorFor(person)}00`]) {
       await expect(stepsFor({ receiver: router, mode: 'call', data })).rejects.toThrow(PlanInputError)
     }
-    await expect(stepsFor({ receiver: router, mode: 'plain' })).rejects.toThrow(/128 byte/)
-    await expect(stepsFor({ receiver: router, mode: 'plain', gas: '300000' })).rejects.toThrow(/128 byte/)
+    await expect(stepsFor({ receiver: router, mode: 'plain' })).rejects.toThrow(/160 byte/)
   })
 
   test('is refused in the 20 byte legacy shape for a token that is not the wrapped native token', async () => {
@@ -65,25 +65,40 @@ describe('a hand written relay to a delivery router', () => {
   })
 
   test('is refused when the data asks to unwrap a token that is not the wrapped native token', async () => {
-    const unwrapping = `0x${word(person)}${'0'.repeat(63)}2${'0'.repeat(64)}${'0'.repeat(64)}`
+    const unwrapping = `0x${word(person)}${'0'.repeat(63)}2${'0'.repeat(64)}${'0'.repeat(64)}${'0'.repeat(64)}`
     await expect(stepsFor({ receiver: router, mode: 'call', data: unwrapping })).rejects.toThrow(/unwrap/)
     await expect(stepsFor({ receiver: router, mode: 'call', data: unwrapping })).rejects.toThrow(PlanInputError)
   })
 
   test('is built when the data asks to unwrap the wrapped native token', async () => {
     const pair = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, contracts: { ...FIXTURE_PAIR.second.contracts, wrappedNative: usdc.counterpart! } } }
-    const unwrapping = `0x${word(person)}${'0'.repeat(63)}2${'0'.repeat(64)}${'0'.repeat(64)}`
+    const unwrapping = `0x${word(person)}${'0'.repeat(63)}2${'0'.repeat(64)}${'0'.repeat(64)}${'0'.repeat(64)}`
     const steps = await stepsFor({ receiver: router, mode: 'call', data: unwrapping }, pair)
     expect(steps.length).toBeGreaterThan(0)
   })
 
   test('is refused for the wrap route with no data', async () => {
-    await expect(stepsFor({ token: 'first:native', receiver: router })).rejects.toThrow(/128 byte/)
+    await expect(stepsFor({ token: 'first:native', receiver: router })).rejects.toThrow(/160 byte/)
   })
 
-  test('leaves a relay to an ordinary receiver alone', async () => {
-    const steps = await stepsFor({ receiver: person, mode: 'call', data: '0x1234' })
-    expect(steps.length).toBeGreaterThan(0)
+  test('gets the callback gas that the router needs, worked out from the terms in the data', async () => {
+    const steps = await stepsFor({ receiver: router, mode: 'call', data: directorFor(person) })
+    expect(decodeKnownCall(steps.at(-1)!.plan.data)?.arguments.at(-1)?.value).toBe(routerCallbackGas({}).toString())
+  })
+
+  test('leaves a relay to an ordinary receiver alone, when the callback gas is given', async () => {
+    const steps = await stepsFor({ receiver: person, mode: 'call', data: '0x1234', callbackGas: '250000' })
+    expect(decodeKnownCall(steps.at(-1)!.plan.data)?.arguments.at(-1)?.value).toBe('250000')
+  })
+
+  test('refuses a relay with a call to an ordinary receiver that names no callback gas, because nobody can guess it', async () => {
+    await expect(stepsFor({ receiver: person, mode: 'call', data: '0x1234' })).rejects.toThrow(/Enter the callback gas/)
+  })
+
+  test('refuses a callback gas that is zero or not a whole number', async () => {
+    for (const callbackGas of ['0', '12.5', 'abc']) {
+      await expect(stepsFor({ receiver: person, mode: 'call', data: '0x1234', callbackGas })).rejects.toThrow(/whole number above zero/)
+    }
   })
 })
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { getAddress } from 'viem'
-import { minimumGasLimitOf, requiredDeliveryGas, settingsOf, decodeFeeDirector, encodeFeeDirector, feeModeOf, requestedPayoutOf } from '@zk-bridge/shared'
+import { settingsOf, decodeFeeDirector, encodeFeeDirector, feeModeOf, requestedPayoutOf } from '@zk-bridge/shared'
 import { bridgeSourceOf } from '../../src/app/actions'
 import {
   buildDeliveryFeeModel,
@@ -128,11 +128,11 @@ describe('buildDeliveryFeeModel', () => {
     expect(model.cost.totalWei).toBe(model.cost.gasCostWei)
   })
 
-  test('a report with no samples uses the gas that a delivery must supply, when that is above the default, and says so', () => {
+  test('a report with no samples uses the configured default gas, and says so', () => {
     const empty = { ...report, kinds: { ...report.kinds, token_callback: { sampleCount: 0, averageGas: null, p90Gas: null, defaultGas: '300000', isDefault: true } } }
     const model = readyModel(stateFor(baseValues, price, empty))
     expect(model.dataSource.description).toBe('default, no deliveries measured yet')
-    expect(model.dataSource.gas).toBe(requiredDeliveryGas(minimumGasLimitOf({ kind: 'token-release', withCall: true })))
+    expect(model.dataSource.gas).toBe(300_000n)
   })
 
   test('with no token price the cost based suggestions are off, the default tip stays, and typed numbers still work', () => {
@@ -164,7 +164,7 @@ describe('buildDeliveryFeeModel', () => {
   test('an edited percentage rebuilds the director and the description', () => {
     const model = readyModel(stateFor({ ...baseValues, feePercent: '0.5' }))
     if (model.chosen.kind !== 'ready') throw new Error('0.5 percent is valid')
-    expect(model.chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 5n * 10n ** 15n })
+    expect(model.chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 5n * 10n ** 15n, callGas: 0n })
     expect(model.chosen.description.certaintyLabel).toBe('exact')
     expect(model.chosen.description.nowUnits).toBe(500_000n) // 0.5 percent of 100 zUSDC: the mediator takes no fee, so the whole amount counts
   })
@@ -231,7 +231,7 @@ describe('buildDeliveryFeeModel', () => {
   test('the default tip is 0.1 percent', () => {
     const chosen = readyModel(stateFor(baseValues)).chosen
     if (chosen.kind !== 'ready') throw new Error('valid')
-    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 10n ** 15n })
+    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 10n ** 15n, callGas: 0n })
     expect(chosen.description.nowUnits).toBe(100_000n)
   })
 
@@ -294,7 +294,7 @@ describe('refillDeliveryFee', () => {
   })
 
   test('custom terms round trip through the director', () => {
-    const director = { recipient: receiver as `0x${string}`, settings: settingsOf({ mode: 'gas', gasPrice: 'base-fee-only' }), limit: 2_000_000n, multiplier: 1n }
+    const director = { recipient: receiver as `0x${string}`, settings: settingsOf({ mode: 'gas', gasPrice: 'base-fee-only' }), limit: 2_000_000n, multiplier: 1n, callGas: 0n }
     expect(customFieldsOf(director, 6).feeCustomBasis).toBe('base-fee-only')
     expect(decodeFeeDirector(encodeFeeDirector(director, { router: '0x00000000000000000000000000000000000000f1', protectedAddresses: [], destinationToken: null, destinationWrappedNative: null }))).toEqual({ ...director, recipient: getAddress(receiver) })
   })

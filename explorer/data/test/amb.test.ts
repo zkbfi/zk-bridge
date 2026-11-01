@@ -48,7 +48,7 @@ describe("AMB message codec against vectors from AmbMessageCodec.sol", () => {
     expect(header.messageId).toBe(vector.messageId);
     expect(header.sender).toBe(vector.sender.toLowerCase());
     expect(header.executor).toBe(vector.executor.toLowerCase());
-    expect(header.gasLimit).toBe(vector.gasLimit);
+    expect(header.reservedGas).toBe(vector.gasLimit);
     expect(header.dataType).toBe(vector.dataType);
     expect(header.sourceChainId).toBe(BigInt(vector.sourceChainId));
     expect(header.destinationChainId).toBe(BigInt(vector.destinationChainId));
@@ -110,6 +110,7 @@ describe("mediator payloads against vectors from TokenMediator.sol selectors", (
     expect(decoded?.recipient).toBe("0x90f79bf6eb2c4f870365e785982e1f101e93b906");
     expect(decoded).not.toHaveProperty("fallbackRecipient");
     expect(decoded?.callbackData).toBeNull();
+    expect(decoded?.callbackGas).toBeNull();
   });
 
   it("decodes a bridged release, which names one recipient and no other payee", () => {
@@ -132,6 +133,7 @@ describe("mediator payloads against vectors from TokenMediator.sol selectors", (
   it("decodes callback data", () => {
     const decoded = decodeMediatorMessage(byHandler("handleNativeTokensAndCall"));
     expect(decoded?.callbackData).toBe("0xc0ffee");
+    expect(decoded?.callbackGas).toBe(750_000n);
     expect(decoded?.value).toBe(99n);
   });
 
@@ -142,6 +144,7 @@ describe("mediator payloads against vectors from TokenMediator.sol selectors", (
     const withCall = decodeMediatorMessage(byHandler("deployAndHandleBridgedTokensAndCall"));
     expect(withCall?.metadata).toEqual({ name: "Wrapped Ether", symbol: "WETH", decimals: 18 });
     expect(withCall?.callbackData).toBe("0xaabb");
+    expect(withCall?.callbackGas).toBe(1_500_000n);
     expect(withCall?.value).toBe(7n);
   });
 

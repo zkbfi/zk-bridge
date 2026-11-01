@@ -110,7 +110,8 @@ describe("one history, two data sources", () => {
     const feed = await indexerApi(database)("/api/feed?limit=50");
     const statusOf = (id: string) => feed.items.find((item: { messageId: string }) => item.messageId === id).status;
     expect(statusOf(scenario.ids.delivered)).toBe("delivered");
-    expect(statusOf(scenario.ids.failed)).toBe("failed_call");
+    // A delivery that fails reverts and leaves no log, so the message is not delivered: no head covers it in this scenario.
+    expect(statusOf(scenario.ids.failed)).toBe("waiting_for_finality");
     expect(statusOf(scenario.ids.paid)).toBe("delivered");
     expect(statusOf(scenario.ids.stuck)).toBe("release_failed");
     expect(statusOf(scenario.ids.callbackFailed)).toBe("delivered");

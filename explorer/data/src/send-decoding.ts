@@ -10,7 +10,7 @@ export type DecodedSend = {
   readonly sourceChainId: number;
   readonly destinationChainId: number;
   /** The message columns that a send fills. */
-  readonly messageFacts: Pick<MessageRow, "messageId" | "sender" | "executor" | "gasLimit" | "dataType" | "data" | "kind">;
+  readonly messageFacts: Pick<MessageRow, "messageId" | "sender" | "executor" | "dataType" | "data" | "kind">;
   /** The mediator call inside a token message, or null for an arbitrary message. */
   readonly transfer: MediatorMessage | null;
 };
@@ -41,7 +41,6 @@ export const decodeSend = (pair: Pair, chainId: number, encodedData: Hex): Decod
       messageId: header.messageId,
       sender: header.sender,
       executor: header.executor,
-      gasLimit: header.gasLimit,
       dataType: header.dataType,
       data,
       kind: transfer === null ? "message" : "token",

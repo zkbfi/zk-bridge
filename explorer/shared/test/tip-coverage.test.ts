@@ -15,8 +15,9 @@ const gasDirector = (limit: bigint, multiplier = WEI_PER_COIN): FeeDirector => (
   settings: settingsOf({ mode: "gas", gasPrice: "base-fee-only" }),
   limit,
   multiplier,
+  callGas: 0n,
 });
-const fixedDirector = (amount: bigint): FeeDirector => ({ recipient, settings: settingsOf({ mode: "fixed" }), limit: amount, multiplier: 0n });
+const fixedDirector = (amount: bigint): FeeDirector => ({ recipient, settings: settingsOf({ mode: "fixed" }), limit: amount, multiplier: 0n, callGas: 0n });
 
 const input = (director: FeeDirector, overrides: Partial<TipCoverageInput> = {}): TipCoverageInput => ({
   director,

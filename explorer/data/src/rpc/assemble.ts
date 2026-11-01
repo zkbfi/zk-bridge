@@ -168,7 +168,6 @@ export const assemble = (input: AssembleInput): Assembled => {
         deliveredTransactionHash: log.transactionHash,
         deliveredBlockNumber: log.blockNumber,
         deliveredTimestamp: timestamp(),
-        deliveredSuccess: log.args.status as boolean,
         executedBy: null,
       });
       return;

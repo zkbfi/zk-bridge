@@ -13,7 +13,6 @@ import {
   buildFeeSuggestions,
   defaultTip,
   defaultTipChoiceOf,
-  describeFee,
   feeModeOf,
   gasPriceBasisFor,
   gasPriceBasisOf,
@@ -36,6 +35,7 @@ import { AmountParseError, RATE_SCALE, formatUnits, parsePercentAsRate, parseUni
 import type { ChainConfig, PairConfig, TokenInfo } from '../model/types'
 import { PlanInputError, parseAddress } from '../tx/plan'
 import type { BridgeSource } from './actions'
+import { describeFeeAtWorstCase, type FeeDescriptionWithExpected } from './worst-case-fee'
 
 /** The names of the form fields of the delivery fee. */
 export const DELIVERY_FIELD = {
@@ -56,6 +56,7 @@ export const DELIVERY_FIELD = {
   router: 'deliveryRouter',
   callTarget: 'callTarget',
   callData: 'callData',
+  callGas: 'callGas',
   senderPrice: 'feeSenderPrice',
 } as const
 
@@ -136,7 +137,7 @@ export function resolveDeliveryTarget(input: ResolveTargetInput): DeliveryTarget
 
 /** What the user chose, once it is a director. */
 export type ChosenFee =
-  | { readonly kind: 'ready'; readonly mode: FeeFormMode; readonly director: FeeDirector; readonly description: FeeDescription }
+  | { readonly kind: 'ready'; readonly mode: FeeFormMode; readonly director: FeeDirector; readonly description: FeeDescriptionWithExpected }
   | { readonly kind: 'invalid'; readonly reason: string }
 
 /** The numbers behind the panel of the form. */
@@ -258,8 +259,8 @@ export function buildDeliveryFeeModel(input: DeliveryFeeInput): DeliveryFeeState
   )
   if (!built.ok) return { kind: 'unavailable', reason: built.reason }
   const suggestions = withoutMissingPrices(built.value, { valuationKnown: target.valueInWei !== null, senderPriceGiven: gasInputs.ok && gasInputs.value.senderPrice !== undefined })
-  const describe = (director: FeeDirector): FeeDescription =>
-    describeFee(director, {
+  const describe = (director: FeeDirector): FeeDescriptionWithExpected =>
+    describeFeeAtWorstCase(director, {
       transferValue,
       token: feeTokenOf(target),
       payout,
@@ -339,7 +340,7 @@ interface ChooseInput {
   readonly payout: PayoutKind
   readonly suggestions: FeeSuggestions
   readonly gasInputs: Parsed<GasInputs>
-  readonly describe: (director: FeeDirector) => FeeDescription
+  readonly describe: (director: FeeDirector) => FeeDescriptionWithExpected
 }
 
 const NO_PRICE_REASON = 'no value of the token is configured, so the cost cannot be turned into tokens'
@@ -347,11 +348,28 @@ const NO_SENDER_PRICE_REASON = 'enter your price of the native coin in this toke
 
 function chooseFee(input: ChooseInput): ChosenFee {
   const mode = feeFormModeOf(input.values)
-  const director = directorOf(mode, input)
-  if (!director.ok) return { kind: 'invalid', reason: director.reason }
-  const described = attempt(() => input.describe(director.value))
+  const base = directorOf(mode, input)
+  if (!base.ok) return { kind: 'invalid', reason: base.reason }
+  const callGas = attempt(() => callGasOf(input.values))
+  if (!callGas.ok) return { kind: 'invalid', reason: callGas.reason }
+  const director = { ...base.value, callGas: callGas.value }
+  const described = attempt(() => input.describe(director))
   if (!described.ok) return { kind: 'invalid', reason: described.reason }
-  return { kind: 'ready', mode, director: director.value, description: described.value }
+  return { kind: 'ready', mode, director, description: described.value }
+}
+
+/**
+ * The exact gas that the follow-up call gets: the fifth word of the director. A delivery with no call carries zero. A
+ * call needs a gas number above zero, because the router gives the call exactly that much and has no default to use.
+ */
+export function callGasOf(values: Values): bigint {
+  const hasCall = valueOf(values, DELIVERY_FIELD.callTarget) !== '' || valueOf(values, DELIVERY_FIELD.callData) !== ''
+  if (!hasCall) return 0n
+  const text = valueOf(values, DELIVERY_FIELD.callGas)
+  if (!/^\d+$/.test(text) || BigInt(text) === 0n) {
+    throw new PlanInputError('Enter the call gas: the exact gas the call gets, as a whole number above zero. The router has no default.')
+  }
+  return BigInt(text)
 }
 
 function suggestedDirector(option: FeeOption): Parsed<FeeDirector> {
@@ -367,13 +385,13 @@ function directorOf(mode: FeeFormMode, input: ChooseInput): Parsed<FeeDirector> 
     return attempt(() => {
       const multiplier = parseRatePercent('percentage', text)
       if (multiplier > RATE_SCALE) throw new PlanInputError('The percentage is above 100 percent.')
-      return { recipient, settings: settingsOf({ mode: 'share', payout }), limit: 0n, multiplier }
+      return { recipient, settings: settingsOf({ mode: 'share', payout }), limit: 0n, multiplier, callGas: 0n }
     })
   }
   if (mode === 'fixed') {
     const text = valueOf(values, DELIVERY_FIELD.fixed)
     if (text === '') return suggestedDirector(input.suggestions.fixed)
-    return attempt(() => ({ recipient, settings: settingsOf({ mode: 'fixed', payout }), limit: parseNumber('fixed amount', text, target.token.decimals), multiplier: 0n }))
+    return attempt(() => ({ recipient, settings: settingsOf({ mode: 'fixed', payout }), limit: parseNumber('fixed amount', text, target.token.decimals), multiplier: 0n, callGas: 0n }))
   }
   if (mode === 'gas') {
     if (!input.gasInputs.ok) return { ok: false, reason: input.gasInputs.reason }
@@ -392,13 +410,13 @@ function customDirector(values: Values, input: { recipient: Address; payout: Pay
     const multiplier = parseNumber('multiplier', valueOf(values, DELIVERY_FIELD.customMultiplier) || '0', 18)
     const chosenBasis = values[DELIVERY_FIELD.customBasis]
     const basis: GasPriceBasis = chosenBasis === 'base-fee-only' || chosenBasis === 'transaction' ? chosenBasis : input.defaultBasis
-    if (kind === 'fixed') return { recipient: input.recipient, settings: settingsOf({ mode: 'fixed', payout: input.payout }), limit, multiplier: 0n }
+    if (kind === 'fixed') return { recipient: input.recipient, settings: settingsOf({ mode: 'fixed', payout: input.payout }), limit, multiplier: 0n, callGas: 0n }
     if (kind === 'share') {
       if (multiplier > RATE_SCALE) throw new PlanInputError('The multiplier of a share is above 1, which is above 100 percent.')
-      return { recipient: input.recipient, settings: settingsOf({ mode: 'share', payout: input.payout }), limit: 0n, multiplier }
+      return { recipient: input.recipient, settings: settingsOf({ mode: 'share', payout: input.payout }), limit: 0n, multiplier, callGas: 0n }
     }
     if (multiplier === 0n) throw new PlanInputError('The multiplier of a gas based fee must be above zero.')
-    return { recipient: input.recipient, settings: settingsOf({ mode: 'gas', payout: input.payout, gasPrice: basis }), limit, multiplier }
+    return { recipient: input.recipient, settings: settingsOf({ mode: 'gas', payout: input.payout, gasPrice: basis }), limit, multiplier, callGas: 0n }
   })
 }
 

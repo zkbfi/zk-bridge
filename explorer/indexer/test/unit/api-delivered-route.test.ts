@@ -66,6 +66,22 @@ describe("GET /api/delivered", () => {
   });
 });
 
+describe("GET /api/delivered clock and empty sums", () => {
+  it("reads the clock when the request names no valid now", async () => {
+    const before = Math.floor(Date.now() / 1000);
+    for (const path of ["/api/delivered", "/api/delivered?now=abc"]) {
+      const { body } = await get(path);
+      expect(body.now).toBeGreaterThanOrEqual(before);
+    }
+  });
+
+  it("counts a token with no value as zero", async () => {
+    serve([{ sourceChainId: 1, destinationChainId: 369, token, day: 1, week: 1, dayValue: null, weekValue: null }]);
+    const { body } = await get("/api/delivered?now=1000000");
+    expect(body.directions[0].byToken).toEqual([{ token: expect.objectContaining({ address: token }), value24h: "0", value7d: "0" }]);
+  });
+});
+
 describe("GET /api/delivered timing", () => {
   it("asks per direction for the deliveries of the last 24 hours and of the last 7 days, and shows each window's stats", async () => {
     serve([], (sourceChainId, since) =>

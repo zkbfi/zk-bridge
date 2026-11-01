@@ -112,7 +112,7 @@ describe("actionResults", () => {
   it("names the sending functions of the bridge action without a fallback, and offers no claim action", () => {
     const results = actionResults({ pair: FIXTURE_PAIR, walletConnected: true });
     const bridge = results.find((result) => result.id === "action:bridge")!;
-    expect(bridge.subtitle).toBe("relayTokens or relayTokensAndCall, with an optional gas limit");
+    expect(bridge.subtitle).toBe("relayTokens, or relayTokensAndCall with the exact gas for the call");
     expect(bridge.subtitle).not.toMatch(/allback/);
     expect(results.map((result) => result.id)).not.toContain("action:claim");
   });

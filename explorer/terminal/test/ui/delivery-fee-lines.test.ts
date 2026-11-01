@@ -48,7 +48,7 @@ describe('the live panel of the bridge form', () => {
 
   test('a default data source says that no deliveries are measured', () => {
     const empty = { ...report, kinds: { ...report.kinds, token_callback: { sampleCount: 0, averageGas: null, p90Gas: null, defaultGas: '300000', isDefault: true } } }
-    expect(panel({ report: empty })).toContain('Gas             1115874 gas, default, no deliveries measured yet')
+    expect(panel({ report: empty })).toContain('Gas             300000 gas, default, no deliveries measured yet')
   })
 
   test('shows the tip range as low, suggested and high, and the words about a tip', () => {
@@ -76,7 +76,7 @@ describe('the live panel of the bridge form', () => {
 
   test('gas mode on a token that is not the native coin is an estimate, priced from the sender price', () => {
     const text = panel({ values: { ...values, feeMode: 'gas' } })
-    expect(text).toMatch(/Your tip {8}about [\d.]+ zUSDC now \(estimate, at most [\d.]+ zUSDC\)/)
+    expect(text).toMatch(/Your tip {8}about [\d.]+ zUSDC now \(estimate, expected about [\d.]+ zUSDC, at most [\d.]+ zUSDC\)/)
   })
 
   test('the wrapped native token gets the estimate label with its maximum', () => {
@@ -88,7 +88,7 @@ describe('the live panel of the bridge form', () => {
     if (resolved.kind !== 'ready') throw new Error(resolved.reason)
     const state = buildDeliveryFeeModel({ values: used, target: resolved.target, report, transferValue: 10n ** 18n })
     const text = deliveryPanelLines({ kind: 'state', state, target: resolved.target }).map(lineText).join('\n')
-    expect(text).toMatch(/Your tip {8}about [\d.]+ zWETH now \(estimate, at most [\d.]+ zWETH\)/)
+    expect(text).toMatch(/Your tip {8}about [\d.]+ zWETH now \(estimate, expected about [\d.]+ zWETH, at most [\d.]+ zWETH\)/)
   })
 
   test('loading, failed and missing amount are stated plainly', () => {
@@ -98,7 +98,7 @@ describe('the live panel of the bridge form', () => {
 })
 
 describe('words for the terms of a director', () => {
-  const director = { recipient: '0x00000000000000000000000000000000000000d1' as const, limit: 2_500_000n }
+  const director = { recipient: '0x00000000000000000000000000000000000000d1' as const, limit: 2_500_000n, callGas: 0n }
   test('flags, multiplier and limit are written out', () => {
     expect(feeFlagsInWords(0n)).toBe('none (gas based fee, paid in the token)')
     expect(feeFlagsInWords(settingsOf({ mode: 'fixed', payout: 'native' }))).toBe('fixed fee, paid in the native coin')

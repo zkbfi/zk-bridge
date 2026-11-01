@@ -1,6 +1,6 @@
 import { decodeFunctionData, getAddress } from "viem";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_GAS_MARGIN, decodeDeliveryCall, encodeFeeDirector, senderPriceOfToken, tokenMediatorAbi } from "@zk-bridge/shared";
+import { DEFAULT_GAS_MARGIN, decodeDeliveryCall, decodeFeeDirector, encodeFeeDirector, routerCallbackGas, senderPriceOfToken, tokenMediatorAbi } from "@zk-bridge/shared";
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { CALL_TIP_NOTE, buildConfirmView } from "../../src/tx/confirm-model";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS } from "../../src/tx/bridge-draft";
@@ -20,13 +20,15 @@ const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => 
   receiver,
   mode: "plain",
   data: "",
-  gasLimit: "",
+  callGas: "", callbackGas: "",
   callTarget: "",
   callData: "",
   ...overrides,
 });
 
-const delivery = (() => {
+const CALL_GAS = 200_000n;
+
+const deliveryFor = (callGas: bigint) => {
   const selection = selectDelivery(
     {
       mode: "percentage",
@@ -45,48 +47,57 @@ const delivery = (() => {
       gasMargin: DEFAULT_GAS_MARGIN,
       destinationName: "PulseChain",
       baseFeeCeilingWei: null,
+      callGas,
     },
     { router: deliveryRouter, defaultRouter: deliveryRouter },
   );
   if (selection.kind !== "available") throw new Error(selection.reason);
   return selection;
-})();
+};
 
-const directorWords = encodeFeeDirector(delivery.director, {
-  router: deliveryRouter,
-  protectedAddresses: [],
-  destinationToken: usdc.counterpart,
-  destinationWrappedNative: FIXTURE_PAIR.second.contracts.wrappedNative,
-});
+/** The tip with no call, and the same tip once a call asks for CALL_GAS. */
+const delivery = deliveryFor(0n);
+const deliveryWithCall = deliveryFor(CALL_GAS);
+
+const wordsOf = (selection: typeof delivery) =>
+  encodeFeeDirector(selection.director, {
+    router: deliveryRouter,
+    protectedAddresses: [],
+    destinationToken: usdc.counterpart,
+    destinationWrappedNative: FIXTURE_PAIR.second.contracts.wrappedNative,
+  });
+const directorWords = wordsOf(delivery);
+const directorWordsWithCall = wordsOf(deliveryWithCall);
 
 const tippedStep = async (overrides: Partial<BridgeFormValues> = {}): Promise<WebStep> => {
   const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
-  return planBridgeSteps({ values: values(overrides), tokens, context, delivery }).at(-1)!;
+  const withCall = (overrides.callTarget ?? "") !== "" || (overrides.callData ?? "") !== "";
+  return planBridgeSteps({ values: values(overrides), tokens, context, delivery: withCall ? deliveryWithCall : delivery }).at(-1)!;
 };
 
 const dataArgumentOf = (step: WebStep): string => decodeFunctionData({ abi: tokenMediatorAbi, data: step.plan.data }).args![3] as string;
 
 describe("the call fields of the bridge form", () => {
-  it("encodes no call, and the data is the four words of the director, when both fields are empty", async () => {
+  it("encodes no call, and the data is the five words of the director, when both fields are empty", async () => {
     const empty = await tippedStep();
     expect(dataArgumentOf(empty)).toBe(directorWords);
-    expect(dataArgumentOf(empty)).toHaveLength(2 + 128 * 2);
+    expect(dataArgumentOf(empty)).toHaveLength(2 + 160 * 2);
     expect(empty.disclosure.deliveryCall).toBeNull();
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
-    const absent = planBridgeSteps({ values: { token: values().token, amount: "250", receiver, mode: "plain", data: "", gasLimit: "" }, tokens, context, delivery }).at(-1)!;
+    const absent = planBridgeSteps({ values: { token: values().token, amount: "250", receiver, mode: "plain", data: "", callGas: "", callbackGas: "" }, tokens, context, delivery }).at(-1)!;
     expect(absent.plan.data).toBe(empty.plan.data);
   });
 
-  it("appends the target and the call data after the four words", async () => {
+  it("appends the target and the call data after the five words", async () => {
     const step = await tippedStep({ callTarget, callData: "0xABcd" });
-    expect(dataArgumentOf(step)).toBe(`${directorWords}${"77".repeat(20)}abcd`);
+    expect(dataArgumentOf(step)).toBe(`${directorWordsWithCall}${"77".repeat(20)}abcd`);
     expect(decodeDeliveryCall(dataArgumentOf(step) as `0x${string}`)).toEqual({ target: `0x${"77".repeat(20)}`, data: "0xabcd" });
     expect(step.disclosure.deliveryCall).toEqual({ target: callTarget, data: "0xabcd" });
   });
 
-  it("allows a target with no call data: 148 bytes, a call with empty data", async () => {
+  it("allows a target with no call data: 180 bytes, a call with empty data", async () => {
     const step = await tippedStep({ callTarget, callData: "  " });
-    expect(dataArgumentOf(step)).toBe(`${directorWords}${"77".repeat(20)}`);
+    expect(dataArgumentOf(step)).toBe(`${directorWordsWithCall}${"77".repeat(20)}`);
     expect(step.disclosure.deliveryCall).toEqual({ target: callTarget, data: "0x" });
   });
 
@@ -106,6 +117,28 @@ describe("the call fields of the bridge form", () => {
     }
   });
 
+  it("carries the call gas in the fifth word of the terms and the callback gas of the router in the relay", async () => {
+    const step = await tippedStep({ callTarget, callData: "0xabcd" });
+    expect(decodeFeeDirector(dataArgumentOf(step) as `0x${string}`).callGas).toBe(CALL_GAS);
+    const args = decodeFunctionData({ abi: tokenMediatorAbi, data: step.plan.data }).args as readonly unknown[];
+    expect(args[4]).toBe(routerCallbackGas({ callGas: CALL_GAS }));
+  });
+
+  it("blocks the draft and asks for the call gas when a call has none, and takes the number when it has one", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
+    const options = { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "1", mode: "percentage" as const };
+    const data = { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n };
+    for (const callGas of ["", "0", "1.5", "abc"]) {
+      const blocked = computeBridgeDraft(values({ callTarget, callGas }), options, data);
+      expect(blocked.status).toBe("blocked");
+      expect(blocked.reason).toBe("Enter the call gas: the exact gas the call gets, as a whole number above zero.");
+    }
+    const ready = computeBridgeDraft(values({ callTarget, callGas: " 123456 " }), options, data);
+    expect(ready.status).toBe("ready");
+    expect(ready.delivery?.director.callGas).toBe(123_456n);
+    expect(computeBridgeDraft(values({ callGas: "999" }), options, data).delivery?.director.callGas).toBe(0n);
+  });
+
   it("refuses a call on a relay with no tip, because only the delivery router makes it", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     expect(() => planBridgeSteps({ values: values({ callTarget }), tokens, context, delivery: null })).toThrow(/needs a tip/);
@@ -113,7 +146,7 @@ describe("the call fields of the bridge form", () => {
 
   it("refuses a target that the router would not call: the router itself", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
-    expect(() => planBridgeSteps({ values: values({ callTarget: deliveryRouter }), tokens, context, delivery })).toThrow(/target of the call is the router itself/);
+    expect(() => planBridgeSteps({ values: values({ callTarget: deliveryRouter }), tokens, context, delivery: deliveryWithCall })).toThrow(/target of the call is the router itself/);
   });
 
   it("leaves the plain relay with empty fields byte-identical to a form without the fields", async () => {
@@ -126,7 +159,7 @@ describe("the call fields of the bridge form", () => {
 
   it("blocks the draft with the sentence for call data without a target", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
-    const draft = computeBridgeDraft(values({ callData: "0xabcd" }), { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "1", mode: "percentage" }, { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n });
+    const draft = computeBridgeDraft(values({ callData: "0xabcd", callGas: "100" }), { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "1", mode: "percentage" }, { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n });
     expect(draft.status).toBe("blocked");
     expect(draft.reason).toBe("The call data needs a call target. Enter the target contract, or clear the call data.");
   });
@@ -140,7 +173,11 @@ describe("the confirm model with a call", () => {
       { label: "Call target", text: callTarget },
       { label: "Call data", text: "0xabcd" },
     ]);
-    expect(view.delivery?.callNote).toBe("A gas based tip counts the gas of the call, so expect the tip to reach its limit.");
+    expect(view.delivery?.directorLines.slice(-2)).toEqual([
+      { label: "Call gas", text: "200000 (the exact gas the call gets)" },
+      { label: "Callback gas", text: `${routerCallbackGas({ callGas: CALL_GAS })} (the call gas plus the router's own work; the page sets it for you)` },
+    ]);
+    expect(view.delivery?.callNote).toBe("A gas based tip counts the call gas, so the tip is higher with a call. The limit is still the most it can take.");
     expect(CALL_TIP_NOTE).toBe(view.delivery?.callNote);
   });
 
@@ -170,7 +207,8 @@ describe("the confirm model with a call", () => {
     const without = await tippedStep();
     const hidden: WebStep = { ...without, plan: { ...without.plan, data: withCall.plan.data } };
     const missing: WebStep = { ...withCall, plan: { ...withCall.plan, data: without.plan.data } };
-    expect(buildConfirmView(hidden).blockedReason).toMatch(/call after the delivery .* differs/);
-    expect(buildConfirmView(missing).blockedReason).toMatch(/call after the delivery .* differs/);
+    // The call gas is part of the terms, so the terms differ before the call does.
+    expect(buildConfirmView(hidden).blockedReason).toMatch(/differs from the one that was shown/);
+    expect(buildConfirmView(missing).blockedReason).toMatch(/differs from the one that was shown/);
   });
 });

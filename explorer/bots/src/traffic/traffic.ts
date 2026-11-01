@@ -1,5 +1,5 @@
 import { formatUnits, type Address, type Hex } from "viem";
-import { bridgedSymbolOf, defaultTip, encodeFeeDirector, GateEvidenceError, type FeeDirector, type GateConfirmation, type ProtectedAddress, type ProofDirection } from "@zk-bridge/shared";
+import { bridgedSymbolOf, defaultTip, encodeFeeDirector, GateEvidenceError, routerCallbackGas, type FeeDirector, type GateConfirmation, type ProtectedAddress, type ProofDirection } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type TransactionPort } from "../chain/transactions.ts";
 import type { Logger } from "../logging/logger.ts";
 import { approvalData, messageIdOf, relayData, relayRefusalOf, type TrafficReader } from "./chain.ts";
@@ -23,8 +23,6 @@ export interface TrafficSide {
   };
   /** The native coin that the wallet keeps on this chain. */
   readonly minimumNativeWei: bigint;
-  /** The gas limit that a send to this chain asks for when it deploys a bridged copy here, or null for the mediator's default. */
-  readonly newCopyGasLimit: bigint | null;
   /**
    * The deposit gate of this chain. Before a send from here, the bot confirms the epoch when the gate enforces and nobody
    * confirmed it yet. Null: never look (tests, or a chain without a gate).
@@ -183,14 +181,15 @@ export function createTraffic(input: TrafficInput): Traffic {
       native -= confirmed.spentWei;
     }
 
-    // The first send of a native token deploys its copy on the destination: ask for the gas the destination needs for that.
-    // A send whose copy has no code yet deploys it. With `deployMessage` (no copy came home yet) the runner cannot price
+    // The first send of a native token deploys its copy on the destination. The send needs no gas number for that: the
+    // executor of the delivery brings the gas. A send whose copy has no code yet deploys it. With `deployMessage` (no copy came home yet) the runner cannot price
     // the send: the indexer names no destination token for a deploy message. Both are logged, so the operator delivers it
     // by hand; the plan sends such a token only once.
     const deploysCopy = candidate.kind === "native" && !(await destination.reader.hasCode(candidate.destinationToken));
     const deployMessage = candidate.kind === "native" && !candidate.homeRecord.acknowledged;
-    const messageGasLimit = deploysCopy ? destination.newCopyGasLimit : null;
-    const data = relayData({ token: candidate.sourceToken, router, amount, terms: termsFor(destination, router, candidate.destinationToken), gasLimit: messageGasLimit });
+    // The terms have no follow-up call, so the callback gas is the base that the router needs for its own work.
+    const callbackGas = routerCallbackGas({});
+    const data = relayData({ token: candidate.sourceToken, router, amount, terms: termsFor(destination, router, candidate.destinationToken), callbackGas });
     const simulation = await source.port.simulate({ to: source.contracts.mediator, data });
     if (!simulation.ok) {
       const refused = relayRefusalOf(simulation.reason);
@@ -212,7 +211,7 @@ export function createTraffic(input: TrafficInput): Traffic {
       messageId,
       deploysCopy,
       deployMessage,
-      messageGasLimit,
+      callbackGas,
       gasUsed: receipt.gasUsed,
       gasCostWei: receipt.gasUsed * receipt.effectiveGasPrice,
       priority: pick.priority,

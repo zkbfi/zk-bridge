@@ -72,7 +72,7 @@ const FEE_MODE_CHOICES = [
 
 const CUSTOM_KIND_LABELS: Readonly<Record<(typeof CUSTOM_KINDS)[number], string>> = { fixed: 'Fixed amount', share: 'Share of the value', gas: 'Gas based' }
 
-/** The form that bridges tokens: relayTokens or relayTokensAndCall, with an optional gas limit and an optional delivery fee. */
+/** The form that bridges tokens: relayTokens or relayTokensAndCall, with an optional delivery fee. A plain relay has no gas number. */
 export function BridgeModal(props: ActionModalProps) {
   const { pair, dataSource, tokenValuationsWei, chainAccess } = useServices()
   const session = useSession()
@@ -115,6 +115,14 @@ export function BridgeModal(props: ActionModalProps) {
     },
     { kind: 'text', name: 'data', label: 'Call data', placeholder: '0x… (empty for none)', visibleWhen: (values) => !deliveryActive(values) && values.mode !== 'plain', hint: 'Hex bytes for onTokenBridged.' },
     {
+      kind: 'text',
+      name: 'callbackGas',
+      label: 'Callback gas',
+      placeholder: 'the exact gas for onTokenBridged',
+      visibleWhen: (values) => !deliveryActive(values) && values.mode !== 'plain',
+      hint: 'The exact gas that onTokenBridged gets on the other chain. Too little gas makes the delivery revert and wait, so anyone can deliver it again with more. Blank works only for a delivery router of this deployment, which gets what it needs.',
+    },
+    {
       kind: 'choice',
       name: DELIVERY_FIELD.delivery,
       label: 'Tip for delivery',
@@ -150,10 +158,10 @@ export function BridgeModal(props: ActionModalProps) {
       hint: 'The destination token is the wrapped native token, so the router can unwrap the fee.',
     },
     { kind: 'text', name: DELIVERY_FIELD.router, label: 'Router (advanced)', placeholder: 'blank is the default delivery router', visibleWhen: whenActive(), hint: 'The last step before delivery, chosen in the extra data. Blank targets the default delivery router on the other chain. Anyone can deliver through it. The tip always goes to the reward address of the router, so a copied delivery gains the copier nothing.' },
-    { kind: 'text', name: DELIVERY_FIELD.callTarget, label: 'Call target (optional)', placeholder: 'blank makes no call', visibleWhen: whenActive(), hint: 'A contract that the router calls once, after it pays the recipient. The call comes from the router and sends no native coin. A gas based tip counts the gas of the call.' },
+    { kind: 'text', name: DELIVERY_FIELD.callTarget, label: 'Call target (optional)', placeholder: 'blank makes no call', visibleWhen: whenActive(), hint: 'A contract that the router calls once, after it pays the recipient. The call comes from the router and sends no native coin. A gas based tip counts the call gas below.' },
     { kind: 'text', name: DELIVERY_FIELD.callData, label: 'Call data (optional)', placeholder: '0x… (empty for none)', visibleWhen: whenActive(), hint: 'Hex bytes for the call. It needs a call target. A target with no call data makes a call with empty data.' },
+    { kind: 'text', name: DELIVERY_FIELD.callGas, label: 'Call gas (with a call)', placeholder: 'the exact gas the call gets', visibleWhen: whenActive((values) => (values[DELIVERY_FIELD.callTarget] ?? '').trim() !== '' || (values[DELIVERY_FIELD.callData] ?? '').trim() !== ''), hint: 'The exact gas the call gets, as a whole number. A call that needs more fails, and the recipient still keeps the tokens. The callback gas is worked out from it and the router\'s own work.' },
     { kind: 'text', name: DELIVERY_FIELD.recipient, label: 'Fee recipient', placeholder: 'blank is the receiver above', visibleWhen: whenActive(), hint: 'Receives the tokens after the fee. Blank means the receiver above.' },
-    { kind: 'text', name: 'gasLimit', label: 'Gas limit (optional)', placeholder: 'blank uses the default', hint: 'Gas for the release on the other chain. It must be at least the default for this kind of message and at most the bridge maximum.' },
   ]
   /** Asks the router for its reward address and its failed delivery address, then builds the review. The read never throws; a failed read becomes a line on the review. */
   const submitBridge = async (values: Values): Promise<void> => {
@@ -213,9 +221,8 @@ export function MessageModal(props: ActionModalProps) {
   const { error, attempt } = useSubmitError()
   const specs: readonly FieldSpec[] = [
     { kind: 'choice', name: 'chain', label: 'Send from', choices: [{ value: 'first', label: pair.first.name }, { value: 'second', label: pair.second.name }] },
-    { kind: 'text', name: 'target', label: 'Target contract', placeholder: '0x… on the other chain', hint: 'The contract that the bridge calls on the other chain.' },
+    { kind: 'text', name: 'target', label: 'Target contract', placeholder: '0x… on the other chain', hint: 'The contract that the bridge calls on the other chain. It gets all the gas of the delivery: there is no gas number to set.' },
     { kind: 'text', name: 'data', label: 'Call data', placeholder: '0x…', hint: 'Hex bytes: the selector and the arguments.' },
-    { kind: 'text', name: 'gas', label: 'Gas', initial: '200000', hint: 'Gas that the call gets on the other chain.' },
   ]
   const form = useForm({
     specs,
@@ -223,7 +230,7 @@ export function MessageModal(props: ActionModalProps) {
     onCancel: props.onClose,
   })
   return (
-    <ModalFrame title="Send a message (requireToPassMessage)" width={90} height={13}>
+    <ModalFrame title="Send a message (requireToPassMessage)" width={90} height={12}>
       <FormView form={form} width={86} />
       <RichLine line={[colored(error ?? ' ', theme.bad)]} />
       <RichLine line={[muted('Enter reviews the transaction. Esc cancels.')]} />

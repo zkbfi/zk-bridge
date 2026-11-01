@@ -89,6 +89,10 @@ export {
   type FeeSplit,
   expectedFee,
   maximumFee,
+  ROUTER_CALLBACK_GAS_BASE,
+  routerCallbackGas,
+  type WorstCaseFeeInput,
+  worstCaseFee,
 } from "./delivery-terms.js";
 
 // Fee rules of the bridge screen

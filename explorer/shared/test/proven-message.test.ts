@@ -26,7 +26,7 @@ describe("readProvenMessage", () => {
     expect(proven.sourceTransactionHash).toBe(String(message.sourceTransactionHash).toLowerCase());
     expect(proven.sender.toLowerCase()).toBe(String(message.sender).toLowerCase());
     expect(proven.executor.toLowerCase()).toBe(String(message.executor).toLowerCase());
-    expect(proven.gasLimit).toBe(BigInt(message.gasLimit!));
+    expect(proven).not.toHaveProperty("gasLimit");
     expect(proven.sourceChainId).toBe(BigInt(message.sourceChainId!));
     expect(proven.destinationChainId).toBe(BigInt(message.destinationChainId!));
   });
@@ -138,7 +138,6 @@ describe("readProvenMessage on built proofs", () => {
       const proven = readProvenMessage(build({ index }));
       expect(proven.messageId).toBe(id);
       expect(proven.sourceTransactionHash).toBe(keccak256("0x02c0"));
-      expect(proven.gasLimit).toBe(300_000n);
       expect(proven.destinationChainId).toBe(0x171n);
     }
     expect(readProvenMessage(build({ receipt: receiptWith(goodLog) })).messageId).toBe(id);

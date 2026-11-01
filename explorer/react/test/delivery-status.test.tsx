@@ -7,8 +7,8 @@ const NOW = 1_800_000_000;
 
 describe("the steps and the pulse", () => {
   it("put every status on a step and a position", () => {
-    expect(MESSAGE_STATUSES.map(stepOf)).toEqual([0, 1, 2, 5, 2, 2]);
-    expect(MESSAGE_STATUSES.map(positionOf)).toEqual([0.18, 0.42, 0.72, 1, 0.72, 0.72]);
+    expect(MESSAGE_STATUSES.map(stepOf)).toEqual([0, 1, 2, 5, 2]);
+    expect(MESSAGE_STATUSES.map(positionOf)).toEqual([0.18, 0.42, 0.72, 1, 0.72]);
   });
 });
 
@@ -19,7 +19,6 @@ describe("stepWords", () => {
     expect(words("sent")).toBe("Sent · waiting for finality");
     expect(words("waiting_for_finality")).toBe("Final soon · waiting for the proof");
     expect(words("delivered")).toBe("Delivered to PulseChain");
-    expect(words("failed_call")).toBe("Delivered, but the call after it failed");
     expect(words("release_failed")).toBe("The release failed");
   });
 
@@ -36,7 +35,6 @@ describe("stepWords", () => {
 describe("groupOf", () => {
   it("is delivered, needs you (a failure, or proven and undelivered for 30 minutes), or in flight", () => {
     expect(groupOf("delivered", NOW, NOW)).toBe("delivered");
-    expect(groupOf("failed_call", NOW, NOW)).toBe("needs-you");
     expect(groupOf("release_failed", NOW, NOW)).toBe("needs-you");
     expect(groupOf("covered", NOW - NEEDS_YOU_AFTER_SECONDS, NOW)).toBe("in-flight");
     expect(groupOf("covered", NOW - NEEDS_YOU_AFTER_SECONDS - 1, NOW)).toBe("needs-you");

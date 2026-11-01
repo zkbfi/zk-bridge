@@ -12,7 +12,7 @@ const snapshots: readonly ChainSnapshotResult[] = [
     snapshot: {
       chain: FIXTURE_PAIR.first,
       nativeBalance: 1_213_127_000_000_000_000n,
-      positions: [{ token: usdc, balance: 25_000_000n, allowance: 0n, relayGas: { kind: "known", firstMessage: "token" } as never }],
+      positions: [{ token: usdc, balance: 25_000_000n, allowance: 0n }],
     },
   },
 ];

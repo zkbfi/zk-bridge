@@ -24,7 +24,7 @@
     "maximumBatchSize": 5,
     "maximumBatchGas": 6000000,
     "tokenValuationsWei": {},
-    "proofCheckGas": 400000,
+    "deliveryGasFallback": 1500000,
     "minimumPriorityFeeWei": { "943": "10000000", "369": "10000000" },
     "maximumDeliveriesPerSweep": 10,
     "maximumPrerequisiteRounds": 4,

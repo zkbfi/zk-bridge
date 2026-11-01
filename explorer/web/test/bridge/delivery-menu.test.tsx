@@ -24,12 +24,14 @@ describe("deliverySummary (owner, quote 88: \"just tell the user what is happeni
     for (const mode of ["percentage", "fixed", "gas-multiplier", "none"] as const) expect(deliverySummary({ tip: { mode } }, FACTS).full).not.toMatch(/Standard|Fast/);
   });
 
-  it("names a call, a custom router and a gas limit, short in the pill and whole in the label", () => {
+  it("names a call with its gas and a custom router, short in the pill and whole in the label", () => {
     const target = "0x1234567890abcdef1234567890abcdef123456ab";
     const router = "0xabcdef1234567890abcdef1234567890abcdef12";
-    const summary = deliverySummary({ mode: "call", callTarget: target, gasLimit: "300000", tip: { routerText: router } }, FACTS);
-    expect(summary.text).toBe("Deliver for 0.39%, max $0.39, then calls 0x12…ab · via router 0xab…12 · gas limit 300,000");
-    expect(summary.full).toBe(`Deliver for 0.39%, max $0.39, then calls ${target} · via router ${router} · gas limit 300,000`);
+    const summary = deliverySummary({ mode: "call", callTarget: target, callGas: "300000", tip: { routerText: router } }, FACTS);
+    expect(summary.text).toBe("Deliver for 0.39%, max $0.39, then calls 0x12…ab with 300,000 gas · via router 0xab…12");
+    // The call gas belongs to the call: without a call it is not named.
+    expect(deliverySummary({ mode: "call", callGas: "300000", tip: {} }, FACTS).text).not.toMatch(/gas$/);
+    expect(summary.full).toBe(`Deliver for 0.39%, max $0.39, then calls ${target} with 300,000 gas · via router ${router}`);
   });
 });
 
@@ -49,7 +51,7 @@ const typeExact = async (scope: HTMLElement, label: string, text: string) => {
 };
 
 describe("the delivery settings menu", () => {
-  it("offers every tip mode with its value, the gas level and the gas limit, and no speed presets", async () => {
+  it("offers every tip mode with its value, and the gas level, and no speed presets", async () => {
     const menu = await menuOpen();
     expect(within(menu).getByRole("radiogroup", { name: "Who delivers" })).toBeInTheDocument();
     expect(within(menu).queryByRole("radio", { name: /Standard|Fast/ })).toBeNull();
@@ -58,7 +60,7 @@ describe("the delivery settings menu", () => {
     expect(within(menu).getByRole("slider", { name: "Gas level" })).toBeInTheDocument();
     expect(within(menu).queryByRole("slider", { name: "Gas limit" })).toBeNull();
     await userEvent.click(within(menu).getByRole("button", { name: "Advanced" }));
-    expect(within(menu).getByRole("slider", { name: "Gas limit" })).toBeInTheDocument();
+    expect(within(menu).queryByRole("slider", { name: "Gas limit" })).toBeNull();
     expect(within(menu).getByRole("textbox", { name: /Relay router/ })).toBeInTheDocument();
     expect(within(menu).getByRole("textbox", { name: /Call after delivery/ })).toBeInTheDocument();
     expect(pillLabel()).toMatch(/^Delivery settings: Deliver for [\d.]+%, max .+\. Fee /);
@@ -130,15 +132,12 @@ describe("the delivery settings menu", () => {
     await waitFor(() => expect(window.location.hash).not.toMatch(/tip\.ceiling=/));
   });
 
-  it("takes a gas limit typed against the recommendation, and resets to it", async () => {
+  it("has no gas limit at all: a plain transfer has no gas number", async () => {
     const menu = await menuOpen();
     await userEvent.click(within(menu).getByRole("button", { name: "Advanced" }));
-    await typeExact(menu, "Gas limit", "400000");
-    await waitFor(() => expect(window.location.hash).toMatch(/bridge\.gas=400000|gasLimit=400000|\.gas=400000/));
-    expect(pillLabel()).toMatch(/gas limit 400,000/);
-    const resets = within(menu).getAllByRole("button", { name: "Reset to recommended" });
-    await userEvent.click(resets[resets.length - 1]!);
-    await waitFor(() => expect(pillLabel()).not.toMatch(/gas limit/));
+    expect(within(menu).queryByRole("textbox", { name: /Gas limit/ })).toBeNull();
+    expect(within(menu).queryByRole("textbox", { name: "Call gas" })).toBeNull();
+    expect(pillLabel()).not.toMatch(/gas limit/);
   });
 });
 

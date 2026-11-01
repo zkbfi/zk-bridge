@@ -97,7 +97,6 @@ const STATUS_CYCLE: readonly FeedStatus[] = [
   'delivered',
   'delivered',
   'delivered',
-  'failed_call',
   'release_failed',
 ]
 

@@ -2,7 +2,7 @@
  * What the confirm dialog shows before the wallet opens. The call is decoded from the calldata itself, not taken from
  * the plan, and the two must agree. When they do not, the dialog blocks the signature.
  */
-import { decodeDeliveryCall, decodeFeeDirector, feeModeOf, GAS_MODE_HELP, settingFlagsOf, TIP_MODE_NAMES, type FeeDirector, type FeeMode } from "@zk-bridge/shared";
+import { decodeDeliveryCall, decodeFeeDirector, feeModeOf, GAS_MODE_HELP, routerCallbackGas, settingFlagsOf, TIP_MODE_NAMES, type FeeDirector, type FeeMode } from "@zk-bridge/shared";
 import { formatUnits, formatRateAsPercent } from "@terminal/format/amounts";
 import type { RouterAddressesReading } from "@terminal/chain/live-reads";
 import { decodeKnownCall } from "@terminal/tx/decode";
@@ -79,9 +79,11 @@ export type ConfirmView = {
   readonly blockedReason: string | null;
 };
 
-const tipMaximumOf = (mode: FeeMode, amount: string): string => {
-  if (mode === "gas") return `The limit is ${amount}. It is the price ceiling, and the tip can take at most the limit. Expect the tip to reach it. Everything else goes to the recipient.`;
-  return `The tip can take at most ${amount}. Everything else goes to the recipient.`;
+const tipMaximumOf = (mode: FeeMode, amounts: { readonly limit: string; readonly atEstimate: string }): string => {
+  if (mode === "gas") {
+    return `The tip is expected to be about ${amounts.atEstimate} at the gas estimate. The most it can take is ${amounts.limit}, the limit: a deliverer who supplies more gas, or gas that costs more at delivery, can raise the tip up to it. Everything else goes to the recipient.`;
+  }
+  return `The tip can take at most ${amounts.limit}. Everything else goes to the recipient.`;
 };
 
 const withSymbol = (units: bigint, token: { readonly symbol: string; readonly decimals: number }): string =>
@@ -101,11 +103,17 @@ const directorLinesOf = (director: FeeDirector, token: { readonly symbol: string
     { label: "Settings", text: `${director.settings} (${TIP_MODE_NAMES[mode]}${flagsText(director.settings)})` },
     { label: "Limit", text: `${director.limit} base units (${withSymbol(director.limit, token)})` },
     { label: "Multiplier", text: `${director.multiplier} (${mode === "share" ? `${formatRateAsPercent(director.multiplier)} of the value` : `${formatUnits(director.multiplier, 18)} times the gas price`})` },
+    ...(director.callGas > 0n
+      ? [
+          { label: "Call gas", text: `${director.callGas} (the exact gas the call gets)` },
+          { label: "Callback gas", text: `${routerCallbackGas({ callGas: director.callGas })} (the call gas plus the router's own work; the page sets it for you)` },
+        ]
+      : []),
   ];
 };
 
 /** The sentence that goes with a call: a gas based tip counts the gas of the call. */
-export const CALL_TIP_NOTE = "A gas based tip counts the gas of the call, so expect the tip to reach its limit.";
+export const CALL_TIP_NOTE = "A gas based tip counts the call gas, so the tip is higher with a call. The limit is still the most it can take.";
 
 /** The target and the call data of the call that is in the bytes. The router sends no native value with it. */
 const callLinesOf = (call: DeliveryCall | null): readonly ConfirmLine[] => {
@@ -171,7 +179,7 @@ const deliveryViewOf = (step: WebStep, routerAddresses: RouterAddressesReading |
     ...routerAddressesViewOf(routerAddresses),
     tipMode: TIP_MODE_NAMES[description.mode],
     tipNow: description.summary,
-    tipMaximum: tipMaximumOf(description.mode, withSymbol(delivery.maximumTip, token)),
+    tipMaximum: tipMaximumOf(description.mode, { limit: withSymbol(delivery.maximumTip, token), atEstimate: withSymbol(description.expectedUnits, token) }),
     gasModeHelp: description.mode === "gas" ? GAS_MODE_HELP : null,
     gasNotice: delivery.notice,
     tipNotes: TIP_NOTES,
@@ -256,7 +264,8 @@ const directorMismatch = (step: WebStep, shown: FeeDirector): string | null => {
       found.recipient.toLowerCase() === shown.recipient.toLowerCase() &&
       found.settings === shown.settings &&
       found.limit === shown.limit &&
-      found.multiplier === shown.multiplier;
+      found.multiplier === shown.multiplier &&
+      found.callGas === shown.callGas;
     if (!same) return "The fee director in the call data differs from the one that was shown. Nothing was sent.";
   } catch {
     return "The fee director in the call data cannot be read.";

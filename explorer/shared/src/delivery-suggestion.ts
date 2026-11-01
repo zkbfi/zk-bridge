@@ -12,7 +12,6 @@ import {
 } from "./delivery-fee.js";
 import { expectedFee, feeModeOf, gasPriceBasisFor, maximumFee, type BaseFeeSupport, type FeeDirector, type FeeMode, type GasPriceBasis, type PayoutKind } from "./delivery-terms.js";
 import { formatRate, formatTokenAmount, RATE_SCALE } from "./format.js";
-import { minimumGasLimitOf, requiredDeliveryGas, type MessageKind } from "./gas-limit.js";
 
 /**
  * What the sender is about to pay, stated so that nobody mistakes an estimate for a promise. The terminal dashboard and
@@ -147,22 +146,6 @@ export const describeFee = (director: FeeDirector, input: DescribeFeeInput): Fee
   };
 };
 
-const MESSAGE_KIND_OF_DELIVERY: Readonly<Record<DeliveryKind, MessageKind>> = {
-  token_callback: { kind: "token-release", withCall: true },
-  token: { kind: "token-release", withCall: false },
-  message: { kind: "plain-message" },
-};
-
-/**
- * The gas of a kind that nobody has measured: the larger of the configured default and the gas that a delivery must
- * supply for the least gas limit of the kind. A tip below that gas would price the delivery under what it must carry.
- */
-const unmeasuredGasOf = (defaultGas: string, kind: DeliveryKind): bigint => {
-  const required = requiredDeliveryGas(minimumGasLimitOf(MESSAGE_KIND_OF_DELIVERY[kind]));
-  const configured = BigInt(defaultGas);
-  return configured > required ? configured : required;
-};
-
 /**
  * Tells the data behind a suggestion.
  *
@@ -175,7 +158,7 @@ export const describeDataSource = (report: DeliveryCostReport, kind: DeliveryKin
   if (report.baseFee.wei === null) throw new RangeError("the indexer has seen no block on the destination chain yet, so there is no base fee");
   const baseFeeWei = BigInt(report.baseFee.wei);
   const measured = !entry.isDefault && entry.p90Gas !== null;
-  const gas = measured ? BigInt(entry.p90Gas as string) : unmeasuredGasOf(entry.defaultGas, kind);
+  const gas = measured ? BigInt(entry.p90Gas as string) : BigInt(entry.defaultGas);
   const when = report.baseFee.timestamp === null ? "" : ` (${new Date(report.baseFee.timestamp * 1000).toISOString()})`;
   const block = report.baseFee.blockNumber === null ? "" : ` at block ${report.baseFee.blockNumber}`;
   return {

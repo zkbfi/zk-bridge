@@ -64,7 +64,7 @@ export function deliverySettingsOf(runnerConfig: RunnerConfig): DeliverySettings
     maximumLossPercent: runnerConfig.maximumLossPercent,
     deliverWithoutOffer: runnerConfig.deliverWithoutOffer,
     tokenValuationsWei: valuations(runnerConfig.tokenValuationsWei),
-    proofCheckGas: BigInt(runnerConfig.proofCheckGas),
+    deliveryGasFallback: BigInt(runnerConfig.deliveryGasFallback),
     maximumPrerequisiteRounds: runnerConfig.maximumPrerequisiteRounds,
     prerequisiteGasFallback: BigInt(runnerConfig.prerequisiteGasFallback),
     maximumPrerequisiteSpendPerSweepWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerSweepWei),

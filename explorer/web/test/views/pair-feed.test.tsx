@@ -22,7 +22,7 @@ describe("the feed and its filter bar", () => {
     expect(chains).toHaveLength(2);
     expect(new Set(chains.map((chain) => chain.textContent)).size).toBe(2);
     expect(first.querySelectorAll("time").length).toBeGreaterThanOrEqual(1);
-    expect(within(first).getByText(/^(Sent|Waiting for finality|Covered|Delivered|Failed call|Release failed)$/)).toBeInTheDocument();
+    expect(within(first).getByText(/^(Sent|Waiting for finality|Covered|Delivered|Release failed)$/)).toBeInTheDocument();
   });
 
   it("keeps the filter bar visible with a label on every control", async () => {
@@ -35,10 +35,10 @@ describe("the feed and its filter bar", () => {
   it("filters by status and shows only that status", async () => {
     renderPage(<StatefulPairView pairId="eth-pls" initialToken={null} />);
     await loaded();
-    await userEvent.selectOptions(screen.getByLabelText("Status"), "failed_call");
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "release_failed");
     await waitFor(() => expect(rows().length).toBeGreaterThan(0));
     await waitFor(() => {
-      for (const row of rows()) expect(within(row).getByText("Failed call")).toBeInTheDocument();
+      for (const row of rows()) expect(within(row).getByText("Release failed")).toBeInTheDocument();
     });
   });
 

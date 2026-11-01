@@ -2,8 +2,8 @@
  * Turns what the user typed in an action form into the steps of a transaction flow. Pure: it reads the form values
  * and the live snapshots, and throws {@link PlanInputError} with a message that tells the user what to fix.
  */
-import type { DeliveryCall, DeliveryCostReport, RelayGasFacts } from '@zk-bridge/shared'
-import type { Address } from 'viem'
+import { readDeliveryTerms, routerCallbackGas, type DeliveryCall, type DeliveryCostReport } from '@zk-bridge/shared'
+import type { Address, Hex } from 'viem'
 import { parseUnits, AmountParseError } from '../format/amounts'
 import type { ChainSnapshot, ChainSnapshotResult, RouterAddressesReading, TokenPosition } from '../chain/live-reads'
 import type { FlowStep } from '../flow/transaction-flow'
@@ -53,7 +53,7 @@ export function nativeChoiceValue(side: ChainSide): string {
 /**
  * Builds the steps for the bridge form: an exact-amount approval when the allowance is too low, then the relay.
  *
- * @param values The form values: token, amount, receiver, mode, data, gas limit, maxFeePercent.
+ * @param values The form values: token, amount, receiver, mode, data, callback gas, maxFeePercent.
  */
 export function buildBridgeSteps(values: Readonly<Record<string, string>>, tokens: readonly TokenInfo[], context: BridgeContext): readonly FlowStep[] {
   const source = bridgeSourceOf(values, tokens, context.pair)
@@ -73,13 +73,10 @@ export function buildBridgeSteps(values: Readonly<Record<string, string>>, token
   const amount = parseAmount(values.amount ?? '', token.decimals)
   const position = positionOf(snapshot, token)
   if (amount > position.balance) throw new PlanInputError(`The amount is more than your ${token.symbol} balance.`)
-  const gasLimit = gasLimitOf(values)
   const relay = planRelay({
     chain,
     token,
     amount,
-    ...(gasLimit === undefined ? {} : { gasLimit }),
-    relayGas: position.relayGas,
     ...(deliveryWanted(values, { source, tokens, context })
       ? deliveryRelayOf(values, { source, tokens, context })
       : directRelayOf(values, { source, receiver, pair: context.pair })),
@@ -116,7 +113,9 @@ function requireValidTermsForKnownRouter(
 /** The receiver and the mode that the user typed, once the guard accepts them. */
 function directRelayOf(values: Readonly<Record<string, string>>, input: { source: BridgeSource; receiver: Address; pair: PairConfig }) {
   requireValidTermsForKnownRouter(values, input)
-  return { receiver: input.receiver, mode: relayModeOf(values) }
+  const mode = relayModeOf(values)
+  if (mode.kind === 'plain') return { receiver: input.receiver, mode }
+  return { receiver: input.receiver, mode, callbackGas: callbackGasOf(values, { receiver: input.receiver, data: mode.data, pair: input.pair }) }
 }
 
 /** What the bridge form has chosen as the source of the transfer. */
@@ -197,6 +196,7 @@ function deliveryRelayOf(
   const call = deliveryCallOf(values)
   return {
     receiver: router,
+    callbackGas: routerCallbackGas(call === null ? {} : { callGas: chosen.director.callGas }),
     mode: { kind: 'call', data: encodeDirectorFor(chosen.director, context.pair, { router, destination: target.chain, destinationToken: input.source.token.counterpart }, call ?? undefined) } satisfies RelayMode,
     deliveryFee: {
       router,
@@ -233,37 +233,32 @@ export function deliveryCallOf(values: Readonly<Record<string, string>>): Delive
   return { target: parseAddress(targetText, 'call target'), data }
 }
 
-/** The optional gas limit of the bridge form: undefined when the field is empty, else a positive whole number. */
-function gasLimitOf(values: Readonly<Record<string, string>>): bigint | undefined {
-  const text = (values.gasLimit ?? '').trim()
-  if (text === '') return undefined
-  if (!/^\d+$/.test(text)) throw new PlanInputError('The gas limit must be a whole number.')
-  return BigInt(text)
-}
-
 /**
- * What the mediator says about the token that the form chose, which sets the minimum of the gas limit. The native coin
- * route and a token with no loaded position give a release, the lowest minimum.
+ * The callback gas of a relay with a call, as the mediator takes it. A number typed in the form wins. Without one, a
+ * receiver that is a delivery router of the deployment gets the gas that the router needs for the terms in the data:
+ * its own work, plus the call gas when the data asks for a call. Any other receiver needs a number, because nobody can
+ * say how much gas its `onTokenBridged` needs.
  */
-export function relayGasFactsOf(values: Readonly<Record<string, string>>, tokens: readonly TokenInfo[], context: BridgeContext): RelayGasFacts {
-  const source = bridgeSourceOf(values, tokens, context.pair)
-  if (source.kind !== 'token') return { kind: 'acknowledged' }
-  const loaded = (context.snapshots ?? []).find((result) => result.status === 'ok' && result.snapshot.chain.side === source.side)
-  if (loaded === undefined || loaded.status !== 'ok') return { kind: 'acknowledged' }
-  const position = loaded.snapshot.positions.find((candidate) => candidate.token.address === source.token.address)
-  return position === undefined ? { kind: 'acknowledged' } : position.relayGas
+function callbackGasOf(values: Readonly<Record<string, string>>, input: { receiver: Address; data: Hex; pair: PairConfig }): bigint {
+  const text = (values.callbackGas ?? '').trim()
+  if (text !== '') {
+    if (!/^\d+$/.test(text) || BigInt(text) === 0n) throw new PlanInputError('The callback gas must be a whole number above zero.')
+    return BigInt(text)
+  }
+  if (isDeploymentDeliveryRouter(input.pair, input.receiver)) {
+    const terms = readDeliveryTerms(input.data)
+    return routerCallbackGas(terms.kind === 'director' && terms.call !== null ? { callGas: terms.director.callGas } : {})
+  }
+  throw new PlanInputError('Enter the callback gas: the exact gas that onTokenBridged gets on the other chain. A relay with a call has no default.')
 }
 
 /** Builds the single step of the send-a-message form. */
 export function buildMessageSteps(values: Readonly<Record<string, string>>, pair: PairConfig): readonly FlowStep[] {
   const chain = values.chain === 'second' ? pair.second : pair.first
-  const gasText = (values.gas ?? '').trim()
-  if (!/^\d+$/.test(gasText)) throw new PlanInputError('The gas must be a whole number.')
   const plan = planSendMessage({
     chain,
     target: parseAddress(values.target ?? '', 'target'),
     data: parseHexBytes(values.data ?? ''),
-    gas: BigInt(gasText),
   })
   return [{ plan, skippable: false }]
 }

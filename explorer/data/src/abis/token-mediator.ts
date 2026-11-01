@@ -20,11 +20,6 @@ export const tokenMediatorAbi = [
             "internalType": "address"
           },
           {
-            "name": "remoteChainId",
-            "type": "uint256",
-            "internalType": "uint256"
-          },
-          {
             "name": "flowLimiter",
             "type": "address",
             "internalType": "address"
@@ -41,58 +36,6 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "function",
-    "name": "CALLBACK_GAS_LIMIT",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "DEPLOY_GAS_BASE",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "DEPLOY_GAS_LIMIT",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "DEPLOY_GAS_PER_BYTE",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "NAME_CONNECTOR",
     "inputs": [],
     "outputs": [
@@ -100,19 +43,6 @@ export const tokenMediatorAbi = [
         "name": "",
         "type": "string",
         "internalType": "string"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "RELEASE_GAS_LIMIT",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -251,6 +181,11 @@ export const tokenMediatorAbi = [
         "name": "data",
         "type": "bytes",
         "internalType": "bytes"
+      },
+      {
+        "name": "callbackGas",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -358,6 +293,11 @@ export const tokenMediatorAbi = [
         "name": "data",
         "type": "bytes",
         "internalType": "bytes"
+      },
+      {
+        "name": "callbackGas",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -409,6 +349,11 @@ export const tokenMediatorAbi = [
         "name": "data",
         "type": "bytes",
         "internalType": "bytes"
+      },
+      {
+        "name": "callbackGas",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -594,34 +539,6 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "function",
-    "name": "relayTokens",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "receiver",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "value",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "gasLimit",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "relayTokensAndCall",
     "inputs": [
       {
@@ -645,37 +562,9 @@ export const tokenMediatorAbi = [
         "internalType": "bytes"
       },
       {
-        "name": "gasLimit",
+        "name": "callbackGas",
         "type": "uint256",
         "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "relayTokensAndCall",
-    "inputs": [
-      {
-        "name": "token",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "receiver",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "value",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "data",
-        "type": "bytes",
-        "internalType": "bytes"
       }
     ],
     "outputs": [],
@@ -859,6 +748,17 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "error",
+    "name": "CallOutOfGas",
+    "inputs": [
+      {
+        "name": "gasAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "DecimalsOutOfRange",
     "inputs": [
       {
@@ -875,40 +775,24 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "error",
-    "name": "GasLimitAboveBridgeMaximum",
-    "inputs": [
-      {
-        "name": "gasLimit",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "maximum",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "GasLimitBelowMinimum",
-    "inputs": [
-      {
-        "name": "gasLimit",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "minimum",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
-  },
-  {
-    "type": "error",
     "name": "HandlerDuringTransfer",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientGas",
+    "inputs": [
+      {
+        "name": "available",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "required",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",
@@ -939,6 +823,17 @@ export const tokenMediatorAbi = [
         "name": "receiver",
         "type": "address",
         "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "MalformedTransferData",
+    "inputs": [
+      {
+        "name": "length",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ]
   },
@@ -1006,6 +901,17 @@ export const tokenMediatorAbi = [
     "type": "error",
     "name": "ReentrancyGuardReentrantCall",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ReleaseOutOfGas",
+    "inputs": [
+      {
+        "name": "token",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
   },
   {
     "type": "error",
@@ -1085,6 +991,11 @@ export const tokenMediatorAbi = [
   {
     "type": "error",
     "name": "ZeroAmount",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ZeroCallbackGas",
     "inputs": []
   },
   {

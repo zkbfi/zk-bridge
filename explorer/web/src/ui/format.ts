@@ -24,7 +24,6 @@ export const STATUS_LABELS: Readonly<Record<FeedStatus, string>> = {
   waiting_for_finality: "Waiting for finality",
   covered: "Covered",
   delivered: "Delivered",
-  failed_call: "Failed call",
   release_failed: "Release failed",
 };
 
@@ -33,8 +32,7 @@ export const STATUS_MEANINGS: Readonly<Record<FeedStatus, string>> = {
   sent: "The send is on the source chain and is too young to be final.",
   waiting_for_finality: "The send is older than the finality window. No stored head covers it yet.",
   covered: "The destination light client stored a head at or after the send. Anyone can deliver it.",
-  delivered: "The destination bridge ran the message and the call succeeded.",
-  failed_call: "The destination bridge ran the message and the call reverted. This is final.",
+  delivered: "The destination bridge ran the message. A delivery that fails reverts, so the message stays proven until someone delivers it again.",
   release_failed: "The mediator could not release the tokens to the recipient. This is final: the tokens stay in the mediator.",
 };
 
@@ -44,7 +42,6 @@ export const STATUS_PALETTES: Readonly<Record<FeedStatus, string>> = {
   waiting_for_finality: "orange",
   covered: "purple",
   delivered: "green",
-  failed_call: "red",
   release_failed: "yellow",
 };
 

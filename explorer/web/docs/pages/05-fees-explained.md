@@ -33,7 +33,7 @@ The delivery menu holds every fee setting in one place:
 - The gas level.
 - The automatic fee cap and the hard fee cap.
 - What the fee covers: delivery gas, proof, the extra for a higher gas level, tip, and the fee in total.
-- **Advanced**: the gas limit, the relay router and a call after delivery.
+- **Advanced**: the relay router, and a call after delivery with the exact gas the call gets.
 
 ## The default fee
 
@@ -143,7 +143,7 @@ No fee and no router. The page sends a plain transfer, and anyone can deliver it
 
 ## Every value is yours to set
 
-Each value in the menu is one control: a slider with tick marks, an exact field next to its unit, and a mark for the recommended value. This holds for the tip share, the fixed amount, the gas multiple, the gas level, the gas limit and both caps.
+Each value in the menu is one control: a slider with tick marks, an exact field next to its unit, and a mark for the recommended value. This holds for the tip share, the fixed amount, the gas multiple, the gas level and both caps.
 
 - **Reset to recommended** shows while the value differs from the recommendation.
 - After a reset, a **Back to your …** button appears in the same place, for example "Back to your 0.44%". It stays until you change something else.

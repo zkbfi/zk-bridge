@@ -41,8 +41,8 @@ describe("searchIdentifiers", () => {
   });
 
   it("replaces the underscores of the status with spaces", async () => {
-    const failed = feed.find((item) => item.kind === "token" && item.status === "failed_call")!;
-    expect((await run(failed.id)).results[0]!.subtitle.startsWith("Transfer · failed call · ")).toBe(true);
+    const failed = feed.find((item) => item.kind === "token" && item.status === "release_failed")!;
+    expect((await run(failed.id)).results[0]!.subtitle.startsWith("Transfer · release failed · ")).toBe(true);
   });
 
   it("finds a transfer by transaction hash after the identifier lookup found nothing", async () => {

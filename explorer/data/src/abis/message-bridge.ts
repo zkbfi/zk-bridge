@@ -10,11 +10,6 @@ export const messageBridgeAbi = [
         "internalType": "address"
       },
       {
-        "name": "localChainId_",
-        "type": "uint64",
-        "internalType": "uint64"
-      },
-      {
         "name": "remoteChainId_",
         "type": "uint64",
         "internalType": "uint64"
@@ -74,46 +69,7 @@ export const messageBridgeAbi = [
   },
   {
     "type": "function",
-    "name": "EXECUTION_OVERHEAD_GAS",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "HISTORICAL_SUMMARIES_LIST_DEPTH",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "MAX_GAS_PER_TX",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "MIN_GAS_PER_CALL",
     "inputs": [],
     "outputs": [
       {
@@ -399,6 +355,25 @@ export const messageBridgeAbi = [
   },
   {
     "type": "function",
+    "name": "deliveryStatus",
+    "inputs": [
+      {
+        "name": "id",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint8",
+        "internalType": "enum MessageBridge.DeliveryStatus"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "depositGate",
     "inputs": [],
     "outputs": [
@@ -560,7 +535,7 @@ export const messageBridgeAbi = [
     "name": "failedMessageDataHash",
     "inputs": [
       {
-        "name": "id",
+        "name": "",
         "type": "bytes32",
         "internalType": "bytes32"
       }
@@ -572,14 +547,14 @@ export const messageBridgeAbi = [
         "internalType": "bytes32"
       }
     ],
-    "stateMutability": "view"
+    "stateMutability": "pure"
   },
   {
     "type": "function",
     "name": "failedMessageReceiver",
     "inputs": [
       {
-        "name": "id",
+        "name": "",
         "type": "bytes32",
         "internalType": "bytes32"
       }
@@ -591,14 +566,14 @@ export const messageBridgeAbi = [
         "internalType": "address"
       }
     ],
-    "stateMutability": "view"
+    "stateMutability": "pure"
   },
   {
     "type": "function",
     "name": "failedMessageSender",
     "inputs": [
       {
-        "name": "id",
+        "name": "",
         "type": "bytes32",
         "internalType": "bytes32"
       }
@@ -610,7 +585,7 @@ export const messageBridgeAbi = [
         "internalType": "address"
       }
     ],
-    "stateMutability": "view"
+    "stateMutability": "pure"
   },
   {
     "type": "function",
@@ -846,7 +821,7 @@ export const messageBridgeAbi = [
         "internalType": "bytes"
       },
       {
-        "name": "_gas",
+        "name": "",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -875,7 +850,7 @@ export const messageBridgeAbi = [
         "internalType": "bytes"
       },
       {
-        "name": "_gas",
+        "name": "",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -1325,27 +1300,6 @@ export const messageBridgeAbi = [
   },
   {
     "type": "error",
-    "name": "GasOutOfRange",
-    "inputs": [
-      {
-        "name": "gas",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "minimum",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "maximum",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
-  },
-  {
-    "type": "error",
     "name": "GloasSlotRefused",
     "inputs": [
       {
@@ -1382,22 +1336,6 @@ export const messageBridgeAbi = [
       },
       {
         "name": "transactionIndex",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "InsufficientGas",
-    "inputs": [
-      {
-        "name": "available",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "required",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -1459,22 +1397,6 @@ export const messageBridgeAbi = [
         "name": "slot",
         "type": "uint64",
         "internalType": "uint64"
-      }
-    ]
-  },
-  {
-    "type": "error",
-    "name": "LocalChainIdMismatch",
-    "inputs": [
-      {
-        "name": "configured",
-        "type": "uint64",
-        "internalType": "uint64"
-      },
-      {
-        "name": "actual",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ]
   },
@@ -1618,6 +1540,17 @@ export const messageBridgeAbi = [
         "name": "cutoff",
         "type": "uint64",
         "internalType": "uint64"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "TargetCallFailed",
+    "inputs": [
+      {
+        "name": "messageId",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ]
   },

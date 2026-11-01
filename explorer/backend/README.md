@@ -255,7 +255,7 @@ was in a previous hour"):
   router), valued in dollars with the dapp's PulseX price rules at one named PulseChain block. A token without a price
   counts nothing; testnet tokens have no price, so a testnet batch never pays. Its **cost** is the proof
   (`PROOF_COST_USD`, $0.025) plus the delivery gas of each message on the destination (`deliveryGasUsd` at the newest
-  base fee, the chain's minimum tip and `requiredDeliveryGas` of a release, which errs high), times `profitMargin`. The
+  base fee, the chain's minimum tip and `DELIVERY_GAS` of 400,000, an estimate that errs high), times `profitMargin`. The
   runner that delivers is not paid by us: "pays" means the fee address's take covers our costs. Dollars are integers
   (USD × 1e18), as in `@zkb/core`.
 - **Nothing waits:** no final message the head does not cover. Nothing proves, however long ago the last proof was,
@@ -343,7 +343,7 @@ pair), 503 when the indexer is not configured or cannot be read.
   | `board-post` | "I have the proof but it is not on chain": the proof is stored and is posted to the msgboard | + median grind |
   | `light-client-update` | the proof is on the msgboard; a runner posts the update | + median board-to-chain |
   | `delivery` | the light client covers the message; a runner delivers it | + median covered-to-delivered |
-  | `none` | delivered, or the delivery ended (`failed_call`, `release_failed`; `detail` says which) | none |
+  | `none` | delivered, or the delivery ended (`release_failed`; `detail` says so) | none |
 
   The prover reports its steps only when it ends, so the two GPU services are an estimate from the newest 20 proofs.
 - `proof`, once a proof reaches the message: `{ startSlot, newSlot, where }`, `where` is `stored` (made, not on the

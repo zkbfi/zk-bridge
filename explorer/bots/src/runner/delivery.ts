@@ -1,5 +1,5 @@
 import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, type Address, type ContractFunctionArgs, type Hex } from "viem";
-import { bridgedSymbolOf, decodeMediatorMessage, deliveryRouterAbi, messageBridgeAbi, requiredDeliveryGas, tokenFactoryAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
+import { bridgedSymbolOf, decodeMediatorMessage, deliveryRouterAbi, messageBridgeAbi, tokenFactoryAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
@@ -15,8 +15,12 @@ export interface DeliverySettings {
   readonly deliverWithoutOffer: boolean;
   /** The value of one whole token in wei, by lowercase address. */
   readonly tokenValuationsWei: Readonly<Record<string, bigint>>;
-  /** The gas that the light client proof check takes inside a delivery, and that the gas limit of the message does not cover. */
-  readonly proofCheckGas: bigint;
+  /**
+   * The gas the runner assumes for one whole delivery (proof check, bridge, mediator, router) when it cannot estimate it
+   * yet: the first fee check runs before the evidence exists, and a delivery that needs a light client update in the same
+   * batch cannot be estimated alone. Once an estimate exists, it replaces this number.
+   */
+  readonly deliveryGasFallback: bigint;
   readonly maximumPrerequisiteRounds: number;
   /** The gas the runner assumes for a layout call that it cannot simulate before the call before it is mined. */
   readonly prerequisiteGasFallback: bigint;
@@ -28,7 +32,7 @@ export interface DeliverySettings {
   readonly maximumUnrecoveredPrerequisiteLossWei: bigint;
   /** The most items that one batch transaction delivers. */
   readonly maximumBatchSize: number;
-  /** The most gas that one batch may use: the sum of the assumed gas of its items, and the upper bound of its gas limit. */
+  /** The most gas that one batch may use: the sum of the estimates of its items and of the block proof update. A single item above it goes alone. */
   readonly maximumBatchGas: bigint;
 }
 
@@ -41,7 +45,11 @@ export interface DeliveryDependencies {
   readonly prover: ProverBinary;
   readonly indexer: IndexerClient;
   readonly source: SourceReader;
-  /** The delivery router of the destination chain, or null. */
+  /**
+   * The delivery router of the destination chain, or null. The runner delivers to the router that the operator names
+   * here and to no other. This is the operator's allowlist, not a rule of the protocol: no contract of the bridge or the
+   * mediator knows a router, and anyone may deploy one.
+   */
   readonly deliveryRouter: Address | null;
   /** The Multicall3 contract of the destination chain, which batches the calls of a delivery. Not null whenever `deliveryRouter` is not null. */
   readonly multicall: Address | null;
@@ -64,8 +72,8 @@ export type SkipReason =
   | "no-fee-offer"
   | "no-price-for-fee-token"
   | "loss-at-or-above-limit"
-  | "gas-limit-unknown"
   | "message-gas-above-batch-maximum"
+  | "batch-gas-above-maximum"
   | "source-log-not-found"
   | "already-delivered"
   | "indexer-disagrees-with-evidence"
@@ -172,15 +180,13 @@ export async function withDestinationToken(dependencies: DeliveryDependencies, i
 
 /**
  * The fee that the router would pay to its reward address for this gas, measured in wei. `payout` tells how the router pays it.
- * When the offer carries a user call, the router counts the gas of the call too (see {@link feeGasUnitsOf}): `plannedGas` is
- * the gas limit that the runner plans to send, which bounds that gas.
+ * When the offer carries a user call, the router counts the `callGas` of the director too (see {@link feeGasUnitsOf}).
  */
 export async function quoteFee(
   dependencies: DeliveryDependencies,
   item: FeedItem,
   offer: Extract<FeeOffer, { kind: "offer" }>,
   gasUnits: bigint,
-  plannedGas: bigint,
 ): Promise<{ readonly ok: true; readonly feeWei: bigint; readonly feeTokens: bigint; readonly payout: PayoutKind } | { readonly ok: false; readonly reason: "no-price-for-fee-token" }> {
   const token = item.transfer?.destinationToken;
   if (token === undefined || token === null) return { ok: false, reason: "no-price-for-fee-token" };
@@ -189,7 +195,7 @@ export async function quoteFee(
   const data = encodeFunctionData({
     abi: deliveryRouterAbi,
     functionName: "feeInfo",
-    args: [token.address as Address, offer.value, feeGasUnitsOf({ call: offer.call, executionGas: gasUnits, plannedGas, payout }), director],
+    args: [token.address as Address, offer.value, feeGasUnitsOf({ call: offer.call, executionGas: gasUnits, callGas: director.callGas }), director],
   });
   const answer = await dependencies.chain.call({ to: dependencies.deliveryRouter as Address, data });
   const [feeTokens] = decodeFunctionResult({ abi: deliveryRouterAbi, functionName: "feeInfo", data: answer });
@@ -370,23 +376,12 @@ export async function recordLoss(dependencies: DeliveryDependencies, ledger: Pre
   return { ...outcome, prerequisiteCostWei: spentWei };
 }
 
-/** The gas that a delivery of one item needs, read from the gas limit of its message. */
-export interface GasNeed {
-  /** The gas that the bridge requires a delivery to supply for the message. */
-  readonly requiredGas: bigint;
-  /** The required gas plus the proof check. The planner sums it, and the first fee check prices it. */
-  readonly assumedGas: bigint;
-}
-
 /**
- * The gas that a delivery needs for an item, or a skip when the indexer has no gas limit for the message. A message
- * that the indexer saw first on the destination side carries no limit, and the runner never guesses one.
+ * The gas that Multicall3 adds to each call, beyond the single entry of the router: the call, the copy of the proof and
+ * the result. The batch test of the router (`DeliveryRouterBatching.t.sol`) measures about 17,000, so this rounds up. An
+ * estimate of an item at the single entry gets it added, because the item then runs inside a batch.
  */
-export function gasNeedOf(settings: DeliverySettings, item: FeedItem): GasNeed | Skip {
-  if (item.gasLimit === null) return skip(item.messageId as Hex, "gas-limit-unknown", { detail: "the indexer has no gas limit for this message" });
-  const requiredGas = requiredDeliveryGas(BigInt(item.gasLimit));
-  return { requiredGas, assumedGas: requiredGas + settings.proofCheckGas };
-}
+export const BATCH_ITEM_OVERHEAD_GAS = 20_000n;
 
 /** The result of {@link approvePrerequisiteSpend}: the approved calls, a skip, or nothing to approve. */
 type Approval = { readonly kind: "skip"; readonly outcome: Skip } | { readonly kind: "approved"; readonly approved: readonly ApprovedPrerequisite[] };
@@ -430,9 +425,10 @@ export interface ReadyDelivery {
   readonly offer: Extract<FeeOffer, { kind: "offer" }>;
   /** The proof tuple that the evidence carries, after the layout calls. */
   readonly proof: MessageProof;
-  /** The gas that the bridge requires a delivery to supply for the message, from its gas limit. The transaction limit is at least the sum of these. */
-  readonly requiredGas: bigint;
-  /** The required gas plus the proof check, before a simulation. The batch planner sums it. */
+  /**
+   * The gas of the delivery inside a batch: the estimate of the delivery call plus {@link BATCH_ITEM_OVERHEAD_GAS}, or
+   * the configured fallback when the call cannot be estimated alone. The batch planner sums it.
+   */
   readonly assumedGas: bigint;
   /** What the layout calls for this item cost. Zero when it needed none. */
   readonly prerequisiteCostWei: bigint;
@@ -445,15 +441,16 @@ export type Preparation = { readonly kind: "outcome"; readonly outcome: Delivery
  * Does the per-item work of a delivery, up to and including the layout calls.
  *
  * 1. Read the call data of the message from the indexer and look for a fee offer to the delivery router.
- * 1b. Read the gas limit of the message from the feed item and skip when the indexer has none. The assumed gas is the
- *    gas that a delivery must supply for that limit, plus the proof check.
- * 2. Price the offer at the assumed gas, and skip when the loss reaches the limit. This check needs no
+ * 2. Price the offer at the configured fallback gas, and skip when the loss reaches the limit. This check needs no
  *    evidence, so an item that does not pay costs no proving time.
  * 3. Build the evidence (`zk-bridge-prover evidence`). Skip when the message is delivered already.
  * 4. Estimate the gas of every layout call. Require that the loss on the layout calls and the execution together stays under the limit, and that the worst case of the layout calls fits the budgets. Skip before any layout call leaves.
  *    The calls and the gas of this estimate are the approved set.
  * 5. Send the layout calls that the evidence lists, each after a simulation, each inside the approved set, and each
  *    after the ledger reserved its worst case.
+ * 6. Estimate the delivery call (`eth_estimateGas` of `executeMessage` at the router). The estimate sizes the item in a
+ *    batch. A delivery that reverts or runs out of gas leaves no trace on chain, so a call that cannot be estimated alone
+ *    (it may need the light client update of the same batch) keeps the fallback, and the batch simulation decides.
  *
  * An item with a fee offer then returns as a {@link ReadyDelivery}. {@link sendBatch} simulates the batch, judges the fee
  * again at the simulated gas, and sends. An item without an offer (when the configuration delivers such items) goes
@@ -470,9 +467,7 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
   const messageId = item.messageId as Hex;
   const { settings, chain } = dependencies;
   const done = (outcome: DeliveryOutcome): Preparation => ({ kind: "outcome", outcome });
-  const need = gasNeedOf(settings, item);
-  if ("status" in need) return done(need);
-  const { requiredGas, assumedGas } = need;
+  const fallbackGas = settings.deliveryGasFallback;
   const message = await dependencies.indexer.getMessage(item.messageId);
   const offer = readFeeOffer({ messageData: message.data as Hex, deliveryRouter: dependencies.deliveryRouter });
   if (offer.kind === "none" && !settings.deliverWithoutOffer) return done(skip(messageId, "no-fee-offer", { detail: offer.reason }));
@@ -491,7 +486,7 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
   const quote = await chain.feeQuote();
   const early =
     offer.kind === "offer"
-      ? await judgeOffer(dependencies, { item, offer, feeGasUnits: assumedGas, costGasUnits: assumedGas, quote, messageId })
+      ? await judgeOffer(dependencies, { item, offer, feeGasUnits: fallbackGas, costGasUnits: fallbackGas, quote, messageId })
       : null;
   if (early !== null && early.kind === "skip") return done(early.outcome);
 
@@ -511,23 +506,23 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
     return done(skip(messageId, "evidence-for-another-message", { detail: `the evidence names ${evidence.message.messageId}` }));
   }
   if (evidence.alreadyDelivered) return done(skip(messageId, "already-delivered", { detail: evidence.deliveryStatus }));
-  // The offer and the gas limit priced above come from the indexer. The prover read the message from the source chain,
-  // so an indexer that disagrees with it is lying or wrong, and the item is left before any gas is spent.
-  if (evidence.message.data.toLowerCase() !== message.data.toLowerCase() || evidence.message.gasLimit !== item.gasLimit) {
-    return done(skip(messageId, "indexer-disagrees-with-evidence", { detail: "the data or the gas limit of the message differs from the source chain" }));
+  // The offer priced above comes from the indexer. The prover read the message from the source chain, so an indexer
+  // that disagrees with it is lying or wrong, and the item is left before any gas is spent.
+  if (evidence.message.data.toLowerCase() !== message.data.toLowerCase()) {
+    return done(skip(messageId, "indexer-disagrees-with-evidence", { detail: "the data of the message differs from the source chain" }));
   }
 
-  const approval = await approvePrerequisiteSpend(dependencies, ledger, { item, offer, evidence, messageId, assumedGas });
+  const approval = await approvePrerequisiteSpend(dependencies, ledger, { item, offer, evidence, messageId, assumedGas: fallbackGas });
   if (approval.kind === "skip") return done(approval.outcome);
 
   const prepared = await satisfyPrerequisites(dependencies, ledger, { messageId, transactionHash: sourceTransaction, logIndex }, evidence, approval.approved);
   if (!prepared.ok) return done(await recordLoss(dependencies, ledger, prepared.outcome, prepared.costWei));
 
   if (offer.kind === "none") return done(await deliverDirect(dependencies, ledger, { item, messageId, evidence: prepared.evidence, prerequisiteCostWei: prepared.costWei }));
-  return {
-    kind: "ready",
-    ready: { item, messageId, offer, proof: proofOf(prepared.evidence), requiredGas, assumedGas, prerequisiteCostWei: prepared.costWei },
-  };
+  const proof = proofOf(prepared.evidence);
+  const estimate = await chain.simulate({ to: dependencies.deliveryRouter as Address, data: singleCallData(proof) });
+  const assumedGas = estimate.ok ? estimate.gas + BATCH_ITEM_OVERHEAD_GAS : fallbackGas;
+  return { kind: "ready", ready: { item, messageId, offer, proof, assumedGas, prerequisiteCostWei: prepared.costWei } };
 }
 
 /** Input of {@link deliverDirect}. */
@@ -584,7 +579,7 @@ export interface JudgeOfferInput {
 /** Prices the offer at the fee gas and compares it with the cost of the cost gas. The item is left out when the loss reaches the limit. */
 export async function judgeOffer(dependencies: DeliveryDependencies, input: JudgeOfferInput): Promise<Judgement> {
   const { item, offer, feeGasUnits, costGasUnits, quote, messageId } = input;
-  const priced = await quoteFee(dependencies, item, offer, feeGasUnits, sendTerms(quote, feeGasUnits).gas);
+  const priced = await quoteFee(dependencies, item, offer, feeGasUnits);
   if (!priced.ok) return { kind: "skip", outcome: skip(messageId, priced.reason) };
   const costWei = costGasUnits * (quote.baseFee + quote.priorityFee);
   const decision = decideDelivery({ feeWei: priced.feeWei, costWei, maximumLossPercent: dependencies.settings.maximumLossPercent });

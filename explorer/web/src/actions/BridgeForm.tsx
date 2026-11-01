@@ -1,13 +1,14 @@
 import { Button, Flex, Stack, Text } from "@chakra-ui/react";
 import { useMemo } from "react";
 import type { Address } from "viem";
+import { routerCallbackGas } from "@zk-bridge/shared";
 import type { BridgeContext } from "@terminal/app/actions";
 import type { ChainSnapshot } from "@terminal/chain/live-reads";
 import type { ChainSide, PairConfig, TokenInfo } from "@terminal/model/types";
 import { useDeliveryCost, usePriorityFee } from "../app/queries";
 import type { BridgeQuery, TipQuery } from "../app/route";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, tipStatusOf, type DeliveryOptions } from "../tx/bridge-draft";
-import type { BridgeFormValues, WebStep } from "../tx/bridge-steps";
+import { hasCallText, type BridgeFormValues, type WebStep } from "../tx/bridge-steps";
 import { formatAmountWithSymbol, formatUnits } from "../ui/format";
 import { Field, Notice, SelectInput, TextAreaInput, TextInput } from "../ui/primitives";
 import { DeliveryFeeSection } from "./DeliveryFeeSection";
@@ -87,7 +88,8 @@ const bridgeQueryOf = (values: Values, options: DeliveryOptions, defaults: Value
     ...differs("receiver"),
     ...(values.mode === defaults.mode ? {} : { mode: values.mode }),
     ...differs("data"),
-    ...differs("gasLimit"),
+    ...differs("callGas"),
+    ...differs("callbackGas"),
     ...differs("callTarget"),
     ...differs("callData"),
     ...(tip === undefined ? {} : { tip }),
@@ -104,7 +106,7 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, query, onQ
   const choices = useMemo(() => choicesOf(variant, pair, tokens, context), [variant, pair, tokens, context]);
   // The default sends from the first chain (Ethereum, or Sepolia) to the second.
   const defaults = useMemo<Values>(
-    () => ({ token: (choices.find((choice) => choice.side === "first") ?? choices[0])?.value ?? "", amount: "", receiver: account, mode: "plain", data: "", gasLimit: "", callTarget: "", callData: "" }),
+    () => ({ token: (choices.find((choice) => choice.side === "first") ?? choices[0])?.value ?? "", amount: "", receiver: account, mode: "plain", data: "", callGas: "", callbackGas: "", callTarget: "", callData: "" }),
     [choices, account],
   );
   const values = useMemo<Values>(() => {
@@ -132,6 +134,9 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, query, onQ
   );
   const reasonId = "bridge-form-reason";
   const showCall = values.mode !== "plain" && !tipOn && variant === "tokens";
+  // A call after the delivery needs the call gas; the callback gas that the relay passes is shown, read only.
+  const callWanted = hasCallText(values);
+  const callbackGasShown = /^\d+$/.test(values.callGas.trim()) && BigInt(values.callGas.trim()) > 0n ? routerCallbackGas({ callGas: BigInt(values.callGas.trim()) }).toString() : null;
 
   return (
     <form
@@ -181,12 +186,10 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, query, onQ
             <Field label="Data for the receiver" hint="Hex, such as 0xabcd. Empty is allowed.">
               {(id) => <TextAreaInput id={id} spellCheck={false} value={values.data} onChange={(event) => setValues({ ...values, data: event.target.value })} />}
             </Field>
+            <Field label="Callback gas" hint="The exact gas that onTokenBridged gets on the other chain. Too little makes the delivery revert and wait, so anyone can deliver it again with more.">
+              {(id) => <TextInput id={id} inputMode="numeric" autoComplete="off" placeholder="for example 200000" value={values.callbackGas} onChange={(event) => setValues({ ...values, callbackGas: event.target.value })} />}
+            </Field>
           </>
-        ) : null}
-        {variant === "tokens" ? (
-          <Field label="Gas limit" hint="Optional. The gas for the delivery on the other chain. Empty uses the default. The number must be at least the default for this kind of message and at most the bridge maximum.">
-            {(id) => <TextInput id={id} inputMode="numeric" autoComplete="off" placeholder="Default" value={values.gasLimit} onChange={(event) => setValues({ ...values, gasLimit: event.target.value })} />}
-          </Field>
         ) : null}
         {variant === "tokens" ? (
           <>
@@ -196,6 +199,18 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, query, onQ
             <Field label="Call data" hint="Optional. Hex, such as 0xabcd, for the call target. The call sends no native coin. Empty calls the target with no data.">
               {(id) => <TextAreaInput id={id} spellCheck={false} value={values.callData} onChange={(event) => setValues({ ...values, callData: event.target.value })} />}
             </Field>
+            {callWanted ? (
+              <>
+                <Field label="Call gas" hint="The exact gas the call gets, as a whole number. A call that needs more fails, and the recipient still keeps the tokens.">
+                  {(id) => <TextInput id={id} inputMode="numeric" autoComplete="off" placeholder="for example 200000" value={values.callGas} onChange={(event) => setValues({ ...values, callGas: event.target.value })} />}
+                </Field>
+                {callbackGasShown === null ? null : (
+                  <Text fontSize="sm" color="fg.muted" data-testid="callback-gas">
+                    Callback gas: {callbackGasShown} (the call gas plus the router's own work; the page sets it for you)
+                  </Text>
+                )}
+              </>
+            ) : null}
           </>
         ) : null}
 

@@ -90,10 +90,11 @@ rate, and the account that delivers supplies no rate.
 - `Tip mode` is `Gas, to limit` (the default), `Percentage`, `Fixed amount` or `Custom terms`. The percentage starts at
   `0.1` when you choose it. Choosing the fixed mode, or changing the margin, the priority fee, the amount or the token,
   fills the fixed amount with the suggestion. Editing a number keeps your number. A blank percentage means 0.1 percent.
-- The gas based mode follows the gas that the deliverer's transaction makes available. The deliverer chooses the gas
-  limit of that transaction, and the bridge forwards only the message gas limit, so gas held back above it counts. Expect
-  the tip to reach the limit. The limit is the price ceiling, and the help line says `Up to the limit; the deliverer's
-  gas choice decides`. The panel and the confirmation screen show the limit as the price ceiling.
+- The gas based mode follows the gas that the delivery uses up to the router callback, plus the call gas when the relay
+  asks for a call, times the gas price. The limit is the price ceiling and the most the tip can take. The panel and the
+  confirmation screen show the most the tip is expected to be at the gas estimate (`At most`), and the limit as the price
+  ceiling. A plain relay has no gas number. A relay with a call has the `Call gas` field (the exact gas the call gets), and
+  the callback gas that the relay passes is worked out from it and shown on the review.
 - Gas based mode fields: a decimal factor such as `1` on the cost (1 is the cost itself, 0.5 half of it), the base fee ceiling in gwei,
   and `Your coin price`: your own price of one whole native coin of the other chain, in whole tokens. The form folds
   your price into the multiplier now, so the mode works for any token. It fills the fields when you enter the form, or

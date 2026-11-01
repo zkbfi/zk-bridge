@@ -114,7 +114,7 @@ describe('the tip field of the bridge form', () => {
     await screen.press('RETURN')
     await screen.settle(120)
     const frame = screen.frame()
-    for (const shown of ['relayTokensAndCall(address,address,uint256,bytes)', 'Tip for delivery', 'Router', '(the default delivery router)', 'Tip mode', 'Gas, to limit', 'price ceiling', 'Tip goes to', 'On failure']) {
+    for (const shown of ['relayTokensAndCall(address,address,uint256,bytes,uint256)', 'Tip for delivery', 'Router', '(the default delivery router)', 'Tip mode', 'Gas, to limit', 'price ceiling', 'Tip goes to', 'On failure']) {
       expect(frame).toContain(shown)
     }
     expect(chainAccess.sentTransactions).toHaveLength(0)
@@ -147,7 +147,7 @@ describe('the tip field of the bridge form', () => {
     await screen.press('RETURN')
     await screen.settle(120)
     const frame = screen.frame()
-    expect(frame).toContain('relayTokensAndCall(address,address,uint256,bytes)')
+    expect(frame).toContain('relayTokensAndCall(address,address,uint256,bytes,uint256)')
     expect(frame).toContain('Tip goes to   unknown')
     expect(frame).toMatch(/On failure\s*unknown/)
     expect(frame).toContain('Warning: the router did not return its addresses (execution reverted).')

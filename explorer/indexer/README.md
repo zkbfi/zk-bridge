@@ -77,8 +77,7 @@ Conventions:
 | `sent` | The send is on the source chain and younger than the finality window. |
 | `waiting_for_finality` | Older than the window. No stored head covers it yet. |
 | `covered` | The destination light client stored a head whose execution block is at or after the source block. Anyone can deliver it. |
-| `delivered` | The destination bridge executed it and the call succeeded. |
-| `failed_call` | Executed and the call reverted. Final. |
+| `delivered` | The destination bridge executed it. A delivery that fails (the target reverts, or the gas runs out) reverts as a whole and leaves no log, so the message stays `covered` and anyone can deliver it again. There is no status for a failed delivery. |
 | `release_failed` | The destination bridge executed the message, but the recipient could not take the tokens. The mediator emitted `ReleaseFailed`. Final: the mediator keeps no claim record, and the tokens stay in the mediator. |
 
 In flight means `sent`, `waiting_for_finality` or `covered`.
@@ -166,10 +165,10 @@ An item:
 {
   "messageId": "0x..", "kind": "token", "status": "delivered",
   "direction": { "sourceChainId": 1, "destinationChainId": 369, "label": "1>369" },
-  "sender": "0x..", "executor": "0x..", "gasLimit": 2000000, "sentLogIndex": 4,
+  "sender": "0x..", "executor": "0x..", "sentLogIndex": 4,
   "sent": { "transactionHash": "0x..", "blockNumber": 12, "timestamp": 1789999000 },
   "covered": { "headSlot": 100, "timestamp": 1789999100 },
-  "delivered": { "transactionHash": "0x..", "blockNumber": 40, "timestamp": 1789999200, "success": true, "executedBy": "0x.." },
+  "delivered": { "transactionHash": "0x..", "blockNumber": 40, "timestamp": 1789999200, "executedBy": "0x.." },
   "callbackFailed": false, "releaseFailed": false,
   "transfer": {
     "sourceToken": { "...": "token object" }, "destinationToken": { "...": "token object" },
@@ -184,7 +183,7 @@ An item:
 
 `sentLogIndex` is the position of the send log in its block. It is null until the indexer sees the send.
 
-`GET /api/undelivered?direction=1>369&after=<cursor>&limit=` is the work list of the evidence archive. It returns `{ items, nextCursor }`, oldest send first, for messages in status `covered` only. Each item holds `messageId`, `sourceChainId`, `destinationChainId`, `sentTransactionHash`, `sentLogIndex`, `gasLimit` and `coveredByHeadSlot` (a decimal string). `limit` runs from 1 to 500 (default 100). `after` is the `nextCursor` of the previous page. `nextCursor` is null on the last page.
+`GET /api/undelivered?direction=1>369&after=<cursor>&limit=` is the work list of the evidence archive. It returns `{ items, nextCursor }`, oldest send first, for messages in status `covered` only. Each item holds `messageId`, `sourceChainId`, `destinationChainId`, `sentTransactionHash`, `sentLogIndex` and `coveredByHeadSlot` (a decimal string). `limit` runs from 1 to 500 (default 100). `after` is the `nextCursor` of the previous page. `nextCursor` is null on the last page.
 
 `GET /api/history` returns `{ items, nextCursor, partial: false }`, newest event first. An event is a send, a delivery or a stored head of the light client: `{ kind: "sent" | "delivered" | "head-update", chainId, timestamp, transactionHash, messageId, slot, status }`. It takes the filters of the feed, plus `chain` (events that happened on that chain) and `eventKind`. A time range applies to the time of the event. A head update belongs to no message, so a filter on kind, status, token or address leaves head updates out. The cursor is `<timestamp>:<kind>:<key>`.
 
@@ -231,7 +230,7 @@ When a kind has no samples, `isDefault` is true and `defaultGas` is a configured
                "pendingForward": "0", "pendingBackward": "0", "expectedEscrow": "750000", "difference": "0", "mismatch": false }] }
 ```
 
-The rule: `escrow = bridgedSupply + pendingForward + pendingBackward`. `pendingForward` is the value locked on the home chain and not yet paid on the other chain. `pendingBackward` is the value burned on the other chain and not yet paid on the home chain. A transfer is paid when its status is `delivered`. `release_failed` and `failed_call` count as pending, because the mediator holds the tokens for good. `difference` is `escrow - expectedEscrow`: negative means the copy is under-backed. The mediator charges no fee, so the escrow must equal the sum exactly. The two sides are read at different blocks. Check a `mismatch` twice before you raise an alarm.
+The rule: `escrow = bridgedSupply + pendingForward + pendingBackward`. `pendingForward` is the value locked on the home chain and not yet paid on the other chain. `pendingBackward` is the value burned on the other chain and not yet paid on the home chain. A transfer is paid when its status is `delivered`. `release_failed` counts as pending, because the mediator holds the tokens for good. `difference` is `escrow - expectedEscrow`: negative means the copy is under-backed. The mediator charges no fee, so the escrow must equal the sum exactly. The two sides are read at different blocks. Check a `mismatch` twice before you raise an alarm.
 
 
 `GET /api/release-events?address=&limit=` returns `{ events: [{ chainId, kind, token, account, value, messageId, transactionHash, timestamp }] }`. `kind` is `release_failed` or `callback_failed`. `account` is the recipient. The address filter matches `account`.

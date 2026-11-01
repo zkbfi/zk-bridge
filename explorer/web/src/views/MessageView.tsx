@@ -1,8 +1,8 @@
 /**
  * The message page (mockup explore-message.html). Every transfer is a message; the page tells one message's whole
  * story: the band (kind, route, amount, message ID, status), who and what (from, to, sent, received, the fee as one total
- * that opens into its parts, who delivered it), the steps from send to delivery (each opening a drawer; a reverted call
- * opens to its reason), then the message itself (nonce, the app on each side by what it is, gas limit, the payload).
+ * that opens into its parts, who delivered it), the steps from send to delivery (each opening a drawer; a failed release
+ * opens to its reason), then the message itself (nonce, the app on each side by what it is, the payload).
  * Real data only: where the indexer, the deployment or the chain has no value the page shows "—".
  */
 import { useQuery } from "@tanstack/react-query";
@@ -28,7 +28,7 @@ import { explorerUrl } from "../explore/chain-reader";
 import { BlockDrawer, Missing, timeText, TxDrawer } from "../explore/TxAddressPages";
 import { ProofPanel } from "./ProofPanel";
 
-const FINISHED: readonly MessageDetail["status"][] = ["delivered", "failed_call", "release_failed"];
+const FINISHED: readonly MessageDetail["status"][] = ["delivered", "release_failed"];
 
 const explore = (page: ExplorePage): string => formatRoute({ name: "explore", page });
 
@@ -161,20 +161,19 @@ const FeeRow = ({ token, other, pair, destination }: { readonly token: DetailTok
 const CostCell = ({ text }: { readonly text: string | null }) => (text === null ? <Missing why={NOT_RECORDED} /> : <span title={COST_NOTE}>{text}</span>);
 const COST_NOTE = "Gas used × the effective gas price, in the chain's coin; dollars at the PulseX price of the block the indexer read (for Ethereum, the PulseChain block nearest the transaction).";
 
-/** The drawer of the delivery step: the transaction, its block, gas and what it paid out; or, for a reverted call, the reason first. */
+/** The drawer of the delivery step: the transaction, its block, gas and what it paid out; or, for a release that failed, the reason first. */
 const DeliveryDrawer = ({ detail, reverted, pair }: { readonly detail: MessageDetail; readonly reverted: boolean; readonly pair: PairConfig }) => {
   const cost = <CostCell text={stepCostText(detail.costs?.delivered ?? null, pair)} />;
   const gasUsed = detail.costs?.delivered == null ? null : Number(detail.costs.delivered.gasUsed).toLocaleString("en-US");
   const hash = detail.destinationTransactionHash;
   const transaction: readonly [string, ReactNode] = ["Transaction", hash === null ? <Missing why={NOT_RECORDED} /> : <a href={explore({ kind: "tx", chainId: detail.destinationChainId, id: hash })} className="zb-mono">{shortHex(hash)}</a>];
-  const gasLimit = detail.gasLimit === null ? null : detail.gasLimit.toLocaleString("en-US");
   if (reverted) {
     return (
       <DrawerGrid
         rows={[
-          ["Reason", detail.releaseFailed ? "the mediator could not release the tokens; final" : <Missing why={NOT_RECORDED} />],
+          ["Reason", "the mediator could not release the tokens; final"],
           transaction,
-          ["Gas used", <>{gasUsed ?? <Missing why={NOT_RECORDED} />}{gasLimit === null ? null : ` of ${gasLimit}`}</>],
+          ["Gas used", gasUsed ?? <Missing why={NOT_RECORDED} />],
           ["Cost", cost],
         ]}
       />
@@ -279,7 +278,7 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
   const stopped = steps.findIndex((step) => step.tone === "error");
   const reverted = stopped >= 0;
   const status = statusWord(detail.status);
-  // A message that reached its destination (delivered, reverted or failed to release) has nothing left to prove or deliver.
+  // A message that reached its destination (delivered, or failed to release) has nothing left to prove or deliver.
   const finished = detail.deliveredAt !== null || FINISHED.includes(detail.status);
   const call = calledFunction(detail.data);
   const target = appOf(pair, detail.destinationChainId, detail.executor);
@@ -324,7 +323,6 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
             <KV k="Calls" href={target.href}><AppValue app={target} /></KV>
             <KV k="Function">{call === null ? <Missing why={NOT_RECORDED} /> : <span className="zb-mono zb-break">{call.text}</span>}</KV>
             <KV k="Arguments">{detail.data === null ? <Missing why={NOT_RECORDED} /> : `${Math.max(0, payloadBytes(detail.data) - 4).toLocaleString("en-US")} bytes`}</KV>
-            <KV k="Gas limit">{detail.gasLimit === null ? <Missing why={NOT_RECORDED} /> : detail.gasLimit.toLocaleString("en-US")}</KV>
             {deliveredBy}
             <PayloadRow detail={detail} />
           </>
@@ -360,25 +358,12 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
         )}
         <XGroup title="Steps" />
         <StepTrail steps={trailOf(steps, detail, pair)} initiallyOpen={reverted ? stopped : null} />
-        {reverted && !detail.releaseFailed ? (
-          <div className="zb-xactions">
-            <button type="button" className="zb-pill zb-xretry" disabled title="Not available yet: the dapp has no retry path for a reverted call">
-              Retry with more gas <Chevron dir="right" />
-            </button>
-            {detail.destinationTransactionHash === null ? null : (
-              <a className="zb-pill" href={explore({ kind: "tx", chainId: detail.destinationChainId, id: detail.destinationTransactionHash })}>
-                Open the call
-              </a>
-            )}
-          </div>
-        ) : null}
         {transfer === null ? null : (
           <>
             <XGroup title="The message itself" />
             <KV k="Nonce"><Missing why={NOT_RECORDED} /></KV>
             <SourceApp detail={detail} />
             <KV k="Target app" href={target.href}><AppValue app={target} /></KV>
-            <KV k="Gas limit">{detail.gasLimit === null ? <Missing why={NOT_RECORDED} /> : detail.gasLimit.toLocaleString("en-US")}</KV>
             <PayloadRow detail={detail} />
           </>
         )}

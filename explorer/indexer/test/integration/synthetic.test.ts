@@ -111,7 +111,7 @@ describe("the indexer follows synthetic chains", () => {
   const poster = () => chainA.accounts[3] as Address;
 
   /** Sends a message on chain A (source) or chain B and returns its identifier and the block of the send. */
-  const sendMessage = async (input: { from: "A" | "B"; executor: Address; data: Hex; gasLimit: number }) => {
+  const sendMessage = async (input: { from: "A" | "B"; executor: Address; data: Hex }) => {
     const fromA = input.from === "A";
     const chain = fromA ? chainA : chainB;
     const bridge = fromA ? bridgeA : bridgeB;
@@ -122,7 +122,7 @@ describe("the indexer follows synthetic chains", () => {
         messageId: id,
         sender: fromA ? mediatorA : mediatorB,
         executor: input.executor,
-        gasLimit: input.gasLimit,
+        reservedGas: 0,
         dataType: 0,
         sourceChainId: BigInt(chain.chainId),
         destinationChainId: BigInt(fromA ? chainB.chainId : chainA.chainId),
@@ -142,7 +142,7 @@ describe("the indexer follows synthetic chains", () => {
           args: [tokenA, "Alpha", "ALP", 6, recipient(), value],
         })
       : encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleBridgedTokens", args: [tokenA, recipient(), value] });
-    const { id, blockNumber } = await sendMessage({ from: "A", executor: mediatorB, data, gasLimit: 2_000_000 });
+    const { id, blockNumber } = await sendMessage({ from: "A", executor: mediatorB, data });
     await chainA.send(mediatorA, "SyntheticMediator", "initiated", [tokenA, sender(), value, id]);
     ids[name] = id;
     blocks[name] = blockNumber;
@@ -258,7 +258,7 @@ describe("the indexer follows synthetic chains", () => {
     const value = 400_000n;
     await chainB.send(copyB, "SyntheticToken", "burn", [recipient(), value]);
     const data = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokens", args: [tokenA, recipient(), value] });
-    const { id, blockNumber } = await sendMessage({ from: "B", executor: mediatorA, data, gasLimit: 250_000 });
+    const { id, blockNumber } = await sendMessage({ from: "B", executor: mediatorA, data });
     await chainB.send(mediatorB, "SyntheticMediator", "initiated", [copyB, recipient(), value, id]);
     ids.back = id;
     await waitForStatus(id, "sent");
@@ -317,19 +317,18 @@ describe("the indexer follows synthetic chains", () => {
     await waitForAudit(tokenA, { escrow: 700_000n, bridgedSupply: 600_000n, pendingForward: 100_000n, pendingBackward: 0n });
   });
 
-  it("reports failed_call for an arbitrary message whose target reverted", async () => {
+  it("keeps an arbitrary message undelivered when its delivery attempt reverted: a failed delivery leaves no log", async () => {
     const target = chainB.accounts[5] as Address;
-    const { id } = await sendMessage({ from: "A", executor: target, data: "0xdeadbeef", gasLimit: 100_000 });
+    const { id } = await sendMessage({ from: "A", executor: target, data: "0xdeadbeef" });
     ids.failed = id;
-    await chainB.send(bridgeB, "SyntheticBridge", "complete", [sender(), target, id, false]);
-    const item = await waitForStatus(id, "failed_call");
+    const item = await waitForStatus(id, "sent");
     expect(item.kind).toBe("message");
     expect(item.transfer).toBeNull();
-    expect(item.delivered?.success).toBe(false);
+    expect(item.delivered).toBeNull();
   });
 
   it("moves a send from sent to waiting_for_finality after the finality window, then covers it", async () => {
-    const { id, blockNumber } = await sendMessage({ from: "A", executor: chainB.accounts[6] as Address, data: "0x01", gasLimit: 100_000 });
+    const { id, blockNumber } = await sendMessage({ from: "A", executor: chainB.accounts[6] as Address, data: "0x01" });
     ids.waiting = id;
     expect((await waitForStatus(id, "sent")).covered).toBeNull();
     await new Promise((done) => setTimeout(done, (FINALITY_SECONDS + 1) * 1000));
@@ -412,9 +411,9 @@ describe("the indexer follows synthetic chains", () => {
     const graphql = await api<{ data: { messagess: { items: { messageId: string; status: string }[] } } }>("/graphql", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ query: `{ messagess(limit: 100, where: { status: "failed_call" }) { items { messageId status } } }` }),
+      body: JSON.stringify({ query: `{ messagess(limit: 100, where: { status: "release_failed" }) { items { messageId status } } }` }),
     });
-    expect(graphql.body.data.messagess.items.map((item) => item.messageId)).toEqual([ids.failed]);
+    expect(graphql.body.data.messagess.items.map((item) => item.messageId)).toEqual([ids.stuck]);
 
     const { createClient } = await import("@ponder/client");
     const schema = await import("../../ponder.schema");

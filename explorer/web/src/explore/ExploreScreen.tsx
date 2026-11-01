@@ -281,7 +281,7 @@ const Browse = ({ data }: { readonly data: ExploreData }) => {
 
 /** The live ring map: the two chains joined by the two halves of one ring; each transfer in flight runs along its lane. */
 export const RingMap = ({ feed, pair }: { readonly feed: readonly FeedItem[]; readonly pair: PairConfig }) => {
-  const flying = feed.filter((item) => item.status !== "delivered" && item.status !== "failed_call" && item.status !== "release_failed");
+  const flying = feed.filter((item) => item.status !== "delivered" && item.status !== "release_failed");
   const outbound = flying.filter((item) => item.direction === "first-to-second");
   const inbound = flying.filter((item) => item.direction === "second-to-first");
   const W = 390;

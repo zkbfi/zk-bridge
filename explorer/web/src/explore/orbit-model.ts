@@ -14,7 +14,7 @@
  * | `covered` (a stored head covers it), or a valid proof covers it      | Proof ready | a deliverer               |
  * | `waiting_for_finality`                                               | Final       | a proof that covers it    |
  * | `sent`                                                               | Sent        | finality on its chain     |
- * | `delivered`, `failed_call`, `release_failed`                         | none        | it has left the loop      |
+ * | `delivered`, `release_failed`                                       | none        | it has left the loop      |
  *
  * "A valid proof covers it": the latest proof of its direction (the msgboard indexer's, verified on intake, else the
  * msgboard node's; read as the proof panel reads it) ends at a slot whose time is at or after the send. There is no

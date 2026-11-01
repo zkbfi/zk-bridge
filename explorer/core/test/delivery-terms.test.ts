@@ -19,6 +19,10 @@ import {
   KNOWN_SETTING_BITS,
   maximumFee,
   MULTIPLIER_OF_TOTAL,
+  ROUTER_CALLBACK_GAS_BASE,
+  routerCallbackGas,
+  worstCaseFee,
+  FEE_DIRECTOR_BYTES,
   NATIVE_GAS_OVERHEAD,
   payoutOf,
   protectedAddressesOf,
@@ -50,9 +54,12 @@ const chains: readonly ProtectedChain[] = [
 ];
 const context: FeeTermsContext = { router, protectedAddresses: protectedAddressesOf(chains), destinationToken: otherToken, destinationWrappedNative: wrappedNative };
 const wrappedContext: FeeTermsContext = { ...context, destinationToken: wrappedNative };
-const director = (recipient: string, settings = 8n): FeeDirector => ({ recipient: recipient as FeeDirector["recipient"], settings, limit: 0n, multiplier: 5n });
+const director = (recipient: string, settings = 8n, callGas = 50_000n): FeeDirector => ({ recipient: recipient as FeeDirector["recipient"], settings, limit: 0n, multiplier: 5n, callGas });
 const word = (address: string) => address.slice(2).toLowerCase().padStart(64, "0");
-const directorData = (recipient: string, settings = 8n) => `0x${word(recipient)}${settings.toString(16).padStart(64, "0")}${"0".repeat(64)}${"0".repeat(63)}5` as const;
+const directorData = (recipient: string, settings = 8n) => `0x${word(recipient)}${settings.toString(16).padStart(64, "0")}${"0".repeat(64)}${"0".repeat(63)}5${"0".repeat(64)}` as const;
+/** Director data with a call: a callGas word of the given value, then the target and the call data. */
+const callDirectorData = (recipient: string, callGas: bigint, tail: string) =>
+  `0x${directorData(recipient).slice(2, 2 + 256)}${callGas.toString(16).padStart(64, "0")}${tail}` as const;
 const input = (data: FeeTermsInput["data"], overrides: Partial<FeeTermsInput> = {}): FeeTermsInput => ({ ...context, data, ...overrides });
 
 type Constants = Record<string, string>;
@@ -77,7 +84,8 @@ describe("the constants of the compiled DeliveryRouter", () => {
 
   it("puts the call data after the director and the 20 byte target", () => {
     expect(DELIVERY_CALL_TARGET_BYTES).toBe(20);
-    expect(DELIVERY_CALL_OFFSET_BYTES).toBe(148);
+    expect(FEE_DIRECTOR_BYTES).toBe(160);
+    expect(DELIVERY_CALL_OFFSET_BYTES).toBe(180);
   });
 
   it("reads exactly the bits that the contract defines", () => {
@@ -127,28 +135,38 @@ describe("reading the data as the router does", () => {
   it("reads 20 bytes as the legacy receiver, in lowercase", () => {
     expect(readDeliveryTerms(person.toUpperCase().replace("0X", "0x") as `0x${string}`)).toEqual({ kind: "legacy", receiver: person });
   });
-  it("reads 128 bytes as a director", () => {
-    expect(readDeliveryTerms(directorData(person))).toEqual({ kind: "director", director: { recipient: getAddress(person), settings: 8n, limit: 0n, multiplier: 5n }, call: null });
+  it("reads 160 bytes as a director", () => {
+    expect(readDeliveryTerms(directorData(person))).toEqual({ kind: "director", director: { recipient: getAddress(person), settings: 8n, limit: 0n, multiplier: 5n, callGas: 0n }, call: null });
   });
-  it("finds no known shape in a length below 128 that is not 20, or in a dirty recipient word", () => {
+  it("finds no known shape in a length below 160 that is not 20, or in a dirty recipient word", () => {
     expect(readDeliveryTerms("0x1234")).toEqual({ kind: "unknown", bytes: 2 });
     expect(readDeliveryTerms(`0x${"00".repeat(127)}`)).toEqual({ kind: "unknown", bytes: 127 });
-    expect(readDeliveryTerms(`0x${"ff".repeat(12)}${person.slice(2)}${"0".repeat(192)}`)).toEqual({ kind: "unknown", bytes: 128 });
-    expect(readDeliveryTerms(`0x${"ff".repeat(12)}${person.slice(2)}${"0".repeat(192)}${"11".repeat(40)}`)).toEqual({ kind: "unknown", bytes: 168 });
+    expect(readDeliveryTerms(`0x${"00".repeat(128)}`)).toEqual({ kind: "unknown", bytes: 128 });
+    expect(readDeliveryTerms(`0x${"00".repeat(159)}`)).toEqual({ kind: "unknown", bytes: 159 });
+    expect(readDeliveryTerms(`0x${"ff".repeat(12)}${person.slice(2)}${"0".repeat(256)}`)).toEqual({ kind: "unknown", bytes: 160 });
+    expect(readDeliveryTerms(`0x${"ff".repeat(12)}${person.slice(2)}${"0".repeat(256)}${"11".repeat(40)}`)).toEqual({ kind: "unknown", bytes: 200 });
   });
-  // Changed: 129 bytes used to be unknown. The router now reads a director from 128 bytes up, so 129 bytes is a director with no call.
-  it("reads 128, 129 and 147 bytes as a director with no call, and 148 and 200 bytes as a call", () => {
-    const director128 = directorData(person);
-    const expected = { recipient: getAddress(person), settings: 8n, limit: 0n, multiplier: 5n };
+  // Changed: the director has five words now, so 160 bytes is a director, 161 to 179 bytes make no call, and 180 bytes or more do.
+  it("reads 160, 161 and 179 bytes as a director with no call, and 180 and 250 bytes as a call", () => {
+    const director160 = directorData(person);
+    const expected = { recipient: getAddress(person), settings: 8n, limit: 0n, multiplier: 5n, callGas: 0n };
     const target = "ab".repeat(20);
-    expect(readDeliveryTerms(director128)).toEqual({ kind: "director", director: expected, call: null });
-    expect(readDeliveryTerms(`${director128}ff`)).toEqual({ kind: "director", director: expected, call: null });
-    expect(readDeliveryTerms(`${director128}${"ff".repeat(19)}`)).toEqual({ kind: "director", director: expected, call: null });
-    expect(readDeliveryTerms(`${director128}${target}`)).toEqual({ kind: "director", director: expected, call: { target: `0x${target}`, data: "0x" } });
-    expect(readDeliveryTerms(`${director128}${target}${"cd".repeat(52)}`)).toEqual({
+    expect(readDeliveryTerms(director160)).toEqual({ kind: "director", director: expected, call: null });
+    expect(readDeliveryTerms(`${director160}ff`)).toEqual({ kind: "director", director: expected, call: null });
+    expect(readDeliveryTerms(`${director160}${"ff".repeat(19)}`)).toEqual({ kind: "director", director: expected, call: null });
+    expect(readDeliveryTerms(`${director160}${target}`)).toEqual({ kind: "director", director: expected, call: { target: `0x${target}`, data: "0x" } });
+    expect(readDeliveryTerms(`${director160}${target}${"cd".repeat(52)}`)).toEqual({
       kind: "director",
       director: expected,
       call: { target: `0x${target}`, data: `0x${"cd".repeat(52)}` },
+    });
+  });
+  it("reads the call gas word of a director", () => {
+    const target = "ab".repeat(20);
+    expect(readDeliveryTerms(callDirectorData(person, 77_000n, target))).toEqual({
+      kind: "director",
+      director: { recipient: getAddress(person), settings: 8n, limit: 0n, multiplier: 5n, callGas: 77_000n },
+      call: { target: `0x${target}`, data: "0x" },
     });
   });
   it("refuses to decode a dirty recipient word", () => {
@@ -161,6 +179,7 @@ type Vector = {
   settings: string;
   limit: string;
   multiplier: string;
+  callGas: string;
   encoded: `0x${string}`;
   wrappedNative: boolean;
   value: string;
@@ -182,6 +201,7 @@ const directorOf = (vector: Vector): FeeDirector => ({
   settings: BigInt(vector.settings),
   limit: BigInt(vector.limit),
   multiplier: BigInt(vector.multiplier),
+  callGas: BigInt(vector.callGas),
 });
 
 const recipient = person;
@@ -202,10 +222,12 @@ describe("against vectors printed by the compiled DeliveryRouter", () => {
       } else {
         expect(encodeFeeDirector(director, vectorContext), JSON.stringify(vector)).toBe(vector.encoded);
       }
-      expect(decodeFeeDirector(vector.encoded).settings).toBe(director.settings);
-      expect(decodeFeeDirector(vector.encoded).limit).toBe(director.limit);
-      expect(decodeFeeDirector(vector.encoded).multiplier).toBe(director.multiplier);
-      expect(decodeFeeDirector(vector.encoded).recipient.toLowerCase()).toBe(director.recipient.toLowerCase());
+      const decoded = decodeFeeDirector(vector.encoded);
+      expect(decoded.settings).toBe(director.settings);
+      expect(decoded.limit).toBe(director.limit);
+      expect(decoded.multiplier).toBe(director.multiplier);
+      expect(decoded.callGas).toBe(director.callGas);
+      expect(decoded.recipient.toLowerCase()).toBe(director.recipient.toLowerCase());
     }
   }, 30_000);
 
@@ -228,9 +250,48 @@ describe("against vectors printed by the compiled DeliveryRouter", () => {
   });
 });
 
+describe("routerCallbackGas", () => {
+  it("is the base for a delivery with no call", () => {
+    expect(ROUTER_CALLBACK_GAS_BASE).toBe(300_000n);
+    expect(routerCallbackGas({})).toBe(300_000n);
+    expect(routerCallbackGas({ callGas: 0n })).toBe(300_000n);
+  });
+  it("adds the call gas, a 63rd of it rounded up, and the reserve for a call", () => {
+    expect(routerCallbackGas({ callGas: 63_000n })).toBe(300_000n + 63_000n + 1_000n + CALL_GAS_RESERVE);
+    expect(routerCallbackGas({ callGas: 1n })).toBe(300_000n + 1n + 1n + CALL_GAS_RESERVE);
+    expect(routerCallbackGas({ callGas: 64n })).toBe(300_000n + 64n + 2n + CALL_GAS_RESERVE);
+  });
+});
+
+describe("worstCaseFee", () => {
+  const base = { recipient, limit: 10n ** 30n, multiplier: wei, callGas: 40_000n };
+  const gasInput = { value: 10n ** 30n, deliveryGas: 200_000n, gasPrice: 10n, payout: "token", withCall: false } as const;
+  it("takes the limit in fixed mode, never above the value", () => {
+    expect(worstCaseFee({ ...base, settings: FIXED_FEE, limit: 500n }, { ...gasInput, value: 1_000n })).toBe(500n);
+    expect(worstCaseFee({ ...base, settings: FIXED_FEE, limit: 500n }, { ...gasInput, value: 100n })).toBe(100n);
+  });
+  it("takes the share of the value in share mode, never above the value", () => {
+    expect(worstCaseFee({ ...base, settings: MULTIPLIER_OF_TOTAL, multiplier: wei / 100n }, { ...gasInput, value: 1_000n })).toBe(10n);
+    expect(worstCaseFee({ ...base, settings: MULTIPLIER_OF_TOTAL, multiplier: 2n * wei }, { ...gasInput, value: 1_000n })).toBe(1_000n);
+  });
+  it("counts the delivery gas, the overhead and, with a call, the call gas in gas mode", () => {
+    expect(worstCaseFee({ ...base, settings: 0n }, gasInput)).toBe((200_000n + TOKEN_GAS_OVERHEAD) * 10n);
+    expect(worstCaseFee({ ...base, settings: 0n }, { ...gasInput, withCall: true })).toBe((200_000n + 40_000n + TOKEN_GAS_OVERHEAD) * 10n);
+    expect(worstCaseFee({ ...base, settings: UNWRAP }, { ...gasInput, payout: "native" })).toBe((200_000n + NATIVE_GAS_OVERHEAD) * 10n);
+  });
+  it("is capped by the limit and by the value in gas mode", () => {
+    expect(worstCaseFee({ ...base, settings: 0n, limit: 1_000n }, gasInput)).toBe(1_000n);
+    expect(worstCaseFee({ ...base, settings: 0n }, { ...gasInput, value: 500n })).toBe(500n);
+  });
+  it("throws where the router would overflow", () => {
+    expect(() => worstCaseFee({ ...base, settings: 0n, multiplier: 2n ** 255n }, { ...gasInput, gasPrice: 4n })).toThrow(RangeError);
+    expect(() => worstCaseFee({ ...base, settings: 0n }, { ...gasInput, deliveryGas: 2n ** 256n - 1n })).toThrow(RangeError);
+  });
+});
+
 describe("decodeDeliveryCall", () => {
   const target = "0x1234567890abcdef1234567890abcdef12345678";
-  it("returns null below 148 bytes", () => {
+  it("returns null below 180 bytes", () => {
     expect(decodeDeliveryCall(directorData(person))).toBeNull();
     expect(decodeDeliveryCall(`${directorData(person)}${target.slice(2, 40)}`)).toBeNull();
     expect(decodeDeliveryCall("0x")).toBeNull();
@@ -241,7 +302,7 @@ describe("decodeDeliveryCall", () => {
   });
 });
 
-type CallVector = { recipient: `0x${string}`; settings: string; limit: string; multiplier: string; target: `0x${string}`; callData: `0x${string}`; encoded: `0x${string}` };
+type CallVector = { recipient: `0x${string}`; settings: string; limit: string; multiplier: string; callGas: string; target: `0x${string}`; callData: `0x${string}`; encoded: `0x${string}` };
 
 const callVectors = readFileSync(new URL("./fixtures/delivery-call-vectors.jsonl", import.meta.url), "utf8")
   .split("\n")
@@ -255,11 +316,12 @@ describe("against call vectors printed by the compiled generator", () => {
 
   it("encodes a director with a call as abi.encodePacked does, and decodes it back", () => {
     for (const vector of callVectors) {
-      const vectorDirector: FeeDirector = { recipient: vector.recipient, settings: BigInt(vector.settings), limit: BigInt(vector.limit), multiplier: BigInt(vector.multiplier) };
+      const vectorDirector: FeeDirector = { recipient: vector.recipient, settings: BigInt(vector.settings), limit: BigInt(vector.limit), multiplier: BigInt(vector.multiplier), callGas: BigInt(vector.callGas) };
       const call: DeliveryCall = { target: vector.target, data: vector.callData };
-      expect(encodeFeeDirector(vectorDirector, context, call), JSON.stringify(vector)).toBe(vector.encoded.toLowerCase());
-      expect(decodeDeliveryCall(vector.encoded)).toEqual({ target: vector.target.toLowerCase(), data: vector.callData });
-      expect(readDeliveryTerms(vector.encoded)).toEqual({
+      const encoded = vector.encoded;
+      expect(encodeFeeDirector(vectorDirector, context, call), JSON.stringify(vector)).toBe(encoded.toLowerCase());
+      expect(decodeDeliveryCall(encoded)).toEqual({ target: vector.target.toLowerCase(), data: vector.callData });
+      expect(readDeliveryTerms(encoded)).toEqual({
         kind: "director",
         director: vectorDirector,
         call: { target: vector.target.toLowerCase(), data: vector.callData },
@@ -269,14 +331,15 @@ describe("against call vectors printed by the compiled generator", () => {
 });
 
 describe("the encoding", () => {
-  it("is four words with no offset", () => {
-    const encoded = encodeFeeDirector({ recipient, settings: 8n, limit: 0n, multiplier: 5n }, context);
-    expect((encoded.length - 2) / 2).toBe(128);
+  it("is five words with no offset", () => {
+    const encoded = encodeFeeDirector({ recipient, settings: 8n, limit: 0n, multiplier: 5n, callGas: 0n }, context);
+    expect((encoded.length - 2) / 2).toBe(160);
   });
 
-  it("refuses data below 128 bytes, and reads the first 128 bytes of longer data", () => {
+  it("refuses data below 160 bytes, and reads the first 160 bytes of longer data", () => {
     expect(() => decodeFeeDirector("0x1234")).toThrow(RangeError);
-    expect(decodeFeeDirector(`${directorData(person)}${"ab".repeat(30)}`)).toEqual({ recipient: getAddress(person), settings: 8n, limit: 0n, multiplier: 5n });
+    expect(() => decodeFeeDirector(`0x${"00".repeat(128)}`)).toThrow(RangeError);
+    expect(decodeFeeDirector(`${directorData(person)}${"ab".repeat(30)}`)).toEqual({ recipient: getAddress(person), settings: 8n, limit: 0n, multiplier: 5n, callGas: 0n });
   });
 });
 
@@ -289,13 +352,13 @@ describe("the fee modes", () => {
   });
 
   it("takes the limit in fixed mode, never above the value", () => {
-    const director = { recipient, settings: FIXED_FEE, limit: 500n, multiplier: 0n };
+    const director = { recipient, settings: FIXED_FEE, limit: 500n, multiplier: 0n, callGas: 0n };
     expect(expectedFee(director, { value: 1_000n, gasUsed: 0n, baseFeeWei: 0n }).fee).toBe(500n);
     expect(expectedFee(director, { value: 100n, gasUsed: 0n, baseFeeWei: 0n })).toEqual({ fee: 100n, toRecipient: 0n });
   });
 
   it("prices gas at the base fee only when the flag is set", () => {
-    const base = { recipient, limit: 10n ** 30n, multiplier: wei };
+    const base = { recipient, limit: 10n ** 30n, multiplier: wei, callGas: 0n };
     const input = { value: 10n ** 30n, gasUsed: 0n, baseFeeWei: 7n, priorityFeeWei: 3n };
     expect(expectedFee({ ...base, settings: 0n }, input).fee).toBe(100_000n * 10n);
     expect(expectedFee({ ...base, settings: EXCLUDE_PRIORITY }, input).fee).toBe(100_000n * 7n);
@@ -303,9 +366,9 @@ describe("the fee modes", () => {
   });
 
   it("reports the maximum: the limit for gas, the amount for the others", () => {
-    expect(maximumFee({ recipient, settings: 0n, limit: 500n, multiplier: wei }, 1_000n)).toBe(500n);
-    expect(maximumFee({ recipient, settings: 0n, limit: 5_000n, multiplier: wei }, 1_000n)).toBe(1_000n);
-    expect(maximumFee({ recipient, settings: MULTIPLIER_OF_TOTAL, limit: 0n, multiplier: wei / 100n }, 1_000n)).toBe(10n);
+    expect(maximumFee({ recipient, settings: 0n, limit: 500n, multiplier: wei, callGas: 0n }, 1_000n)).toBe(500n);
+    expect(maximumFee({ recipient, settings: 0n, limit: 5_000n, multiplier: wei, callGas: 0n }, 1_000n)).toBe(1_000n);
+    expect(maximumFee({ recipient, settings: MULTIPLIER_OF_TOTAL, limit: 0n, multiplier: wei / 100n, callGas: 0n }, 1_000n)).toBe(10n);
   });
 });
 
@@ -316,8 +379,8 @@ describe("assertValidFeeTerms accepts", () => {
 
   it("a call to a plain target, with and without call data", () => {
     const target = "ab".repeat(20);
-    expect(() => assertValidFeeTerms(input(`${directorData(person)}${target}`))).not.toThrow();
-    expect(() => assertValidFeeTerms(input(`${directorData(person)}${target}a9059cbb`))).not.toThrow();
+    expect(() => assertValidFeeTerms(input(callDirectorData(person, 50_000n, target)))).not.toThrow();
+    expect(() => assertValidFeeTerms(input(callDirectorData(person, 50_000n, `${target}a9059cbb`)))).not.toThrow();
   });
 
   it("the legacy receiver for the wrapped native token, in any letter case", () => {
@@ -343,17 +406,21 @@ describe("assertValidFeeTerms refuses what the router would send to its reward a
       refuses(directorData(chain.bridge), new RegExp(`bridge of ${chain.name}`));
     }
   });
-  it("data that is empty, short, between 20 and 128 bytes, or longer than 128 bytes", () => {
+  it("data that is empty, short, or between 20 and 160 bytes (the four word director of before too)", () => {
+    refuses(`0x${"00".repeat(128)}`, /not 128 bytes/);
     refuses("0x", /not 0 bytes/);
     refuses("0x1234", /not 2 bytes/);
     refuses(`0x${"00".repeat(64)}`, /not 64 bytes/);
   });
-  it("129 to 147 bytes, and says that the target needs 20 bytes", () => {
-    refuses(`${directorData(person)}00`, /129 bytes.*20 byte target/);
-    refuses(`${directorData(person)}${"00".repeat(19)}`, /147 bytes.*20 byte target/);
+  it("161 to 179 bytes, and says that the target needs 20 bytes", () => {
+    refuses(`${directorData(person)}00`, /161 bytes.*20 byte target/);
+    refuses(`${directorData(person)}${"00".repeat(19)}`, /179 bytes.*20 byte target/);
+  });
+  it("a call with no call gas", () => {
+    refuses(callDirectorData(person, 0n, "ab".repeat(20)), /call has no gas/);
   });
   it("a call to the zero address, the router, a mediator, a bridge or a delivery router", () => {
-    const calling = (target: string) => `${directorData(person)}${target.slice(2).toLowerCase()}a9059cbb` as const;
+    const calling = (target: string) => callDirectorData(person, 50_000n, `${target.slice(2).toLowerCase()}a9059cbb`);
     refuses(calling("0x0000000000000000000000000000000000000000"), /target of the call is the zero address/);
     refuses(calling(router.toUpperCase().replace("0X", "0x")), /target of the call is the router itself/);
     refuses(calling(chains[0]!.mediator), /target of the call is the mediator of ethereum/);
@@ -364,7 +431,7 @@ describe("assertValidFeeTerms refuses what the router would send to its reward a
     refuses(`0x${person.slice(2)}${"ab".repeat(20)}a9059cbb`, /not 44 bytes/, { destinationToken: wrappedNative });
   });
   it("data that is not hex", () => refuses("0xzz", /hex/));
-  it("a recipient word with bits above 160", () => refuses(`0x${"f".repeat(24)}${person.slice(2)}${"0".repeat(192)}`, /bits above 160/));
+  it("a recipient word with bits above 160", () => refuses(`0x${"f".repeat(24)}${person.slice(2)}${"0".repeat(256)}`, /bits above 160/));
   it("a router that is not an address", () => refuses(directorData(person), /not an address/, { router: "0x12" }));
   it("the legacy receiver for a token that is not the wrapped native token", () => {
     refuses(person, /wrapped native token/);
@@ -386,6 +453,7 @@ describe("the encoder cannot be bypassed", () => {
     expect(() => encodeFeeDirector(director(person), context, { target: router, data: "0x" })).toThrow(/router itself/);
     expect(() => encodeFeeDirector(director(person), context, { target: chains[0]!.mediator as `0x${string}`, data: "0x" })).toThrow(/mediator of ethereum/);
     expect(() => encodeFeeDirector(director(person), context, { target: "0xabababababababababababababababababababab", data: "0xabc" })).toThrow(/hex/);
+    expect(() => encodeFeeDirector(director(person, 8n, 0n), context, { target: "0xabababababababababababababababababababab", data: "0x" })).toThrow(/call has no gas/);
   });
 
   it("refuses a director that the guard refuses", () => {

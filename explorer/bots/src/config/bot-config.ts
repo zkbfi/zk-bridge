@@ -150,7 +150,11 @@ export const runnerSchema = z
      * uses the oracle stand-in as its verifier, for local testing. Never set it on a live deployment. Default off.
      */
     acceptOracleProof: z.boolean().default(false),
-    /** The delivery router on the destination chain. Default: the `delivery_router` of the deployment file. */
+    /**
+     * The delivery router on the destination chain. Default: the `delivery_router` of the deployment file. The runner
+     * delivers to this router and to no other. It is the operator's allowlist, not a rule of the protocol: no contract
+     * of the bridge or the mediator names a router, and anyone may deploy one.
+     */
     deliveryRouter: addressSchema.optional(),
     /**
      * The Multicall3 contract that batches the deliveries (`aggregate3`, failure allowed on each call). The default is
@@ -164,11 +168,11 @@ export const runnerSchema = z
      */
     tokenValuationsWei: z.record(addressSchema, weiSchema).default({}),
     /**
-     * The gas that the light client proof check takes inside a delivery, on top of the gas limit of the message. The
-     * runner adds it to the gas that a delivery must supply, before a simulation exists. The default covers the 290,655
-     * gas that the bridge test measures, plus the entry of the router.
+     * The gas that the runner assumes for one whole delivery (proof check, bridge, mediator, router) when it cannot
+     * estimate it: the first fee check runs before the proof exists, and a delivery that needs a light client update in
+     * its own batch cannot be estimated alone. A delivery that can be estimated uses its estimate (`eth_estimateGas`).
      */
-    proofCheckGas: z.number().int().positive().default(400_000),
+    deliveryGasFallback: z.number().int().positive().default(1_500_000),
     /** The priority fee in wei. Default: what the node suggests. */
     priorityFeeWei: weiSchema.optional(),
     /**
@@ -182,8 +186,8 @@ export const runnerSchema = z
     /** The most items that one batch transaction delivers through the delivery router. */
     maximumBatchSize: z.number().int().positive().default(5),
     /**
-     * The most gas that the items of one batch may assume together. A message whose own gas is above it is sent alone
-     * in a transaction with the gas it needs, and is never cut.
+     * The most gas that the estimates of the items of one batch, with the light client update, may add up to. An item
+     * whose own estimate is above it is sent alone, with the gas it needs, and is never cut.
      */
     maximumBatchGas: z.number().int().positive().default(6_000_000),
     /** The most layout calls that one delivery sends before it gives up. */
@@ -299,14 +303,8 @@ export const trafficSchema = z
      * of the dapp and the terminal (`DEFAULT_TIP_PERCENTAGE_MULTIPLIER`).
      */
     tipPercent: z.string().regex(/^\d+(\.\d+)?$/, "must be a percentage as decimal text, such as 0.1").default("0.1"),
-    /**
-     * The gas limit to ask for, by destination chain id, when a send carries a token whose bridged copy does not exist on
-     * the destination yet, so the delivery deploys it. Without an entry the mediator's default applies (2,000,000 plus
-     * the callback). Sepolia prices new code about seven times higher than the default assumes: the copy alone took
-     * 6,971,380 gas in an estimate on 2026-11-01, so a send to Sepolia needs an entry here, at most the bridge's
-     * `maxGasPerTx` (10,000,000).
-     */
-    newCopyGasLimit: z.record(z.string().regex(/^\d+$/, "must be a chain id"), z.string().regex(/^\d+$/, "must be a whole number of gas, as text")).default({}),
+    /** Removed: a send needs no gas number for a new copy. Accepted and ignored, so a configuration from before still loads. */
+    newCopyGasLimit: z.unknown().optional(),
     /**
      * The beacon API that serves the state proofs of the deposit gate, by chain id. Before the first send of an epoch from
      * a chain whose gate enforces (Sepolia), the bot confirms the epoch with a proof from it. It needs the compact
@@ -364,7 +362,7 @@ export class BotConfigError extends Error {
 }
 
 /** The runner settings that were removed, with the setting that replaces each. */
-const REMOVED_RUNNER_SETTINGS = { minimumMarginWei: "maximumLossPercent", executionGasFallback: "proofCheckGas" } as const;
+const REMOVED_RUNNER_SETTINGS = { minimumMarginWei: "maximumLossPercent", executionGasFallback: "deliveryGasFallback", proofCheckGas: "deliveryGasFallback" } as const;
 
 /** The first removed runner setting that the value still names, or null. */
 function removedRunnerSettingIn(value: unknown): { readonly name: string; readonly replacement: string } | null {

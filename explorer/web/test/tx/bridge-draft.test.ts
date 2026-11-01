@@ -10,7 +10,7 @@ const usdc = FIXTURE_TOKENS[0]!;
 const weth = FIXTURE_TOKENS[2]!;
 const receiver = getAddress(`0x${"cd".repeat(20)}`);
 const deliveryRouter = getAddress(FIXTURE_PAIR.second.contracts.deliveryRouter!);
-const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => ({ token: `first:${usdc.address}`, amount: "100", receiver, mode: "plain", data: "", gasLimit: "", ...overrides });
+const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => ({ token: `first:${usdc.address}`, amount: "100", receiver, mode: "plain", data: "", callGas: "", callbackGas: "", ...overrides });
 /** The percentage mode: these tests read the percentage rules. The default mode is the gas based mode. */
 const PERCENT: DeliveryOptions = { ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage" };
 const options = (overrides: Partial<DeliveryOptions> = {}): DeliveryOptions => ({ ...PERCENT, ...overrides });
@@ -105,8 +105,8 @@ describe("No tip", () => {
 });
 
 describe("No tip means no router at all", () => {
-  it("builds calldata that names no router and holds no fee director, for a plain relay, a relay with a call, and a relay with a gas limit", async () => {
-    const forms = [values(), values({ mode: "call", data: "0xabcd" }), values({ gasLimit: "900000" })];
+  it("builds calldata that names no router and holds no fee director, for a plain relay and a relay with a call", async () => {
+    const forms = [values(), values({ mode: "call", data: "0xabcd", callbackGas: "300000" })];
     for (const form of forms) {
       const draft = computeBridgeDraft(form, options({ mode: "none" }), await data());
       const relay = draft.steps.at(-1)!.plan;
@@ -164,7 +164,7 @@ describe("the price field", () => {
     expect(withoutPrice).toMatchObject({ status: "blocked", reason: expect.stringContaining("Enter your price of the native coin") });
     const priced = computeBridgeDraft(values(), options({ mode: "gas-multiplier", senderPriceText: "3000" }), await data());
     expect(priced.status).toBe("ready");
-    expect(priced.delivery?.description.certaintyLabel).toMatch(/^estimate, at most [\d.]+ zUSDC$/);
+    expect(priced.delivery?.description.certaintyLabel).toMatch(/^estimate, expected about [\d.]+ zUSDC, at most [\d.]+ zUSDC$/);
     const cheaper = computeBridgeDraft(values(), options({ mode: "gas-multiplier", senderPriceText: "1500" }), await data());
     expect(priced.delivery!.director.multiplier).toBe(cheaper.delivery!.director.multiplier * 2n);
   });
@@ -204,7 +204,7 @@ describe("the modes", () => {
   it("builds a gas based estimate with a maximum for the wrapped native token", async () => {
     const draft = computeBridgeDraft(values({ token: `first:${weth.address}`, amount: "2" }), options({ mode: "gas-multiplier" }), await wrappedData());
     expect(feeModeOf(draft.delivery!.director.settings)).toBe("gas");
-    expect(draft.delivery?.description.certaintyLabel).toMatch(/^estimate, at most /);
+    expect(draft.delivery?.description.certaintyLabel).toMatch(/^estimate, expected about [\d.]+ WPLS, at most /);
   });
 
   it("builds a fixed tip from the suggestion when a price is known, and from the typed amount otherwise", async () => {

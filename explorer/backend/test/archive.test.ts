@@ -25,7 +25,7 @@ const evidenceFor = (messageId: string) => ({
   route: "pulsechain_to_ethereum",
   sourceTransactionHash: transactionHash("a"),
   logIndex: 1,
-  message: { messageId, sender: `0x${"7".repeat(40)}`, executor: `0x${"8".repeat(40)}`, gasLimit: 250000, data: "0x", futureField: "kept" },
+  message: { messageId, sender: `0x${"7".repeat(40)}`, executor: `0x${"8".repeat(40)}`, data: "0x", futureField: "kept" },
   destination: { chainId: 1, bridge: `0x${"b".repeat(40)}`, lightClient: `0x${"c".repeat(40)}` },
   anchor: { slot: 90, root: id("d") },
   deliveryStatus: "notDelivered",
@@ -101,7 +101,7 @@ describe("evidence archive", () => {
     expect(health(backend.context).detail).toContain("0 entries");
   });
 
-  it.each(["failed_call", "release_failed"])("drops the entry for the status %s", async (status) => {
+  it.each(["release_failed"])("drops the entry for the status %s", async (status) => {
     const state = { work: [item("a")], statuses: {} as Record<string, string> };
     const backend = setup(async () => evidenceFor(id("a")) as never);
     vi.stubGlobal("fetch", fakeIndexer(state));

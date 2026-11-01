@@ -11,9 +11,7 @@ import { parseAbi } from 'viem'
 export const tokenMediatorAbi = parseAbi([
   'function relayTokens(address token, address receiver, uint256 value)',
   'function relayTokens(address token, uint256 value)',
-  'function relayTokens(address token, address receiver, uint256 value, uint256 gasLimit)',
-  'function relayTokensAndCall(address token, address receiver, uint256 value, bytes data)',
-  'function relayTokensAndCall(address token, address receiver, uint256 value, bytes data, uint256 gasLimit)',
+  'function relayTokensAndCall(address token, address receiver, uint256 value, bytes data, uint256 callbackGas)',
   'function mediatorBalance(address token) view returns (uint256)',
   'function bridgedTokenAddress(address nativeToken) view returns (address)',
   'function nativeTokenAddress(address bridgedToken) view returns (address)',

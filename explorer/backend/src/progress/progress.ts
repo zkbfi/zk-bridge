@@ -144,7 +144,7 @@ export type ProgressInput = {
   readonly now: number;
 };
 
-const DELIVERED_STATUSES = new Set(["delivered", "failed_call", "release_failed"]);
+const DELIVERED_STATUSES = new Set(["delivered", "release_failed"]);
 
 const plus = (at: number, milliseconds: number | null) => (milliseconds === null ? {} : { eta: at + milliseconds });
 
@@ -216,7 +216,7 @@ export function buildProgress(input: ProgressInput): Progress {
     final: slot === null ? undefined : `slot ${slot}${finalizedSlot === null ? "" : `; the source chain finalized slot ${finalizedSlot}`}`,
     batched: job === null ? undefined : `job ${job.id}`,
     "update-posted": headSlot === null ? undefined : `the light client head is at slot ${headSlot}`,
-    delivered: status === "failed_call" || status === "release_failed" ? `the delivery ended as ${status.replace(/_/g, " ")}` : undefined,
+    delivered: status === "release_failed" ? `the delivery ended as ${status.replace(/_/g, " ")}` : undefined,
   };
   const stages: Stage[] = STAGE_KEYS.map((key) => {
     const state = done[key] ? "done" : key === current ? "current" : "pending";

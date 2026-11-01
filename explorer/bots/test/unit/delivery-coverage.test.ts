@@ -5,7 +5,7 @@ import type { FeedItem } from "../../src/indexer/client.ts";
 import { prepareItem, type DeliveryDependencies } from "../../src/runner/delivery.ts";
 import { createPrerequisiteLedger } from "../../src/runner/prerequisite-ledger.ts";
 import type { PrerequisiteBudgetState } from "../../src/runner/state.ts";
-import { BRIDGE, MULTICALL, REWARD_ADDRESS, WRAPPED_NATIVE, address, emptyExecuteMessage, evidenceFor, fakeChain, fakeIndexer, fakeProver, feedProver, feeOfferData, feedItem, memoryLogger, word, TEST_PROOF_CHECK_GAS, FEED_REQUIRED_GAS } from "../support/builders.ts";
+import { BRIDGE, MULTICALL, REWARD_ADDRESS, WRAPPED_NATIVE, address, emptyExecuteMessage, evidenceFor, fakeChain, fakeIndexer, fakeProver, feedProver, feeOfferData, feedItem, memoryLogger, word, TEST_DELIVERY_GAS_FALLBACK } from "../support/builders.ts";
 
 const NOW = 1_000_000;
 /** Base fee 10 wei and 300,000 gas of the fake chain: one call costs 3,000,000 wei. */
@@ -29,7 +29,7 @@ function setup(options: SetupOptions = {}) {
   const chain = fakeChain();
   chain.feeTokens = CALL_COST_WEI * 2n;
   const item = options.item ?? feedItem({ id: 1, token: WRAPPED_NATIVE });
-  const offerData = feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n }, value: 1000n, token: WRAPPED_NATIVE });
+  const offerData = feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n, callGas: 0n }, value: 1000n, token: WRAPPED_NATIVE });
   const prover = fakeProver();
   const dependencies: DeliveryDependencies = {
     direction: "first-to-second",
@@ -48,7 +48,7 @@ function setup(options: SetupOptions = {}) {
       maximumLossPercent: 20,
       deliverWithoutOffer: options.deliverWithoutOffer ?? false,
       tokenValuationsWei: {},
-      proofCheckGas: TEST_PROOF_CHECK_GAS,
+      deliveryGasFallback: TEST_DELIVERY_GAS_FALLBACK,
       maximumPrerequisiteRounds: options.maximumPrerequisiteRounds ?? 3,
       prerequisiteGasFallback: 300_000n,
       maximumPrerequisiteSpendPerSweepWei: 10n ** 18n,
@@ -99,7 +99,7 @@ describe("the preparation of an item: guards at the edge of external data", () =
   it("skips an item whose message data in the indexer differs from the message that the prover read, and spends nothing", async () => {
     const w = setup();
     w.dependencies = { ...w.dependencies, prover: w.prover };
-    w.prover.evidence = async () => ({ ...evidenceFor(), message: { ...evidenceFor().message, gasLimit: Number(w.item.gasLimit) } });
+    w.prover.evidence = async () => ({ ...evidenceFor(), message: { ...evidenceFor().message } });
     expect(await outcomeOf(() => prepareItem(w.dependencies, w.item, w.ledger))).toMatchObject({ status: "skipped", reason: "indexer-disagrees-with-evidence" });
     expect(w.chain.log.some((entry) => entry.kind === "send" || entry.kind === "simulate")).toBe(false);
   });
@@ -129,7 +129,7 @@ describe("the preparation of an item: guards at the edge of external data", () =
   };
   const COPY_FACTORY = address(0x67);
   const HOME_TOKEN = address(0x55);
-  const director = { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n };
+  const director = { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n, callGas: 0n };
 
   it("skips an item whose destination token is not the token that the message releases, and asks the chain nothing", async () => {
     const w = setup();
@@ -155,7 +155,7 @@ describe("the preparation of an item: guards at the edge of external data", () =
 
   it("cannot price a tip in a token that does not answer its decimals, such as a copy that is not deployed yet", async () => {
     const w = setup({ item: feedItem({ id: 1 }) });
-    const data = { [w.item.messageId]: feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n }, value: 1000n, token: address(0x66) }) };
+    const data = { [w.item.messageId]: feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n, callGas: 0n }, value: 1000n, token: address(0x66) }) };
     w.dependencies = {
       ...w.dependencies,
       indexer: fakeIndexer([w.item], data),
@@ -233,7 +233,7 @@ describe("the layout calls of an item", () => {
     const w = setup({ maximumPrerequisiteRounds: 1 });
     w.listLayoutCallOnce();
     const preparation = await w.prepare();
-    expect(preparation).toMatchObject({ kind: "ready", ready: { messageId: word(1), requiredGas: FEED_REQUIRED_GAS, assumedGas: 300_000n, prerequisiteCostWei: CALL_COST_WEI } });
+    expect(preparation).toMatchObject({ kind: "ready", ready: { messageId: word(1), assumedGas: 320_000n, prerequisiteCostWei: CALL_COST_WEI } });
     expect(w.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
   });
 

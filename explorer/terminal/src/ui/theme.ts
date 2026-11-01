@@ -20,7 +20,7 @@ export const theme = {
 /** The color of a feed or gate status word. */
 export function statusColor(status: string): string {
   if (status === 'delivered' || status === 'open') return theme.good
-  if (status === 'failed_call' || status === 'release_failed' || status === 'stop' || status === 'sealed') return theme.bad
+  if (status === 'release_failed' || status === 'stop' || status === 'sealed') return theme.bad
   if (status === 'warn' || status === 'stale') return theme.warn
   if (status === 'unknown') return theme.muted
   return theme.pending

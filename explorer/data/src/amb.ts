@@ -4,7 +4,7 @@ import { normalizeAddress } from "@zkb/core";
 /**
  * The Arbitrary Message Bridge message encoding, byte for byte as `AmbMessageCodec.sol` writes it.
  *
- * Layout, in bytes: 32 message identifier, 20 sender, 20 executor, 4 gas limit, 1 length X of the source chain
+ * Layout, in bytes: 32 message identifier, 20 sender, 20 executor, 4 reserved gas (always zero), 1 length X of the source chain
  * identifier, 1 length Y of the destination chain identifier, 1 data type, X source chain identifier, Y destination
  * chain identifier, then the call data.
  */
@@ -24,7 +24,11 @@ export type AmbHeader = {
   readonly messageId: Hex;
   readonly sender: Address;
   readonly executor: Address;
-  readonly gasLimit: number;
+  /**
+   * The 4-byte gas field of the OmniBridge layout. The bridge always writes zero and nothing reads it as a limit: a
+   * delivery gets all the gas of its transaction, and too little gas reverts the delivery.
+   */
+  readonly reservedGas: number;
   readonly dataType: number;
   readonly sourceChainId: bigint;
   readonly destinationChainId: bigint;
@@ -62,7 +66,7 @@ export const encodeAmbMessage = (message: AmbMessage): Hex => {
     pad(header.messageId, { size: 32 }),
     header.sender,
     header.executor,
-    toHex(header.gasLimit, { size: 4 }),
+    toHex(header.reservedGas, { size: 4 }),
     toHex(sourceLength, { size: 1 }),
     toHex(destinationLength, { size: 1 }),
     toHex(header.dataType, { size: 1 }),
@@ -94,7 +98,7 @@ export const decodeAmbMessage = (encoded: Hex): AmbMessage => {
       messageId: slice(0, 32),
       sender: normalizeAddress(slice(32, 52)),
       executor: normalizeAddress(slice(52, 72)),
-      gasLimit: Number(hexToBigInt(slice(72, 76))),
+      reservedGas: Number(hexToBigInt(slice(72, 76))),
       dataType: bytes[78] as number,
       sourceChainId: hexToBigInt(slice(FIXED_HEADER_LENGTH, destinationStart)),
       destinationChainId: hexToBigInt(slice(destinationStart, dataStart)),

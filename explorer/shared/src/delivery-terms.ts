@@ -48,4 +48,8 @@ export {
   type FeeSplit,
   expectedFee,
   maximumFee,
+  ROUTER_CALLBACK_GAS_BASE,
+  routerCallbackGas,
+  type WorstCaseFeeInput,
+  worstCaseFee,
 } from "@zkb/core";

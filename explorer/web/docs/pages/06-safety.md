@@ -61,7 +61,7 @@ Each bridge starts locked. A send on a locked bridge reverts with `DepositsNotOp
 
 ## No refunds
 
-Delivery is final. A failed call is not retried. The bridge has no refund function. A refund without a proof of cancellation would let one send be paid twice.
+A delivery that succeeds is final. A delivery that fails reverts and can be tried again. The bridge has no refund function. A refund without a proof of cancellation would let one send be paid twice.
 
 ## What the app does to keep you safe
 

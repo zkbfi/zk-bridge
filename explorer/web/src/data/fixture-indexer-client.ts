@@ -54,7 +54,6 @@ const detailOf = (item: FeedItem, pair: PairConfig): MessageDetail => {
     // A transfer is a message from the mediator on one side to the mediator on the other; the user is the transfer's sender.
     sender: isTransfer ? from.contracts.tokenMediator : item.sender,
     executor: isTransfer ? to.contracts.tokenMediator : item.recipient,
-    gasLimit: 2_000_000,
     sentAt: item.sentAt,
     sentBlockNumber: 12_000_000,
     sourceTransactionHash: item.sourceTransactionHash,
@@ -63,7 +62,6 @@ const detailOf = (item: FeedItem, pair: PairConfig): MessageDetail => {
     deliveredAt: item.deliveredAt,
     destinationTransactionHash: item.destinationTransactionHash,
     deliveredBlockNumber: null,
-    deliverySucceeded: item.deliveredAt === null ? null : item.status !== "failed_call",
     executedBy: item.deliveredAt === null ? null : item.recipient,
     callbackFailed: false,
     releaseFailed: item.status === "release_failed",
