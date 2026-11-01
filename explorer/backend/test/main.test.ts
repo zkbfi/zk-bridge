@@ -47,6 +47,7 @@ describe("configuration", () => {
       secondsBeforeRetryAfterFailure: 60,
       jobsPerDirectionPerDay: 96,
       keepAliveSeconds: 43_200,
+      pendingProofStaleSeconds: 600,
     });
     expect(config.trustedProxyHops).toBe(1);
     expect(config.trustForwardedHeader).toBe(false);

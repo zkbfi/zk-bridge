@@ -102,7 +102,8 @@ export function register(app: Hono, context: BackendModuleContext): void {
       const result = await service.submit({ ...body.data, caller: callerOf(request, context.config) });
       if (!("refused" in result)) return request.json(result, 202);
       // The chains need no proof now: no message waits for a head and the head is fresh. Asking again changes nothing.
-      if (result.refused === "nothing-to-prove") return request.json({ error: "nothing-to-prove" }, 409);
+      // A request from outside never names a target, so it never meets "duplicate"; both mean that asking again changes nothing.
+      if (!("retryAfterSeconds" in result)) return request.json({ error: result.refused }, 409);
       request.header("Retry-After", String(result.retryAfterSeconds));
       return request.json({ error: result.refused, retryAfterSeconds: result.retryAfterSeconds }, result.refused === "cannot-check" ? 503 : 429);
     },

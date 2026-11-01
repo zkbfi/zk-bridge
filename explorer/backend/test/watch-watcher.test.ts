@@ -8,7 +8,9 @@ import { MIN_PARTICIPANTS, expectedFinalityAt } from "../src/watch/decide.ts";
 import { DEFAULT_WARMUP, type WarmupConfig } from "../src/watch/warmup.ts";
 import { createWarmupStore } from "../src/watch/warmup-store.ts";
 import type { FinalityObservation } from "../src/watch/feed.ts";
-import { createDirectionWatcher, pendingProofOf, REFUSED_RETRIES, REFUSED_RETRY_SECONDS, type ListedMessage } from "../src/watch/watcher.ts";
+import type { HeldProof } from "../src/requests/held-proofs.ts";
+import type { BatchRule, Economics } from "../src/watch/batch.ts";
+import { createDirectionWatcher, REFUSED_RETRIES, REFUSED_RETRY_SECONDS, type ListedMessage } from "../src/watch/watcher.ts";
 import { memoryLogger } from "./support.ts";
 
 // A Sepolia-like clock: 12 s slots, genesis at a round time, 8192 slots per period.
@@ -33,7 +35,20 @@ const job = (overrides: Partial<Job> = {}): Job => ({
   ...overrides,
 });
 
-function setup(options: { messages?: ListedMessage[]; facts?: LightClientFacts; submit?: (request: ProofRequest) => SubmitResult; ping?: boolean | (() => Promise<number>); warmup?: Partial<WarmupConfig> } = {}) {
+/** No batch wait: a message proves at the first finality that covers it. */
+const NO_WAIT: BatchRule = { maxWaitSeconds: 0, lookaheadSeconds: 384, marginWad: 10n ** 18n };
+
+function setup(
+  options: {
+    messages?: ListedMessage[];
+    facts?: LightClientFacts;
+    submit?: (request: ProofRequest) => SubmitResult;
+    ping?: boolean | (() => Promise<number>);
+    warmup?: Partial<WarmupConfig>;
+    batchRule?: BatchRule;
+    economics?: Economics | (() => Promise<Economics>);
+  } = {},
+) {
   const log = memoryLogger();
   const storage = openStorage(":memory:");
   const store = createWarmupStore(storage);
@@ -41,13 +56,13 @@ function setup(options: { messages?: ListedMessage[]; facts?: LightClientFacts; 
     facts: options.facts ?? facts(),
     messages: options.messages ?? [],
     active: null as Job | null,
-    latest: null as Job | null,
+    held: [] as HeldProof[],
     factsFail: false,
     history: { kind: "serves" } as SourceHistory,
   };
   const submitted: ProofRequest[] = [];
   const pings: number[] = [];
-  const reads = { facts: 0, messages: 0, history: 0 };
+  const reads = { facts: 0, messages: 0, history: 0, economics: 0 };
   let jobs = 0;
   const watcher = createDirectionWatcher({
     pairName: "sepolia-pls943",
@@ -67,7 +82,14 @@ function setup(options: { messages?: ListedMessage[]; facts?: LightClientFacts; 
       return state.history;
     },
     findActiveJob: () => state.active,
-    findLatestJob: () => state.latest,
+    readHeldProofs: () => state.held,
+    pendingStaleSeconds: 600,
+    batchRule: options.batchRule ?? NO_WAIT,
+    readEconomics: async () => {
+      reads.economics += 1;
+      const economics = options.economics ?? { kind: "unknown", why: "no prices in this test" };
+      return typeof economics === "function" ? economics() : economics;
+    },
     submit: async (request) => {
       submitted.push(request);
       const result = options.submit?.(request) ?? { requestId: "r", jobId: `job-${(jobs += 1)}` };
@@ -123,7 +145,7 @@ describe("the direction watcher, on finality", () => {
     run.watcher.observe(reading);
     // No timer runs: the job starts on the same turn of reads.
     await run.watcher.settled();
-    expect(run.submitted).toEqual([{ pair: "sepolia-pls943", direction: "first-to-second", reason: "finality", caller: "watch", messageId: id("a"), since: reading.receivedAt }]);
+    expect(run.submitted).toEqual([{ pair: "sepolia-pls943", direction: "first-to-second", reason: "finality", caller: "watch", messageId: id("a"), since: reading.receivedAt, target: { startSlot: HEAD, newSlot: HEAD + 128 } }]);
     expect(run.named("finality_seen")).toMatchObject([{ direction: "first-to-second", chainId: 11155111, finalizedSlot: HEAD + 128, signatureSlot: HEAD + 193, participants: 500, source: "sse", latencyMs: 2_000 }]);
     expect(run.named("proof_due")).toMatchObject([{ why: "message", detail: "1 waiting message is final at slot " + (HEAD + 128), attempt: 0 }]);
   });
@@ -169,7 +191,7 @@ describe("the direction watcher, on finality", () => {
 
   it("does not prove again what a posted proof already covers", async () => {
     const run = setup({ messages: [listed(HEAD + 100)] });
-    run.state.latest = job({ status: "published", startSlot: String(HEAD), newSlot: String(HEAD + 128) });
+    run.state.held = [{ startSlot: HEAD, newSlot: HEAD + 128, where: "job", since: Date.now() }];
     run.watcher.observe(observation(HEAD + 160));
     await run.watcher.settled();
     expect(run.submitted).toEqual([]);
@@ -709,12 +731,144 @@ describe("the direction watcher, warm-ups", () => {
   });
 });
 
-describe("pendingProofOf", () => {
-  it("is the newest job's proof while it waits to land", () => {
-    expect(pendingProofOf(null)).toBeNull();
-    expect(pendingProofOf(job())).toBeNull();
-    expect(pendingProofOf(job({ status: "on-chain", startSlot: "1", newSlot: "2" }))).toBeNull();
-    expect(pendingProofOf(job({ status: "published", startSlot: "1", newSlot: "2" }))).toEqual({ startSlot: 1, newSlot: 2 });
-    expect(pendingProofOf(job({ status: "proving", startSlot: "1", newSlot: "2" }))).toEqual({ startSlot: 1, newSlot: 2 });
+describe("the direction watcher, with a batch wait (2026-11-01)", () => {
+  const WAIT: BatchRule = { maxWaitSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n };
+  const USD = 10n ** 18n;
+  const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, block: "7" });
+  const finalAt = (slot: number) => expectedFinalityAt(slot, facts()) * 1000;
+
+  it("waits while the batch does not pay, then proves every waiting message at its fallback, also one sent meanwhile", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT });
+    const reading = observation(HEAD + 128);
+    arrive(reading);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([]);
+    const [waiting] = run.named("proof_not_due");
+    expect(waiting).toMatchObject({ why: "waiting-for-profit", messages: 1, feesUsd: null, costUsd: null, startWhy: "max-wait", maxWaitAt: new Date(finalAt(HEAD + 100) + 3_600_000).toISOString() });
+    expect(waiting!.detail).toContain("the fees cannot be valued (no prices in this test)");
+    // A message sent during the wait, final before the fallback, rides along with the next finality.
+    run.state.messages = [listed(HEAD + 100, "a"), listed(HEAD + 140, "b")];
+    const later = observation(HEAD + 160);
+    arrive(later);
+    run.watcher.observe(later);
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([]);
+    // No new finality is needed: the watcher wakes at the fallback by itself.
+    await vi.advanceTimersByTimeAsync(finalAt(HEAD + 100) + 3_600_000 - Date.now());
+    await run.watcher.settled();
+    expect(run.submitted).toMatchObject([{ messageId: id("a"), target: { startSlot: HEAD, newSlot: HEAD + 160 } }]);
+    expect(run.named("proof_due")).toMatchObject([{ why: "message", trigger: "max-wait", batch: 2, waitedSeconds: 3600, feesUsd: null, costUsd: null }]);
+    // The fallback timer of the first reading finds the job made: nothing more.
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(run.submitted).toHaveLength(1);
+  });
+
+  it("proves at once when the batch pays", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 110, "b")], batchRule: WAIT, economics: priced({ [id("a")]: USD }) });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.named("proof_due")).toMatchObject([{ why: "message", trigger: "profit", batch: 2, feesUsd: "1.000000", costUsd: "0.025000" }]);
+  });
+
+  it("waits for the finality of an upcoming message that makes the batch pay, and proves both together", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 140, "b")], batchRule: WAIT, economics: priced({ [id("b")]: USD }) });
+    const first = observation(HEAD + 128);
+    arrive(first);
+    run.watcher.observe(first);
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([]);
+    expect(run.named("proof_not_due")).toMatchObject([{ why: "waiting-for-profit", startWhy: "profit", startAt: new Date(finalAt(HEAD + 140)).toISOString() }]);
+    const second = observation(HEAD + 160);
+    arrive(second);
+    run.watcher.observe(second);
+    await run.watcher.settled();
+    expect(run.named("proof_due")).toMatchObject([{ trigger: "profit", batch: 2 }]);
+    // Two readings 384 s apart: two valuations.
+    expect(run.reads.economics).toBe(2);
+  });
+
+  it("a valuation that fails counts as unknown: the batch waits for its fallback", async () => {
+    const run = setup({
+      messages: [listed(HEAD + 100, "a")],
+      batchRule: WAIT,
+      economics: async () => {
+        throw new Error("no route");
+      },
+    });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.named("watch_economics_failed")).toMatchObject([{ error: { message: "no route" } }]);
+    expect(run.named("proof_not_due")[0]!.detail).toContain("the prices could not be read");
+    expect(run.submitted).toEqual([]);
+    // The same messages within a minute: the valuation is not read again.
+    run.watcher.observe(observation(HEAD + 128, 501));
+    await run.watcher.settled();
+    expect(run.reads.economics).toBe(1);
+  });
+
+  it("does not value anything when no message waits or the head covers them", async () => {
+    const run = setup({ messages: [listed(HEAD - 5)], batchRule: WAIT });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.reads.economics).toBe(0);
+  });
+
+  it("times the warm-up to the batch: its fallback, not each message's finality", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 150, "b")], batchRule: WAIT });
+    const due = finalAt(HEAD + 100) + 3_600_000;
+    vi.setSystemTime(finalAt(HEAD + 150) - 90_000);
+    await run.watcher.scan();
+    expect(run.pings).toEqual([]);
+    vi.setSystemTime(due - DEFAULT_WARMUP.defaultLeadSeconds * 1000);
+    await run.watcher.scan();
+    expect(run.named("warmup_scheduled")).toMatchObject([{ why: "message", dueAt: new Date(due).toISOString(), dueInSeconds: 90 }]);
+  });
+
+  it("stop cancels the fallback timer", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    await run.watcher.stop();
+    await vi.advanceTimersByTimeAsync(2 * 3_600_000);
+    expect(run.submitted).toEqual([]);
+  });
+});
+
+describe("the direction watcher, with a proof we have (2026-11-01)", () => {
+  it("waits for a pending proof to land rather than proving the messages after it from the same head", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 140, "b")] });
+    run.state.held = [{ startSlot: HEAD, newSlot: HEAD + 128, where: "board", since: Date.now() }];
+    run.watcher.observe(observation(HEAD + 160));
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([]);
+    expect(run.named("proof_not_due")).toMatchObject([{ why: "proof-pending", detail: `the proof from slot ${HEAD} to slot ${HEAD + 128} (board) waits to land; 1 message after it waits for it to land` }]);
+    // It landed: the head moved, and the next finality proves from the new head.
+    run.state.facts = facts(HEAD + 128);
+    run.watcher.observe(observation(HEAD + 192));
+    await run.watcher.settled();
+    expect(run.submitted).toMatchObject([{ messageId: id("b"), target: { startSlot: HEAD + 128, newSlot: HEAD + 192 } }]);
+  });
+
+  it("proves past a pending proof that waited too long, and says so", async () => {
+    const run = setup({ messages: [listed(HEAD + 140, "b")] });
+    const reading = observation(HEAD + 160);
+    arrive(reading);
+    run.state.held = [{ startSlot: HEAD, newSlot: HEAD + 128, where: "stored", since: Date.now() - 601_000 }];
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    expect(run.submitted).toHaveLength(1);
+    expect(run.named("proof_pending_stale")).toMatchObject([{ startSlot: HEAD, newSlot: HEAD + 128, where: "stored", waitedSeconds: 601 }]);
+  });
+
+  it("a duplicate target is not tried again", async () => {
+    const run = setup({ messages: [listed(HEAD + 100)], submit: () => ({ refused: "duplicate" }) });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.named("proof_due_refused")).toMatchObject([{ refused: "duplicate", retryInSeconds: null }]);
+    run.watcher.observe(observation(HEAD + 128));
+    await vi.advanceTimersByTimeAsync(60_000);
+    await run.watcher.settled();
+    expect(run.submitted).toHaveLength(1);
   });
 });

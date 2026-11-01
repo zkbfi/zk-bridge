@@ -11,6 +11,37 @@ export const MODULE_NAMES = ["requests", "webhook", "msgboard-indexer", "archive
 export type ModuleName = (typeof MODULE_NAMES)[number];
 
 const positiveInteger = z.number().int().positive();
+const nonNegativeInteger = z.number().int().min(0);
+
+/**
+ * When a message proof is due (README.md, "Batching and profit"). Every field may be left out; a pair or a direction
+ * overrides only what it names.
+ */
+const batchFields = {
+  /**
+   * The fallback: prove once the oldest waiting final message has been final this long, whether or not the batch pays.
+   * 0 proves at the first finality that covers a waiting message, whatever it pays.
+   */
+  maxWaitSeconds: nonNegativeInteger.optional(),
+  /** How far ahead the fees of messages that are not final yet count toward the time the proof is expected. Default: one epoch of the source chain. */
+  lookaheadSeconds: nonNegativeInteger.optional(),
+  /** The fees must reach the cost (the proof and the deliveries) times this before a batch proves early. */
+  profitMargin: z.number().positive().max(1000).optional(),
+};
+
+/** The batching of one direction of a pair. */
+const directionBatchSchema = z.object(batchFields).strict();
+
+/** The batching of one pair, with overrides per direction. */
+const pairBatchSchema = z
+  .object({
+    ...batchFields,
+    directions: z.partialRecord(z.enum(PROOF_DIRECTIONS), directionBatchSchema).optional(),
+  })
+  .strict();
+
+/** The names of the pairs, for the keys of `watch.pairs`. */
+const PAIR_NAMES = PAIR_DEFINITIONS.map((definition) => definition.name) as [string, ...string[]];
 const variableName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "must be the name of an environment variable");
 
 /**
@@ -66,6 +97,7 @@ export const backendConfigSchema = z
         secondsBeforeRetryAfterFailure: positiveInteger.default(DEFAULT_RATE_LIMITS.secondsBeforeRetryAfterFailure),
         jobsPerDirectionPerDay: positiveInteger.default(DEFAULT_RATE_LIMITS.jobsPerDirectionPerDay),
         keepAliveSeconds: positiveInteger.default(DEFAULT_RATE_LIMITS.keepAliveSeconds),
+        pendingProofStaleSeconds: positiveInteger.default(DEFAULT_RATE_LIMITS.pendingProofStaleSeconds),
       })
       .strict()
       .default(DEFAULT_RATE_LIMITS),
@@ -110,6 +142,9 @@ export const backendConfigSchema = z
         pollSeconds: positiveInteger.optional(),
         /** How often to look at the sent messages for a warm-up. */
         scanSeconds: positiveInteger.default(15),
+        ...batchFields,
+        /** Batching per pair, and per direction inside a pair. A direction beats its pair, a pair beats these. */
+        pairs: z.partialRecord(z.enum(PAIR_NAMES), pairBatchSchema).default({}),
         /**
          * Wake the remote prover (`<remote.endpoint>/ping`) a learned lead time before a proof is expected, and keep the
          * worker warm until the job starts. See README.md, "Proving on finality".

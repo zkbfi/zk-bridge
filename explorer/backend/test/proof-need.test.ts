@@ -67,21 +67,23 @@ async function reader(state: IndexerState, timeoutMilliseconds?: number) {
 describe("the proof need reader against a chain indexer", () => {
   it("needs a proof when a message of the direction waits for a head, and asks for that direction only", async () => {
     const { read, queries } = await reader({ waiting: { "1>369": 1 }, heads: { 1: fresh, 369: fresh } });
-    expect(await read("first-to-second")).toEqual({ needed: true, why: "waiting-message" });
+    expect(await read("first-to-second")).toEqual({ needed: true, why: "waiting-message", headSlot: 100 });
     expect(queries).toContain("/api/feed?direction=1%3E369&status=waiting_for_finality&limit=1");
     expect(await read("second-to-first")).toEqual({ needed: false });
+    // A waiting message needs a proof even when the indexer lists no head: the head is then unknown.
+    expect(await (await reader({ waiting: {}, heads: {}, body: { items: [{}], heads: [] } })).read("first-to-second")).toEqual({ needed: true, why: "waiting-message", headSlot: null });
   });
 
   it("needs a proof when the light client of the destination holds a head older than the keep-alive time", async () => {
     // The light client on chain 369 follows chain 1: it is the destination of first-to-second.
     const { read } = await reader({ waiting: {}, heads: { 1: fresh, 369: stale } });
-    expect(await read("first-to-second")).toEqual({ needed: true, why: "keep-alive" });
+    expect(await read("first-to-second")).toEqual({ needed: true, why: "keep-alive", headSlot: 100 });
     expect(await read("second-to-first")).toEqual({ needed: false });
   });
 
   it("needs a proof when the light client of the destination holds no head", async () => {
     const { read } = await reader({ waiting: {}, heads: { 1: null, 369: fresh } });
-    expect(await read("second-to-first")).toEqual({ needed: true, why: "keep-alive" });
+    expect(await read("second-to-first")).toEqual({ needed: true, why: "keep-alive", headSlot: null });
   });
 
   it("fails when the indexer answers an error status, a wrong shape, a heads list without the destination, or too late", async () => {

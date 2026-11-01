@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PULSEX_FACTORIES, STABLES } from "@zk-bridge/shared";
 import { BackendConfigError, parseBackendConfig } from "../src/config.ts";
 import type { LightClientFacts } from "../src/keepalive/plan.ts";
 import { findActiveJob, getRequest } from "../src/requests/jobs.ts";
@@ -51,7 +52,7 @@ describe("watchedDirections", () => {
     const parsed = parseBackendConfig(
       JSON.stringify({ schemaVersion: 1, deploymentFile: "d", databasePath: "x", publicUrl: "https://b.example.org", prover: { binary: "p" }, remote: { endpoint: "https://e.example.org" }, runpodApiKeyVariable: "K", webhookBearerVariable: "B" }),
     );
-    expect(parsed.watch).toEqual({ sse: true, scanSeconds: 15, warmup: { enabled: true, ...DEFAULT_WARMUP } });
+    expect(parsed.watch).toEqual({ sse: true, scanSeconds: 15, pairs: {}, warmup: { enabled: true, ...DEFAULT_WARMUP } });
     expect(() => makeConfig({ watch: { unknown: 1 } })).toThrow(BackendConfigError);
   });
 
@@ -219,6 +220,72 @@ describe("startWatch", () => {
     await vi.advanceTimersByTimeAsync(15_000);
     await flush();
     expect(run.named("watch_read_failed")[1]).toMatchObject({ error: { message: "the chain indexer answered 502 for the feed" } });
+    await stop();
+  });
+
+  it("with a batch wait, values the waiting messages on PulseChain and proves at the fallback", async () => {
+    const run = setup();
+    const USDC = STABLES[0]!.address;
+    const POOL = "0x0000000000000000000000000000000000000a01";
+    const ZERO = "0x0000000000000000000000000000000000000000";
+    const baseFees: Array<bigint | null> = [null, 7n];
+    const chain = {
+      getBlockNumber: async () => 5n,
+      getBlock: async () => ({ baseFeePerGas: baseFees.length > 0 ? (baseFees.shift() as bigint | null) : 7n }),
+      readContract: async (call: { address: string; functionName: string; args?: readonly unknown[] }) => {
+        if (call.functionName === "getPair") return call.address === PULSEX_FACTORIES[0] && (call.args as string[]).includes(USDC) ? POOL : ZERO;
+        if (call.functionName === "token0") return USDC;
+        return [10n ** 12n, 10n ** 26n, 0];
+      },
+    };
+    const context = { ...run.context, config: makeConfig({ indexerUrl: "http://indexer.test", watch: { directions: ["first-to-second"], maxWaitSeconds: 600 } }) };
+    const stop = await startWatch({ context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, chainClient: () => chain } });
+    await flush();
+    expect(run.named("watch_started")).toMatchObject([{ batch: { "first-to-second": { maxWaitSeconds: 600, lookaheadSeconds: 384, profitMargin: 1 } } }]);
+    const sent = HEAD + 100;
+    const messageId = `0x${"ab".repeat(32)}`;
+    run.beacon.set(FEED, { items: [{ messageId, sent: { timestamp: GENESIS + sent * SLOT }, transfer: { destinationToken: null } }] });
+    const finalized = (Math.floor(sent / 32) + 1) * 32;
+    const send = async (slot: number, participants: number) => {
+      vi.setSystemTime(Math.max(Date.now(), slotStart(slot + 65)));
+      run.beacon.latest().send("light_client_finality_update", finalityUpdate(slot, participants, slot + 65));
+      await flush();
+    };
+    // The indexer does not serve the message, then serves it in an unknown shape: the batch cannot be valued.
+    run.beacon.set(`/api/messages/${messageId}`, { error: "busy" }, 503);
+    await send(finalized, 500);
+    run.beacon.set(`/api/messages/${messageId}`, { data: "nope" });
+    vi.setSystemTime(Date.now() + 61_000);
+    await send(finalized, 501);
+    expect(run.named("watch_economics_failed").map((line) => (line.error as { message: string }).message)).toEqual([
+      "the chain indexer answered 503 for a message",
+      "the chain indexer sent a message in an unknown shape",
+    ]);
+    // Served: a message that pays no fee does not cover the cost, so the batch waits for its fallback.
+    run.beacon.set(`/api/messages/${messageId}`, { data: "0x" });
+    vi.setSystemTime(Date.now() + 61_000);
+    await send(finalized, 502);
+    expect(run.named("proof_not_due").at(-1)).toMatchObject({ why: "waiting-for-profit", feesUsd: "0.000000" });
+    expect(findActiveJob(run.context.storage, "first-to-second")).toBeNull();
+    await vi.advanceTimersByTimeAsync(600_000);
+    await flush();
+    expect(run.named("proof_due")).toMatchObject([{ why: "message", trigger: "max-wait", batch: 1 }]);
+    await stop();
+    run.backend.prover.settleAll({ kind: "up-to-date" });
+    await run.service.settled();
+  });
+
+  it("a pair without PulseChain reads no prices", async () => {
+    const run = setup();
+    const testnet = { ...PAIR, sides: [PAIR.sides[0], { ...PAIR.sides[1], chainId: 943 }] as const };
+    const asked: number[] = [];
+    const chainClient = (side: { chainId: number }) => {
+      asked.push(side.chainId);
+      return { getBlockNumber: async () => 1n, getBlock: async () => ({ baseFeePerGas: 1n }), readContract: async () => null };
+    };
+    const stop = await startWatch({ context: { ...run.context, pair: testnet }, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, chainClient } });
+    // Only the destination of the watched direction, for its base fee.
+    expect(asked).toEqual([943]);
     await stop();
   });
 
