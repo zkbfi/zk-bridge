@@ -6,8 +6,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { signerFromPrivateKeyText } from "../../../terminal/src/signing/key-sources.ts";
 import { BotConfigError, parseBotConfig } from "../../src/config/bot-config.ts";
 import { LockHeldError } from "../../src/runtime/lock-file.ts";
-import { newCopyGasLimitOf, scheduleOf, startTraffic, tipRateOf, type TrafficOverrides } from "../../src/traffic/service.ts";
-import { dueAt } from "../../src/traffic/schedule.ts";
+import { ignoredScheduleSettings, newCopyGasLimitOf, startTraffic, tipRateOf, type TrafficOverrides } from "../../src/traffic/service.ts";
+import { HOUR_MILLISECONDS } from "../../src/traffic/schedule.ts";
+import { seeded } from "../support/seeded.ts";
 import { createServiceWorld, type ServiceWorld } from "../support/service-world.ts";
 import { DOLLAR, copyAddressOf, fakeReader, requestLog, tokenFile, type FakeReaderState } from "../support/traffic.ts";
 
@@ -18,7 +19,10 @@ const MESSAGE_ID = `0x${"ef".repeat(32)}` as const;
 /** The contracts of the service world's deployment file (`test/support/service-world.ts`). */
 const MEDIATOR = { 1: getAddress(`0x${"12".repeat(20)}`), 369: getAddress(`0x${"22".repeat(20)}`) } as const;
 const BRIDGE = { 1: getAddress(`0x${"11".repeat(20)}`), 369: getAddress(`0x${"21".repeat(20)}`) } as const;
-const SLOT = 480_000;
+/** An hour of the clock, and a moment in it. */
+const HOUR = 480_000;
+const HOUR_START = HOUR * HOUR_MILLISECONDS;
+const NOW = HOUR_START + 1_000;
 
 const closers: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -103,7 +107,7 @@ function overridesFor(extra: TrafficOverrides = {}) {
     },
     reader: (chainId) => fakeReader(chainId, states[chainId] as FakeReaderState),
     random: () => 0,
-    now: () => dueAt("first-to-second", SLOT, { intervalMilliseconds: 900_000, offsetMilliseconds: 0, jitterMilliseconds: 60_000 }),
+    now: () => NOW,
     ...extra,
   };
   return { overrides, states, nodes, dispose, urls };
@@ -128,11 +132,36 @@ describe("tipRateOf", () => {
 });
 
 describe("the traffic configuration", () => {
-  it("fills the defaults: four sends an hour in each direction, seven and a half minutes apart", () => {
-    const parsed = parseBotConfig({ schemaVersion: 1, stateDirectory: "/s", ...trafficSection({ directory: "/d" }) }).traffic!;
-    expect(parsed).toMatchObject({ intervalSeconds: 900, jitterSeconds: 60, tipPercent: "0.1", receiptTimeoutSeconds: 300, minimumPriorityFeeWei: {} });
-    expect(parsed.directions).toEqual({ "first-to-second": { enabled: true, offsetSeconds: 0 }, "second-to-first": { enabled: true, offsetSeconds: 450 } });
-    expect(scheduleOf(parsed, "second-to-first")).toEqual({ intervalMilliseconds: 900_000, offsetMilliseconds: 450_000, jitterMilliseconds: 60_000 });
+  const parse = (extra: Record<string, unknown>) => parseBotConfig({ schemaVersion: 1, stateDirectory: "/s", ...trafficSection({ directory: "/d" }, extra) }).traffic!;
+
+  it("fills the defaults: 0 to 3 sends an hour in each direction, five minutes apart at least", () => {
+    const parsed = parse({});
+    expect(parsed).toMatchObject({ cadence: { minPerHour: 0, maxPerHour: 3, minGapSeconds: 300 }, tipPercent: "0.1", receiptTimeoutSeconds: 300, minimumPriorityFeeWei: {} });
+    expect(parsed.directions).toEqual({ "first-to-second": { enabled: true }, "second-to-first": { enabled: true } });
+    expect(ignoredScheduleSettings(parsed)).toEqual([]);
+  });
+
+  it("takes a partial cadence and fills the rest", () => {
+    expect(parse({ cadence: { maxPerHour: 5, minGapSeconds: 60 } }).cadence).toEqual({ minPerHour: 0, maxPerHour: 5, minGapSeconds: 60 });
+    expect(parse({ cadence: { minPerHour: 0, maxPerHour: 0 } }).cadence.maxPerHour).toBe(0);
+    expect(parse({ cadence: { maxPerHour: 1, minGapSeconds: 5000 } }).cadence.minGapSeconds).toBe(5000);
+  });
+
+  it("refuses a maximum below the minimum, a count that cannot fit with the gap, and negatives", () => {
+    expect(() => parse({ cadence: { minPerHour: 2, maxPerHour: 1 } })).toThrow(/config.traffic.cadence: maxPerHour must not be below minPerHour/);
+    expect(() => parse({ cadence: { maxPerHour: 3, minGapSeconds: 1800 } })).toThrow(/config.traffic.cadence: maxPerHour sends cannot fit in one hour/);
+    expect(() => parse({ cadence: { maxPerHour: 61, minGapSeconds: 60 } })).toThrow(/cannot fit in one hour/);
+    expect(() => parse({ cadence: { minPerHour: -1 } })).toThrow(/config.traffic.cadence.minPerHour/);
+    expect(() => parse({ cadence: { maxPerHour: -1 } })).toThrow(/config.traffic.cadence.maxPerHour/);
+    expect(() => parse({ cadence: { minGapSeconds: -1 } })).toThrow(/config.traffic.cadence.minGapSeconds/);
+    expect(() => parse({ cadence: { maxPerHour: 1.5 } })).toThrow(/config.traffic.cadence.maxPerHour/);
+    expect(() => parse({ cadence: { unknown: 1 } })).toThrow(/config.traffic.cadence/);
+  });
+
+  it("still accepts the removed interval, jitter and offsets, and names them", () => {
+    const parsed = parse({ intervalSeconds: 900, jitterSeconds: 60, directions: { "first-to-second": { enabled: true, offsetSeconds: 0 }, "second-to-first": { enabled: false, offsetSeconds: 450 } } });
+    expect(ignoredScheduleSettings(parsed)).toEqual(["intervalSeconds", "jitterSeconds", "directions.first-to-second.offsetSeconds", "directions.second-to-first.offsetSeconds"]);
+    expect(parsed.directions["second-to-first"].enabled).toBe(false);
   });
 
   it("refuses bounds whose minimum is above the maximum, and an empty token list", () => {
@@ -169,7 +198,7 @@ describe("startTraffic refuses to start", () => {
 });
 
 describe("startTraffic", () => {
-  it("with --once sends in each direction now, records the slots, logs the tokens and disposes of the signer", async () => {
+  it("with --once sends in each direction now, leaves the plan alone, logs the tokens and disposes of the signer", async () => {
     const created = await prepare({ minimumPriorityFeeWei: { "369": "7" } });
     const { overrides, nodes, dispose, urls } = overridesFor();
     await run(created, overrides);
@@ -181,11 +210,13 @@ describe("startTraffic", () => {
     const sends = named(created, "traffic_sent");
     expect(sends.map((event) => event.direction)).toEqual(["first-to-second", "second-to-first"]);
     expect(sends[0]).toMatchObject({ bot: "traffic", pair: "eth-pls", symbol: "tUSD", messageId: MESSAGE_ID });
-    expect(named(created, "traffic_started")[0]).toMatchObject({ wallet: SIGNER_ADDRESS, signer: "private-key", intervalSeconds: 900, tipPercent: "0.1" });
+    expect(named(created, "traffic_started")[0]).toMatchObject({ wallet: SIGNER_ADDRESS, signer: "private-key", cadence: { minPerHour: 0, maxPerHour: 3, minGapSeconds: 300 }, tipPercent: "0.1" });
+    expect(named(created, "traffic_hour_planned")).toEqual([]);
+    expect(named(created, "config_ignored")).toEqual([]);
     expect((named(created, "traffic_tokens")[0]?.tokens as unknown[]).length).toBe(2);
     const state = JSON.parse(readFileSync(statePath(created), "utf8"));
-    expect(state.directions["first-to-second"].lastSlot).toBe(SLOT);
-    expect(state.directions["second-to-first"].lastSlot).toBe(SLOT - 1);
+    expect(state.directions["first-to-second"]).toEqual({ plan: null, lastAttemptAtMilliseconds: NOW });
+    expect(state.directions["second-to-first"]).toEqual({ plan: null, lastAttemptAtMilliseconds: NOW });
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(existsSync(`${statePath(created)}.lock`)).toBe(false);
   });
@@ -205,34 +236,187 @@ describe("startTraffic", () => {
     expect(parseTransaction(relay369.serializedTransaction).maxPriorityFeePerGas).toBe(10_000_000n);
   });
 
-  it("records a skipped slot, so the next pass does not try again", async () => {
-    const created = await prepare({ directions: { "first-to-second": { enabled: true, offsetSeconds: 0 }, "second-to-first": { enabled: false, offsetSeconds: 1800 } } });
+  it("with --once records a skipped attempt", async () => {
+    const created = await prepare({ directions: { "first-to-second": { enabled: true }, "second-to-first": { enabled: false } } });
     const { overrides, states, nodes } = overridesFor();
     states[1]!.balances.clear();
     await run(created, overrides);
     expect(named(created, "traffic_skipped")[0]).toMatchObject({ direction: "first-to-second", reason: "no-eligible-token" });
-    expect(JSON.parse(readFileSync(statePath(created), "utf8")).directions).toEqual({ "first-to-second": { lastSlot: SLOT, lastAttemptAtMilliseconds: overrides.now!() }, "second-to-first": null });
+    expect(JSON.parse(readFileSync(statePath(created), "utf8")).directions).toEqual({ "first-to-second": { plan: null, lastAttemptAtMilliseconds: NOW }, "second-to-first": null });
     expect(nodes[1].sent).toHaveLength(0);
   });
 
-  it("on its schedule sends a due direction once, and leaves the other until its time", async () => {
+  it("warns once at start about the removed interval settings and starts", async () => {
+    const created = await prepare({ intervalSeconds: 900, jitterSeconds: 60, directions: { "first-to-second": { enabled: true, offsetSeconds: 0 }, "second-to-first": { enabled: true, offsetSeconds: 450 } } });
+    await run(created, overridesFor().overrides);
+    expect(named(created, "config_ignored")).toHaveLength(1);
+    expect(named(created, "config_ignored")[0]).toMatchObject({ level: "warn", settings: ["intervalSeconds", "jitterSeconds", "directions.first-to-second.offsetSeconds", "directions.second-to-first.offsetSeconds"] });
+    expect(named(created, "traffic_sent")).toHaveLength(2);
+  });
+
+  it("reads a state file from before the hourly plans", async () => {
     const created = await prepare();
-    const { overrides, nodes } = overridesFor();
-    // The way back sent in its current slot already (half an hour earlier); the way out is due now.
     await mkdir(join(created.directory, "state"), { recursive: true });
-    await writeFile(statePath(created), JSON.stringify({ schemaVersion: 1, directions: { "first-to-second": null, "second-to-first": { lastSlot: SLOT - 1, lastAttemptAtMilliseconds: 1 } } }));
+    await writeFile(statePath(created), JSON.stringify({ schemaVersion: 1, directions: { "first-to-second": { lastSlot: 4, lastAttemptAtMilliseconds: 7 }, "second-to-first": null } }));
+    await run(created, overridesFor().overrides);
+    expect(named(created, "traffic_sent")).toHaveLength(2);
+  });
+});
+
+describe("startTraffic on the hourly plan", () => {
+  const T0 = HOUR_START + 1_650_000;
+  const GAP = 300_000;
+  /** A random source that always answers one value: 0.5 draws two sends, at T0 and T0 plus the gap. */
+  const half = () => 0.5;
+  const stateOf = (created: ServiceWorld) => JSON.parse(readFileSync(statePath(created), "utf8")).directions;
+
+  /** Runs the loop until its log stops growing, then stops it: one or two passes of a bot with a one second poll. */
+  async function pass(created: ServiceWorld, overrides: TrafficOverrides, now: number): Promise<void> {
     const controller = new AbortController();
-    const running = run(created, overrides, { runOnce: false, signal: controller.signal });
-    for (let attempt = 0; attempt < 300 && named(created, "traffic_sent").length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
-    // A second pass comes after one poll second: it must find the slot used up.
-    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    const running = run(created, { ...overrides, now: () => now }, { runOnce: false, signal: controller.signal });
+    let size = -1;
+    for (let waited = 0; waited < 500; waited += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const next = created.logLines.length;
+      if (next === size && waited > 5) break;
+      size = next;
+    }
     controller.abort();
     await running;
-    expect(named(created, "traffic_sent").map((event) => event.direction)).toEqual(["first-to-second"]);
-    expect(nodes[1].sent).toHaveLength(2);
+  }
+
+  it("plans the hour at its start, sends at the planned times, and a restart resumes the same plan without sending twice", async () => {
+    const created = await prepare();
+    const { overrides, nodes } = overridesFor({ random: half });
+
+    await pass(created, overrides, NOW);
+    const planned = named(created, "traffic_hour_planned");
+    expect(planned.map((event) => event.direction)).toEqual(["first-to-second", "second-to-first"]);
+    expect(planned[0]).toMatchObject({ hour: HOUR, count: 2, times: [new Date(T0).toISOString(), new Date(T0 + GAP).toISOString()] });
+    expect(stateOf(created)["first-to-second"].plan).toEqual({ hour: HOUR, count: 2, times: [T0, T0 + GAP], sent: [false, false] });
+    expect(named(created, "traffic_sent")).toHaveLength(0);
+
+    await pass(created, overrides, T0);
+    expect(named(created, "traffic_sent").map((event) => event.direction)).toEqual(["first-to-second", "second-to-first"]);
+    expect(stateOf(created)["first-to-second"]).toMatchObject({ plan: { sent: [true, false] }, lastAttemptAtMilliseconds: T0 });
+    const sentOnChain = nodes[1].sent.length + nodes[369].sent.length;
+
+    // A restart a minute later: the same plan, nothing planned, nothing sent (the second time has not come).
+    await pass(created, overrides, T0 + 60_000);
+    expect(named(created, "traffic_hour_planned")).toHaveLength(2);
+    expect(named(created, "traffic_sent")).toHaveLength(2);
+    expect(nodes[1].sent.length + nodes[369].sent.length).toBe(sentOnChain);
+
+    // The second time sends, and no third ever does.
+    await pass(created, overrides, T0 + GAP);
+    expect(named(created, "traffic_sent")).toHaveLength(4);
+    await pass(created, overrides, HOUR_START + HOUR_MILLISECONDS - 1);
+    expect(named(created, "traffic_sent")).toHaveLength(4);
+    expect(named(created, "traffic_hour_skipped")).toEqual([]);
+  });
+
+  it("plans an hour with no send and sends nothing in it", async () => {
+    const created = await prepare();
+    const { overrides, nodes } = overridesFor({ random: () => 0 });
+    await pass(created, overrides, NOW);
+    await pass(created, overrides, HOUR_START + HOUR_MILLISECONDS - 1);
+    expect(named(created, "traffic_hour_planned")).toMatchObject([{ count: 0, times: [] }, { count: 0, times: [] }]);
+    expect(nodes[1].sent).toHaveLength(0);
     expect(nodes[369].sent).toHaveLength(0);
   });
 
+  it("draws a new plan in the next hour, and logs what the last one still held as skipped", async () => {
+    const created = await prepare();
+    const { overrides } = overridesFor({ random: half });
+    await pass(created, overrides, NOW);
+    // The bot was down through both times and the rest of the hour.
+    await pass(created, overrides, HOUR_START + HOUR_MILLISECONDS + 5);
+    expect(named(created, "traffic_sent")).toHaveLength(0);
+    const skipped = named(created, "traffic_hour_skipped");
+    expect(skipped).toHaveLength(2);
+    expect(skipped[0]).toMatchObject({ level: "warn", direction: "first-to-second", hour: HOUR, planned: 2, unsent: 2, hoursMissed: 0 });
+    const planned = named(created, "traffic_hour_planned");
+    expect(planned).toHaveLength(4);
+    expect(planned[2]).toMatchObject({ hour: HOUR + 1, count: 2 });
+    expect(stateOf(created)["first-to-second"].plan.hour).toBe(HOUR + 1);
+  });
+
+  it("names the hours that passed whole, and skips a fully used plan without a warning", async () => {
+    const created = await prepare({ directions: { "first-to-second": { enabled: true }, "second-to-first": { enabled: false } } });
+    const { overrides } = overridesFor({ random: half });
+    await pass(created, overrides, NOW);
+    await pass(created, overrides, T0 + GAP);
+    expect(named(created, "traffic_sent")).toHaveLength(1);
+    await pass(created, overrides, T0 + GAP + 1);
+    // Two sends are planned and one is used. Three hours later: skipped, with two whole hours missed.
+    await pass(created, overrides, HOUR_START + 3 * HOUR_MILLISECONDS);
+    expect(named(created, "traffic_hour_skipped")).toMatchObject([{ hour: HOUR, unsent: 1, hoursMissed: 2 }]);
+  });
+
+  it("warns about a missed whole hour even when the plan was used up", async () => {
+    const created = await prepare({ directions: { "first-to-second": { enabled: true }, "second-to-first": { enabled: false } } });
+    await mkdir(join(created.directory, "state"), { recursive: true });
+    await writeFile(statePath(created), JSON.stringify({ schemaVersion: 1, directions: { "first-to-second": { plan: { hour: HOUR - 5, count: 0, times: [], sent: [] }, lastAttemptAtMilliseconds: null }, "second-to-first": null } }));
+    await pass(created, overridesFor({ random: half }).overrides, NOW);
+    expect(named(created, "traffic_hour_skipped")).toMatchObject([{ hour: HOUR - 5, planned: 0, unsent: 0, hoursMissed: 4 }]);
+  });
+
+  it("does not catch up an hour that is only one behind and fully used", async () => {
+    const created = await prepare({ directions: { "first-to-second": { enabled: true }, "second-to-first": { enabled: false } } });
+    await mkdir(join(created.directory, "state"), { recursive: true });
+    await writeFile(statePath(created), JSON.stringify({ schemaVersion: 1, directions: { "first-to-second": { plan: { hour: HOUR - 1, count: 1, times: [HOUR_START - 10], sent: [true] }, lastAttemptAtMilliseconds: HOUR_START - 10 }, "second-to-first": null } }));
+    await pass(created, overridesFor({ random: () => 0 }).overrides, NOW);
+    expect(named(created, "traffic_hour_skipped")).toEqual([]);
+    expect(named(created, "traffic_hour_planned")).toHaveLength(1);
+  });
+
+  it("waits when the stored plan is for a later hour (the clock went back)", async () => {
+    const created = await prepare({ directions: { "first-to-second": { enabled: true }, "second-to-first": { enabled: false } } });
+    await mkdir(join(created.directory, "state"), { recursive: true });
+    const stored = { plan: { hour: HOUR + 1, count: 1, times: [HOUR_START + HOUR_MILLISECONDS + 5], sent: [false] }, lastAttemptAtMilliseconds: null };
+    await writeFile(statePath(created), JSON.stringify({ schemaVersion: 1, directions: { "first-to-second": stored, "second-to-first": null } }));
+    await pass(created, overridesFor({ random: half }).overrides, NOW);
+    expect(named(created, "traffic_hour_planned")).toEqual([]);
+    expect(stateOf(created)["first-to-second"]).toEqual(stored);
+  });
+
+  it("uses up a planned time with a skip, so the next pass does not try again", async () => {
+    const created = await prepare({ directions: { "first-to-second": { enabled: true }, "second-to-first": { enabled: false } } });
+    const { overrides, states, nodes } = overridesFor({ random: half });
+    states[1]!.balances.clear();
+    await pass(created, overrides, NOW);
+    await pass(created, overrides, T0);
+    await pass(created, overrides, T0 + 1_000);
+    expect(named(created, "traffic_skipped")).toHaveLength(1);
+    expect(stateOf(created)["first-to-second"]).toMatchObject({ plan: { sent: [true, false] }, lastAttemptAtMilliseconds: T0 });
+    expect(nodes[1].sent).toHaveLength(0);
+  });
+
+  it("sends a time that came while it was down late, and the next only after the gap", async () => {
+    const created = await prepare({ directions: { "first-to-second": { enabled: true }, "second-to-first": { enabled: false } } });
+    const { overrides } = overridesFor({ random: half });
+    await pass(created, overrides, NOW);
+    await pass(created, overrides, T0 + GAP + 10);
+    expect(named(created, "traffic_sent")).toHaveLength(1);
+    await pass(created, overrides, T0 + GAP + 20);
+    expect(named(created, "traffic_sent")).toHaveLength(1);
+    await pass(created, overrides, T0 + 2 * GAP + 10);
+    expect(named(created, "traffic_sent")).toHaveLength(2);
+  });
+
+  it("makes the same plans for the same seed", async () => {
+    const plansOf = async (seed: number) => {
+      const created = await prepare();
+      await pass(created, overridesFor({ random: seeded(seed) }).overrides, NOW);
+      return named(created, "traffic_hour_planned").map((event) => ({ direction: event.direction, count: event.count, times: event.times }));
+    };
+    const first = await plansOf(5);
+    expect(await plansOf(5)).toEqual(first);
+    expect(first).toHaveLength(2);
+  });
+});
+
+describe("startTraffic, failures", () => {
   it("logs a direction that fails and goes on with the other", async () => {
     const created = await prepare();
     const { overrides, states } = overridesFor();

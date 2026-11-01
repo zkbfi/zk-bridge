@@ -242,14 +242,33 @@ export const trafficTokenSchema = z
   })
   .strict();
 
-/** When one direction of the traffic bot sends. */
+/** One direction of the traffic bot. */
 export const trafficDirectionSchema = z
   .object({
     enabled: z.boolean().default(true),
-    /** Seconds after the start of each interval at which the direction is due. */
-    offsetSeconds: z.number().int().nonnegative(),
+    /** Removed with the fixed interval. Accepted and ignored, with a `config_ignored` warning, so an old file still starts. */
+    offsetSeconds: z.number().int().nonnegative().optional(),
   })
   .strict();
+
+/**
+ * How many sends a direction makes in a clock hour (UTC). At the start of each hour the bot draws a count from
+ * `minPerHour` to `maxPerHour`, uniformly, and that many send times at random inside the hour. Owner: "choose a number,
+ * 0-3, and that is how many bridges will be initated through the course of an hour. 0 because sometimes there will be no
+ * bridges. up to 3 because sometimes there will be multiple."
+ */
+export const trafficCadenceSchema = z
+  .object({
+    minPerHour: z.number().int().nonnegative().default(0),
+    maxPerHour: z.number().int().nonnegative().default(3),
+    /** The least seconds between two sends of one direction. */
+    minGapSeconds: z.number().int().nonnegative().default(300),
+  })
+  .strict()
+  .refine((cadence) => cadence.maxPerHour >= cadence.minPerHour, { message: "maxPerHour must not be below minPerHour" })
+  .refine((cadence) => Math.max(cadence.maxPerHour - 1, 0) * cadence.minGapSeconds < 3600, {
+    message: "maxPerHour sends cannot fit in one hour with minGapSeconds between them",
+  });
 
 /** The traffic bot section: test transfers in both directions on a schedule. */
 export const trafficSchema = z
@@ -260,23 +279,21 @@ export const trafficSchema = z
     tokensFile: pathSchema,
     /** The settings by symbol. A token of the file without an entry here is not sent. */
     tokens: z.record(z.string().min(1), trafficTokenSchema).refine((tokens) => Object.keys(tokens).length > 0, "name at least one token"),
-    /**
-     * Seconds between two sends of one direction. Default 900: four sends an hour in each direction. Owner: "seems like
-     * it would be best to have these proofs be posted if and only if they have erc20s moving across the bridge.
-     * otherwise they are useless. so perhaps we should be doing bridges 4x/hr".
-     */
-    intervalSeconds: positiveSeconds.default(900),
-    /** The most seconds that a send comes after its due time. Drawn once for each interval, so a restart keeps it. */
-    jitterSeconds: z.number().int().nonnegative().default(60),
+    /** How many sends each direction makes in an hour. Default 0 to 3, at least five minutes apart. */
+    cadence: trafficCadenceSchema.default({ minPerHour: 0, maxPerHour: 3, minGapSeconds: 300 }),
+    /** Removed with the fixed interval. Accepted and ignored, with a `config_ignored` warning, so an old file still starts. */
+    intervalSeconds: z.number().optional(),
+    /** Removed with the fixed interval. Accepted and ignored, with a `config_ignored` warning. */
+    jitterSeconds: z.number().optional(),
     /** Seconds between two looks at the clock. */
     pollSeconds: positiveSeconds.default(60),
     directions: z
       .object({
-        "first-to-second": trafficDirectionSchema.default({ enabled: true, offsetSeconds: 0 }),
-        "second-to-first": trafficDirectionSchema.default({ enabled: true, offsetSeconds: 450 }),
+        "first-to-second": trafficDirectionSchema.default({ enabled: true }),
+        "second-to-first": trafficDirectionSchema.default({ enabled: true }),
       })
       .strict()
-      .default({ "first-to-second": { enabled: true, offsetSeconds: 0 }, "second-to-first": { enabled: true, offsetSeconds: 450 } }),
+      .default({ "first-to-second": { enabled: true }, "second-to-first": { enabled: true } }),
     /**
      * The tip, as a percentage of the amount, in the share mode of the delivery router. Default 0.1: the default tip
      * of the dapp and the terminal (`DEFAULT_TIP_PERCENTAGE_MULTIPLIER`).
