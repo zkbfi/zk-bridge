@@ -31,6 +31,11 @@ export type PairSide = {
    * none is configured.
    */
   readonly stateUrls?: readonly string[];
+  /**
+   * More execution RPCs that the prover asks, in order, only for `debug_getRawHeader`, when `rpcUrl` does not serve the
+   * raw header. Every header is checked against its block hash. Empty when none is configured.
+   */
+  readonly headerRpcUrls?: readonly string[];
   /** The first block to index: the block before the deployment. */
   readonly startBlock: number;
   /** Seconds after which a send counts as waiting for finality. */
@@ -114,6 +119,12 @@ export const beaconVariableName = (chainId: number): string => `EXPLORER_BEACON_
 export const stateUrlsVariableName = (chainId: number): string => `EXPLORER_STATE_URLS_${chainId}`;
 
 /**
+ * The variable that holds the header RPCs of a chain: a comma separated list of execution RPC URLs that serve
+ * `debug_getRawHeader`.
+ */
+export const headerRpcVariableName = (chainId: number): string => `EXPLORER_HEADER_RPC_URL_${chainId}`;
+
+/**
  * Reads a comma separated list of state URLs. Blank entries are skipped.
  *
  * @throws When an entry is not an http or https URL. The message names the variable.
@@ -194,12 +205,14 @@ const buildSide = (
   }
   const beaconUrl = options.environment[beaconVariableName(definition.chainId)];
   const stateVariable = stateUrlsVariableName(definition.chainId);
+  const headerVariable = headerRpcVariableName(definition.chainId);
   return {
     name: definition.name,
     chainId: definition.chainId,
     rpcUrl: rpcUrl ?? "",
     beaconUrl: beaconUrl === undefined || beaconUrl === "" ? null : beaconUrl,
     stateUrls: parseStateUrls(options.environment[stateVariable], stateVariable),
+    headerRpcUrls: parseStateUrls(options.environment[headerVariable], headerVariable),
     startBlock: section.start_block,
     finalitySeconds: finalityOf(options.environment, definition.chainId),
     contracts: {

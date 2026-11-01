@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, beaconVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
+import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, beaconVariableName, headerRpcVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
 import { SINGLE_ENDPOINT_LABEL, endpointKeyVariables, remoteEndpointListSchema, type ProverSecret, type RemoteEndpoint } from "@zk-bridge/shared/prover";
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
 import { DEFAULT_WARMUP } from "./watch/warmup.ts";
@@ -113,6 +113,12 @@ export const backendConfigSchema = z
      * state. Optional. They can carry a key; the logger removes them like the other endpoints.
      */
     stateUrls: z.record(z.string().regex(/^\d+$/), z.array(z.url())).default({}),
+    /**
+     * More execution RPCs of each chain, asked in order only for `debug_getRawHeader` when the RPC endpoint lacks it.
+     * The `opening-proof` command reads the raw header of the other chain's block; every header is checked against its
+     * block hash. Optional. They can carry a key; the logger removes them like the other endpoints.
+     */
+    headerRpcUrls: z.record(z.string().regex(/^\d+$/), z.array(z.url({ protocol: /^https?$/ }))).default({}),
     /** The msgboard node (`ws://`, `wss://`, `http://` or `https://`). Needed by the webhook and the msgboard indexer. It can carry a key. */
     msgboardUrl: z.string().regex(/^(wss?|https?):\/\/\S+$/, "must be a ws, wss, http or https address").optional(),
     /**
@@ -288,6 +294,8 @@ export function loadBackendPair(config: BackendConfig, deployment: unknown): Pai
     if (beaconUrl !== undefined) environment[beaconVariableName(chainId)] = beaconUrl;
     const stateUrls = config.stateUrls[String(chainId)];
     if (stateUrls !== undefined) environment[stateUrlsVariableName(chainId)] = stateUrls.join(",");
+    const headerRpcUrls = config.headerRpcUrls[String(chainId)];
+    if (headerRpcUrls !== undefined) environment[headerRpcVariableName(chainId)] = headerRpcUrls.join(",");
   }
   return loadPair({ pairName: config.pair, environment, deployment });
 }
@@ -297,8 +305,8 @@ export function loadBackendPair(config: BackendConfig, deployment: unknown): Pai
  * The logger removes these, and the secret parts of each, from every line.
  */
 export function endpointValues(config: BackendConfig, pair: Pair | null): string[] {
-  const fromPair = (pair?.sides ?? []).flatMap((side) => [side.rpcUrl, side.beaconUrl ?? "", ...(side.stateUrls ?? [])]);
-  return [...Object.values(config.rpcUrls), ...Object.values(config.beaconUrls), ...Object.values(config.stateUrls).flat(), config.msgboardUrl ?? "", ...remoteEndpoints(config).map((endpoint) => endpoint.url), config.indexerUrl ?? "", ...fromPair].filter((value) => value !== "");
+  const fromPair = (pair?.sides ?? []).flatMap((side) => [side.rpcUrl, side.beaconUrl ?? "", ...(side.stateUrls ?? []), ...(side.headerRpcUrls ?? [])]);
+  return [...Object.values(config.rpcUrls), ...Object.values(config.beaconUrls), ...Object.values(config.stateUrls).flat(), ...Object.values(config.headerRpcUrls).flat(), config.msgboardUrl ?? "", ...remoteEndpoints(config).map((endpoint) => endpoint.url), config.indexerUrl ?? "", ...fromPair].filter((value) => value !== "");
 }
 
 /** The shortest path segment that counts as a key. Shorter segments, such as `rpc` or `evm`, are plain words. */

@@ -245,6 +245,31 @@ newer head of the light client and a backoff of 60 seconds that doubles with eac
 loops on a head that cannot work. Until the other light client has its first update the prover refuses with "it needs its
 first update"; that is the same wait.
 
+**The raw header of the remote block.** Besides `eth_getProof`, the proof needs the exact header of that block of S, which
+the prover asks with `debug_getRawHeader` (a Gloas header on Sepolia has fields that the block JSON does not show, so a
+rebuild from the JSON hashes to another value). One node rarely does both: on 2026-11-01 the keyless Sepolia node with
+enough proof history (`ethereum-sepolia-rpc.publicnode.com`, about 100 blocks) answers -32601 for `debug_getRawHeader`, and
+the keyed node that serves it keeps too short a proof window. So a chain may name **header RPCs**: point
+`chains.<chainId>.headerRpc` of `prover-setup.json` at a reference that holds a comma separated list of execution RPC URLs,
+or set `EXPLORER_HEADER_RPC_URL_<chainId>` in the environment of the bot:
+
+```json
+"chains": {
+  "11155111": {
+    "rpc": { "source": "environment", "variable": "EXPLORER_RPC_URL_11155111" },
+    "beacon": null,
+    "headerRpc": { "source": "environment", "variable": "EXPLORER_HEADER_RPC_URL_11155111" }
+  }
+}
+```
+
+The prover file then gets `header_rpc_urls = [...]` in the destination section of each route whose destination is that
+chain. The prover asks the main RPC first, then each header RPC in order, only for `debug_getRawHeader`, then the rebuild
+from the JSON. Every header must hash to the block hash that the own light client stored, so a header RPC is never trusted:
+a wrong one is refused and the next is asked. When all fail, the error names each source (`destination.rpc_url`,
+`destination.header_rpc_urls[0]`, ..., the rebuild from JSON) with its cause and no URL. Header RPC URLs can carry a key;
+each URL and its key-like parts are removed from every log line.
+
 ## The traffic bot
 
 Owner: "we should start out with a minimum of 1 proof/hour. this will help with keeping things current on both chains

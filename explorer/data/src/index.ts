@@ -30,6 +30,7 @@ export {
   rpcVariableName,
   beaconVariableName,
   stateUrlsVariableName,
+  headerRpcVariableName,
   parseStateUrls,
   finalityVariableName,
   type LoadPairOptions,
