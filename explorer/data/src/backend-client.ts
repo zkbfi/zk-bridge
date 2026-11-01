@@ -4,6 +4,7 @@ import type { JsonFetcher, JsonResponse } from "./connection.js";
 import type { JsonRequestInit } from "./msgboard/board-http.js";
 import type { ProofDirection } from "./proof-message.js";
 import { evidencePackageSchema, type EvidencePackage } from "./prover/packages.js";
+import { benchmarksSchema, directionPipelineSchema, transferProgressSchema, type Benchmarks, type DirectionPipeline, type TransferProgress } from "./pipeline-views.js";
 
 /** Posts a JSON body and parses the JSON of the answer. The `postJsonResponse` of the msgboard code fits it. */
 export type JsonPoster = (url: string, init: JsonRequestInit) => Promise<JsonResponse>;
@@ -156,6 +157,28 @@ export function createBackendClient(input: { baseUrl: string; fetchJson: JsonFet
       if (response.status === 404) return null;
       if (response.status !== 200) refuseStatus(response, "evidence");
       return parseAnswer(evidencePackageSchema, response, "evidence");
+    },
+    /**
+     * Where a transfer is in the proving pipeline and which service it waits on, or null when the chain indexer does not
+     * know the message. A 429 (60 reads a minute per caller) and a 503 (the indexer cannot be read) are errors.
+     */
+    async progress(messageId: Hex): Promise<TransferProgress | null> {
+      const response = await get(`/progress/${messageId}`);
+      if (response.status === 404) return null;
+      if (response.status !== 200) refuseStatus(response, "a progress");
+      return parseAnswer(transferProgressSchema, response, "a progress");
+    },
+    /** The proving pipeline of a direction: the waiting batch, the running job and its step, the newest proof and the head. */
+    async pipeline(direction: ProofDirection): Promise<DirectionPipeline> {
+      const response = await get(`/directions/${direction}/pipeline`);
+      if (response.status !== 200) refuseStatus(response, "a pipeline");
+      return parseAnswer(directionPipelineSchema, response, "a pipeline");
+    },
+    /** The median, p90 and count of each step over a window such as `24h`, `90m` or `7d` (1h to 30d). */
+    async benchmarks(window = "24h"): Promise<Benchmarks> {
+      const response = await get(`/benchmarks?window=${encodeURIComponent(window)}`);
+      if (response.status !== 200) refuseStatus(response, "benchmarks");
+      return parseAnswer(benchmarksSchema, response, "benchmarks");
     },
     /** The health report. */
     async health(): Promise<BackendHealth> {

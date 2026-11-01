@@ -17,6 +17,7 @@ import { batchRuleFor } from "./batch.ts";
 import { MIN_PARTICIPANTS, SLOTS_PER_EPOCH } from "./decide.ts";
 import { createEconomicsReader, type DestinationToken } from "./economics.ts";
 import { createFinalityFeed } from "./feed.ts";
+import { decisionBoardOf } from "./decisions.ts";
 import { createDirectionWatcher, type ListedMessage } from "./watcher.ts";
 import { createWarmupStore } from "./warmup-store.ts";
 
@@ -181,6 +182,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
       maxRetrySeconds: MAX_RETRY_SECONDS,
       logger,
       now: context.now,
+      onDecision: (decision) => decisionBoardOf(context).record(direction, decision),
     });
     const slotMilliseconds = secondsPerSlot(source.chainId) * 1000;
     const feed = createFinalityFeed({

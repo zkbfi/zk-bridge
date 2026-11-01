@@ -10,6 +10,7 @@ import { createWarmupStore } from "../src/watch/warmup-store.ts";
 import type { FinalityObservation } from "../src/watch/feed.ts";
 import type { HeldProof } from "../src/requests/held-proofs.ts";
 import type { BatchRule, Economics } from "../src/watch/batch.ts";
+import type { WatchDecision } from "../src/watch/decisions.ts";
 import { createDirectionWatcher, REFUSED_RETRIES, REFUSED_RETRY_SECONDS, type ListedMessage } from "../src/watch/watcher.ts";
 import { memoryLogger } from "./support.ts";
 
@@ -47,8 +48,11 @@ function setup(
     warmup?: Partial<WarmupConfig>;
     batchRule?: BatchRule;
     economics?: Economics | (() => Promise<Economics>);
+    /** Keep each decision the watcher reports. */
+    recordDecisions?: boolean;
   } = {},
 ) {
+  const decisions: WatchDecision[] = [];
   const log = memoryLogger();
   const storage = openStorage(":memory:");
   const store = createWarmupStore(storage);
@@ -110,10 +114,11 @@ function setup(
     maxRetrySeconds: 600,
     logger: log.logger,
     now: Date.now,
+    ...(options.recordDecisions === true ? { onDecision: (decision: WatchDecision) => void decisions.push(decision) } : {}),
   });
   const events = () => log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
   const sessions = () => storage.database.prepare("SELECT why, lead_seconds AS lead, started_at AS startedAt, ready_at AS readyAt, ended_at AS endedAt, outcome FROM warmup_sessions ORDER BY started_at").all();
-  return { watcher, state, submitted, pings, reads, store, sessions, named: (name: string) => events().filter((event) => event.event === name) };
+  return { watcher, state, submitted, pings, reads, store, sessions, decisions, named: (name: string) => events().filter((event) => event.event === name) };
 }
 
 /** A reading that arrived `delay` ms after its signature slot began. */
@@ -870,5 +875,82 @@ describe("the direction watcher, with a proof we have (2026-11-01)", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     await run.watcher.settled();
     expect(run.submitted).toHaveLength(1);
+  });
+});
+
+describe("the direction watcher reports its decisions (2026-11-01)", () => {
+  const WAIT: BatchRule = { maxWaitSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n };
+  const USD = 10n ** 18n;
+  const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, block: "7" });
+  const finalAt = (slot: number) => expectedFinalityAt(slot, facts()) * 1000;
+
+  it("a batch that waits: its size, worth and times in milliseconds, with the slot clock of the light client", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT, recordDecisions: true });
+    const reading = observation(HEAD + 128);
+    arrive(reading);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    expect(run.decisions).toEqual([
+      {
+        at: reading.receivedAt,
+        finalizedSlot: HEAD + 128,
+        headSlot: HEAD,
+        genesisTime: GENESIS,
+        secondsPerSlot: SLOT,
+        due: false,
+        why: "waiting-for-profit",
+        detail: expect.stringContaining("1 message waits"),
+        batch: { messages: 1, feesUsd: null, costUsd: null, unknownWhy: "no prices in this test", oldestFinalAt: finalAt(HEAD + 100), startAt: finalAt(HEAD + 100) + 3_600_000, startWhy: "max-wait", maxWaitAt: finalAt(HEAD + 100) + 3_600_000 },
+      },
+    ]);
+  });
+
+  it("a priced batch that waits for profit carries its fees and cost", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 140, "b")], batchRule: WAIT, economics: priced({ [id("b")]: USD }), recordDecisions: true });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.decisions[0]?.batch).toMatchObject({ feesUsd: "0.000000", costUsd: "0.025000", startWhy: "profit", startAt: finalAt(HEAD + 140) });
+  });
+
+  it("a due batch says what triggered it and that the job started; a later one meets the running job", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 110, "b")], batchRule: WAIT, economics: priced({ [id("a")]: USD }), recordDecisions: true });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.decisions).toMatchObject([{ due: true, why: "message", trigger: "profit", batchSize: 2, feesUsd: "1.000000", costUsd: "0.025000", outcome: "job-started" }]);
+    run.watcher.observe(observation(HEAD + 160));
+    await run.watcher.settled();
+    expect(run.decisions.at(-1)).toMatchObject({ due: true, outcome: "job-active", finalizedSlot: HEAD + 160 });
+  });
+
+  it("a proof due without a batch wait carries no batch facts; a refusal is its outcome", async () => {
+    const run = setup({ messages: [listed(HEAD + 100)], submit: () => ({ refused: "duplicate" }), recordDecisions: true });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.decisions).toHaveLength(1);
+    expect(run.decisions[0]).toMatchObject({ due: true, why: "message", outcome: "duplicate" });
+    expect(run.decisions[0]).not.toHaveProperty("trigger");
+  });
+
+  it("a second keep-alive in one period is reported as held back", async () => {
+    const head = 1000 * PERIOD + 8000;
+    const run = setup({ facts: facts(head, false), recordDecisions: true });
+    const first = observation(1001 * PERIOD + 4);
+    arrive(first);
+    run.watcher.observe(first);
+    await run.watcher.settled();
+    run.state.active = null;
+    const second = observation(1001 * PERIOD + 36);
+    arrive(second);
+    run.watcher.observe(second);
+    await run.watcher.settled();
+    expect(run.decisions.map((decision) => decision.outcome)).toEqual(["job-started", "keep-alive-this-period"]);
+  });
+
+  it("a decision that is not due and has no batch carries none", async () => {
+    const run = setup({ messages: [listed(HEAD + 100)], recordDecisions: true });
+    run.watcher.observe(observation(HEAD + 128, MIN_PARTICIPANTS - 1));
+    await run.watcher.settled();
+    expect(run.decisions).toMatchObject([{ due: false, why: "insufficient-signatures" }]);
+    expect(run.decisions[0]).not.toHaveProperty("batch");
   });
 });

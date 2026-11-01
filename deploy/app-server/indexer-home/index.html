@@ -27,6 +27,22 @@
   a { color: var(--accent-text); } .warn { color: var(--accent-text); } .ok { color: var(--good); }
   footer { color: var(--muted); font-size: 14px; padding: 28px 0 40px; }
   ul.api { list-style: none; padding: 0; margin: 0; } ul.api li { padding: 8px 0; border-top: 1px solid var(--line); }
+  h3 { font-size: 16px; margin: 16px 0 2px; }
+  .lookup { display: flex; gap: 8px; margin: 8px 0 4px; }
+  .lookup input { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); color: var(--ink); }
+  .lookup button { font: inherit; padding: 8px 16px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; }
+  .waiting { background: var(--raised); border: 1px solid var(--accent); border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
+  .waiting b { color: var(--accent-text); }
+  ol.stages { list-style: none; padding: 0; margin: 0; }
+  ol.stages li { position: relative; padding: 10px 0 10px 26px; border-top: 1px solid var(--line); }
+  ol.stages li::before { content: ""; position: absolute; left: 3px; top: 17px; width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--line); }
+  ol.stages li.done::before { background: var(--good); border-color: var(--good); }
+  ol.stages li.current { font-weight: 600; } ol.stages li.current::before { background: var(--accent); border-color: var(--accent); }
+  ol.stages li.pending { color: var(--muted); }
+  .scroll { overflow-x: auto; }
+  table.t { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.t th, table.t td { text-align: right; padding: 8px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
+  table.t th { color: var(--muted); font-weight: 600; } table.t th:first-child, table.t td:first-child { text-align: left; white-space: normal; }
 </style>
 </head>
 <body>
@@ -37,12 +53,17 @@
 </div></header>
 <section class="band"><div class="col">
   <h1 id="pair">zkb.fi bridge</h1>
-  <p>Live on-chain data, read from both chains by this indexer. It refreshes every 15 seconds.</p>
+  <p>Live on-chain data, read from both chains by this indexer, and where each proof is in the proving pipeline. It refreshes every 15 seconds.</p>
 </div></section>
 <main class="col">
   <h2>Light clients</h2><div id="heads"></div>
   <h2>Gates</h2><div id="gates"></div>
+  <h2>Proving pipeline</h2><div id="pipeline"></div>
   <h2>Transfers</h2><div id="flight"></div><div id="feed"></div>
+  <h2>Look up a transfer</h2>
+  <form class="lookup" id="lookup"><input id="lookup-id" name="id" placeholder="Message ID: 0x and 64 hex characters" autocomplete="off" spellcheck="false" aria-label="Message ID"><button type="submit">Look up</button></form>
+  <div id="progress"></div>
+  <h2>Recent proof timings</h2><div id="timings"></div>
   <h2>Read it yourself</h2>
   <ul class="api">
     <li><a href="/api/summary">/api/summary</a><span class="sub">Heads, gates, transfers in flight, 24 h volume</span></li>
@@ -52,6 +73,8 @@
     <li><a href="/api/tokens">/api/tokens</a><span class="sub">Bridged tokens</span></li>
     <li><span class="mono">/api/messages/&lt;id&gt;</span> · <span class="mono">/api/tx/&lt;chainId&gt;/&lt;hash&gt;</span><span class="sub">One message with its costs; one transaction's cost</span></li>
     <li><a href="/graphql">/graphql</a><span class="sub">GraphQL over the same data</span></li>
+    <li><span class="mono">prove host: /progress/&lt;messageId&gt;</span><span class="sub">Where one transfer is in the proving pipeline and which service it waits on</span></li>
+    <li><span class="mono">prove host: /directions/&lt;direction&gt;/pipeline</span> · <span class="mono">/benchmarks?window=24h</span><span class="sub">The batch, job and proof of a direction; the time each step takes</span></li>
   </ul>
 </main>
 <footer class="col">Use the bridge at <a href="https://next.zkb.fi">next.zkb.fi</a> · docs at <a href="https://docs.zkb.fi">docs.zkb.fi</a>. Send <span class="mono">Accept: application/json</span> to this address for the summary as JSON.</footer>
@@ -81,6 +104,128 @@
       `slot ${num(h.storedHeadSlot)} · ${num(h.updateCount)} update${h.updateCount === 1 ? "" : "s"}${started}${u ? ` · last ${ago(now - u.timestamp)} ago in ${tx(h.chainId, u.transactionHash)}` : ""}`,
       behind);
   }
+  // The proving service (the backend) answers on the prove host of this deployment: indexer.example → prove.example.
+  // Only the page's own host decides it, so no link can point this page at another server.
+  function proveBase(loc) {
+    const host = String((loc && loc.hostname) || "");
+    return host.startsWith("indexer.") ? `https://prove.${host.slice("indexer.".length)}` : null;
+  }
+  const PROVE = proveBase(typeof location === "undefined" ? null : location);
+  const SERVICE = {
+    "source-chain-finality": "The source chain is finalizing the block with this transfer.",
+    "batch-profit": "The proof starts once the waiting transfers' fees cover its cost.",
+    "batch-max-wait": "The proof starts at the batch's set time, whatever the fees.",
+    "proof-dedup-pending": "A proof already made is landing first; this transfer goes in the proof after it.",
+    "gpu-worker-start": "A GPU worker is starting for the proof.",
+    "gpu-proving": "The GPU is making the proof.",
+    "board-post": "The proof is made and is being posted to the message board.",
+    "light-client-update": "The proof is on the message board; a runner posts it to the destination chain.",
+    "delivery": "The destination chain accepts the transfer; a runner delivers it.",
+    "none": "Nothing: the transfer is done.",
+  };
+  const SERVICE_NAME = { "source-chain-finality": "source chain finality", "batch-profit": "batch: fees to cover the proof", "batch-max-wait": "batch: its set time",
+    "proof-dedup-pending": "an earlier proof landing", "gpu-worker-start": "GPU worker start", "gpu-proving": "GPU proving", "board-post": "message board post",
+    "light-client-update": "light client update", "delivery": "delivery", "none": "nothing" };
+  const STAGE = { sent: "Sent on the source chain", final: "Final on the source chain", batched: "Picked for a proof", proving: "Proof made",
+    "proof-ready": "Proof on the message board", "update-posted": "Light client updated on the destination chain", delivered: "Delivered" };
+  const WHERE = { stored: "made, not on the message board yet", board: "on the message board, not on chain yet", applied: "on chain" };
+  // A duration in milliseconds: "850 ms", "4.2 s", "95 s", "2 min 10 s", then whole minutes and hours.
+  const dur = (ms) => {
+    if (ms === null || ms === undefined) return "—";
+    if (ms < 1000) return `${Math.round(ms)} ms`;
+    if (ms < 10000) return `${(ms / 1000).toFixed(1)} s`;
+    const s = Math.round(ms / 1000);
+    if (s < 120) return `${s} s`;
+    if (s < 600) return `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ""}`;
+    return ago(s);
+  };
+  // A time against now (both in milliseconds): "in 3 min", "4 min ago", "now".
+  const rel = (at, now) => { const d = Math.round((at - now) / 1000); if (Math.abs(d) < 5) return "now"; return d > 0 ? `in ${ago(d)}` : `${ago(-d)} ago`; };
+  const slots = (p) => `slot ${num(p.startSlot)} → ${num(p.newSlot)}`;
+  // One direction of the proving pipeline (GET /directions/<direction>/pipeline).
+  function pipelineRows(p, label) {
+    const now = p.now, out = [];
+    const b = p.batch;
+    out.push(`<h3>${esc(label)}</h3>`);
+    out.push(b ? row(`Batch: ${num(b.count)} transfer${b.count === 1 ? "" : "s"} wait for a proof`,
+        `${b.trigger === "profit" ? "the proof starts once their fees cover its cost" : "the proof starts at the batch's set time"} · oldest final ${rel(b.oldestFinalAt, now)}${b.feesUsd !== null ? ` · fees $${esc(b.feesUsd)} against $${esc(b.costUsd)}` : ""}`,
+        `<span class="warn">${rel(b.eta, now)}</span>`)
+      : row("Batch: none waits", p.decision ? `last decision ${rel(p.decision.at, now)}: ${esc(p.decision.detail)}` : "the watcher has decided nothing since the backend started", "—"));
+    const j = p.job;
+    if (j) out.push(row(`Proving: ${esc(SERVICE_NAME[j.step] || j.step)}`, `job ${esc(j.jobId.slice(0, 8))} · ${esc(j.status)} for ${dur(j.elapsedMs)}${j.eta !== undefined ? ` · expected done ${rel(j.eta, now)}` : ""} · ${esc(j.detail)}`, `<span class="warn">running</span>`));
+    else if (p.latestJob) out.push(row("Proving: no job runs", `last job ${esc(p.latestJob.status)} ${rel(p.latestJob.updatedAt, now)}${p.latestJob.error ? ` · ${esc(p.latestJob.error)}` : ""}`, "idle"));
+    else out.push(row("Proving: no job runs", "no job yet", "idle"));
+    const pr = p.latestProof;
+    out.push(pr ? row(`Latest proof: ${slots(pr)}`, `${WHERE[pr.where] || esc(pr.where)} · since ${rel(pr.since, now)}${p.head && p.head.slot !== null ? ` · light client at slot ${num(p.head.slot)}` : ""}`,
+        `<span class="${pr.where === "applied" ? "ok" : "warn"}">${esc(pr.where)}</span>`)
+      : row("Latest proof: none held", p.head && p.head.slot !== null ? `light client at slot ${num(p.head.slot)}` : "", "—"));
+    return out.join("");
+  }
+  // The timings of each step (GET /benchmarks) and the newest proofs.
+  const STEP = [["workerWait", "Wait for a GPU worker"], ["remote", "Remote request"], ["workerQueue", "Queue on the worker"], ["workerProve", "Proof on the GPU"],
+    ["total", "Whole prover run"], ["webhookToBoard", "Proof stored → on the message board"], ["boardPost", "Message board proof of work"],
+    ["proofToOnChain", "Message board → light client update on chain"], ["coveredToDelivered", "Light client update → delivered"], ["sentToDelivered", "Sent → delivered"]];
+  function timingsTable(b) {
+    const steps = STEP.map(([k, name]) => { const s = b.steps[k] || { count: 0, medianMs: null, p90Ms: null };
+      return `<tr><td>${name}</td><td>${dur(s.medianMs)}</td><td>${dur(s.p90Ms)}</td><td>${num(s.count)}</td></tr>`; }).join("");
+    const note = b.indexer === "ok" ? "" : `<p class="sub">The indexer did not answer the proving service, so the on-chain and delivery steps are empty.</p>`;
+    const head = `<div class="scroll"><table class="t"><thead><tr><th>Step (last ${esc(b.window)})</th><th>Median</th><th>p90</th><th>Count</th></tr></thead><tbody>${steps}</tbody></table></div>${note}`;
+    if (!b.recent || b.recent.length === 0) return head + `<p class="sub">No proof was made in the last ${esc(b.window)}.</p>`;
+    const rows = b.recent.map((r) => `<tr><td>${r.provedAt ? rel(r.provedAt, b.to) : "—"}${r.newSlot !== null ? `<span class="sub">to slot ${num(r.newSlot)}</span>` : ""}</td>`
+      + `<td>${r.coldWorker === null ? "—" : r.coldWorker ? `cold, ${dur(r.waitWorkerMs)}` : "warm"}</td><td>${dur(r.workerProveMs)}</td><td>${dur(r.totalMs)}</td><td>${dur(r.grindMs)}</td>`
+      + `<td>${r.onChainAt && r.boardPostedAt ? dur(r.onChainAt - r.boardPostedAt) : "—"}</td><td>${esc(r.workerGpu || r.endpoint || "—")}</td></tr>`).join("");
+    return head + `<h3>Newest proofs</h3><div class="scroll"><table class="t"><thead><tr><th>Proved</th><th>Worker</th><th>GPU proof</th><th>Prover run</th><th>Board PoW</th><th>Board → chain</th><th>Ran on</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  // The services whose detail from the backend only repeats the sentence above.
+  const PLAIN = new Set(["board-post", "light-client-update", "delivery"]);
+  // One transfer's timeline (GET /progress/<messageId>), with what it waits on.
+  function progressView(p, now) {
+    const w = p.waitingOn;
+    const waiting = w.service === "none" ? `<div class="waiting"><b>Done.</b> ${esc(w.detail || "")}</div>`
+      : `<div class="waiting">Waiting on <b>${esc(SERVICE_NAME[w.service] || w.service)}</b> since ${rel(w.since, now)}${w.eta !== undefined ? ` · expected ${rel(w.eta, now)}` : ""}<span class="sub">${esc(SERVICE[w.service] || "")}</span>${w.detail && !PLAIN.has(w.service) ? `<span class="sub">${esc(w.detail)}</span>` : ""}</div>`;
+    const items = p.stages.map((s) => `<li class="${esc(s.status)}">${STAGE[s.key] || esc(s.key)}${s.status === "current" ? ` · waiting on ${esc(SERVICE_NAME[w.service] || w.service)}` : ""}`
+      + `${s.at !== undefined || s.detail ? `<span class="sub">${s.at !== undefined ? rel(s.at, now) : ""}${s.at !== undefined && s.detail ? " · " : ""}${s.detail ? esc(s.detail) : ""}</span>` : ""}</li>`).join("");
+    const proof = p.proof ? row(`Proof ${slots(p.proof)}`, WHERE[p.proof.where] || esc(p.proof.where), `<span class="${p.proof.where === "applied" ? "ok" : "warn"}">${esc(p.proof.where)}</span>`) : "";
+    return `${waiting}<ol class="stages">${items}</ol>${proof}`;
+  }
+  const proveGet = (path) => fetch(`${PROVE}${path}`, { cache: "no-store" });
+  let directions = null, lastBenchmarks = 0, shown = null;
+  async function loadPipeline() {
+    const box = document.getElementById("pipeline"), table = document.getElementById("timings");
+    if (!PROVE) { box.innerHTML = row("The proving service of this host is not known", "This page reads it from prove.&lt;domain&gt; when it is served at indexer.&lt;domain&gt;.", "—"); table.innerHTML = ""; return; }
+    try {
+      if (!directions) { const pair = await fetch("/api/pair").then((r) => r.json()); const [a, b] = pair.sides.map((x) => name(x.chainId));
+        directions = [["first-to-second", `${a} → ${b}`], ["second-to-first", `${b} → ${a}`]]; }
+      const parts = await Promise.all(directions.map(([d]) => proveGet(`/directions/${d}/pipeline`).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })));
+      box.innerHTML = parts.map((p, i) => pipelineRows(p, directions[i][1])).join("");
+      if (Date.now() - lastBenchmarks >= 60000) {
+        const r = await proveGet("/benchmarks?window=24h"); if (!r.ok) throw new Error(String(r.status));
+        table.innerHTML = timingsTable(await r.json()); lastBenchmarks = Date.now();
+      }
+    } catch (error) {
+      box.innerHTML = row("The proving service did not answer", "This page asks again every 15 seconds.", `<span class="warn">unreachable</span>`);
+    }
+  }
+  async function lookup(id) {
+    const box = document.getElementById("progress");
+    if (!/^0x[0-9a-fA-F]{64}$/.test(id)) { shown = null; box.innerHTML = row("Enter a message ID", "0x followed by 64 hex characters. The transfers above link to theirs.", "—"); return; }
+    if (!PROVE) { box.innerHTML = row("The proving service of this host is not known", "", "—"); return; }
+    shown = id;
+    try {
+      const r = await proveGet(`/progress/${id}`);
+      if (shown !== id) return;
+      if (r.status === 404) { box.innerHTML = row("The indexer does not know this transfer", "It shows a transfer once its send is in a block it has read.", "—"); return; }
+      if (r.status === 429) { box.innerHTML = row("Too many lookups", `Try again in ${esc(r.headers.get("Retry-After") || "60")} s.`, "—"); return; }
+      if (!r.ok) throw new Error(String(r.status));
+      box.innerHTML = progressView(await r.json(), Date.now());
+    } catch (error) {
+      box.innerHTML = row("The proving service did not answer", "", `<span class="warn">unreachable</span>`);
+    }
+  }
+  const form = document.getElementById("lookup");
+  if (form.addEventListener) form.addEventListener("submit", (event) => { event.preventDefault(); const id = document.getElementById("lookup-id").value.trim(); if (typeof history !== "undefined") history.replaceState(null, "", `#progress=${id}`); lookup(id); });
+  const fromHash = () => { const m = /progress=(0x[0-9a-fA-F]{64})/.exec(typeof location === "undefined" ? "" : location.hash); if (m) { document.getElementById("lookup-id").value = m[1]; lookup(m[1]); } };
+  if (typeof addEventListener === "function") addEventListener("hashchange", fromHash);
   async function load() {
     try {
       const [summary, feed] = await Promise.all(["/api/summary", "/api/feed"].map((p) => fetch(p, { cache: "no-store" }).then((r) => { if (!r.ok) throw new Error(`${p} ${r.status}`); return r.json(); })));
@@ -101,14 +246,16 @@
           const what = t ? `${amount ?? "?"} ${esc((token && token.symbol) || "token")}` : "Message";
           const when = m.sent ? `${ago(summary.now - m.sent.timestamp)} ago` : "";
           const link = m.sent && m.sent.transactionHash ? ` · ${tx(d.sourceChainId, m.sent.transactionHash)}` : "";
-          return row(what, `${esc(name(d.sourceChainId))} → ${esc(name(d.destinationChainId))} · ${when}${link}`, esc(String(m.status || "").replace(/_/g, " ")));
+          const track = PROVE && /^0x[0-9a-fA-F]{64}$/.test(m.messageId || "") ? ` · <a href="#progress=${m.messageId}">progress</a>` : "";
+          return row(what, `${esc(name(d.sourceChainId))} → ${esc(name(d.destinationChainId))} · ${when}${link}${track}`, esc(String(m.status || "").replace(/_/g, " ")));
         }).join("");
       document.getElementById("dot").className = "dot"; document.getElementById("live").textContent = "live";
     } catch (error) {
       document.getElementById("dot").className = "dot off"; document.getElementById("live").textContent = "can't reach the API";
     }
   }
-  load(); setInterval(load, 15000);
+  load(); loadPipeline(); fromHash();
+  setInterval(() => { load(); loadPipeline(); if (shown) lookup(shown); }, 15000);
 </script>
 </body>
 </html>

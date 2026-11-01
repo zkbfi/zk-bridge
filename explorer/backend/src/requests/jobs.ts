@@ -34,6 +34,8 @@ export type StoredRequest = {
 };
 
 type JobRow = {
+  planned_start_slot?: string | null;
+  planned_new_slot?: string | null;
   id: string;
   direction: ProofDirection;
   status: JobStatus;
@@ -96,6 +98,15 @@ export function recentCostlyJobs(storage: Storage, direction: ProofDirection, si
     .prepare("SELECT count(*) AS total, min(created_at) AS oldest FROM jobs WHERE direction = ? AND created_at > ? AND NOT (status = 'on-chain' AND new_slot IS NULL)")
     .get(direction, since) as { total: number; oldest: number | null };
   return { count: row.total, oldest: row.oldest };
+}
+
+/** A job with the slots the watcher planned for it (null for a request from outside). */
+export type PlannedJob = Job & { readonly plannedStartSlot: string | null; readonly plannedNewSlot: string | null };
+
+/** The jobs of a direction created at or after `since`, oldest first, with their planned slots. */
+export function listJobsSince(storage: Storage, direction: ProofDirection, since: number): PlannedJob[] {
+  const rows = storage.database.prepare("SELECT * FROM jobs WHERE direction = ? AND created_at >= ? ORDER BY created_at, rowid").all(direction, since) as JobRow[];
+  return rows.map((row) => ({ ...toJob(row), plannedStartSlot: row.planned_start_slot ?? null, plannedNewSlot: row.planned_new_slot ?? null }));
 }
 
 /** All active jobs, oldest first. */
