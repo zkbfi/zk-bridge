@@ -20,7 +20,7 @@ import { TokenIcon } from "../bridge/TokenIcon";
 import { loadImageServer } from "../bridge/image-server";
 import { iconSubjectOf, iconUrl } from "../bridge/image-source";
 import { priceNumber, type PriceQuote } from "../bridge/price-oracle";
-import type { CostInput } from "@zk-bridge/shared";
+import { DEFAULT_GAS_LEVEL, type CostInput } from "@zk-bridge/shared";
 import { usePrices } from "../bridge/use-prices";
 import { durationText, exploreNumbers, lightClientCards, statusWord } from "./explore-model";
 import { ExplorePageView } from "./ExplorePages";
@@ -136,7 +136,7 @@ const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
 
 type ExploreData = ReturnType<typeof useExploreData>;
 
-/** One destination's delivery cost inputs (fee-rules' CostInput at the Normal level), or null while any is unknown. */
+/** One destination's delivery cost inputs (fee-rules' CostInput at the default, Normal, level), or null while any is unknown. */
 const useCostInput = (chainId: number, prices: ReadonlyMap<string, PriceQuote | null> | undefined, live: boolean): CostInput | null => {
   const report = useDeliveryCost(chainId, { enabled: true }).data;
   const priority = usePriorityFee(chainId, { enabled: live }).data;
@@ -144,7 +144,7 @@ const useCostInput = (chainId: number, prices: ReadonlyMap<string, PriceQuote | 
   if (report === undefined || report.baseFee.wei === null || native === null) return null;
   const kind = report.kinds.token;
   const gas = kind.p90Gas ?? kind.averageGas ?? kind.defaultGas;
-  return { gasUsed: BigInt(gas), baseFeeWei: BigInt(report.baseFee.wei), priorityFeeWei: priority ?? 0n, nativePriceE18: native.usdE18, level: 1 };
+  return { gasUsed: BigInt(gas), baseFeeWei: BigInt(report.baseFee.wei), priorityFeeWei: priority ?? 0n, nativePriceE18: native.usdE18, level: DEFAULT_GAS_LEVEL };
 };
 
 /**

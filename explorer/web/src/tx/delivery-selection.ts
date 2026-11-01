@@ -59,7 +59,7 @@ export type DeliverySelectionInput = {
   readonly marginRate: bigint;
   /** The factor on the gas cost, scaled by 1e18. Only the gas multiplier mode reads it. */
   readonly gasMargin: bigint;
-  /** The base fee above which a gas based tip stops rising, in wei per gas. Null takes twice the base fee now. */
+  /** The base fee above which a gas based tip stops rising, in wei per gas. Null takes three times the base fee now (the Normal gas level). */
   readonly baseFeeCeilingWei: bigint | null;
   /**
    * The most a gas based tip may take, in base units: the automatic cap's share of the amount (owner, quotes 70–71: the

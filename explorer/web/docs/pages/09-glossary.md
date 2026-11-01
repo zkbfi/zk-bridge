@@ -52,7 +52,7 @@ The point at which a chain can no longer undo a block. On these chains, finality
 
 ## Gas level
 
-How far above today's gas price you let the deliverer pay: Normal (up to 2 ×), High (3 ×) or Highest (5 ×). Today's price is the anchor, and the real price can land lower or higher over the next 15 minutes.
+How far above today's gas price you let the deliverer pay: Low (up to 2 ×), Normal (3 ×, where every transfer starts) or High (5 ×). Today's price is the anchor, and the real price can land lower or higher over the next 15 minutes.
 
 ## Gate
 

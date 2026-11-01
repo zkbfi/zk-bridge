@@ -56,7 +56,7 @@ export const Bridge = ({ amountUsd }: { amountUsd: bigint }) => {
   const caps = useFeeCaps(); // the caps live in the host's storage (localStorage unless you pass your own)
   const prices = usePrices({ tokens: [ETH], pair, source }).data;
   const costUsd = 5n * 10n ** 18n; // the host reads the delivery cost from its own indexer
-  const { auto } = useDefaultFee({ amountUsd, costUsd, costNormalUsd: costUsd, capPercent: caps.storedCap });
+  const { auto } = useDefaultFee({ amountUsd, costUsd, costDefaultUsd: costUsd, capPercent: caps.storedCap });
   const amountUnits = 10n ** 18n;
   const feeUnits = amountUnits / 100n; // 1% of the amount
   const hard = useHardCap({ hardCapPercent: caps.hardCapPercent, amountUnits, feeUnits, worstFeeUnits: 0n });
@@ -136,7 +136,7 @@ Hooks:
 
 | Export | What it does |
 | --- | --- |
-| `useDefaultFee({ amountUsd, costUsd, costNormalUsd, capPercent })` | `{ capWad, auto }`: the default fee of `@zkb/core` (the larger of the curve and twice the cost, held at the cap, plus the gas level's extra). |
+| `useDefaultFee({ amountUsd, costUsd, costDefaultUsd, capPercent })` | `{ capWad, auto }`: the default fee of `@zkb/core` (the larger of the curve and twice the cost, held at the cap, plus the extra of a gas level above Normal). |
 | `useFeeWarnings(input)` | `{ warnings, linePercent, thresholdText }`: small transfer, low fee, "High cap %", the cap warning, and the line a tip should stay under. `input` is `FeeWarningsInput` of `@zkb/core`. |
 | `useHardCap({ hardCapPercent, amountUnits, feeUnits, worstFeeUnits })` | `{ hardCapWad, check, over, raisePercent }`: the hard cap against the fee now (or the worst case of a gas-based fee), and the smallest cap that admits it. |
 | `useFeeCaps(storage?)` | `{ storedCap, storedHardCap, hardCapPercent, setHardCapPercent, saveCap(percent), saveHard() }`: the two stored caps. |

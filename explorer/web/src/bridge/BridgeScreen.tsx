@@ -17,7 +17,7 @@ import { useWallet } from "../wallet/wallet-port";
 import { arrivesAsSymbol, isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
 import { DeliveryMenu, deliverySummary, type TipChoiceKey } from "./DeliveryMenu";
-import { nativeSymbolOf, ceilingCostUsd, ceilingWeiOf, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
+import { nativeSymbolOf, ceilingCostUsd, ceilingWeiOf, DEFAULT_GAS_LEVEL, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
 import { formatUnits } from "viem";
 import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, ReviewNotice, ReviewRow, ReviewSheet, useDefaultFee, useFeeCaps, useFeeWarnings, useHardCap, useVerdict } from "@zkb/react";
 import { DirectionMenu } from "./DirectionMenu";
@@ -188,10 +188,10 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const ceilingWeiText = form.tip?.ceilingGweiText === undefined ? null : safeParse(form.tip.ceilingGweiText, 9);
   const gasLevel = gasLevelOfCeiling(ceilingWeiText, levelBaseWei);
   const costUsd = costAt(gasLevel);
-  const costNormalUsd = costAt(1);
+  const costDefaultUsd = costAt(DEFAULT_GAS_LEVEL);
   const amountUsd = valueOf(amount);
-  // A higher gas level adds its extra expected cost on top of the curve, so the automatic fee rises with the bars too.
-  const { capWad, auto } = useDefaultFee({ amountUsd, costUsd, costNormalUsd, capPercent });
+  // A level above the default adds its extra expected cost on top of the curve, so the automatic fee rises with the bars too.
+  const { capWad, auto } = useDefaultFee({ amountUsd, costUsd, costDefaultUsd, capPercent });
   // The automatic fee signs the default share; a gas-based fee signs a limit no higher than the cap's share (owner,
   // quotes 70–71: "limited by the cap").
   const options = useMemo(
@@ -236,7 +236,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     capWad,
     feeUsd: feeUsd,
     costUsd: costUsd,
-    costNormalUsd: costNormalUsd,
+    costDefaultUsd: costDefaultUsd,
     shareWithoutPriceWad,
     belowBreakEven: tipUnits !== null && breakEven !== null && tipUnits < breakEven,
     gasBased,
@@ -259,12 +259,12 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     const next = tipWad === null ? null : signedShareFor(tipWad, to);
     return next === null ? undefined : percentTextOfWad(next);
   };
-  // The bars beside the gas can (owner, quote 81): a new level writes its ceiling (none at Normal) and, for a share the
+  // The bars beside the gas can (owner, quote 81): a new level writes its ceiling (none at the default, Normal) and, for a share the
   // user set, adds the level's extra expected cost to it. The automatic fee follows by itself (its floor is twice the
   // cost at the level). Either way every number moves: "a new level of fee spend has been consented to".
   const setGasLevel = (level: GasLevel): void => {
     const { ceilingGweiText: _drop, ...rest } = form.tip ?? {};
-    const ceiling = levelBaseWei === null || level === 1 ? undefined : formatUnits(ceilingWeiOf(levelBaseWei, level), 9);
+    const ceiling = levelBaseWei === null || level === DEFAULT_GAS_LEVEL ? undefined : formatUnits(ceilingWeiOf(levelBaseWei, level), 9);
     const percentText = rebasedPercentText(costAt(gasLevel), costAt(level));
     write({ ...form, tip: { ...rest, ...(percentText === undefined ? {} : { percentText }), ...(ceiling === undefined ? {} : { ceilingGweiText: ceiling }) } });
   };
@@ -307,13 +307,13 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const tipShareWad = tipWadNow(costUsd);
   const tipUsd = tipShareWad === null || amountUsd === null ? (feeUsd === null || costUsd === null ? null : feeUsd > costUsd ? feeUsd - costUsd : 0n) : (tipShareWad * amountUsd) / WAD;
   const breakdown =
-    feeUsd === null || costUsd === null || costNormalUsd === null || tipUsd === null
+    feeUsd === null || costUsd === null || costDefaultUsd === null || tipUsd === null
       ? []
       : [
-          { label: "Delivery gas", value: dollarsText(costNormalUsd - PROOF_COST_USD) },
+          { label: "Delivery gas", value: dollarsText(costDefaultUsd - PROOF_COST_USD) },
           // The proof cost is a set figure ($0.025), shown exactly rather than cut to the cent.
           { label: "Proof", value: `$${formatUnits(PROOF_COST_USD, 18)}` },
-          ...(gasLevel === 1 ? [] : [{ label: `${levelName(gasLevel)} gas level`, value: `+${dollarsText(costUsd - costNormalUsd)}` }]),
+          ...(gasLevel === DEFAULT_GAS_LEVEL ? [] : [{ label: `${levelName(gasLevel)} gas level`, value: costUsd >= costDefaultUsd ? `+${dollarsText(costUsd - costDefaultUsd)}` : `−${dollarsText(costDefaultUsd - costUsd)}` }]),
           { label: "Tip", value: dollarsText(tipUsd) },
           { label: "Fee", value: dollarsText(feeUsd), total: true },
         ];
@@ -449,8 +449,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     if (options.mode === "gas-multiplier") {
       const text = form.tip?.gasMultiplierText ?? DEFAULT_GAS_MARGIN_TEXT;
       const value = Number(text) || 0;
-      const normal = costInputAt(1);
-      const gasNow = normal === null ? null : deliveryGasUsd(normal);
+      const atDefault = costInputAt(DEFAULT_GAS_LEVEL);
+      const gasNow = atDefault === null ? null : deliveryGasUsd(atDefault);
       // Recommended: the factor whose fee meets the automatic fee at today's gas; 2 (twice the cost) without prices.
       const recommended = auto.feeUsd !== null && gasNow !== null && gasNow > 0n ? Number((auto.feeUsd * 100n) / gasNow) / 100 : 2;
       const max = Math.max(5, recommended * 2, value * 1.5);
@@ -525,7 +525,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const gasControl: FeeSlider | null = (() => {
     if (levelBaseWei === null) return null;
     const gwei = (wei: bigint): number => Number(formatUnits(wei, 9));
-    const ceilingWei = ceilingWeiText ?? ceilingWeiOf(levelBaseWei, 1);
+    const ceilingWei = ceilingWeiText ?? ceilingWeiOf(levelBaseWei, DEFAULT_GAS_LEVEL);
     const max = gwei((ceilingWeiOf(levelBaseWei, 3) * 6n) / 5n);
     // The range in dollars (the whole cost, the proof included) and in the destination's coin (the delivery gas alone).
     const gasUsed = probe.delivery?.suggestions.dataSource.gas ?? null;
@@ -535,13 +535,13 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     const words = gasSpan === null ? null : `Anchored at today's gas · could land ${dollarsSpanWords(gasSpan.lowUsd, gasSpan.highUsd)} over 15 min${coinRange}`;
     return {
       label: "Gas level",
-      help: "Today's gas is the anchor. Over the next 15 minutes the real price could land lower (left) or higher (right); this sets how high you let it go. The bars beside the gas can step through Normal, High and Highest.",
+      help: "Today's gas is the anchor. Over the next 15 minutes the real price could land lower (left) or higher (right); this sets how high you let it go. The bars beside the gas can step through Low, Normal and High.",
       value: gwei(ceilingWei),
       min: 0,
       max,
       step: max / 300,
       valueText: levelName(gasLevel),
-      ticks: ([1, 2, 3] as const).map((level) => ({ at: gwei(ceilingWeiOf(levelBaseWei, level)), label: levelName(level) })).filter((tick) => tick.label !== "Normal"),
+      ticks: ([1, 2, 3] as const).map((level) => ({ at: gwei(ceilingWeiOf(levelBaseWei, level)), label: levelName(level) })).filter((tick) => tick.label !== levelName(DEFAULT_GAS_LEVEL)),
       onChange: (next) => setCeiling(parseUnits(next.toFixed(9), 9)),
       input: {
         text: formatUnits(ceilingWei, 9),
@@ -552,7 +552,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         },
         onText: (text) => setCeiling(safeParse(text, 9) ?? 0n),
       },
-      recommended: { at: gwei(ceilingWeiOf(levelBaseWei, 1)), differs: form.tip?.ceilingGweiText !== undefined, onReset: () => setGasLevel(1) },
+      recommended: { at: gwei(ceilingWeiOf(levelBaseWei, DEFAULT_GAS_LEVEL)), differs: form.tip?.ceilingGweiText !== undefined, onReset: () => setGasLevel(DEFAULT_GAS_LEVEL) },
       ...(gasSpan === null ? {} : { band: { from: gwei(gasSpan.lowWei), to: gwei(gasSpan.highWei), mark: gwei(gasSpan.anchorWei), label: words ?? "" } }),
       ...(words === null ? {} : { note: words }),
     };

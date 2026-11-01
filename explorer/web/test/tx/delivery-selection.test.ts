@@ -193,7 +193,7 @@ describe("selectDelivery: the default gas based tip", () => {
     expect(selection.director.multiplier).toBe(expected);
   });
 
-  it("sets the limit to the tip at the ceiling base fee of twice the base fee now", () => {
+  it("sets the limit to the tip at the ceiling base fee of three times the base fee now", () => {
     const selection = gas();
     const suggestion = buildFeeSuggestions({
       recipient: RECIPIENT,
@@ -206,9 +206,9 @@ describe("selectDelivery: the default gas based tip", () => {
     if (suggestion.kind !== "available") throw new Error(suggestion.reason);
     expect(selection.director.limit).toBe(suggestion.director.limit);
     expect(selection.maximumTip).toBe(selection.director.limit);
-    // The base fee now is 7 gwei in the report, and the ceiling is twice that, so the limit is twice the tip now.
-    expect(selection.director.limit).toBeGreaterThanOrEqual(selection.description.nowUnits * 2n - 1n);
-    expect(selection.director.limit).toBeLessThanOrEqual(selection.description.nowUnits * 2n + 1n);
+    // The base fee now is 7 gwei in the report, and the ceiling is three times that, so the limit is three times the tip now.
+    expect(selection.director.limit).toBeGreaterThanOrEqual(selection.description.nowUnits * 3n - 1n);
+    expect(selection.director.limit).toBeLessThanOrEqual(selection.description.nowUnits * 3n + 1n);
   });
 
   it("has no proof line in the cost breakdown", () => {

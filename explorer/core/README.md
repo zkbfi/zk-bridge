@@ -43,11 +43,11 @@ Fee rules (`fee-rules`):
 | --- | --- |
 | `usdOf(units, decimals, priceE18)` | A token amount in USD x 1e18. |
 | `totalCostUsd(cost)`, `ceilingCostUsd`, `gasRange` | Cost of a delivery at a gas level: proof cost plus gas. |
-| `ceilingWeiOf(baseFee, level)`, `gasLevelOfCeiling` | The base fee ceiling a gas level signs, and the level a ceiling stands for. |
+| `ceilingWeiOf(baseFee, level)`, `gasLevelOfCeiling` | The base fee ceiling a gas level signs (1 Low ×2, 2 Normal ×3, 3 High ×5), and the level a ceiling stands for (no ceiling is `DEFAULT_GAS_LEVEL`, Normal). |
 | `defaultFee({ amountUsd, costUsd, capWad })` | The default fee curve: which rule binds, the share to sign, the fee. |
 | `feeWarnings(input)`, `highCap`, `smallTransfer`, `lowFee`, `capWarns` | The warnings of the screen. |
 | `hardCapCheck`, `clampAutoCap`, `feeSpanUsd`, `shareWadOfPercentText` | Caps and share helpers. |
-| `PROOF_COST_USD`, `COST_MARGIN`, `GAS_LEVELS`, `WAD`, `PERCENT_WAD`, `USD`, ... | The constants. |
+| `PROOF_COST_USD`, `COST_MARGIN`, `GAS_LEVELS`, `DEFAULT_GAS_LEVEL`, `WAD`, `PERCENT_WAD`, `USD`, ... | The constants. |
 
 Delivery terms and tips (`delivery-terms`, `delivery-fee`, `default-tip`):
 
@@ -92,10 +92,10 @@ the forge test `test/hardened/GateEvidenceSepolia.t.sol` feeds the same calldata
 ### Examples
 
 ```ts
-import { USD, PERCENT_WAD, defaultFee, totalCostUsd, usdOf } from "@zkb/core";
+import { DEFAULT_GAS_LEVEL, USD, PERCENT_WAD, defaultFee, totalCostUsd, usdOf } from "@zkb/core";
 
-// What a delivery costs at the Normal gas level, then the default fee for a $500 transfer capped at 1%.
-const costUsd = totalCostUsd({ gasUsed: 150_000n, baseFeeWei: 10n ** 9n, priorityFeeWei: 0n, nativePriceE18: USD / 2n, level: 1 });
+// What a delivery costs at the default gas level (Normal), then the default fee for a $500 transfer capped at 1%.
+const costUsd = totalCostUsd({ gasUsed: 150_000n, baseFeeWei: 10n ** 9n, priorityFeeWei: 0n, nativePriceE18: USD / 2n, level: DEFAULT_GAS_LEVEL });
 const fee = defaultFee({ amountUsd: usdOf(500_000_000n, 6, USD), costUsd, capWad: PERCENT_WAD });
 // fee.binding, fee.shareWad (1e18 = 100%), fee.feeUsd (USD x 1e18)
 ```

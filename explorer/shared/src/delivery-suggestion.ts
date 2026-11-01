@@ -11,6 +11,7 @@ import {
   type SenderPrice,
 } from "./delivery-fee.js";
 import { expectedFee, feeModeOf, gasPriceBasisFor, maximumFee, type BaseFeeSupport, type FeeDirector, type FeeMode, type GasPriceBasis, type PayoutKind } from "./delivery-terms.js";
+import { ceilingWeiOf, DEFAULT_GAS_LEVEL } from "./fee-rules.js";
 import { formatRate, formatTokenAmount, RATE_SCALE } from "./format.js";
 import { minimumGasLimitOf, requiredDeliveryGas, type MessageKind } from "./gas-limit.js";
 
@@ -224,7 +225,7 @@ export interface BuildFeeSuggestionsInput {
    * folds it into the multiplier at send time, so it works for any token. Default: the valuation of the token.
    */
   readonly senderPrice?: SenderPrice;
-  /** The base fee above which a gas based fee stops rising. Default: twice the base fee now. */
+  /** The base fee above which a gas based fee stops rising. Default: the ceiling of the default gas level (Normal), three times the base fee now. */
   readonly baseFeeCeilingWei?: bigint;
 }
 
@@ -283,7 +284,7 @@ const gasTipOf = (input: BuildFeeSuggestionsInput, dataSource: FeeDataSource, ma
     recipient: input.recipient,
     senderPrice: input.senderPrice ?? senderPriceOfToken(price),
     margin,
-    baseFeeCeilingWei: input.baseFeeCeilingWei ?? dataSource.baseFeeWei * 2n,
+    baseFeeCeilingWei: input.baseFeeCeilingWei ?? ceilingWeiOf(dataSource.baseFeeWei, DEFAULT_GAS_LEVEL),
     priorityFeeCeilingWei: input.priorityFeeWei,
     deliveryGas: dataSource.gas,
     gasPrice: input.gasPrice ?? "base-fee-only",

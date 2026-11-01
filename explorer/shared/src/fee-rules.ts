@@ -10,6 +10,7 @@ export {
   HARD_CAP_STEP_WAD,
   NO_PRICE_SHARE_WAD,
   type GasLevel,
+  DEFAULT_GAS_LEVEL,
   GAS_LEVELS,
   ceilingWeiOf,
   gasLevelOfCeiling,

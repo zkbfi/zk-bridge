@@ -19,18 +19,18 @@ describe("plainNumber and capWadOf", () => {
 describe("useDefaultFee", () => {
   it("gives the default fee of the rule at the cap, and adds the level's extra cost on top of the curve", () => {
     const { result, rerender } = renderHook((props: Parameters<typeof useDefaultFee>[0]) => useDefaultFee(props), {
-      initialProps: { amountUsd: 1_000n * USD, costUsd: 5n * USD, costNormalUsd: 5n * USD, capPercent: 5 },
+      initialProps: { amountUsd: 1_000n * USD, costUsd: 5n * USD, costDefaultUsd: 5n * USD, capPercent: 5 },
     });
     expect(result.current.capWad).toBe(capWadOf(5, DEFAULT_CAP_WAD));
-    const normal = result.current.auto.feeUsd;
-    expect(normal).not.toBeNull();
-    // A higher level costs more: the fee rises by the extra.
-    rerender({ amountUsd: 1_000n * USD, costUsd: 9n * USD, costNormalUsd: 5n * USD, capPercent: 5 });
-    expect(result.current.auto.feeUsd!).toBeGreaterThan(normal!);
+    const atDefault = result.current.auto.feeUsd;
+    expect(atDefault).not.toBeNull();
+    // A level above the default costs more: the fee rises by the extra.
+    rerender({ amountUsd: 1_000n * USD, costUsd: 9n * USD, costDefaultUsd: 5n * USD, capPercent: 5 });
+    expect(result.current.auto.feeUsd!).toBeGreaterThan(atDefault!);
   });
 
   it("falls back to the default share without prices, and keeps its answer while the inputs stay", () => {
-    const { result, rerender } = renderHook(() => useDefaultFee({ amountUsd: null, costUsd: null, costNormalUsd: null, capPercent: 1 }));
+    const { result, rerender } = renderHook(() => useDefaultFee({ amountUsd: null, costUsd: null, costDefaultUsd: null, capPercent: 1 }));
     expect(result.current.auto.binding).toBe("no-price");
     const first = result.current;
     rerender();
@@ -39,7 +39,7 @@ describe("useDefaultFee", () => {
 });
 
 describe("useFeeWarnings", () => {
-  const input = { amountUsd: 1_000n * USD, capWad: DEFAULT_CAP_WAD, feeUsd: 1n * USD, costUsd: 5n * USD, costNormalUsd: 5n * USD, shareWithoutPriceWad: null, belowBreakEven: false, gasBased: false, expandedCostUsd: null };
+  const input = { amountUsd: 1_000n * USD, capWad: DEFAULT_CAP_WAD, feeUsd: 1n * USD, costUsd: 5n * USD, costDefaultUsd: 5n * USD, shareWithoutPriceWad: null, belowBreakEven: false, gasBased: false, expandedCostUsd: null };
 
   it("tells a fee under the cost, with the line a tip should stay under", () => {
     const { result } = renderHook(() => useFeeWarnings(input));

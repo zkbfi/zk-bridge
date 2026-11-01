@@ -53,14 +53,16 @@ describe.each([
     await waitFor(() => expect(bars()).toHaveAccessibleName("Gas level: High. Change"));
     // The drawer stays open while the bars change.
     expect(screen.getByRole("list", { name: "What the fee covers" })).toBeInTheDocument();
-    expect(row("High gas level")).toBe("+$0.01");
+    expect(row("High gas level")).toBe("+$0.02");
     expect(feeText()).not.toBe(before.fee);
     expect(output()).not.toBe(before.out);
     // The tip before gas stays where the curve put it: the level's cost is added on top.
     expect(row("Tip")).toBe(before.tip);
     await userEvent.click(bars());
-    await waitFor(() => expect(bars()).toHaveAccessibleName("Gas level: Highest. Change"));
-    expect(row("Highest gas level")).toBe("+$0.03");
+    // High wraps to Low, which costs less than Normal: the line shows the saving.
+    await waitFor(() => expect(bars()).toHaveAccessibleName("Gas level: Low. Change"));
+    expect(row("Low gas level")).toBe("−$0.01");
+    expect(breakdown()).not.toMatch(/Normal gas level/);
     await userEvent.click(bars());
     await waitFor(() => expect(bars()).toHaveAccessibleName("Gas level: Normal. Change"));
     expect(feeText()).toBe(before.fee);
@@ -75,10 +77,10 @@ describe.each([
     // 1% of $500 on top of the $0.025 cost: past the 0.2% high cap line.
     fireEvent.change(screen.getByRole("slider", { name: "Tip" }), { target: { value: "1" } });
     await waitFor(() => expect(row("Tip")).toBe("$5.00"));
-    expect(row("Fee")).toBe("$5.02");
+    expect(row("Fee")).toBe("$5.03");
     expect(feeText()).not.toBe(before.fee);
     expect(output()).not.toBe(before.out);
-    expect(window.location.hash).toMatch(/tip\.percent=1\.005/);
+    expect(window.location.hash).toMatch(/tip\.percent=1\.0075/);
     expect(screen.getByText("Set by you · the automatic fee is off")).toBeInTheDocument();
     if (connected) expect(pill()).toBe("High cap %");
     await userEvent.click(screen.getByRole("button", { name: "Reset to recommended" }));
@@ -94,10 +96,10 @@ describe.each([
     const before = { tip: row("Tip"), fee: feeText() };
     expect(row("Fee")).toBe("$1.05");
     await userEvent.click(bars());
-    await waitFor(() => expect(row("High gas level")).toBe("+$0.01"));
+    await waitFor(() => expect(row("High gas level")).toBe("+$0.02"));
     expect(row("Tip")).toBe(before.tip);
-    expect(row("Fee")).toBe("$1.06");
-    expect(window.location.hash).toMatch(/tip\.percent=0\.2125/);
+    expect(row("Fee")).toBe("$1.07");
+    expect(window.location.hash).toMatch(/tip\.percent=0\.215/);
     expect(screen.getByText("Set by you · the automatic fee is off")).toBeInTheDocument();
     // Round the levels and back: the same tip and fee in dollars, and the same fee after a second round (no drift).
     await userEvent.click(bars());

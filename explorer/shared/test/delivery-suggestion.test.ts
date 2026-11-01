@@ -69,7 +69,7 @@ describe("the suggestions", () => {
     expect(suggestions.fixed.description.certaintyLabel).toBe("exact");
     const gas = suggestions.gasMultiplier.description;
     expect(gas.certainty).toBe("estimate");
-    expect(gas.certaintyLabel).toBe("estimate, at most 0.0124 WPLS");
+    expect(gas.certaintyLabel).toBe("estimate, at most 0.0186 WPLS");
     expect(gas.amountText.startsWith("about ")).toBe(true);
     expect(gas.nowUnits).toBeLessThanOrEqual(gas.maximumUnits);
   });

@@ -266,7 +266,7 @@ describe('refillDeliveryFee', () => {
     const next = refillDeliveryFee({ ...baseValues, delivery: 'yes', feeMode: 'percentage' }, { ...baseValues, delivery: 'yes', feeMode: 'gas' }, context)
     expect(next.feeMultiplier).toBe('1')
     expect(next.feeSenderPrice).toBe('2500') // one zUSDC is worth 4e14 wei, so one coin is worth 2,500
-    expect(next.feeCeilingGwei).toBe('14')
+    expect(next.feeCeilingGwei).toBe('21')
   })
 
   test('editing a number alone does not refill it', () => {

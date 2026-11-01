@@ -105,11 +105,11 @@ describe('the default tip of the form', () => {
     }
   })
 
-  test('the limit is the tip at the ceiling base fee, which is twice the base fee now', () => {
+  test('the limit is the tip at the ceiling base fee, which is three times the base fee now (the Normal gas level)', () => {
     const director = directorOf(defaultValues)
     const baseFeeNow = 7_000_000_000n
     const deliveryGas = 210_000n
-    expect(director.limit).toBe(ceilingDivide((deliveryGas + gasOverheadOf('token')) * director.multiplier * (2n * baseFeeNow), 10n ** 18n))
+    expect(director.limit).toBe(ceilingDivide((deliveryGas + gasOverheadOf('token')) * director.multiplier * (3n * baseFeeNow), 10n ** 18n))
     const suggestion = buildFeeSuggestions({
       recipient: getAddress(receiver),
       transferValue: 100_000_000n,
@@ -170,7 +170,7 @@ describe('refilling the gas fields', () => {
   test('entering the form with the default mode fills the multiplier, the ceiling and the price', () => {
     const next = refillDeliveryFee({ ...entered, delivery: 'no' }, entered, context)
     expect(next.feeMultiplier).toBe('1')
-    expect(next.feeCeilingGwei).toBe('14')
+    expect(next.feeCeilingGwei).toBe('21')
     expect(next.feeSenderPrice).toBe('2500')
   })
 
@@ -186,7 +186,7 @@ describe('refilling the gas fields', () => {
     const typed = { ...entered, feeMultiplier: '3', feeCeilingGwei: '20', feeSenderPrice: '1' }
     const next = refillDeliveryFee(typed, { ...typed, token: `second:${zkUsdc.address}` }, { stateFor: () => stateOf(typed) })
     expect(next.feeMultiplier).toBe('1')
-    expect(next.feeCeilingGwei).toBe('14')
+    expect(next.feeCeilingGwei).toBe('21')
   })
 })
 
