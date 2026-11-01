@@ -1,0 +1,60 @@
+# The status service (explorer/status): checks of the services, chains, light clients, gates, prover and wallets every
+# minute, a small SQLite history, and the status page with its JSON API. deploy.sh installs this file. It listens on
+# 127.0.0.1 only; Caddy is the public side (Caddyfile). It holds no wallet key and sends no transaction.
+#
+#   /etc/zk-bridge/status/status.json     settings: pair, chains, wallets to watch (config/status/status.json.example)
+#   /etc/zk-bridge/status/status.env      secrets: its own RPC and beacon endpoints, the RunPod key (config/status/status.env.example)
+#   /etc/zk-bridge/deployment.json        contract addresses of the pair (world readable, no secret)
+#   /var/lib/zk-bridge-status             the SQLite history (30 days)
+#
+# It reads the state of the other units with `systemctl show`, which needs no privilege, and the other services over
+# HTTP. It never calls the prover endpoint at RunPod (that would start a paid worker), only RunPod's REST API.
+[Unit]
+Description=zk-bridge status service
+Wants=network-online.target
+After=network-online.target zk-bridge-indexer.service zk-bridge-backend.service
+ConditionPathExists=/etc/zk-bridge/status/status.json
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=zkb_status
+Group=zkb_status
+WorkingDirectory=/opt/zk-bridge/current/explorer/status
+EnvironmentFile=/etc/zk-bridge/status/status.env
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node bin/zk-bridge-status.mjs --config /etc/zk-bridge/status/status.json
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+# Sandbox. Writable: the state directory, and a private /tmp (tsx keeps its cache there).
+ReadWritePaths=/var/lib/zk-bridge-status
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# No MemoryDenyWriteExecute: the V8 JIT needs memory that is writable and executable.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

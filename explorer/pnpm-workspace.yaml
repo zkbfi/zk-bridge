@@ -9,6 +9,7 @@ packages:
   - web
   - e2e
   - backend
+  - status
   - docs
   - release
 # Refuse any package version younger than 28 days (40320 minutes), direct or transitive.

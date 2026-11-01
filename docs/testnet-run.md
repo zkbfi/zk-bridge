@@ -560,6 +560,16 @@ Fund 2 Sepolia ETH and 10 tPLS to start, and watch `native-below-reserve` skips.
 
 `explorer/e2e` stage `traffic` (run after `open` and `gate`): it deploys the tokens with the script on both Anvil chains, runs `zk-bridge-bot traffic --once` (both directions send their native tUSD, each after one approval: the deploy messages) and delivers these two by hand; sends again, so that both copies go home, posts an update on both light clients, lets the runner deliver both through the delivery router for the default tip, and checks that the wallet got each returned amount back less the 0.1 percent tip; then sends once more, every send now an ordinary release, and the runner delivers both.
 
+## The status page (status.zkb.fi)
+
+The owner asked: "where can i and you go to get a gut check of your uptime / the status. explore.zkb.fi?" and then: "yeah, give it a try. might be better as a standalone, non ipfs server though. then we can have checks on each of the services and a centralized (small) db". So the status page is its own service on the app server, `explorer/status` (README there), not part of the explorer on IPFS.
+
+It runs the checks every 60 seconds: the services (indexer local and public, backend local and public, webhook, `next.zkb.fi` and `zkb.fi` with their release sequence, the IPFS gateway with the dapp CID of each channel), the systemd units, each chain's RPC and beacon, both light clients (head age and deadline, through the keep-alive planner), both bridges (`depositsOpen`), both gates, the pipeline (backend `/benchmarks` and `/directions/<dir>/pipeline`, indexer deliveries), the RunPod endpoint (through RunPod's REST API only, never its `/ping` or `/prove`) and the wallet balances. Results go into a SQLite file for 30 days.
+
+- Page: `https://status.zkb.fi/`. For you and for me: `curl https://status.zkb.fi/api/summary` (one line: operational, degraded or down, and what fails), `/api/status` (every check), `/api/history?check=<id>&window=24h|7d|30d`.
+- Deploy (after `provision.sh`, which creates the user `zkb_status` and `/etc/zk-bridge/status`): copy `deploy/app-server/config/status/status.json.example` and `status.env.example` to `/etc/zk-bridge/status/` (mode 0640, owner root, group `zkb_status`), fill in the wallet addresses, the thresholds and the endpoints, then `ansible-playbook bots.yml -e commit=<hash> -e bots=status`. DNS: an A record for `status.zkb.fi` to the app server, like the other hosts; Caddy gets the certificate.
+- **The blind spot.** The service runs on the app server, so if the server is down, the page is down too, and it cannot tell you. Point a free external monitor at `https://status.zkb.fi/api/summary` (for example UptimeRobot or Better Stack, 5 minute interval). The route answers 200 while everything works or is degraded, and 503 when something is down or when the checks themselves stopped; add `?strict=1` to get 503 for degraded as well.
+
 ## Step 12: clean up
 
 ```sh

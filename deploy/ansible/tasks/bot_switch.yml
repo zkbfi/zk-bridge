@@ -1,5 +1,5 @@
 ---
-# One bot. Needs zkb_bot (publisher, runner or traffic), zkb_commit, zkb_release.
+# One bot. Needs zkb_bot (publisher, runner, traffic or status), zkb_commit, zkb_release.
 - name: Look for the files of the {{ zkb_bot }}
   ansible.builtin.stat:
     path: "{{ zkb_etc }}/{{ item }}"
