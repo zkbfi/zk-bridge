@@ -244,8 +244,8 @@ minutes after the way out, with up to 60 seconds of jitter. So every proof the b
 5. Simulates each transaction first and keeps `minimumNativeWei` of the chain: a send whose worst case (gas limit times
    maximum fee) would take the native balance below it does not go.
 
-Every attempt is a log line: `traffic_sent` (direction, symbol, kind, token, amount, `transactionHash`, `messageId`,
-`messageGasLimit`, gas), `traffic_approved`, `traffic_skipped` with a reason, or `traffic_failed` (an error, for example
+Every attempt is a log line: `traffic_sent` (direction, symbol, kind, `tokenAddress`, amount, `transactionHash`, `messageId`,
+`deploysCopy`, `messageGasLimit`, gas), `traffic_approved`, `traffic_skipped` with a reason, or `traffic_failed` (an error, for example
 an endpoint that does not answer; the next poll tries again). At start `traffic_tokens` lists each test token with the
 address of its copy on the other chain: the runner's `tokenValuationsWei` needs all of them, because the runner prices
 a tip only in a token it has a value for.
@@ -259,6 +259,12 @@ a tip only in a token it has a value for.
 | `no-delivery-router` | The deployment names no delivery router on the destination. |
 | `approval-simulation-reverted`, `relay-simulation-reverted` | The node refused the call; `error` names the error when an ABI knows it. |
 | `approval-reverted`, `relay-reverted` | The transaction was mined and reverted. |
+
+**The first send of each token in each direction deploys its copy, and the runner does not deliver it**: the indexer
+names no destination token before the copy exists, so the runner skips the item with `no-price-for-fee-token`.
+`traffic_sent` marks such a send with `deploysCopy: true`. Deliver it once by hand through the delivery router (anyone
+may); every later send of the token is an ordinary release that the runner prices. The end-to-end stage `traffic` does
+exactly that.
 
 An attempt uses up its interval, sent or skipped. A slot is written to `stateDirectory/traffic-<pair>.json` before the
 first transaction leaves, so an attempt whose receipt never arrives is not sent twice. `--once` sends in each enabled

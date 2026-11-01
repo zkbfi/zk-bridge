@@ -85,7 +85,7 @@ describe("a traffic send", () => {
     // The send terms: the simulated gas plus 30 percent, at twice the base fee plus the tip.
     expect(relay).toMatchObject({ gas: 130_000n, maxFeePerGas: 22n, maxPriorityFeePerGas: 2n });
     expect(eventsNamed(logs, "traffic_approved")).toHaveLength(1);
-    expect(eventsNamed(logs, "traffic_sent")[0]).toMatchObject({ direction: "first-to-second", symbol: "tUSD", kind: "native", amount: "1000000", amountText: "1", messageId: MESSAGE_ID, gasUsed: "50000", gasCostWei: "600000" });
+    expect(eventsNamed(logs, "traffic_sent")[0]).toMatchObject({ direction: "first-to-second", symbol: "tUSD", kind: "native", tokenAddress: DOLLAR, amount: "1000000", amountText: "1", messageId: MESSAGE_ID, gasUsed: "50000", gasCostWei: "600000" });
     expect(second.port.sent).toHaveLength(0);
   });
 
@@ -98,12 +98,22 @@ describe("a traffic send", () => {
     const deploying = decodeFunctionData({ abi: tokenMediatorAbi, data: first.port.sent[0]!.data });
     expect(deploying.args).toHaveLength(5);
     expect(deploying.args?.[4]).toBe(9_000_000n);
-    expect(eventsNamed(logs, "traffic_sent")[0]).toMatchObject({ messageGasLimit: "9000000" });
+    expect(eventsNamed(logs, "traffic_sent")[0]).toMatchObject({ deploysCopy: true, messageGasLimit: "9000000" });
 
     second.state.code.add(copyAddressOf(369, 1, DOLLAR).toLowerCase());
     await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
     expect(decodeFunctionData({ abi: tokenMediatorAbi, data: first.port.sent[1]!.data }).args).toHaveLength(4);
-    expect(eventsNamed(logs, "traffic_sent")[1]).toMatchObject({ messageGasLimit: null });
+    expect(eventsNamed(logs, "traffic_sent")[1]).toMatchObject({ deploysCopy: false, messageGasLimit: null });
+  });
+
+  it("logs a send that deploys the copy also without a gas limit for it", async () => {
+    const { first, second, logs, traffic } = world();
+    first.state.balances.set(DOLLAR.toLowerCase(), 100_000n * DOLLAR_UNIT);
+    first.state.allowances.set(DOLLAR.toLowerCase(), 10n ** 30n);
+    second.state.code = new Set();
+    await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
+    expect(decodeFunctionData({ abi: tokenMediatorAbi, data: first.port.sent[0]!.data }).args).toHaveLength(4);
+    expect(eventsNamed(logs, "traffic_sent")[0]).toMatchObject({ deploysCopy: true, messageGasLimit: null });
   });
 
   it("skips the approval when the allowance covers the amount", async () => {

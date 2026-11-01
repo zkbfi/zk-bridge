@@ -128,7 +128,8 @@ export function createTraffic(input: TrafficInput): Traffic {
     const pick = pickTransfer(await candidatesOf(source, destination), input.random);
     if (pick.kind === "skip") return skip(direction, pick.reason, { candidates: pick.candidates });
     const { candidate, amount } = pick;
-    const described = { symbol: candidate.kind === "copy" ? bridgedSymbolOf(candidate.symbol) : candidate.symbol, kind: candidate.kind, token: candidate.sourceToken, amount, amountText: formatUnits(amount, candidate.decimals) };
+    // A JSON field named `token` is redacted by the shared redactor (it reads as a credential), so the address goes as `tokenAddress`.
+    const described = { symbol: candidate.kind === "copy" ? bridgedSymbolOf(candidate.symbol) : candidate.symbol, kind: candidate.kind, tokenAddress: candidate.sourceToken, amount, amountText: formatUnits(amount, candidate.decimals) };
 
     let native = await source.reader.nativeBalance(wallet);
     let announced = false;
@@ -155,7 +156,9 @@ export function createTraffic(input: TrafficInput): Traffic {
     }
 
     // The first send of a native token deploys its copy on the destination: ask for the gas the destination needs for that.
-    const deploysCopy = candidate.kind === "native" && destination.newCopyGasLimit !== null && !(await destination.reader.hasCode(candidate.destinationToken));
+    // The runner cannot price such a send (the indexer names no destination token before the copy exists): it is
+    // logged, so the operator delivers it once by hand.
+    const deploysCopy = candidate.kind === "native" && !(await destination.reader.hasCode(candidate.destinationToken));
     const messageGasLimit = deploysCopy ? destination.newCopyGasLimit : null;
     const data = relayData({ token: candidate.sourceToken, router, amount, terms: termsFor(destination, router, candidate.destinationToken), gasLimit: messageGasLimit });
     const simulation = await source.port.simulate({ to: source.contracts.mediator, data });
@@ -177,6 +180,7 @@ export function createTraffic(input: TrafficInput): Traffic {
       ...described,
       transactionHash: receipt.hash,
       messageId,
+      deploysCopy,
       messageGasLimit,
       gasUsed: receipt.gasUsed,
       gasCostWei: receipt.gasUsed * receipt.effectiveGasPrice,
