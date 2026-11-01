@@ -28,6 +28,14 @@
 //! 943) can therefore move a light client across one period border, as long as a proof runs before the source signs in
 //! the period after the stored next committee. After that the light client is stranded on such a node.
 //!
+//! When the light client does not store the next committee, the first step of a crossing must prove it: it must finalize
+//! a header after the head, inside the head period, be signed there, and carry the next committee. The best update that a
+//! node serves for the period often finalizes a header before the head (in-period updates moved the head past it), and a
+//! node without the updates route serves none. The source then assembles that step from the blocks and the state at the
+//! end of the head period (`head_period_handoff`). An update that stays inside the head period also gets the next
+//! committee from its attested state when it carries none (a finality update never does), so the contract stores the
+//! next committee before the border is reached.
+//!
 //! # Old messages
 //!
 //! The bridge picks the ancestry path from the distance between the anchor and the source slot. Up to 8192 slots it
@@ -77,6 +85,7 @@ use crate::logging::Logger;
 use crate::rpc::{HttpGet, JsonRpc};
 use alloy_primitives::B256;
 use lc_core::chain::ForkName;
+use lc_core::types::NextSyncCommittee;
 use lc_core::update::{FoldStep, MAX_FOLD_UPDATES};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -248,12 +257,61 @@ pub fn handoff_periods(
     first..last.min(first + MAX_FOLD_UPDATES as u64).max(first)
 }
 
+/// Whether `update` can be the first step from a head at `head_slot` that does not store the next committee: it moves
+/// the head, it is attested, finalized and signed in the period of the head, and it proves the next committee. The program
+/// refuses any other first step of a fold that crosses the period border: an update that does not move the head is
+/// refused ("the finalized slot is not after the stored head"), an update without the next committee leaves the next
+/// step with no committee to verify it, and an update signed in the next period needs a crossing.
+pub fn proves_next_committee_from_head(
+    chain: ChainKind,
+    head_slot: u64,
+    update: &LightClientUpdate,
+) -> bool {
+    let spec = chain.spec();
+    let period = spec.period_at_slot(head_slot);
+    update.finalized_header.beacon.slot > head_slot
+        && update.next_sync_committee.is_some()
+        && spec.period_at_slot(update.finalized_header.beacon.slot) == period
+        && spec.period_at_slot(update.attested_header.beacon.slot) == period
+        && spec.period_at_slot(update.signature_slot) == period
+}
+
+/// The period of the head when the source must build the handoff update of that period itself, from block and state data,
+/// or `None` when it need not.
+///
+/// It must when the light client does not store the next committee, the fold crosses the period border of the head, and
+/// the node gave no handoff for the head period that can be the first step ([`proves_next_committee_from_head`]). A node
+/// gives the best update of a period, chosen by participation, so its pick often finalizes a header before a head that
+/// in-period updates have already moved late into the period; a node without the `light_client/updates` route (chain 943
+/// on the g4mm4 node) gives none.
+pub fn head_period_handoff_to_build(
+    chain: ChainKind,
+    head_slot: u64,
+    next_committee_known: bool,
+    handoffs: &BTreeMap<u64, LightClientUpdate>,
+    latest: &LightClientUpdate,
+) -> Option<u64> {
+    if next_committee_known {
+        return None;
+    }
+    let periods = handoff_periods(chain, head_slot, next_committee_known, latest);
+    if periods.is_empty() {
+        return None;
+    }
+    let usable = handoffs
+        .get(&periods.start)
+        .is_some_and(|update| proves_next_committee_from_head(chain, head_slot, update));
+    (!usable).then_some(periods.start)
+}
+
 /// The updates of one fold from the head at `head_slot`: the handoff update of each period, then the latest update when
 /// the fold has room for it. An update that does not move the head forward is left out (the handoff of the head
-/// period often finalizes the head itself).
+/// period often finalizes the head itself), except when the light client does not store the next committee: then the
+/// handoff of the head period is the only step that can prove it, and one that cannot is an error.
 ///
 /// # Errors
-/// `Error::Beacon` naming the first period that `handoffs` lacks.
+/// `Error::Beacon` naming the first period that `handoffs` lacks, or the head period when its handoff cannot be the first
+/// step of a crossing from a head without the next committee.
 pub fn assemble_fold(
     chain: ChainKind,
     head_slot: u64,
@@ -267,6 +325,18 @@ pub fn assemble_fold(
         .period_at_slot(latest.finalized_header.beacon.slot);
     if let Some(period) = first_missing_period(handoffs, periods.start, periods.end) {
         return Err(missing_period_error(period, periods.start, latest_period));
+    }
+    if head_period_handoff_to_build(chain, head_slot, next_committee_known, handoffs, &latest)
+        .is_some()
+    {
+        return Err(Error::Beacon(format!(
+            "the handoff update of sync committee period {} cannot hand off the light client head at slot {head_slot}: \
+             the light client stores no committee for period {}, and the update must finalize a header after the head, \
+             inside period {}, be signed in that period and prove the next committee",
+            periods.start,
+            periods.start + 1,
+            periods.start
+        )));
     }
     let room_for_latest = (periods.end - periods.start) < MAX_FOLD_UPDATES as u64;
     let candidates = periods
@@ -1043,15 +1113,29 @@ impl HttpBeaconSource {
     ) -> Result<UpdateInput> {
         let next_committee_known = next_committee_hash != B256::ZERO;
         let periods = handoff_periods(self.chain, head.slot, next_committee_known, &latest);
-        let handoffs =
+        let mut handoffs =
             fetch_period_updates(self.client.as_ref(), self.chain, periods.start, periods.end)?;
-        let folded = assemble_fold(
+        if let Some(period) = head_period_handoff_to_build(
+            self.chain,
+            head.slot,
+            next_committee_known,
+            &handoffs,
+            &latest,
+        ) {
+            handoffs.insert(period, self.head_period_handoff(period, head.slot)?);
+        }
+        let mut folded = assemble_fold(
             self.chain,
             head.slot,
             next_committee_known,
             &handoffs,
             latest,
         )?;
+        if !next_committee_known {
+            if let Some(last) = folded.last_mut() {
+                self.prove_next_committee_in_period(head.slot, last);
+            }
+        }
         let schedule = self.fork_schedule()?;
         let mut updates = self.attach_genesis_validators_root_branches(folded)?;
         self.repair_finalized_headers(&schedule, &mut updates)?;
@@ -1073,13 +1157,107 @@ impl HttpBeaconSource {
     /// The update assembled from block and state data (the path for nodes without light-client endpoints).
     fn assembled_update(&self) -> Result<LightClientUpdate> {
         let head = Self::require(self.header_by_id("head")?, "a head header")?;
-        let mut slot = head.slot.saturating_sub(1);
+        self.assembled_update_until(head.slot)
+    }
+
+    /// The handoff update of `period`, the period of the light client head at `head_slot`, assembled from block and state
+    /// data: the newest block whose child, inside `period`, signs it. The update proves the committee of `period + 1` from
+    /// the attested state, and it finalizes the header that the attested state names as finalized.
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the node lacks a block or a state, or when that finalized header is not after the head (the
+    /// head is so close to the end of the period that no update signed in the period finalizes a later header; the light
+    /// client then cannot be handed off by an update of this period).
+    fn head_period_handoff(&self, period: u64, head_slot: u64) -> Result<LightClientUpdate> {
+        let spec = self.chain.spec();
+        let last_slot_of_period =
+            (period + 1) * spec.epochs_per_sync_committee_period * spec.slots_per_epoch - 1;
+        let chain_head = Self::require(self.header_by_id("head")?, "a head header")?;
+        let update = self
+            .assembled_update_until(last_slot_of_period.min(chain_head.slot))
+            .map_err(|error| {
+                Error::Beacon(format!(
+                    "the handoff update of sync committee period {period} (the period of the light client head at slot \
+                     {head_slot}, which stores no committee for period {}) must be assembled from blocks and states at the \
+                     end of the period, and that failed: {error}",
+                    period + 1
+                ))
+            })?;
+        if !proves_next_committee_from_head(self.chain, head_slot, &update) {
+            return Err(Error::Beacon(format!(
+                "the last update signed in sync committee period {period} (attested at slot {}, signed at slot {}) finalizes \
+                 slot {}, which does not move the light client head at slot {head_slot}; the light client stores no \
+                 committee for period {} and cannot be handed off by an update of period {period}",
+                update.attested_header.beacon.slot,
+                update.signature_slot,
+                update.finalized_header.beacon.slot,
+                period + 1
+            )));
+        }
+        Logger::standard().info(
+            "handoff_assembled",
+            &[
+                ("period", period.to_string()),
+                ("head_slot", head_slot.to_string()),
+                (
+                    "attested_slot",
+                    update.attested_header.beacon.slot.to_string(),
+                ),
+                (
+                    "finalized_slot",
+                    update.finalized_header.beacon.slot.to_string(),
+                ),
+                ("signature_slot", update.signature_slot.to_string()),
+            ],
+        );
+        Ok(update)
+    }
+
+    /// Gives `update` the next committee from its attested state when it stays in the period of the head at `head_slot`
+    /// and carries none (a served finality update never does). The output then names the next committee, and the contract
+    /// stores it, so the light client reaches the period border with the committee that signs after it.
+    ///
+    /// When the node does not serve the attested state, the update stays as it is and a warning names the state: the
+    /// proof still moves the head, and the handoff at the border builds the missing proof itself
+    /// ([`Self::head_period_handoff`]).
+    fn prove_next_committee_in_period(&self, head_slot: u64, update: &mut LightClientUpdate) {
+        let spec = self.chain.spec();
+        let period = spec.period_at_slot(head_slot);
+        let in_period = spec.period_at_slot(update.attested_header.beacon.slot) == period
+            && spec.period_at_slot(update.finalized_header.beacon.slot) == period;
+        if update.next_sync_committee.is_some() || !in_period {
+            return;
+        }
+        let state_root = update.attested_header.beacon.state_root;
+        match self.state_for(state_root) {
+            Ok(state) => {
+                update.next_sync_committee = Some(NextSyncCommittee {
+                    committee: state.next_committee().clone(),
+                    branch: state.next_committee_branch(),
+                });
+            }
+            Err(error) => Logger::standard().warn(
+                "next_committee_not_proven",
+                &[
+                    ("period", period.to_string()),
+                    ("state_root", format!("{state_root:#x}")),
+                    ("reason", error.to_string()),
+                ],
+            ),
+        }
+    }
+
+    /// The update whose attested block is the newest one with a child at or before `limit_slot`. The child carries the
+    /// aggregate, so the update is signed at or before `limit_slot`.
+    fn assembled_update_until(&self, limit_slot: u64) -> Result<LightClientUpdate> {
+        let mut slot = limit_slot.saturating_sub(1);
         for _ in 0..MAX_EMPTY_SLOTS {
             let Some(attested) = self.block_by_id(&slot.to_string())? else {
                 slot = slot.saturating_sub(1);
                 continue;
             };
-            let Some((child_slot, aggregate)) = self.child_aggregate(&attested, slot, head.slot)?
+            let Some((child_slot, aggregate)) =
+                self.child_aggregate(&attested, slot, limit_slot)?
             else {
                 slot = slot.saturating_sub(1);
                 continue;
@@ -1100,7 +1278,7 @@ impl HttpBeaconSource {
             ));
         }
         Err(Error::Beacon(format!(
-            "no block with a child found within {MAX_EMPTY_SLOTS} slots of the head"
+            "no block with a child found within {MAX_EMPTY_SLOTS} slots before slot {limit_slot}"
         )))
     }
 
@@ -2588,6 +2766,137 @@ mod tests {
         assert_eq!(output.syncCommitteeHash, committee_hash_of(1368));
     }
 
+    /// Claim: from a head late in period 1368 without the next committee, a served handoff of 1368 that finalizes a header
+    /// before the head is not dropped in silence: the source is told to build the handoff of 1368 itself, and the fold
+    /// refuses to go on without it. A served handoff that moves the head, inside 1368, with the next committee, is used.
+    /// Why it matters: the dropped handoff left the newest update alone, which the program refused with "the store does
+    /// not know the next sync committee" (2026-11-01), an error that named neither the period nor the cause.
+    #[test]
+    fn a_stale_handoff_of_the_head_period_is_never_dropped_in_silence() {
+        let spec = ChainKind::Pulsechain.spec();
+        let head_slot = 1368 * PERIOD_SLOTS + 7_648;
+        let stale = period_scenario(1368).update;
+        assert!(stale.finalized_header.beacon.slot < head_slot);
+        let latest = crossing_scenario(1368, false).update;
+        let handoffs: BTreeMap<u64, LightClientUpdate> = [(1368, stale)].into_iter().collect();
+        assert_eq!(
+            head_period_handoff_to_build(
+                ChainKind::Pulsechain,
+                head_slot,
+                false,
+                &handoffs,
+                &latest
+            ),
+            Some(1368)
+        );
+        assert_eq!(
+            head_period_handoff_to_build(
+                ChainKind::Pulsechain,
+                head_slot,
+                false,
+                &BTreeMap::new(),
+                &latest
+            ),
+            Some(1368),
+            "a node without the updates route gives no handoff"
+        );
+        assert_eq!(
+            head_period_handoff_to_build(
+                ChainKind::Pulsechain,
+                head_slot,
+                true,
+                &handoffs,
+                &latest
+            ),
+            None,
+            "a stored next committee needs no handoff of the head period"
+        );
+        let in_period = period_scenario(1368).update;
+        assert_eq!(
+            head_period_handoff_to_build(
+                ChainKind::Pulsechain,
+                1368 * PERIOD_SLOTS + 10,
+                false,
+                &BTreeMap::new(),
+                &in_period
+            ),
+            None,
+            "an update inside the head period crosses nothing"
+        );
+        let error = assemble_fold(
+            ChainKind::Pulsechain,
+            head_slot,
+            false,
+            &handoffs,
+            latest.clone(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("period 1368") && error.contains("period 1369"),
+            "{error}"
+        );
+
+        // A late handoff of 1368: finalized after the head, signed in 1368, proving 1369.
+        let base = 1368 * PERIOD_SLOTS;
+        let late = build_update(
+            spec,
+            UpdateRecipe {
+                store_slot: head_slot,
+                finalized_slot: base + 8_100,
+                attested_slot: base + 8_180,
+                signature_slot: base + 8_181,
+                participants: 400,
+                include_next_committee: true,
+                store_knows_next_committee: false,
+            },
+        );
+        assert!(proves_next_committee_from_head(
+            ChainKind::Pulsechain,
+            head_slot,
+            &late.update
+        ));
+        let handoffs: BTreeMap<u64, LightClientUpdate> =
+            [(1368, late.update.clone())].into_iter().collect();
+        assert_eq!(
+            head_period_handoff_to_build(
+                ChainKind::Pulsechain,
+                head_slot,
+                false,
+                &handoffs,
+                &latest
+            ),
+            None
+        );
+        let fold = assemble_fold(
+            ChainKind::Pulsechain,
+            head_slot,
+            false,
+            &handoffs,
+            latest.clone(),
+        )
+        .unwrap();
+        assert_eq!(fold.len(), 2);
+        let output = verify_update_natively(&UpdateInput {
+            chain: ChainKind::Pulsechain,
+            store: late.store.clone(),
+            steps: steps_with_table_versions(ChainKind::Pulsechain, fold),
+        })
+        .expect("the late handoff proves the committee that signs the newest update");
+        assert_eq!(output.startNextSyncCommitteeHash, B256::ZERO);
+        assert_eq!(output.syncCommitteeHash, committee_hash_of(1369));
+        assert_eq!(output.newHeadSlot, latest.finalized_header.beacon.slot);
+
+        // A late update signed in the next period cannot be the first step.
+        let mut signed_late = late.update;
+        signed_late.signature_slot = base + PERIOD_SLOTS;
+        assert!(!proves_next_committee_from_head(
+            ChainKind::Pulsechain,
+            head_slot,
+            &signed_late
+        ));
+    }
+
     /// Claim: with the next committee stored, a light client two periods behind still needs the handoff of the period
     /// after its head, and only that one; the handoff of the head period is not asked for.
     /// Why it matters: an update signed two periods past the head cannot be verified by any stored committee. The error
@@ -3939,5 +4248,227 @@ mod header_repair_tests {
         let slot = 50_000_000;
         assert_eq!(schedule.signing_version(slot), [0, 0, 0x03, 0x6c]);
         assert_ne!(schedule.signing_version(slot), [0xff; 4]);
+    }
+
+    // ---------------------------------------------------------------- a handoff from a head without the next committee
+
+    /// A light client whose head sits late in period P and which does not store the committee of P + 1, read over the
+    /// standard beacon API of a signed synthetic chain (real BLS signatures, real states). The node can serve a stale best
+    /// update of P (one that finalizes a header before the head), serve none, and serve or not serve the finality update.
+    #[cfg(feature = "signed-beacon")]
+    mod handoff_without_next_committee {
+        use super::*;
+        use crate::light_client::verify_update_natively;
+        use crate::local_network::signed_beacon::api::answer;
+        use crate::local_network::signed_beacon::chain::test_support::{
+            chain_of, first_slot_before_period_end, settings,
+        };
+        use crate::local_network::signed_beacon::chain::SyntheticBeaconChain;
+        use crate::rpc::HttpResponse;
+        use lc_testkit::json::light_client_update_json;
+        use lc_testkit::synthetic::committee_for;
+
+        const KIND: ChainKind = ChainKind::PulsechainTestnetV4;
+        /// The period of the live case: the head of the light client on Sepolia is in 1368.
+        const PERIOD: u64 = 1368;
+        /// The chain starts this many blocks before the end of PERIOD.
+        const BEFORE_END: u64 = 40;
+
+        /// What the node answers for `light_client/updates`.
+        enum UpdatesRoute {
+            /// 404, as the PulseChain g4mm4 node answers.
+            NotServed,
+            /// The update signed at this slot, for PERIOD: a best update that the node chose earlier in the period.
+            BestSignedAt(u64),
+        }
+
+        struct ScriptedNode {
+            chain: SyntheticBeaconChain,
+            updates: UpdatesRoute,
+            finality_update_served: bool,
+        }
+
+        impl HttpGet for ScriptedNode {
+            fn get(&self, path_and_query: &str, accept: &str) -> Result<HttpResponse> {
+                let missing = || HttpResponse {
+                    status: 404,
+                    body: b"{}".to_vec(),
+                };
+                if path_and_query.starts_with("/eth/v1/beacon/light_client/updates") {
+                    return Ok(match self.updates {
+                        UpdatesRoute::NotServed => missing(),
+                        UpdatesRoute::BestSignedAt(slot) => {
+                            let update = self.chain.handoff_update_signed_at(slot)?;
+                            HttpResponse {
+                                status: 200,
+                                body: serde_json::json!([{ "data": light_client_update_json(&update) }])
+                                    .to_string()
+                                    .into_bytes(),
+                            }
+                        }
+                    });
+                }
+                if path_and_query == "/eth/v1/beacon/light_client/finality_update"
+                    && !self.finality_update_served
+                {
+                    return Ok(missing());
+                }
+                let served = answer(&self.chain, path_and_query, accept);
+                Ok(HttpResponse {
+                    status: served.status,
+                    body: served.body,
+                })
+            }
+        }
+
+        fn first_slot() -> u64 {
+            first_slot_before_period_end(KIND, PERIOD, BEFORE_END)
+        }
+
+        /// The first slot of PERIOD + 1.
+        fn border() -> u64 {
+            first_slot() + BEFORE_END
+        }
+
+        /// A source over a chain of `blocks` blocks, and the stored head at `head_slot` with no next committee.
+        fn world(
+            blocks: u64,
+            head_slot: u64,
+            updates: UpdatesRoute,
+            finality_update_served: bool,
+        ) -> (HttpBeaconSource, StoredHead) {
+            let chain = chain_of(settings(KIND, first_slot()), blocks);
+            let head = StoredHead {
+                slot: head_slot,
+                root: chain
+                    .header_root_at(head_slot)
+                    .expect("the head is on the chain"),
+                next_committee_hash: B256::ZERO,
+            };
+            let node = ScriptedNode {
+                chain,
+                updates,
+                finality_update_served,
+            };
+            (source_over_node(KIND, node), head)
+        }
+
+        fn kind_committee_hash(period: u64) -> B256 {
+            committee_hash(&committee_for(KIND.spec(), period).committee).unwrap()
+        }
+
+        /// Claim: the live case of 2026-11-01. The head is late in period 1368 and the light client stores no committee
+        /// for 1369; the node serves, for 1368, a best update that finalizes a header before the head; finality has crossed
+        /// into 1369. The plan holds a step that finalizes a header after the head, inside 1368, signed in 1368, and proves
+        /// the committee of 1369; then the newest update. The program accepts it and the head lands in 1369.
+        /// Why it matters: the source dropped the stale best update (it does not move the head) and sent the newest update
+        /// alone. The program refused it with "the store does not know the next sync committee", and the light client was
+        /// stranded at its period border.
+        #[test]
+        fn a_head_late_in_the_period_is_handed_off_when_the_best_update_is_stale() {
+            let head_slot = first_slot() + 10;
+            let (source, head) = world(
+                BEFORE_END + 20,
+                head_slot,
+                UpdatesRoute::BestSignedAt(head_slot + 2),
+                true,
+            );
+            let plan = source
+                .plan_update(&head)
+                .unwrap()
+                .expect("finality moved past the head");
+            // The control: the newest update alone, as the source sent it on 2026-11-01, is refused as it was then.
+            let alone = UpdateInput {
+                chain: KIND,
+                store: plan.input.store.clone(),
+                steps: plan.input.steps.last().cloned().into_iter().collect(),
+            };
+            let refused = verify_update_natively(&alone).unwrap_err().to_string();
+            assert!(
+                refused.contains("does not know the next sync committee"),
+                "{refused}"
+            );
+            let steps = &plan.input.steps;
+            assert_eq!(
+                steps.len(),
+                2,
+                "a step inside {PERIOD}, then the newest update"
+            );
+            let first = &steps[0].update;
+            assert!(
+                first.finalized_header.beacon.slot > head_slot,
+                "the first step moves the head"
+            );
+            assert!(
+                first.signature_slot < border(),
+                "the first step is signed in {PERIOD}"
+            );
+            assert!(
+                first.next_sync_committee.is_some(),
+                "the first step proves the next committee"
+            );
+            let output = verify_update_natively(&plan.input).expect("the fold verifies natively");
+            assert_eq!(output.previousHeadSlot, head_slot);
+            assert_eq!(output.startNextSyncCommitteeHash, B256::ZERO);
+            assert_eq!(output.newHeadSlot, plan.latest_finalized_slot);
+            assert_eq!(KIND.spec().period_at_slot(output.newHeadSlot), PERIOD + 1);
+            assert_eq!(output.syncCommitteeHash, kind_committee_hash(PERIOD + 1));
+        }
+
+        /// Claim: the same handoff on a node that serves no light-client routes (the PulseChain g4mm4 node): the source
+        /// builds the step inside the head period from blocks and states, and the program accepts the fold.
+        /// Why it matters: without it, such a node strands every light client that reaches a period border without the next
+        /// committee ("no light-client update for sync committee period 1368").
+        #[test]
+        fn a_head_late_in_the_period_is_handed_off_by_a_node_without_light_client_routes() {
+            let head_slot = first_slot() + 10;
+            let (source, head) = world(BEFORE_END + 20, head_slot, UpdatesRoute::NotServed, false);
+            let plan = source
+                .plan_update(&head)
+                .unwrap()
+                .expect("finality moved past the head");
+            assert_eq!(plan.input.steps.len(), 2);
+            let output = verify_update_natively(&plan.input).expect("the fold verifies natively");
+            assert_eq!(KIND.spec().period_at_slot(output.newHeadSlot), PERIOD + 1);
+            assert_eq!(output.syncCommitteeHash, kind_committee_hash(PERIOD + 1));
+        }
+
+        /// Claim: a head so close to the end of its period that no update signed in the period finalizes a later header
+        /// gives an error that names the period, the slots and the cause, before any proof runs.
+        /// Why it matters: the program would refuse such a fold; the operator must learn that this light client cannot be
+        /// handed off by the source, not see a verifier error.
+        #[test]
+        fn a_head_at_the_very_end_of_the_period_is_refused_with_the_cause() {
+            let head_slot = first_slot() + BEFORE_END - 2;
+            let (source, head) = world(BEFORE_END + 20, head_slot, UpdatesRoute::NotServed, false);
+            let error = source.plan_update(&head).unwrap_err().to_string();
+            assert!(error.contains(&format!("period {PERIOD}")), "{error}");
+            assert!(
+                error.contains("does not move the light client head"),
+                "{error}"
+            );
+        }
+
+        /// Claim: an update inside the head period, from a node whose finality update carries no next committee, gets the
+        /// next committee from its attested state, so the output names it and the contract stores it.
+        /// Why it matters: the 47 keep-alive proofs of 2026-10-31 each moved the head inside 1368 with a finality update,
+        /// which never carries a next committee. Each output had a zero nextSyncCommitteeHash, the contract stored nothing,
+        /// and the light client reached the border of 1369 without the committee that signs there.
+        #[test]
+        fn an_update_inside_the_head_period_proves_the_next_committee() {
+            let head_slot = first_slot() + 10;
+            let (source, head) = world(BEFORE_END - 5, head_slot, UpdatesRoute::NotServed, true);
+            let plan = source
+                .plan_update(&head)
+                .unwrap()
+                .expect("finality moved past the head");
+            assert_eq!(plan.input.steps.len(), 1);
+            let output = verify_update_natively(&plan.input).expect("the update verifies natively");
+            assert_eq!(KIND.spec().period_at_slot(output.newHeadSlot), PERIOD);
+            assert_eq!(
+                output.nextSyncCommitteeHash,
+                kind_committee_hash(PERIOD + 1)
+            );
+        }
     }
 }

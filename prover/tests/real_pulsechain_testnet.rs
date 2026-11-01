@@ -94,3 +94,67 @@ fn the_live_finalized_state_and_block_of_testnet_v4_match_their_header() {
     assert_eq!(state.current_committee().pubkeys.len(), 512);
     std::fs::remove_dir_all(&directory).expect("clean up");
 }
+
+/// Claim: the live handoff of 2026-11-01 against the public node, which serves no light-client routes. The light client
+/// on Sepolia has its head at slot 11214304 (period 1368) and stores no committee for 1369; finality has crossed into
+/// 1369. The plan from that head holds a step inside 1368 that moves the head and proves the committee of 1369, then the
+/// newest update, and the fold verifies natively against the store that the node gives for the head.
+/// Needs network, and a head in the period before the finalized one: run with
+/// `cargo test --test real_pulsechain_testnet -- --ignored`, with `ZKB_LIVE_HEAD_SLOT` for another head.
+#[test]
+#[ignore = "needs network"]
+fn the_live_head_without_the_next_committee_is_handed_off() {
+    use zk_bridge_prover::beacon::http::HttpBeaconSource;
+    use zk_bridge_prover::beacon::StoredHead;
+    use zk_bridge_prover::light_client::verify_update_natively;
+
+    let head_slot: u64 = std::env::var("ZKB_LIVE_HEAD_SLOT")
+        .ok()
+        .map(|text| text.parse().expect("a slot"))
+        .unwrap_or(11_214_304);
+    let client = HttpClient::new(NODE);
+    let answer = client
+        .get(
+            &format!("/eth/v1/beacon/headers/{head_slot}"),
+            "application/json",
+        )
+        .expect("answer");
+    assert_eq!(answer.status, 200);
+    let answer: Value = serde_json::from_slice(&answer.body).expect("json");
+    let head = StoredHead {
+        slot: head_slot,
+        root: root_of(&answer["data"]["root"]),
+        next_committee_hash: B256::ZERO,
+    };
+    let source = HttpBeaconSource::new(CHAIN, Box::new(HttpClient::new(NODE)));
+    let plan = source
+        .plan_update(&head)
+        .expect("a plan")
+        .expect("finality moved past the head");
+    let spec = CHAIN.spec();
+    let first = &plan.input.steps[0].update;
+    eprintln!(
+        "steps {}; first: attested {} finalized {} signed {}; newest finalized {}",
+        plan.input.steps.len(),
+        first.attested_header.beacon.slot,
+        first.finalized_header.beacon.slot,
+        first.signature_slot,
+        plan.latest_finalized_slot
+    );
+    assert!(first.finalized_header.beacon.slot > head_slot);
+    assert_eq!(
+        spec.period_at_slot(first.signature_slot),
+        spec.period_at_slot(head_slot)
+    );
+    let output = verify_update_natively(&plan.input).expect("the fold verifies natively");
+    assert_eq!(output.previousHeadSlot, head_slot);
+    assert_eq!(
+        spec.period_at_slot(output.newHeadSlot),
+        spec.period_at_slot(head_slot) + 1
+    );
+    eprintln!(
+        "new head {} (period {})",
+        output.newHeadSlot,
+        spec.period_at_slot(output.newHeadSlot)
+    );
+}
