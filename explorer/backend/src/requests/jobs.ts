@@ -34,6 +34,8 @@ export type StoredRequest = {
 };
 
 type JobRow = {
+  planned_start_slot?: string | null;
+  planned_new_slot?: string | null;
   id: string;
   direction: ProofDirection;
   status: JobStatus;
@@ -88,6 +90,18 @@ export function findLatestJob(storage: Storage, direction: ProofDirection): Job 
 }
 
 /**
+ * When the newest proof job of a direction started (milliseconds since 1970), whatever asked for it: a message, a
+ * handoff, a keep-alive, a user. A job that failed, or that found the chain up to date and ended on chain without a
+ * proof, made no proof and is left out. Null when the direction has none. The watcher's minimum interval counts from it.
+ */
+export function lastProofStartedAt(storage: Storage, direction: ProofDirection): number | null {
+  const row = storage.database
+    .prepare("SELECT max(created_at) AS latest FROM jobs WHERE direction = ? AND status <> 'failed' AND NOT (status = 'on-chain' AND new_slot IS NULL)")
+    .get(direction) as { latest: number | null };
+  return row.latest;
+}
+
+/**
  * The jobs of a direction made after `since` that may have paid for a proof, and the time of the oldest. A job that
  * found the chain up to date ended on chain without a proof and is left out.
  */
@@ -96,6 +110,15 @@ export function recentCostlyJobs(storage: Storage, direction: ProofDirection, si
     .prepare("SELECT count(*) AS total, min(created_at) AS oldest FROM jobs WHERE direction = ? AND created_at > ? AND NOT (status = 'on-chain' AND new_slot IS NULL)")
     .get(direction, since) as { total: number; oldest: number | null };
   return { count: row.total, oldest: row.oldest };
+}
+
+/** A job with the slots the watcher planned for it (null for a request from outside). */
+export type PlannedJob = Job & { readonly plannedStartSlot: string | null; readonly plannedNewSlot: string | null };
+
+/** The jobs of a direction created at or after `since`, oldest first, with their planned slots. */
+export function listJobsSince(storage: Storage, direction: ProofDirection, since: number): PlannedJob[] {
+  const rows = storage.database.prepare("SELECT * FROM jobs WHERE direction = ? AND created_at >= ? ORDER BY created_at, rowid").all(direction, since) as JobRow[];
+  return rows.map((row) => ({ ...toJob(row), plannedStartSlot: row.planned_start_slot ?? null, plannedNewSlot: row.planned_new_slot ?? null }));
 }
 
 /** All active jobs, oldest first. */

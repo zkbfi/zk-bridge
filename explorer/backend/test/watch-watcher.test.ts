@@ -1,15 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Hex } from "viem";
 import { DEFAULT_POLICY, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
-import type { Job } from "../src/requests/jobs.ts";
+import { insertJob, lastProofStartedAt, type Job } from "../src/requests/jobs.ts";
 import type { ProofRequest, SubmitResult } from "../src/requests/service.ts";
-import { openStorage } from "../src/storage.ts";
+import { openStorage, type Storage } from "../src/storage.ts";
 import { MIN_PARTICIPANTS, expectedFinalityAt } from "../src/watch/decide.ts";
 import { DEFAULT_WARMUP, type WarmupConfig } from "../src/watch/warmup.ts";
 import { createWarmupStore } from "../src/watch/warmup-store.ts";
 import type { FinalityObservation } from "../src/watch/feed.ts";
 import type { HeldProof } from "../src/requests/held-proofs.ts";
 import type { BatchRule, Economics } from "../src/watch/batch.ts";
+import type { WatchDecision } from "../src/watch/decisions.ts";
 import { createDirectionWatcher, REFUSED_RETRIES, REFUSED_RETRY_SECONDS, type ListedMessage } from "../src/watch/watcher.ts";
 import { memoryLogger } from "./support.ts";
 
@@ -35,8 +36,17 @@ const job = (overrides: Partial<Job> = {}): Job => ({
   ...overrides,
 });
 
-/** No batch wait: a message proves at the first finality that covers it. */
-const NO_WAIT: BatchRule = { maxWaitSeconds: 0, lookaheadSeconds: 384, marginWad: 10n ** 18n };
+/**
+ * A proof job of the direction started at `now`, as the request service writes it. The jobs before it are done (one
+ * active job per direction), on chain with a proof.
+ */
+function recordJob(storage: Storage, jobId: string, now: number): void {
+  storage.database.prepare("UPDATE jobs SET status = 'on-chain', new_slot = '1' WHERE direction = 'first-to-second' AND status IN ('queued', 'proving')").run();
+  insertJob(storage, { id: jobId, direction: "first-to-second", now });
+}
+
+/** No minimum interval: a message proves at the first finality that covers it. */
+const NO_WAIT: BatchRule = { minIntervalSeconds: 0, lookaheadSeconds: 384, marginWad: 10n ** 18n };
 
 function setup(
   options: {
@@ -47,10 +57,18 @@ function setup(
     warmup?: Partial<WarmupConfig>;
     batchRule?: BatchRule;
     economics?: Economics | (() => Promise<Economics>);
+    /** Keep each decision the watcher reports. */
+    recordDecisions?: boolean;
+    /** The backend database: a second watcher on the same one is a restart. */
+    storage?: Storage;
+    /** A proof job of the direction already started at this time (milliseconds since 1970). */
+    lastProofAt?: number;
   } = {},
 ) {
+  const decisions: WatchDecision[] = [];
   const log = memoryLogger();
-  const storage = openStorage(":memory:");
+  const storage = options.storage ?? openStorage(":memory:");
+  if (options.lastProofAt !== undefined) recordJob(storage, `earlier-${options.lastProofAt}`, options.lastProofAt);
   const store = createWarmupStore(storage);
   const state = {
     facts: options.facts ?? facts(),
@@ -85,6 +103,8 @@ function setup(
     readHeldProofs: () => state.held,
     pendingStaleSeconds: 600,
     batchRule: options.batchRule ?? NO_WAIT,
+    // The jobs table, as the module reads it: each started job below is a row in it.
+    readLastProofAt: () => lastProofStartedAt(storage, "first-to-second"),
     readEconomics: async () => {
       reads.economics += 1;
       const economics = options.economics ?? { kind: "unknown", why: "no prices in this test" };
@@ -93,7 +113,10 @@ function setup(
     submit: async (request) => {
       submitted.push(request);
       const result = options.submit?.(request) ?? { requestId: "r", jobId: `job-${(jobs += 1)}` };
-      if (!("refused" in result)) state.active = job({ id: result.jobId });
+      if (!("refused" in result)) {
+        state.active = job({ id: result.jobId });
+        recordJob(storage, result.jobId, Date.now());
+      }
       return result;
     },
     ping:
@@ -110,10 +133,11 @@ function setup(
     maxRetrySeconds: 600,
     logger: log.logger,
     now: Date.now,
+    ...(options.recordDecisions === true ? { onDecision: (decision: WatchDecision) => void decisions.push(decision) } : {}),
   });
   const events = () => log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
   const sessions = () => storage.database.prepare("SELECT why, lead_seconds AS lead, started_at AS startedAt, ready_at AS readyAt, ended_at AS endedAt, outcome FROM warmup_sessions ORDER BY started_at").all();
-  return { watcher, state, submitted, pings, reads, store, sessions, named: (name: string) => events().filter((event) => event.event === name) };
+  return { watcher, state, submitted, pings, reads, store, storage, sessions, decisions, named: (name: string) => events().filter((event) => event.event === name) };
 }
 
 /** A reading that arrived `delay` ms after its signature slot began. */
@@ -731,54 +755,139 @@ describe("the direction watcher, warm-ups", () => {
   });
 });
 
-describe("the direction watcher, with a batch wait (2026-11-01)", () => {
-  const WAIT: BatchRule = { maxWaitSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n };
+describe("the direction watcher, with a minimum interval since the last proof (2026-11-01)", () => {
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n };
   const USD = 10n ** 18n;
   const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, block: "7" });
   const finalAt = (slot: number) => expectedFinalityAt(slot, facts()) * 1000;
+  /** The last proof started when message `a` was sent: its finality is inside the hour. */
+  const LAST = slotStart(HEAD + 100);
+  const iso = (milliseconds: number) => new Date(milliseconds).toISOString();
 
-  it("waits while the batch does not pay, then proves every waiting message at its fallback, also one sent meanwhile", async () => {
-    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT });
+  it("the zero case: no waiting message, the last proof five hours ago: nothing is due and no worker is warmed", async () => {
+    // Owner: "if there were no transfers over the bridge that are waiting from the last hour or before then do nothing".
+    const run = setup({ batchRule: WAIT, lastProofAt: slotStart(HEAD + 200) - 5 * 3_600_000 });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    await run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(2 * 3_600_000);
+    expect(run.submitted).toEqual([]);
+    expect(run.named("proof_not_due")).toMatchObject([{ why: "nothing-due" }]);
+    expect(run.pings).toEqual([]);
+    expect(run.named("warmup_scheduled")).toEqual([]);
+    expect(run.reads.economics).toBe(0);
+  });
+
+  it("the zero case with no proof ever: nothing is due; once a message arrives the rule applies and proves it at its finality", async () => {
+    const run = setup({ batchRule: WAIT });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([]);
+    expect(run.named("proof_not_due")).toMatchObject([{ why: "nothing-due" }]);
+    run.state.messages = [listed(HEAD + 140, "a")];
+    const reading = observation(HEAD + 160);
+    arrive(reading);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    expect(run.submitted).toMatchObject([{ messageId: id("a"), target: { startSlot: HEAD, newSlot: HEAD + 160 } }]);
+    expect(run.named("proof_due")).toMatchObject([{ why: "message", trigger: "interval", batch: 1 }]);
+  });
+
+  it("proves a message that does not pay at its finality when the last proof is longer ago than the interval", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT, lastProofAt: LAST - 2 * 3_600_000 });
+    const reading = observation(HEAD + 128);
+    arrive(reading);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    expect(run.submitted).toMatchObject([{ messageId: id("a") }]);
+    expect(run.named("proof_due")).toMatchObject([{ why: "message", trigger: "interval", batch: 1, feesUsd: null, costUsd: null }]);
+  });
+
+  it("inside the interval, waits until the last proof plus the interval, then proves every waiting message, also one sent meanwhile", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT, lastProofAt: LAST });
     const reading = observation(HEAD + 128);
     arrive(reading);
     run.watcher.observe(reading);
     await run.watcher.settled();
     expect(run.submitted).toEqual([]);
     const [waiting] = run.named("proof_not_due");
-    expect(waiting).toMatchObject({ why: "waiting-for-profit", messages: 1, feesUsd: null, costUsd: null, startWhy: "max-wait", maxWaitAt: new Date(finalAt(HEAD + 100) + 3_600_000).toISOString() });
+    expect(waiting).toMatchObject({ level: "info", why: "min-interval", messages: 1, feesUsd: null, costUsd: null, startWhy: "interval", lastProofAt: iso(LAST), dueAt: iso(LAST + 3_600_000) });
     expect(waiting!.detail).toContain("the fees cannot be valued (no prices in this test)");
-    // A message sent during the wait, final before the fallback, rides along with the next finality.
+    // A message sent during the wait, final before the interval ends, rides along.
     run.state.messages = [listed(HEAD + 100, "a"), listed(HEAD + 140, "b")];
     const later = observation(HEAD + 160);
     arrive(later);
     run.watcher.observe(later);
     await run.watcher.settled();
     expect(run.submitted).toEqual([]);
-    // No new finality is needed: the watcher wakes at the fallback by itself.
-    await vi.advanceTimersByTimeAsync(finalAt(HEAD + 100) + 3_600_000 - Date.now());
+    // No new finality is needed: the watcher wakes when the interval ends.
+    await vi.advanceTimersByTimeAsync(LAST + 3_600_000 - Date.now());
     await run.watcher.settled();
     expect(run.submitted).toMatchObject([{ messageId: id("a"), target: { startSlot: HEAD, newSlot: HEAD + 160 } }]);
-    expect(run.named("proof_due")).toMatchObject([{ why: "message", trigger: "max-wait", batch: 2, waitedSeconds: 3600, feesUsd: null, costUsd: null }]);
-    // The fallback timer of the first reading finds the job made: nothing more.
+    expect(run.named("proof_due")).toMatchObject([{ why: "message", trigger: "interval", batch: 2, feesUsd: null, costUsd: null }]);
+    // The timer of the first reading finds the job made: nothing more.
     await vi.advanceTimersByTimeAsync(3_600_000);
     expect(run.submitted).toHaveLength(1);
   });
 
-  it("proves at once when the batch pays", async () => {
-    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 110, "b")], batchRule: WAIT, economics: priced({ [id("a")]: USD }) });
+  it("proves at once when the batch pays, even inside the interval", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 110, "b")], batchRule: WAIT, economics: priced({ [id("a")]: USD }), lastProofAt: LAST });
     run.watcher.observe(observation(HEAD + 128));
     await run.watcher.settled();
     expect(run.named("proof_due")).toMatchObject([{ why: "message", trigger: "profit", batch: 2, feesUsd: "1.000000", costUsd: "0.025000" }]);
   });
 
+  it("never delays a handoff for the interval, and the handoff starts the next interval", async () => {
+    const head = 1000 * PERIOD + 8000;
+    const run = setup({ facts: facts(head, false), messages: [listed(1001 * PERIOD - 40, "a")], batchRule: WAIT });
+    // A proof started a minute before the handoff is due.
+    const first = observation(1001 * PERIOD + 4);
+    recordJob(run.storage, "a-minute-ago", first.receivedAt - 60_000);
+    arrive(first);
+    run.watcher.observe(first);
+    await run.watcher.settled();
+    expect(run.submitted).toMatchObject([{ plannedHandoff: true }]);
+    expect(run.named("proof_due")).toMatchObject([{ why: "keep-alive", riders: 1 }]);
+    // It landed. A message after it, inside the hour since the handoff, waits for the hour.
+    run.state.active = null;
+    run.state.facts = facts(1001 * PERIOD + 4, true);
+    run.state.messages = [listed(1001 * PERIOD + 20, "b")];
+    const second = observation(1001 * PERIOD + 96);
+    arrive(second);
+    run.watcher.observe(second);
+    await run.watcher.settled();
+    expect(run.submitted).toHaveLength(1);
+    expect(run.named("proof_not_due").at(-1)).toMatchObject({ why: "min-interval", lastProofAt: iso(first.receivedAt), dueAt: iso(first.receivedAt + 3_600_000) });
+  });
+
+  it("reads the last proof from the jobs table, so the interval survives a restart", async () => {
+    const storage = openStorage(":memory:");
+    const before = setup({ storage, messages: [listed(HEAD + 100, "a")], batchRule: WAIT });
+    const reading = observation(HEAD + 128);
+    arrive(reading);
+    before.watcher.observe(reading);
+    await before.watcher.settled();
+    expect(before.submitted).toHaveLength(1);
+    await before.watcher.stop();
+    // A new process: nothing in memory, the same database. The job ended on chain; a new message waits for the hour.
+    storage.database.prepare("UPDATE jobs SET status = 'on-chain', new_slot = ?").run(String(HEAD + 128));
+    const after = setup({ storage, facts: facts(HEAD + 128), messages: [listed(HEAD + 140, "b")], batchRule: WAIT });
+    const next = observation(HEAD + 192);
+    arrive(next);
+    after.watcher.observe(next);
+    await after.watcher.settled();
+    expect(after.submitted).toEqual([]);
+    expect(after.named("proof_not_due")).toMatchObject([{ why: "min-interval", lastProofAt: iso(reading.receivedAt), dueAt: iso(reading.receivedAt + 3_600_000) }]);
+  });
+
   it("waits for the finality of an upcoming message that makes the batch pay, and proves both together", async () => {
-    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 140, "b")], batchRule: WAIT, economics: priced({ [id("b")]: USD }) });
+    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 140, "b")], batchRule: WAIT, economics: priced({ [id("b")]: USD }), lastProofAt: LAST });
     const first = observation(HEAD + 128);
     arrive(first);
     run.watcher.observe(first);
     await run.watcher.settled();
     expect(run.submitted).toEqual([]);
-    expect(run.named("proof_not_due")).toMatchObject([{ why: "waiting-for-profit", startWhy: "profit", startAt: new Date(finalAt(HEAD + 140)).toISOString() }]);
+    expect(run.named("proof_not_due")).toMatchObject([{ why: "min-interval", startWhy: "profit", startAt: iso(finalAt(HEAD + 140)) }]);
     const second = observation(HEAD + 160);
     arrive(second);
     run.watcher.observe(second);
@@ -788,10 +897,11 @@ describe("the direction watcher, with a batch wait (2026-11-01)", () => {
     expect(run.reads.economics).toBe(2);
   });
 
-  it("a valuation that fails counts as unknown: the batch waits for its fallback", async () => {
+  it("a valuation that fails counts as unknown: the batch waits for the interval", async () => {
     const run = setup({
       messages: [listed(HEAD + 100, "a")],
       batchRule: WAIT,
+      lastProofAt: LAST,
       economics: async () => {
         throw new Error("no route");
       },
@@ -808,25 +918,32 @@ describe("the direction watcher, with a batch wait (2026-11-01)", () => {
   });
 
   it("does not value anything when no message waits or the head covers them", async () => {
-    const run = setup({ messages: [listed(HEAD - 5)], batchRule: WAIT });
+    const run = setup({ messages: [listed(HEAD - 5)], batchRule: WAIT, lastProofAt: LAST });
     run.watcher.observe(observation(HEAD + 128));
     await run.watcher.settled();
     expect(run.reads.economics).toBe(0);
   });
 
-  it("times the warm-up to the batch: its fallback, not each message's finality", async () => {
-    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 150, "b")], batchRule: WAIT });
-    const due = finalAt(HEAD + 100) + 3_600_000;
+  it("times the warm-up to the batch: the end of the interval, not each message's finality", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 150, "b")], batchRule: WAIT, lastProofAt: LAST });
+    const due = LAST + 3_600_000;
     vi.setSystemTime(finalAt(HEAD + 150) - 90_000);
     await run.watcher.scan();
     expect(run.pings).toEqual([]);
     vi.setSystemTime(due - DEFAULT_WARMUP.defaultLeadSeconds * 1000);
     await run.watcher.scan();
-    expect(run.named("warmup_scheduled")).toMatchObject([{ why: "message", dueAt: new Date(due).toISOString(), dueInSeconds: 90 }]);
+    expect(run.named("warmup_scheduled")).toMatchObject([{ why: "message", dueAt: iso(due), dueInSeconds: 90 }]);
   });
 
-  it("stop cancels the fallback timer", async () => {
-    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT });
+  it("long after the last proof, times the warm-up to the message's finality", async () => {
+    const run = setup({ messages: [listed(HEAD + 150, "a")], batchRule: WAIT, lastProofAt: LAST - 5 * 3_600_000 });
+    vi.setSystemTime(finalAt(HEAD + 150) - DEFAULT_WARMUP.defaultLeadSeconds * 1000);
+    await run.watcher.scan();
+    expect(run.named("warmup_scheduled")).toMatchObject([{ why: "message", dueAt: iso(finalAt(HEAD + 150)), dueInSeconds: 90 }]);
+  });
+
+  it("stop cancels the interval timer", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT, lastProofAt: LAST });
     run.watcher.observe(observation(HEAD + 128));
     await run.watcher.settled();
     await run.watcher.stop();
@@ -870,5 +987,83 @@ describe("the direction watcher, with a proof we have (2026-11-01)", () => {
     await vi.advanceTimersByTimeAsync(60_000);
     await run.watcher.settled();
     expect(run.submitted).toHaveLength(1);
+  });
+});
+
+describe("the direction watcher reports its decisions (2026-11-01)", () => {
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n };
+  const LAST = slotStart(HEAD + 100);
+  const USD = 10n ** 18n;
+  const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, block: "7" });
+  const finalAt = (slot: number) => expectedFinalityAt(slot, facts()) * 1000;
+
+  it("a batch that waits: its size, worth and times in milliseconds, with the slot clock of the light client", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT, recordDecisions: true, lastProofAt: LAST });
+    const reading = observation(HEAD + 128);
+    arrive(reading);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    expect(run.decisions).toEqual([
+      {
+        at: reading.receivedAt,
+        finalizedSlot: HEAD + 128,
+        headSlot: HEAD,
+        genesisTime: GENESIS,
+        secondsPerSlot: SLOT,
+        due: false,
+        why: "min-interval",
+        detail: expect.stringContaining("1 message waits"),
+        batch: { messages: 1, feesUsd: null, costUsd: null, unknownWhy: "no prices in this test", oldestFinalAt: finalAt(HEAD + 100), startAt: LAST + 3_600_000, startWhy: "interval", dueAt: LAST + 3_600_000, lastProofAt: LAST },
+      },
+    ]);
+  });
+
+  it("a priced batch that waits for profit carries its fees and cost", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 140, "b")], batchRule: WAIT, economics: priced({ [id("b")]: USD }), recordDecisions: true, lastProofAt: LAST });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.decisions[0]?.batch).toMatchObject({ feesUsd: "0.000000", costUsd: "0.025000", startWhy: "profit", startAt: finalAt(HEAD + 140) });
+  });
+
+  it("a due batch says what triggered it and that the job started; a later one meets the running job", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 110, "b")], batchRule: WAIT, economics: priced({ [id("a")]: USD }), recordDecisions: true });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.decisions).toMatchObject([{ due: true, why: "message", trigger: "profit", batchSize: 2, feesUsd: "1.000000", costUsd: "0.025000", outcome: "job-started" }]);
+    run.watcher.observe(observation(HEAD + 160));
+    await run.watcher.settled();
+    expect(run.decisions.at(-1)).toMatchObject({ due: true, outcome: "job-active", finalizedSlot: HEAD + 160 });
+  });
+
+  it("a proof due without a batch wait carries no batch facts; a refusal is its outcome", async () => {
+    const run = setup({ messages: [listed(HEAD + 100)], submit: () => ({ refused: "duplicate" }), recordDecisions: true });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.decisions).toHaveLength(1);
+    expect(run.decisions[0]).toMatchObject({ due: true, why: "message", outcome: "duplicate" });
+    expect(run.decisions[0]).not.toHaveProperty("trigger");
+  });
+
+  it("a second keep-alive in one period is reported as held back", async () => {
+    const head = 1000 * PERIOD + 8000;
+    const run = setup({ facts: facts(head, false), recordDecisions: true });
+    const first = observation(1001 * PERIOD + 4);
+    arrive(first);
+    run.watcher.observe(first);
+    await run.watcher.settled();
+    run.state.active = null;
+    const second = observation(1001 * PERIOD + 36);
+    arrive(second);
+    run.watcher.observe(second);
+    await run.watcher.settled();
+    expect(run.decisions.map((decision) => decision.outcome)).toEqual(["job-started", "keep-alive-this-period"]);
+  });
+
+  it("a decision that is not due and has no batch carries none", async () => {
+    const run = setup({ messages: [listed(HEAD + 100)], recordDecisions: true });
+    run.watcher.observe(observation(HEAD + 128, MIN_PARTICIPANTS - 1));
+    await run.watcher.settled();
+    expect(run.decisions).toMatchObject([{ due: false, why: "insufficient-signatures" }]);
+    expect(run.decisions[0]).not.toHaveProperty("batch");
   });
 });

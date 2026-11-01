@@ -6,6 +6,7 @@ import type { BoardPublisher } from "@zk-bridge/shared/msgboard";
 import { CommandTimeoutError, type LightClientHead, type ProverBinary } from "@zk-bridge/shared/prover";
 import { PROGRAM_KEY, publicValuesFor, word } from "../../shared/test/support/prover-builders.ts";
 import { MAXIMUM_BODY_BYTES } from "../src/requests/module.ts";
+import { getTiming } from "../src/requests/timings.ts";
 import { getJob, insertJob, updateJob } from "../src/requests/jobs.ts";
 import { NOT_CONFIGURED_TEXT, REAL_SOURCE, TICK_INTERVAL_MILLISECONDS, configureWebhook, settled, start, type WebhookSource } from "../src/webhook/module.ts";
 import { MAXIMUM_POST_ATTEMPTS, POST_FAILED_REASON, RETRY_BASE_MILLISECONDS, RETRY_CEILING_MILLISECONDS, createProofPublisher, retryDelayMilliseconds } from "../src/webhook/publish.ts";
@@ -288,6 +289,15 @@ describe("the publisher", () => {
     await settled(fixture.context);
     const line = fixture.log.lines.map((text) => JSON.parse(text)).find((entry) => entry.event === "webhook_proof_posted");
     expect(line).toMatchObject({ jobId, messageHash: word(0x99), grindMilliseconds: 7, difficulty: "367772", threads: 4 });
+  });
+
+  it("keeps when the webhook stored the proof, when the board took it and how long the grind took (2026-11-01)", async () => {
+    const fixture = setup();
+    const jobId = createProvingJob(fixture, "second-to-first");
+    await send(fixture, jobId, proofPackage());
+    await settled(fixture.context);
+    const row = fixture.storage.database.prepare("SELECT stored_at, posted_at FROM webhook_proofs WHERE job_id = ?").get(jobId) as { stored_at: number; posted_at: number };
+    expect(getTiming(fixture.storage, jobId)).toMatchObject({ direction: "second-to-first", webhookStoredAt: row.stored_at, boardPostedAt: row.posted_at, grindMs: 7, provedAt: null });
   });
 
   it("verifies with the prover before it posts", async () => {

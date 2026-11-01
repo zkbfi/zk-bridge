@@ -1,0 +1,242 @@
+import { Hono } from "hono";
+import { describe, expect, it } from "vitest";
+import { insertJob, updateJob } from "../src/requests/jobs.ts";
+import { recordBoardPost, recordProveTiming } from "../src/requests/timings.ts";
+import { decisionBoardOf } from "../src/watch/decisions.ts";
+import { createWarmupStore } from "../src/watch/warmup-store.ts";
+import type { HeadUpdate, IndexedHead, IndexedMessage, IndexerReads } from "../src/progress/indexer.ts";
+import { ESTIMATE_REUSE_MILLISECONDS, READS_PER_CALLER_PER_MINUTE, createReadLimiter, registerProgressRoutes, workerWarmAt } from "../src/progress/routes.ts";
+import { makeBackend, makeConfig } from "./support.ts";
+
+const ID = `0x${"ab".repeat(32)}`;
+const SLOT = 12;
+
+/** An indexer the test steers: each read answers its field, and an Error makes it fail. */
+function fakeIndexer() {
+  const state = {
+    message: null as IndexedMessage | null | Error,
+    heads: [] as readonly IndexedHead[] | Error,
+    headUpdates: [] as readonly HeadUpdate[] | Error,
+    delivered: [] as readonly IndexedMessage[],
+    calls: { headUpdates: 0 },
+  };
+  const answer = <Value>(value: Value | Error): Promise<Value> => (value instanceof Error ? Promise.reject(value) : Promise.resolve(value));
+  const reads: IndexerReads = {
+    message: async () => answer(state.message),
+    heads: async () => answer(state.heads),
+    headUpdates: async () => {
+      state.calls.headUpdates += 1;
+      return answer(state.headUpdates);
+    },
+    delivered: async () => state.delivered,
+  };
+  return { state, reads };
+}
+
+function setup(options: { indexer?: IndexerReads | null } = {}) {
+  const backend = makeBackend();
+  const indexer = fakeIndexer();
+  const app = new Hono();
+  let caller = "10.0.0.1";
+  registerProgressRoutes(app, backend.context, { indexer: options.indexer === undefined ? indexer.reads : options.indexer, callerOf: () => caller });
+  const get = async (path: string) => {
+    const answer = await app.request(path);
+    return { status: answer.status, body: (await answer.json()) as Record<string, unknown>, headers: answer.headers };
+  };
+  return { ...backend, indexer, app, get, as: (next: string) => (caller = next) };
+}
+
+/** A message sent `secondsAgo` before the clock, from Ethereum (1) to PulseChain (369). */
+const sentMessage = (now: number, secondsAgo: number, overrides: Partial<IndexedMessage> = {}): IndexedMessage => ({
+  messageId: ID,
+  status: "sent",
+  direction: { sourceChainId: 1, destinationChainId: 369 },
+  sent: { timestamp: Math.floor(now / 1000) - secondsAgo },
+  covered: null,
+  delivered: null,
+  ...overrides,
+});
+
+describe("GET /progress/:messageId (2026-11-01)", () => {
+  it("refuses an identifier that is not 32 bytes of hex", async () => {
+    const run = setup();
+    expect(await run.get("/progress/0x1234")).toMatchObject({ status: 400 });
+  });
+
+  it("answers 503 without an indexer or when it cannot be read, and 404 for an unknown, unsent or foreign message", async () => {
+    expect(await setup({ indexer: null }).get(`/progress/${ID}`)).toMatchObject({ status: 503, body: { error: "the chain indexer is not configured" } });
+    const run = setup();
+    run.indexer.state.message = new Error("down");
+    expect(await run.get(`/progress/${ID}`)).toMatchObject({ status: 503, body: { error: "the chain indexer cannot be read" } });
+    run.indexer.state.message = null;
+    expect(await run.get(`/progress/${ID}`)).toMatchObject({ status: 404, body: { error: "unknown message" } });
+    run.indexer.state.message = sentMessage(run.clock.now(), 10, { sent: null });
+    expect(await run.get(`/progress/${ID}`)).toMatchObject({ status: 404 });
+    run.indexer.state.message = sentMessage(run.clock.now(), 10, { direction: { sourceChainId: 1, destinationChainId: 943 } });
+    expect(await run.get(`/progress/${ID}`)).toMatchObject({ status: 404, body: { error: "the message is not of this pair" } });
+  });
+
+  it("names the job, its step and the estimate from recent proofs; the slot clock comes from the watcher's decision", async () => {
+    const run = setup();
+    const now = run.clock.now();
+    const genesis = Math.floor(now / 1000) - 100_000 * SLOT;
+    // An earlier proof: a cold worker took 60 s, the whole run 100 s, the board post 8 s.
+    insertJob(run.storage, { id: "old", direction: "first-to-second", now: now - 900_000 });
+    updateJob(run.storage, "old", { status: "on-chain", startSlot: "1", newSlot: "2" }, now - 800_000, ["queued"]);
+    recordProveTiming(run.storage, { jobId: "old", direction: "first-to-second", startedAt: now - 900_000, provedAt: now - 800_000, timing: { wait_worker_ms: 60_000, not_ready_count: 1, total_ms: 100_000 } });
+    recordBoardPost(run.storage, { jobId: "old", direction: "first-to-second", storedAt: now - 799_000, postedAt: now - 790_000, grindMs: 8_000 });
+    // A proof of an older prover reports nothing and changes no estimate.
+    recordProveTiming(run.storage, { jobId: "older", direction: "first-to-second", startedAt: now - 990_000, provedAt: now - 980_000, timing: null });
+    run.indexer.state.message = sentMessage(now, 1_200, { status: "waiting_for_finality" });
+    decisionBoardOf(run.context).record("first-to-second", { at: now, finalizedSlot: 99_990, headSlot: 99_000, genesisTime: genesis, secondsPerSlot: SLOT, due: true, why: "message", detail: "1 waiting message is final", outcome: "job-started" });
+    insertJob(run.storage, { id: "new", direction: "first-to-second", now: now - 10_000, target: { startSlot: 99_000, newSlot: 99_990 } });
+    updateJob(run.storage, "new", { status: "proving" }, now - 10_000, ["queued"]);
+    const answer = await run.get(`/progress/${ID}`);
+    expect(answer.status).toBe(200);
+    expect(answer.body).toMatchObject({ messageId: ID, direction: "first-to-second", status: "waiting_for_finality", slot: 99_900, job: { jobId: "new", status: "proving" } });
+    expect(answer.body.waitingOn).toMatchObject({ service: "gpu-worker-start", since: now - 10_000, eta: now - 10_000 + 100_000 });
+    // A warm-up that made a worker ready before the job: the GPU proves.
+    const store = createWarmupStore(run.storage);
+    const session = store.openSession({ direction: "first-to-second", why: "message", dueAt: now, leadSeconds: 90, at: now - 120_000 });
+    store.markReady(session, now - 60_000);
+    run.indexer.state.message = sentMessage(now, 1_200, { status: "sent" });
+    run.clock.advance(5_001);
+    expect((await run.get(`/progress/${ID}`)).body.waitingOn).toMatchObject({ service: "gpu-proving" });
+  });
+
+  it("without a decision, takes the slot clock from the indexer's head; without heads, no slot", async () => {
+    const run = setup();
+    const now = run.clock.now();
+    const nowSeconds = Math.floor(now / 1000);
+    run.indexer.state.message = sentMessage(now, 60);
+    run.indexer.state.heads = [
+      { chainId: 1, trackedChainId: 369, storedHeadSlot: 5, storedHeadSlotTimestamp: 50 },
+      { chainId: 369, trackedChainId: 1, storedHeadSlot: 1_000, storedHeadSlotTimestamp: nowSeconds - 600, finalizedSlot: 1_030 },
+    ];
+    const answer = await run.get(`/progress/${ID}`);
+    expect(answer.body).toMatchObject({ slot: 1_045, waitingOn: { service: "source-chain-finality" } });
+    run.indexer.state.heads = new Error("down");
+    run.indexer.state.message = sentMessage(now, 61);
+    run.clock.advance(5_000);
+    expect((await run.get(`/progress/${ID}`)).body).toMatchObject({ slot: null });
+  });
+
+  it("limits each caller to its reads a minute, with Retry-After", async () => {
+    const run = setup();
+    run.indexer.state.message = null;
+    for (let index = 0; index < READS_PER_CALLER_PER_MINUTE; index += 1) expect((await run.get(`/progress/${ID}`)).status).toBe(404);
+    const refused = await run.get(`/progress/${ID}`);
+    expect(refused).toMatchObject({ status: 429, body: { error: "rate-limited", retryAfterSeconds: 60 } });
+    expect(refused.headers.get("Retry-After")).toBe("60");
+    expect((await run.get("/benchmarks")).status).toBe(429);
+    expect((await run.get("/directions/first-to-second/pipeline")).status).toBe(429);
+    run.as("10.0.0.2");
+    expect((await run.get(`/progress/${ID}`)).status).toBe(404);
+    run.as("10.0.0.1");
+    run.clock.advance(60_000);
+    expect((await run.get(`/progress/${ID}`)).status).toBe(404);
+  });
+
+  it("reads the on-chain medians of a day once a minute", async () => {
+    const run = setup();
+    run.indexer.state.message = sentMessage(run.clock.now(), 60);
+    await run.get(`/progress/${ID}`);
+    await run.get(`/progress/${ID}`);
+    expect(run.indexer.state.calls.headUpdates).toBe(2);
+    run.clock.advance(ESTIMATE_REUSE_MILLISECONDS);
+    await run.get(`/progress/${ID}`);
+    expect(run.indexer.state.calls.headUpdates).toBe(4);
+  });
+});
+
+describe("GET /directions/:direction/pipeline (2026-11-01)", () => {
+  it("answers 404 for an unknown direction", async () => {
+    expect(await setup().get("/directions/sideways/pipeline")).toMatchObject({ status: 404, body: { error: "unknown direction" } });
+  });
+
+  it("shows the running job, the newest proof, the head and the last decision", async () => {
+    const run = setup();
+    const now = run.clock.now();
+    insertJob(run.storage, { id: "j", direction: "second-to-first", now: now - 20_000 });
+    run.storage.database.prepare("INSERT INTO proofs (direction, job_id, start_slot, new_slot, body, stored_at) VALUES ('second-to-first', NULL, '10', '20', '{}', 5)").run();
+    run.indexer.state.heads = [{ chainId: 1, trackedChainId: 369, storedHeadSlot: 10, finalizedSlot: 40, lastUpdateTimestamp: 100, lagSeconds: 30 }];
+    const decision = { at: now, finalizedSlot: 40, headSlot: 10, genesisTime: 0, secondsPerSlot: 10, due: false, why: "proof-pending", detail: "the proof from slot 10 to slot 20 (board) waits to land" };
+    decisionBoardOf(run.context).record("second-to-first", decision);
+    const answer = await run.get("/directions/second-to-first/pipeline");
+    expect(answer.status).toBe(200);
+    expect(answer.body).toMatchObject({
+      direction: "second-to-first",
+      batch: null,
+      job: { jobId: "j", status: "queued", step: "gpu-worker-start", elapsedMs: 20_000 },
+      latestJob: { jobId: "j", status: "queued" },
+      latestProof: { startSlot: 10, newSlot: 20, where: "board" },
+      head: { slot: 10, finalizedSlot: 40, lastUpdateAt: 100_000, lagSeconds: 30 },
+      decision,
+    });
+    run.indexer.state.heads = new Error("down");
+    expect((await run.get("/directions/second-to-first/pipeline")).body).toMatchObject({ head: null });
+  });
+
+  it("works without an indexer: no head", async () => {
+    expect((await setup({ indexer: null }).get("/directions/first-to-second/pipeline")).body).toMatchObject({ head: null, job: null, latestJob: null });
+  });
+});
+
+describe("GET /benchmarks (2026-11-01)", () => {
+  it("refuses a window it does not know, and takes a day by default", async () => {
+    const run = setup();
+    expect(await run.get("/benchmarks?window=1w")).toMatchObject({ status: 400 });
+    const answer = await run.get("/benchmarks");
+    expect(answer).toMatchObject({ status: 200, body: { window: "24h", windowSeconds: 86_400, indexer: "ok" } });
+    expect((await run.get("/benchmarks?window=7d")).body).toMatchObject({ window: "7d", windowSeconds: 604_800 });
+  });
+
+  it("states the indexer as unavailable when it fails or is not set, and logs the failure", async () => {
+    const run = setup();
+    run.indexer.state.headUpdates = new Error("down");
+    expect((await run.get("/benchmarks")).body).toMatchObject({ indexer: "unavailable" });
+    expect(run.log.lines.some((line) => line.includes("benchmarks_indexer_unreadable"))).toBe(true);
+    expect((await setup({ indexer: null }).get("/benchmarks")).body).toMatchObject({ indexer: "unavailable" });
+  });
+});
+
+describe("the routes in the backend", () => {
+  it("are served by the requests module, cross-origin, with the indexer of the configuration", async () => {
+    const backend = makeBackend({ config: makeConfig({ indexerUrl: "http://127.0.0.1:9/" }) });
+    const answer = await backend.app.request("/benchmarks", { headers: { origin: "https://next.zkb.fi" } });
+    expect(answer.status).toBe(200);
+    expect(answer.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(await answer.json()).toMatchObject({ indexer: "unavailable" });
+    const progress = await backend.app.request(`/progress/${ID}`, { headers: { "x-forwarded-for": "10.9.9.9" } });
+    expect(progress.status).toBe(503);
+    const without = makeBackend();
+    expect((await without.app.request(`/progress/${ID}`)).status).toBe(503);
+  });
+});
+
+describe("the read limiter", () => {
+  it("forgets the callers of past minutes once it knows many", () => {
+    let now = 0;
+    const limiter = createReadLimiter({ perMinute: 1, now: () => now });
+    for (let index = 0; index <= 10_000; index += 1) expect(limiter.take(`c${index}`)).toBe(0);
+    expect(limiter.take("c0")).toBe(60);
+    now = 60_000;
+    expect(limiter.take("fresh")).toBe(0);
+    expect(limiter.take("c0")).toBe(0);
+  });
+});
+
+describe("a warm worker at a time", () => {
+  it("needs a session that was ready by then and had not ended", () => {
+    const backend = makeBackend();
+    const store = createWarmupStore(backend.storage);
+    expect(workerWarmAt(backend.storage, "first-to-second", 100)).toBe(false);
+    const id = store.openSession({ direction: "first-to-second", why: "message", dueAt: 0, leadSeconds: 90, at: 0 });
+    expect(workerWarmAt(backend.storage, "first-to-second", 100)).toBe(false);
+    store.markReady(id, 50);
+    expect(workerWarmAt(backend.storage, "first-to-second", 100)).toBe(true);
+    store.endSession(id, "used", 80);
+    expect(workerWarmAt(backend.storage, "first-to-second", 100)).toBe(false);
+    expect(workerWarmAt(backend.storage, "first-to-second", 70)).toBe(true);
+  });
+});

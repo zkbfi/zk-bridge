@@ -412,6 +412,14 @@ cast call "<bridge on chain 943>" 'depositsOpen()(bool)' --rpc-url pulsechain_te
 
 Both calls must print `true`. Until then, a send reverts with `DepositsNotOpen()`. Run the manual commands right after an update of the light client of the bridge, or the proof window error above comes back.
 
+**The runner needs a header RPC with `debug_getRawHeader` when its main RPC lacks it.** Besides `eth_getProof`, the proof needs the raw header of the remote block (`debug_getRawHeader`): a Sepolia block under Gloas has header fields that the block JSON does not show, so the rebuild from JSON hashes to another value. On 2026-11-01 the runner opened the bridge on Sepolia, but the bridge on chain 943 failed: the keyless Sepolia RPC with enough proof history (`https://ethereum-sepolia-rpc.publicnode.com`, about 100 blocks) answers `-32601` for `debug_getRawHeader`, and the keyed RPC that serves it keeps too short a proof window. The error was `malformed answer: the remote header: the raw header failed (rpc error -32601 ...) and the rebuild from JSON failed (...)`. Keep the main RPC of Sepolia on the node with the proof history, and name the keyed node as a header RPC, asked only for `debug_getRawHeader`:
+
+- in the environment of the bots: `EXPLORER_HEADER_RPC_URL_11155111=<keyed Sepolia RPC>` (a comma separated list for several), or `chains."11155111".headerRpc` of `prover-setup.json` as a reference (`{ "source": "environment", "variable": "EXPLORER_HEADER_RPC_URL_11155111" }`, or an `op://` reference);
+- in the backend configuration: `headerRpcUrls: { "11155111": ["<keyed Sepolia RPC>"] }`;
+- by hand, in the destination section of the route in `prover.toml`: `header_rpc_urls = ["<keyed Sepolia RPC>"]`.
+
+Every header is checked against the block hash that the own light client stored, so a header RPC is never trusted. When no source gives the header, the error names each one (`destination.rpc_url`, `destination.header_rpc_urls[i]`, the rebuild from JSON) with its cause and no URL. Never paste the keyed URL into a log or a ticket.
+
 ## Step 9: confirm the gate on Sepolia
 
 The gate of Sepolia is enforcing. The first sender of each epoch calls `BeaconForkGate.confirm(evidence)` before a send. See "Gate evidence" in `docs/hardened-build-contract.md`.
@@ -466,7 +474,7 @@ The runner also writes the outcome of each item (gas and fee earned) to the stat
 
 Owner: "we should start out with a minimum of 1 proof/hour. this will help with keeping things current on both chains and giving us a benchmark to check against. we need to mint tokens on both sides too to test the bridge's utility" and "and then setup bots to move said tokens back and forth". Later: "seems like it would be best to have these proofs be posted if and only if they have erc20s moving across the bridge. otherwise they are useless. so perhaps we should be doing bridges 4x/hr".
 
-Two test tokens on each chain: `zkb Test Dollar` (`tUSD`, 6 decimals) and `zkb Test Token` (`tTKN`, 18 decimals), `src/testnet/TestToken.sol`. Only the deployer (the minter, fixed at deployment) mints; there is no public mint, so nobody can print an amount near the 256 bit limit and push it through the mediator. A tester who wants tokens asks the minter. Their bridged copies are `ztUSD` and `ztTKN`. The traffic bot (`explorer/bots`, "The traffic bot") sends one transfer every 15 minutes in each direction, the way back 7.5 minutes after the way out, so each proof carries token transfers.
+Two test tokens on each chain: `zkb Test Dollar` (`tUSD`, 6 decimals) and `zkb Test Token` (`tTKN`, 18 decimals), `src/testnet/TestToken.sol`. Only the deployer (the minter, fixed at deployment) mints; there is no public mint, so nobody can print an amount near the 256 bit limit and push it through the mediator. A tester who wants tokens asks the minter. Their bridged copies are `ztUSD` and `ztTKN`. The traffic bot (`explorer/bots`, "The traffic bot") draws, at the start of each clock hour (UTC) and for each direction on its own, how many transfers to send in that hour (0 to 3, uniformly) and sends them at random times inside it, at least 5 minutes apart. Some hours hold none, some several. Every proof the backend makes then carries token transfers, because the runner proves only for a transfer that waits (the profitability check stays on: testnet transfers earn nothing, so proving only for them is what keeps the cost down).
 
 ### What is needed first
 
@@ -515,7 +523,7 @@ The settings of the template: amounts from 5 to 50 whole tokens, a home balance 
 
 ### What a month costs the traffic wallet
 
-Only the traffic wallet's own sends; the runner pays the deliveries and the light client updates. Four sends an hour in one direction from each chain: 2,880 relays a month on each chain, plus one approval for each token and copy (eight in all, once).
+Only the traffic wallet's own sends; the runner pays the deliveries and the light client updates. Zero to three sends an hour from each chain, 1.5 on average: about 1,080 relays a month on each chain, plus one approval for each token and copy (eight in all, once). The gas figures below are for the old four an hour (2,880 relays a month on each chain); multiply the gas and coin a month by 0.375.
 
 | | Sepolia | Chain 943 |
 |---|---|---|
@@ -527,7 +535,9 @@ Only the traffic wallet's own sends; the runner pays the deliveries and the ligh
 
 Fund 2 Sepolia ETH and 10 tPLS to start, and watch `native-below-reserve` skips.
 
-**Token balances.** A send moves 5 to 50 tokens (27.5 on average). One direction makes 2,880 sends a month, so even with no way back the native balance of one token moves at most about 80,000 tokens a month, far inside the 900,000 above the band's minimum. The way back runs as often, and the band brings copies home first when a home balance falls below 100,000. What leaves for good is the tip, 0.1 percent of each send: about 80 tokens a month on each chain. A mint of 1,000,000 of each token lasts for years.
+**Token balances.** A send moves 5 to 50 tokens (27.5 on average). One direction made 2,880 sends a month at the old four an hour (about 1,080 now), so even with no way back the native balance of one token moves at most about 80,000 tokens a month, far inside the 900,000 above the band's minimum. The way back runs as often, and the band brings copies home first when a home balance falls below 100,000. What leaves for good is the tip, 0.1 percent of each send: about 80 tokens a month on each chain. A mint of 1,000,000 of each token lasts for years.
+
+**Proving cost.** The backend batches with a one hour maximum wait, so each direction needs at most one proof an hour, and only in an hour with at least one send. With the count drawn uniformly from 0 to 3, an hour holds a send with probability 3 in 4, so a direction needs a proof in about 18 hours a day and the two directions together about 36 proofs a day (an upper bound for the pair when the backend can prove both directions in one batch). On RunPod serverless that is about 40 US dollars a month, the owner's figure: "<$40/month costs for proving + some gas money which we can get from faucets".
 
 ### Checked on local chains
 

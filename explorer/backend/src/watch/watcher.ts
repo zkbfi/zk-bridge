@@ -14,6 +14,7 @@ import type { ProofRequest, SubmitResult } from "../requests/service.ts";
 import { usdText, type BatchRule, type Economics } from "./batch.ts";
 import { decideProof, slotAtTime, warmupPlan, type PendingProof, type WaitingMessage } from "./decide.ts";
 import type { DestinationToken } from "./economics.ts";
+import type { DecisionOutcome, WatchDecision } from "./decisions.ts";
 import type { FinalityObservation } from "./feed.ts";
 import { COLD_START_FLOOR_SECONDS, IDLE, nextHoldAt, warmupStep, type WarmupConfig, type WarmupEnd, type WarmupSession, type WarmupTarget } from "./warmup.ts";
 import type { WarmupStore } from "./warmup-store.ts";
@@ -55,8 +56,13 @@ export type DirectionWatcherInput = {
   readonly readHeldProofs: () => readonly HeldProof[];
   /** A proof we have that waited to land longer than this no longer holds a new proof back. */
   readonly pendingStaleSeconds: number;
-  /** When a message proof is due (`watch.maxWaitSeconds` and its overrides). */
+  /** When a message proof is due (`watch.minIntervalSeconds` and its overrides). */
   readonly batchRule: BatchRule;
+  /**
+   * When the direction's newest proof job started (milliseconds since 1970), whatever asked for it, or null. Read from
+   * the jobs table on each decision, so the minimum interval survives a restart.
+   */
+  readonly readLastProofAt: () => number | null;
   /** Values the waiting messages. Only asked when the rule waits. */
   readonly readEconomics: (messages: readonly ListedMessage[]) => Promise<Economics>;
   readonly submit: (request: ProofRequest) => Promise<SubmitResult>;
@@ -72,6 +78,8 @@ export type DirectionWatcherInput = {
   readonly logger: Logger;
   /** Milliseconds since 1970. */
   readonly now: () => number;
+  /** Told of each decision and, for a due one, of what came of it. `GET /directions/:direction/pipeline` shows the latest. */
+  readonly onDecision?: (decision: WatchDecision) => void;
 };
 
 /** A running watcher. */
@@ -117,10 +125,10 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
    * calling for proofs that cannot hand off.
    */
   let keepAlivePeriod: number | null = null;
-  /** Wakes the watcher at the fallback of a batch that waits, when no new finality may come before it. */
+  /** Wakes the watcher when a batch that waits is due, when no new finality may come before it. */
   let batchTimer: ReturnType<typeof setTimeout> | null = null;
   let valued: { key: string; at: number; economics: Economics } | null = null;
-  const waits = input.batchRule.maxWaitSeconds > 0;
+  const waits = input.batchRule.minIntervalSeconds > 0;
 
   /** The pending proof we have from the head, or null. */
   const pendingAt = (headSlot: number): PendingProof | null => pendingFrom(input.readHeldProofs(), headSlot);
@@ -144,7 +152,8 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
   async function batchOf(listed: readonly ListedMessage[], facts: LightClientFacts) {
     const uncovered = listed.filter((message) => slotAtTime(message.timestamp, facts) > facts.headSlot);
     if (!waits || uncovered.length === 0) return undefined;
-    return { rule: input.batchRule, economics: await economicsOf(uncovered) };
+    const lastProofAt = input.readLastProofAt();
+    return { rule: input.batchRule, economics: await economicsOf(uncovered), lastProofAt: lastProofAt === null ? null : lastProofAt / 1000 };
   }
 
   function wakeAt(seconds: number, observation: FinalityObservation): void {
@@ -213,12 +222,43 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       pendingStaleSeconds: input.pendingStaleSeconds,
       ...(batch === undefined ? {} : { batch }),
     });
+    const base: WatchDecision = {
+      at: now(),
+      finalizedSlot: observation.finalizedSlot,
+      headSlot: facts.headSlot,
+      genesisTime: facts.genesisTime,
+      secondsPerSlot: facts.secondsPerSlot,
+      due: decision.due,
+      why: decision.why,
+      detail: decision.detail,
+    };
+    const note = (extra: Partial<WatchDecision>): void => input.onDecision?.({ ...base, ...extra });
+    const noteOutcome = (outcome: DecisionOutcome): void => note({ ...dueFacts, outcome });
+    let dueFacts: Partial<WatchDecision> = {};
     if (!decision.due) {
-      const level = decision.why === "stranded" ? "warn" : decision.why === "insufficient-signatures" || decision.why === "waiting-for-profit" || decision.why === "proof-pending" ? "info" : "debug";
+      const level = decision.why === "stranded" ? "warn" : decision.why === "insufficient-signatures" || decision.why === "min-interval" || decision.why === "proof-pending" ? "info" : "debug";
       const plan = decision.plan;
-      const batchFields = plan === undefined ? {} : { messages: plan.ready, feesUsd: plan.feesUsd === null ? null : usdText(plan.feesUsd), costUsd: plan.costUsd === null ? null : usdText(plan.costUsd), startAt: iso(plan.startAt), startWhy: plan.startWhy, maxWaitAt: iso(plan.maxWaitAt) };
+      // A batch waits only for the interval since a proof: its last proof is known (with none, the batch is due).
+      const batchFields = plan === undefined ? {} : { messages: plan.ready, feesUsd: plan.feesUsd === null ? null : usdText(plan.feesUsd), costUsd: plan.costUsd === null ? null : usdText(plan.costUsd), startAt: iso(plan.startAt), startWhy: plan.startWhy, lastProofAt: iso(plan.lastProofAt as number), dueAt: iso(plan.dueAt) };
       logger[level]("proof_not_due", { direction, finalizedSlot: observation.finalizedSlot, why: decision.why, detail: decision.detail, ...batchFields });
-      if (plan !== undefined) wakeAt(plan.maxWaitAt, observation);
+      note(
+        plan === undefined
+          ? {}
+          : {
+              batch: {
+                messages: plan.ready,
+                feesUsd: batchFields.feesUsd as string | null,
+                costUsd: batchFields.costUsd as string | null,
+                unknownWhy: plan.unknownWhy,
+                oldestFinalAt: plan.oldestFinalAt * 1000,
+                startAt: plan.startAt * 1000,
+                startWhy: plan.startWhy,
+                dueAt: plan.dueAt * 1000,
+                lastProofAt: (plan.lastProofAt as number) * 1000,
+              },
+            },
+      );
+      if (plan !== undefined) wakeAt(plan.dueAt, observation);
       return;
     }
     if (decision.stalePending !== undefined) {
@@ -230,6 +270,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       const headAge = nowSeconds - (facts.genesisTime + facts.headSlot * facts.secondsPerSlot);
       if (headAge <= input.policy.keepAliveSeconds) {
         logger.info("proof_not_due", { direction, finalizedSlot: observation.finalizedSlot, why: "keep-alive-this-period", detail: `a keep-alive already started while the source's finality was in period ${finalizedPeriod}, and the head is younger than the keep-alive age` });
+        noteOutcome("keep-alive-this-period");
         return;
       }
     }
@@ -239,8 +280,12 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
         ? { trigger: decision.trigger, batch: decision.batch, waitedSeconds: decision.waitedSeconds, feesUsd: decision.feesUsd, costUsd: decision.costUsd }
         : { riders: decision.riders };
     logger.info("proof_due", { direction, finalizedSlot: observation.finalizedSlot, why: decision.why, detail: decision.detail, attempt, ...extra });
+    if (decision.why === "message" && decision.trigger !== undefined) {
+      dueFacts = { trigger: decision.trigger, batchSize: decision.batch, waitedSeconds: decision.waitedSeconds, feesUsd: decision.feesUsd, costUsd: decision.costUsd };
+    }
     const active = input.findActiveJob();
     if (active !== null) {
+      noteOutcome("job-active");
       logger.info("proof_due_job_active", { direction, jobId: active.id });
       doneSlot = observation.finalizedSlot;
       return;
@@ -255,6 +300,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       // The proof this finality calls for: from the head to this slot. The service never starts it twice.
       target: { startSlot: facts.headSlot, newSlot: observation.finalizedSlot },
     });
+    noteOutcome("refused" in result ? result.refused : "job-started");
     if (!("refused" in result)) {
       doneSlot = observation.finalizedSlot;
       if (decision.why === "keep-alive") keepAlivePeriod = finalizedPeriod;

@@ -295,37 +295,57 @@ describe("warmupPlan", () => {
   });
 });
 
-describe("decideProof with a batch wait (2026-11-01)", () => {
-  const WAIT: BatchRule = { maxWaitSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
+describe("decideProof with a minimum interval since the last proof (2026-11-01)", () => {
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
   const unknown: Economics = { kind: "unknown", why: "testnet tokens have no price" };
   const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, block: "9" });
   const hex = (digit: string) => `0x${digit.repeat(64)}`;
   const ready = message(FINALIZED - 5, "a");
   const finalAt = expectedFinalityAt(ready.slot, facts(HEAD));
+  const now = at(NOW_SLOT);
+  /** The last proof started ten minutes ago: inside the hour. */
+  const recent = now - 600;
+  const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
 
-  it("with no wait, or no batch, a message proves at once as before", () => {
-    expect(decide({ messages: [ready], batch: { rule: { ...WAIT, maxWaitSeconds: 0 }, economics: unknown } })).toMatchObject({ due: true, why: "message", messageIds: [hex("a")] });
+  it("the zero case: with no waiting message nothing is due, however long ago the last proof was, or with none", () => {
+    // Owner: "if there were no transfers over the bridge that are waiting from the last hour or before then do nothing".
+    expect(decide({ messages: [], batch: { rule: WAIT, economics: unknown, lastProofAt: now - 5 * 3600 } })).toMatchObject({ due: false, why: "nothing-due" });
+    expect(decide({ messages: [], batch: { rule: WAIT, economics: unknown, lastProofAt: null } })).toMatchObject({ due: false, why: "nothing-due" });
+    // Covered or not final yet is not waiting either.
+    expect(decide({ messages: [message(HEAD - 1), message(FINALIZED + 1, "b")], batch: { rule: WAIT, economics: unknown, lastProofAt: now - 5 * 3600 } })).toMatchObject({ due: false, why: "nothing-due" });
+  });
+
+  it("a message that arrives after a quiet spell proves at its finality, with no extra wait", () => {
+    const decision = decide({ messages: [ready], batch: { rule: WAIT, economics: unknown, lastProofAt: now - 5 * 3600 } });
+    expect(decision).toMatchObject({ due: true, why: "message", trigger: "interval", batch: 1, messageIds: [hex("a")], detail: `1 waiting message is final at slot ${FINALIZED}: the last proof started 18000 s ago (min interval 3600 s)` });
+    expect(decide({ messages: [ready], batch: { rule: WAIT, economics: unknown, lastProofAt: null } })).toMatchObject({ due: true, trigger: "interval", detail: `1 waiting message is final at slot ${FINALIZED}: the direction has no proof yet` });
+  });
+
+  it("with no minimum interval, or no batch, a message proves at once as before", () => {
+    expect(decide({ messages: [ready], batch: { rule: { ...WAIT, minIntervalSeconds: 0 }, economics: unknown, lastProofAt: recent } })).toMatchObject({ due: true, why: "message", messageIds: [hex("a")] });
     expect(decide({ messages: [ready] })).not.toHaveProperty("trigger");
   });
 
-  it("a batch that does not pay waits, saying until when and why", () => {
-    const decision = decide({ messages: [ready], batch: { rule: WAIT, economics: priced({}) } });
-    expect(decision).toMatchObject({ due: false, why: "waiting-for-profit", plan: { maxWaitAt: finalAt + 3600, startWhy: "max-wait", ready: 1 } });
+  it("inside the interval, a batch that does not pay waits for the last proof plus the interval, saying why", () => {
+    const decision = decide({ messages: [ready], batch: { rule: WAIT, economics: priced({}), lastProofAt: recent } });
+    expect(decision).toMatchObject({ due: false, why: "min-interval", plan: { dueAt: recent + 3600, lastProofAt: recent, startWhy: "interval", ready: 1 } });
     expect(decision.detail).toBe(
-      `1 message waits, the oldest final since ${new Date(finalAt * 1000).toISOString()}: fees $0.000000 against a cost of $0.025000; no batch pays within the lookahead; proving at ${new Date((finalAt + 3600) * 1000).toISOString()} at the latest (max wait 3600 s)`,
+      `1 message waits, the oldest final since ${iso(finalAt)}: fees $0.000000 against a cost of $0.025000; no batch pays within the lookahead; the last proof started at ${iso(recent)}, so the next one is due at ${iso(recent + 3600)} at the latest (min interval 3600 s)`,
     );
-    expect(decide({ messages: [ready, message(FINALIZED - 4, "b")], batch: { rule: WAIT, economics: unknown } }).detail).toMatch(/^2 messages wait, .*: the fees cannot be valued \(testnet tokens have no price\);/);
+    expect(decide({ messages: [ready, message(FINALIZED - 4, "b")], batch: { rule: WAIT, economics: unknown, lastProofAt: recent } }).detail).toMatch(/^2 messages wait, .*: the fees cannot be valued \(testnet tokens have no price\);/);
+    // At the end of the interval it proves, covering every waiting final message.
+    expect(decide({ messages: [ready, message(FINALIZED - 4, "b")], nowSeconds: recent + 3600, batch: { rule: WAIT, economics: unknown, lastProofAt: recent } })).toMatchObject({ due: true, trigger: "interval", batch: 2, messageIds: [hex("a"), hex("b")] });
   });
 
   it("says when an upcoming message is expected to make the batch pay", () => {
     const upcoming = message(NOW_SLOT + 5, "b");
-    const decision = decide({ messages: [ready, upcoming], batch: { rule: WAIT, economics: priced({ [hex("b")]: USD }) } });
-    expect(decision).toMatchObject({ due: false, why: "waiting-for-profit", plan: { startWhy: "profit", startAt: expectedFinalityAt(upcoming.slot, facts(HEAD)) } });
-    expect(decision.detail).toContain(`the batch is expected to pay at ${new Date(expectedFinalityAt(upcoming.slot, facts(HEAD)) * 1000).toISOString()}`);
+    const decision = decide({ messages: [ready, upcoming], batch: { rule: WAIT, economics: priced({ [hex("b")]: USD }), lastProofAt: recent } });
+    expect(decision).toMatchObject({ due: false, why: "min-interval", plan: { startWhy: "profit", startAt: expectedFinalityAt(upcoming.slot, facts(HEAD)) } });
+    expect(decision.detail).toContain(`the batch is expected to pay at ${iso(expectedFinalityAt(upcoming.slot, facts(HEAD)))}`);
   });
 
-  it("a batch that pays proves at once, with its facts; one past its fallback proves too", () => {
-    expect(decide({ messages: [ready, message(FINALIZED - 4, "b")], batch: { rule: WAIT, economics: priced({ [hex("a")]: USD }) } })).toMatchObject({
+  it("a batch that pays proves at once, even inside the interval, with its facts", () => {
+    expect(decide({ messages: [ready, message(FINALIZED - 4, "b")], batch: { rule: WAIT, economics: priced({ [hex("a")]: USD }), lastProofAt: recent } })).toMatchObject({
       due: true,
       why: "message",
       trigger: "profit",
@@ -334,20 +354,20 @@ describe("decideProof with a batch wait (2026-11-01)", () => {
       costUsd: "0.025000",
       detail: `2 waiting messages are final at slot ${FINALIZED}: their fees cover the cost`,
     });
-    const late = decide({ messages: [ready], nowSeconds: finalAt + 3600, batch: { rule: WAIT, economics: unknown } });
-    expect(late).toMatchObject({ due: true, why: "message", trigger: "max-wait", batch: 1, waitedSeconds: 3600, feesUsd: null, costUsd: null, detail: `1 waiting message is final at slot ${FINALIZED}: the oldest has been final 3600 s` });
   });
 
-  it("never delays a handoff or an old head: the waiting messages ride along", () => {
+  it("never delays a handoff or an old head for the interval: the waiting messages ride along", () => {
     const head = 100 * PERIOD + 8000;
     const nowSlot = 102 * PERIOD - 1000;
     const finalizedSlot = nowSlot - 64;
-    const handoff = decide({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot, messages: [message(finalizedSlot - 5)], batch: { rule: WAIT, economics: unknown } });
+    const handoff = decide({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot, messages: [message(finalizedSlot - 5)], batch: { rule: WAIT, economics: unknown, lastProofAt: at(nowSlot) - 60 } });
     expect(handoff).toMatchObject({ due: true, why: "keep-alive", handoff: true, riders: 1 });
     expect(handoff.detail).toMatch(/1 waiting message rides along$/);
+    // With nothing waiting, a due handoff still proves.
+    expect(decide({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot, messages: [], batch: { rule: WAIT, economics: unknown, lastProofAt: at(nowSlot) - 60 } })).toMatchObject({ due: true, why: "keep-alive", handoff: true });
     const old = 100 * PERIOD + 10;
     const oldNow = old + 13 * 360;
-    expect(decide({ facts: facts(old), nowSeconds: at(oldNow), finalizedSlot: oldNow - 64, messages: [message(oldNow - 70), message(oldNow - 71, "b")], batch: { rule: WAIT, economics: unknown } })).toMatchObject({
+    expect(decide({ facts: facts(old), nowSeconds: at(oldNow), finalizedSlot: oldNow - 64, messages: [message(oldNow - 70), message(oldNow - 71, "b")], batch: { rule: WAIT, economics: unknown, lastProofAt: at(oldNow) - 60 } })).toMatchObject({
       due: true,
       why: "keep-alive",
       handoff: false,
@@ -380,23 +400,31 @@ describe("decideProof with a proof we have (2026-11-01)", () => {
   });
 });
 
-describe("warmupPlan with a batch wait", () => {
-  const WAIT: BatchRule = { maxWaitSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
+describe("warmupPlan with a minimum interval", () => {
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
   const hex = (digit: string) => `0x${digit.repeat(64)}`;
   const base = { facts: facts(HEAD), finalizedSlot: FINALIZED, pendingProof: null, history: { kind: "not-needed" } as const, policy: DEFAULT_POLICY, nowSeconds: at(NOW_SLOT), horizonSeconds: 90 };
+  const recent = at(NOW_SLOT) - 600;
 
-  it("asks for one warm worker per batch, when the batch is expected to pay, else at its fallback", () => {
+  it("asks for one warm worker per batch, when the batch is expected to pay, else when the interval ends", () => {
     const upcoming = message(NOW_SLOT + 5, "b");
     const messages = [message(FINALIZED - 5, "a"), upcoming];
-    const paying = warmupPlan({ ...base, messages, batch: { rule: WAIT, economics: { kind: "known", feesUsd: new Map([[hex("b"), USD]]), deliveryUsd: 0n, unpriced: 0, block: "1" } } });
+    const paying = warmupPlan({ ...base, messages, batch: { rule: WAIT, economics: { kind: "known", feesUsd: new Map([[hex("b"), USD]]), deliveryUsd: 0n, unpriced: 0, block: "1" }, lastProofAt: recent } });
     expect(paying.targets).toEqual([{ at: expectedFinalityAt(upcoming.slot, facts(HEAD)), why: "message", keys: [hex("a"), hex("b")] }]);
-    const unpaid = warmupPlan({ ...base, messages, batch: { rule: WAIT, economics: { kind: "unknown", why: "testnet" } } });
-    expect(unpaid.targets).toEqual([{ at: expectedFinalityAt(FINALIZED - 5, facts(HEAD)) + 3600, why: "message", keys: [hex("a"), hex("b")] }]);
+    const unpaid = warmupPlan({ ...base, messages, batch: { rule: WAIT, economics: { kind: "unknown", why: "testnet" }, lastProofAt: recent } });
+    expect(unpaid.targets).toEqual([{ at: recent + 3600, why: "message", keys: [hex("a"), hex("b")] }]);
   });
 
-  it("a batch due now asks for a worker now; no waiting message asks for nothing", () => {
-    const due = warmupPlan({ ...base, messages: [message(FINALIZED - 5, "a")], batch: { rule: WAIT, economics: { kind: "known", feesUsd: new Map([[hex("a"), USD]]), deliveryUsd: 0n, unpriced: 0, block: "1" } } });
+  it("long after the last proof, a message not final yet asks for a worker at its finality", () => {
+    const upcoming = message(NOW_SLOT + 5, "b");
+    const plan = warmupPlan({ ...base, messages: [upcoming], batch: { rule: WAIT, economics: { kind: "unknown", why: "testnet" }, lastProofAt: at(NOW_SLOT) - 5 * 3600 } });
+    expect(plan.targets).toEqual([{ at: expectedFinalityAt(upcoming.slot, facts(HEAD)), why: "message", keys: [hex("b")] }]);
+  });
+
+  it("a batch due now asks for a worker now; no waiting message asks for nothing, however long ago the last proof was", () => {
+    const due = warmupPlan({ ...base, messages: [message(FINALIZED - 5, "a")], batch: { rule: WAIT, economics: { kind: "known", feesUsd: new Map([[hex("a"), USD]]), deliveryUsd: 0n, unpriced: 0, block: "1" }, lastProofAt: recent } });
     expect(due.targets).toEqual([{ at: at(NOW_SLOT), why: "message", keys: [hex("a")] }]);
-    expect(warmupPlan({ ...base, messages: [], batch: { rule: WAIT, economics: { kind: "unknown", why: "x" } } }).targets).toEqual([]);
+    expect(warmupPlan({ ...base, messages: [], batch: { rule: WAIT, economics: { kind: "unknown", why: "x" }, lastProofAt: at(NOW_SLOT) - 5 * 3600 } })).toEqual({ targets: [], live: new Set() });
+    expect(warmupPlan({ ...base, messages: [], batch: { rule: WAIT, economics: { kind: "unknown", why: "x" }, lastProofAt: null } })).toEqual({ targets: [], live: new Set() });
   });
 });

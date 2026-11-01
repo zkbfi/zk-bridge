@@ -9,7 +9,7 @@ mod common;
 
 use alloy_primitives::{hex, keccak256, Address, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolValue};
-use common::serve_rpc;
+use common::{serve_rpc, serve_rpc_replies};
 use lc_core::json::execution_header_from_json;
 use lc_core::receipts::{encode_execution_header, header_hash};
 use serde_json::{json, Value};
@@ -227,9 +227,22 @@ fn own_chain_url(mode: HeaderMode) -> String {
 }
 
 fn remote_chain_url(tamper: Tamper, mode: HeaderMode) -> String {
-    serve_rpc(move |call| {
+    remote_chain_url_with(tamper, mode, true)
+}
+
+/// The JSON-RPC error of a node without `debug_getRawHeader`, as the keyless Sepolia node answers.
+fn method_missing() -> Value {
+    json!({ "code": -32601, "message": "the method debug_getRawHeader does not exist/is not available" })
+}
+
+/// The remote chain. `serves_raw_header: false` makes it answer `debug_getRawHeader` with the error of a missing method.
+fn remote_chain_url_with(tamper: Tamper, mode: HeaderMode, serves_raw_header: bool) -> String {
+    serve_rpc_replies(move |call| {
         let world = remote_in(mode);
-        match call["method"].as_str().unwrap() {
+        if call["method"] == "debug_getRawHeader" && !serves_raw_header {
+            return Err(method_missing());
+        }
+        Ok(match call["method"].as_str().unwrap() {
             "eth_chainId" => json!(format!("{REMOTE_CHAIN_ID:#x}")),
             "debug_getRawHeader" => {
                 assert_eq!(call["params"][0], format!("{:#x}", world.block_hash));
@@ -279,6 +292,32 @@ fn remote_chain_url(tamper: Tamper, mode: HeaderMode) -> String {
                 })
             }
             other => panic!("unexpected remote method {other}"),
+        })
+    })
+}
+
+/// What a header endpoint answers to `debug_getRawHeader`.
+#[derive(Clone, Copy)]
+enum HeaderAnswer {
+    /// The exact bytes of the remote header.
+    Right,
+    /// Bytes that do not hash to the block hash.
+    WrongHash,
+    /// The error of a missing method.
+    Missing,
+}
+
+/// A header endpoint: it answers `debug_getRawHeader` and nothing else, so a test fails if the command asks it for more.
+fn header_url(answer: HeaderAnswer, mode: HeaderMode) -> String {
+    serve_rpc_replies(move |call| {
+        assert_eq!(call["method"], "debug_getRawHeader", "only the raw header");
+        let world = remote_in(mode);
+        assert_eq!(call["params"][0], format!("{:#x}", world.block_hash));
+        let raw = world.raw_header.expect("the extra-field header");
+        match answer {
+            HeaderAnswer::Right => Ok(json!(hex::encode_prefixed(raw))),
+            HeaderAnswer::WrongHash => Ok(json!(hex::encode_prefixed(with_extra_item(&raw)))),
+            HeaderAnswer::Missing => Err(method_missing()),
         }
     })
 }
@@ -296,8 +335,22 @@ fn run_command(tamper: Tamper, extra: &[&str]) -> (Result<i32>, Vec<u8>) {
 }
 
 fn run_command_in(tamper: Tamper, mode: HeaderMode, extra: &[&str]) -> (Result<i32>, Vec<u8>) {
+    run_with_remote(mode, remote_chain_url(tamper, mode), &[], extra)
+}
+
+/// Runs the command with a remote chain at `remote` and `header_urls` as `destination.header_rpc_urls`.
+fn run_with_remote(
+    mode: HeaderMode,
+    remote: String,
+    header_urls: &[String],
+    extra: &[&str],
+) -> (Result<i32>, Vec<u8>) {
     let own = own_chain_url(mode);
-    let remote = remote_chain_url(tamper, mode);
+    let header_rpc_urls = if header_urls.is_empty() {
+        String::new()
+    } else {
+        format!("header_rpc_urls = {header_urls:?}\n")
+    };
     let scratch = Scratch(std::env::temp_dir().join(format!(
         "opening-proof-{}-{}",
         std::process::id(),
@@ -321,7 +374,7 @@ chain_id = {REMOTE_CHAIN_ID}
 rpc_url = "{remote}"
 light_client = "{REMOTE_LIGHT_CLIENT:#x}"
 bridge = "{:#x}"
-"#,
+{header_rpc_urls}"#,
             Address::repeat_byte(0xd1)
         ),
     )
@@ -417,6 +470,95 @@ fn a_header_with_an_extra_field_comes_from_the_raw_header() {
     );
     assert_eq!(keccak256(&raw), world.block_hash);
     assert_eq!(printed["verifiedNatively"], true);
+}
+
+/// Claim: when the main RPC of the remote chain lacks `debug_getRawHeader` and the JSON rebuild cannot give the header,
+/// the command asks `destination.header_rpc_urls` for the raw header and builds the proof with it. Why it matters: the
+/// keyless Sepolia node with enough `eth_getProof` history answers -32601, so PulseChain testnet v4's bridge could not open.
+#[test]
+fn the_raw_header_comes_from_a_header_rpc_when_the_main_rpc_lacks_the_method() {
+    let mode = HeaderMode::ExtraField;
+    let remote = remote_chain_url_with(Tamper::Nothing, mode, false);
+    let (outcome, out) =
+        run_with_remote(mode, remote, &[header_url(HeaderAnswer::Right, mode)], &[]);
+    assert_eq!(outcome.unwrap(), 0);
+    let printed: Value = serde_json::from_slice(&out).unwrap();
+    let raw = remote_in(mode).raw_header.unwrap();
+    assert_eq!(
+        printed["proof"]["remoteHeaderRlp"],
+        hex::encode_prefixed(&raw)
+    );
+    assert_eq!(printed["verifiedNatively"], true);
+}
+
+/// Claim: a header endpoint that answers bytes with another hash is refused, and the next endpoint is asked. Why it
+/// matters: no header endpoint is trusted; each answer is checked against the block hash the own light client stored.
+#[test]
+fn a_header_rpc_with_a_wrong_hash_is_refused_and_the_next_one_is_asked() {
+    let mode = HeaderMode::ExtraField;
+    let remote = remote_chain_url_with(Tamper::Nothing, mode, false);
+    let urls = [
+        header_url(HeaderAnswer::WrongHash, mode),
+        header_url(HeaderAnswer::Missing, mode),
+        header_url(HeaderAnswer::Right, mode),
+    ];
+    let (outcome, out) = run_with_remote(mode, remote, &urls, &[]);
+    assert_eq!(outcome.unwrap(), 0);
+    let printed: Value = serde_json::from_slice(&out).unwrap();
+    let world = remote_in(mode);
+    assert_eq!(
+        printed["proof"]["remoteHeaderRlp"],
+        hex::encode_prefixed(world.raw_header.unwrap())
+    );
+}
+
+/// Claim: when every source fails, the error names each one (the main RPC, each header endpoint by its index, the JSON
+/// rebuild) with its cause, and holds no URL. Why it matters: an operator sees which endpoint to fix, and a URL with a key
+/// never reaches a log.
+#[test]
+fn every_header_source_failing_gives_an_error_that_names_each_without_urls() {
+    let mode = HeaderMode::ExtraField;
+    let remote = remote_chain_url_with(Tamper::Nothing, mode, false);
+    let urls = [
+        header_url(HeaderAnswer::WrongHash, mode),
+        header_url(HeaderAnswer::Missing, mode),
+    ];
+    let (outcome, out) = run_with_remote(mode, remote, &urls, &[]);
+    let error = outcome.expect_err("no source gives the header");
+    assert!(out.is_empty());
+    let Error::Malformed(text) = &error else {
+        panic!("{error}");
+    };
+    for part in [
+        "destination.rpc_url",
+        "-32601",
+        "destination.header_rpc_urls[0]",
+        "does not hash to",
+        "destination.header_rpc_urls[1]",
+        "the rebuild from JSON",
+    ] {
+        assert!(text.contains(part), "{part}: {text}");
+    }
+    assert!(
+        !text.contains("http") && !text.contains("127.0.0.1"),
+        "{text}"
+    );
+}
+
+/// Claim: an entry of `destination.header_rpc_urls` that is not an http(s) URL is refused when the configuration loads.
+#[test]
+fn a_header_rpc_url_without_http_is_refused() {
+    let remote = remote_chain_url(Tamper::Nothing, HeaderMode::Plain);
+    let (outcome, _) = run_with_remote(
+        HeaderMode::Plain,
+        remote,
+        &["ftp://header.example".to_string()],
+        &[],
+    );
+    assert!(
+        matches!(&outcome, Err(Error::Config(text)) if text.contains("destination.header_rpc_urls")),
+        "{outcome:?}"
+    );
 }
 
 /// Claim: one flipped byte in a node of the account proof, or of the storage proof, stops the command with a refusal, and

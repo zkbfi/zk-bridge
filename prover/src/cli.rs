@@ -744,10 +744,24 @@ fn run_opening_proof(
         route.destination.chain_id,
         &route.destination.rpc_url,
     )?;
+    let header_sources: Vec<ChainClient> = route
+        .destination
+        .header_rpc_urls
+        .iter()
+        .enumerate()
+        .map(|(index, url)| {
+            ChainClient::header_only(
+                &format!("destination.header_rpc_urls[{index}]"),
+                route.destination.chain_id,
+                Box::new(HttpRpc::new(url)),
+            )
+        })
+        .collect();
     let package = build_opening_proof(&OpeningRequest {
         route: name,
         own_chain: &own,
         remote_chain: &remote,
+        remote_header_sources: &header_sources,
         bridge,
         remote_light_client: route.destination.light_client_address()?,
         remote_slot: arguments.remote_slot,

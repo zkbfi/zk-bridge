@@ -4,7 +4,8 @@ import { DatabaseSync } from "node:sqlite";
  * The tables of the backend, in one file. The `jobs` table carries a unique index that lets only one job per direction
  * be queued or proving, so the rule "one job per direction" holds even if two processes share the file.
  * The `proofs` and `evidence` tables belong to the msgboard indexer and the archive module, the `warmup_` tables to the
- * warm-up of the remote prover (`watch/warmup-store.ts`).
+ * warm-up of the remote prover (`watch/warmup-store.ts`), and `job_timings` to the timings of each proof
+ * (`requests/timings.ts`): what the prover reported, and when the webhook stored and the board took the proof.
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
@@ -63,6 +64,29 @@ CREATE TABLE IF NOT EXISTS warmup_sessions (
   outcome TEXT
 );
 CREATE INDEX IF NOT EXISTS warmup_sessions_by_time ON warmup_sessions (started_at);
+CREATE TABLE IF NOT EXISTS job_timings (
+  job_id TEXT PRIMARY KEY,
+  direction TEXT NOT NULL,
+  started_at INTEGER,
+  proved_at INTEGER,
+  wait_worker_ms INTEGER,
+  not_ready_count INTEGER,
+  retry_count INTEGER,
+  failover_count INTEGER,
+  remote_ms INTEGER,
+  prove_ms INTEGER,
+  total_ms INTEGER,
+  worker_queue_ms INTEGER,
+  worker_prove_ms INTEGER,
+  worker_total_ms INTEGER,
+  remote_overhead_ms INTEGER,
+  endpoint TEXT,
+  worker_gpu TEXT,
+  webhook_stored_at INTEGER,
+  board_posted_at INTEGER,
+  grind_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS job_timings_by_proved ON job_timings (proved_at);
 `;
 
 /**

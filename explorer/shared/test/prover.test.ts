@@ -53,6 +53,22 @@ describe("the prover configuration file", () => {
     expect(text).toContain("light_client = ");
   });
 
+  it("names the header RPCs of the destination when they are set, and nothing otherwise", () => {
+    const withHeaders = loadPair({
+      environment: { ...environment, EXPLORER_HEADER_RPC_URL_1: "https://header.example.org/key, https://second.example.org" },
+      deployment,
+    });
+    const text = renderProverConfig(describeRoute(withHeaders, "second-to-first"), null);
+    const destination = text.slice(text.indexOf("[routes.pulsechain_to_ethereum.destination]"));
+    expect(destination).toContain('header_rpc_urls = ["https://header.example.org/key", "https://second.example.org"]');
+    expect(renderProverConfig(describeRoute(withHeaders, "first-to-second"), null)).not.toContain("header_rpc_urls");
+    const { headerRpcUrls: _dropped, ...bareSide } = withHeaders.sides[0];
+    const bare: Pair = { ...withHeaders, sides: [bareSide, withHeaders.sides[1]] };
+    expect(renderProverConfig(describeRoute(bare, "second-to-first"), null)).not.toContain("header_rpc_urls");
+    const quote: Pair = { ...withHeaders, sides: [{ ...withHeaders.sides[0], headerRpcUrls: ['https://h.example/"x'] }, withHeaders.sides[1]] };
+    expect(() => renderProverConfig(describeRoute(quote, "second-to-first"), null)).toThrow(/destination header rpc endpoint/);
+  });
+
   it("names the state URLs and the state cache of the source when they are set, and nothing otherwise", () => {
     const withStates = loadPair({
       environment: { ...environment, EXPLORER_STATE_URLS_369: "https://states.example.org, https://archive.example.org/" },

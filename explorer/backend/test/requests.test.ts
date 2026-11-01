@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CommandTimeoutError, ProverCommandError } from "@zk-bridge/shared/prover";
 import { DEFAULT_RATE_LIMITS } from "../src/requests/rate-limit.ts";
 import { createRequestService } from "../src/requests/service.ts";
+import { getTiming } from "../src/requests/timings.ts";
 import { openStorage } from "../src/storage.ts";
 import { DEFAULT_WARMUP } from "../src/watch/warmup.ts";
 import { createWarmupStore } from "../src/watch/warmup-store.ts";
@@ -151,6 +152,16 @@ describe("job life", () => {
     const events = backend.log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(events.filter((event) => event.event === "warmup_observed")).toMatchObject([{ direction: "first-to-second", source: "job", seconds: 61.5 }]);
     expect(createWarmupStore(backend.storage).lead(DEFAULT_WARMUP)).toMatchObject({ seconds: 62, basis: "observed" });
+  });
+
+  it("keeps the prover's timings of every proof (2026-11-01)", async () => {
+    const backend = makeBackend();
+    const { jobId } = (await (await post(backend, "10.0.0.1")).json()) as { jobId: string };
+    const startedAt = backend.clock.now();
+    backend.clock.advance(90_000);
+    backend.prover.settleAll({ kind: "proof", proofPackage: makeProofPackage(10, 42), timing: { wait_worker_ms: 61_500, not_ready_count: 2, remote_ms: 25_000, total_ms: 88_000, worker_prove_ms: 20_000, endpoint: "serverless", worker_gpu: "RTX 5090" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(getTiming(backend.storage, jobId)).toMatchObject({ direction: "first-to-second", startedAt, provedAt: startedAt + 90_000, waitWorkerMs: 61_500, notReadyCount: 2, remoteMs: 25_000, totalMs: 88_000, workerProveMs: 20_000, endpoint: "serverless", workerGpu: "RTX 5090" });
   });
 
   it("a cold worker despite a warm-up is a miss, not a cold start; a warm worker or an older prover teaches nothing", async () => {

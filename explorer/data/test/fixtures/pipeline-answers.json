@@ -1,0 +1,284 @@
+{
+  "progress": {
+    "messageId": "0xabababababababababababababababababababababababababababababababab",
+    "direction": "first-to-second",
+    "status": "waiting_for_finality",
+    "slot": 99900,
+    "stages": [
+      {
+        "key": "sent",
+        "status": "done",
+        "at": 1793498800000
+      },
+      {
+        "key": "final",
+        "status": "done",
+        "at": 1793499628000,
+        "detail": "slot 99900; the source chain finalized slot 99990"
+      },
+      {
+        "key": "batched",
+        "status": "done",
+        "at": 1793499990000,
+        "detail": "job new"
+      },
+      {
+        "key": "proving",
+        "status": "current"
+      },
+      {
+        "key": "proof-ready",
+        "status": "pending"
+      },
+      {
+        "key": "update-posted",
+        "status": "pending",
+        "detail": "the light client head is at slot 99000"
+      },
+      {
+        "key": "delivered",
+        "status": "pending"
+      }
+    ],
+    "waitingOn": {
+      "service": "gpu-worker-start",
+      "since": 1793499990000,
+      "eta": 1793500090000,
+      "detail": "estimated from recent jobs: a cold worker took 60 s to start; the prover reports its steps when it ends"
+    },
+    "job": {
+      "jobId": "new",
+      "status": "proving"
+    }
+  },
+  "pipeline": {
+    "direction": "first-to-second",
+    "now": 1793500000000,
+    "batch": null,
+    "job": {
+      "jobId": "new",
+      "status": "proving",
+      "startedAt": 1793499990000,
+      "elapsedMs": 10000,
+      "step": "gpu-worker-start",
+      "eta": 1793500090000,
+      "detail": "estimated from recent jobs: a cold worker took 60 s to start; the prover reports its steps when it ends"
+    },
+    "latestJob": {
+      "jobId": "new",
+      "status": "proving",
+      "createdAt": 1793499990000,
+      "updatedAt": 1793499990000,
+      "startSlot": null,
+      "newSlot": null,
+      "error": null
+    },
+    "latestProof": null,
+    "head": {
+      "slot": 99000,
+      "finalizedSlot": 99990,
+      "lastUpdateAt": 1793497000000,
+      "lagSeconds": 900
+    },
+    "decision": {
+      "at": 1793499989000,
+      "finalizedSlot": 99990,
+      "headSlot": 99000,
+      "genesisTime": 1606824023,
+      "secondsPerSlot": 12,
+      "due": true,
+      "why": "message",
+      "detail": "1 waiting message is final at slot 99990: the oldest has been final 300 s",
+      "trigger": "max-wait",
+      "batchSize": 1,
+      "waitedSeconds": 300,
+      "feesUsd": null,
+      "costUsd": null,
+      "outcome": "job-started"
+    }
+  },
+  "benchmarks": {
+    "window": "24h",
+    "windowSeconds": 86400,
+    "from": 1793413600000,
+    "to": 1793500000000,
+    "steps": {
+      "workerWait": {
+        "count": 1,
+        "medianMs": 60000,
+        "p90Ms": 60000
+      },
+      "remote": {
+        "count": 1,
+        "medianMs": 38000,
+        "p90Ms": 38000
+      },
+      "workerQueue": {
+        "count": 0,
+        "medianMs": null,
+        "p90Ms": null
+      },
+      "workerProve": {
+        "count": 1,
+        "medianMs": 33000,
+        "p90Ms": 33000
+      },
+      "total": {
+        "count": 1,
+        "medianMs": 100000,
+        "p90Ms": 100000
+      },
+      "webhookToBoard": {
+        "count": 1,
+        "medianMs": 9000,
+        "p90Ms": 9000
+      },
+      "boardPost": {
+        "count": 1,
+        "medianMs": 8000,
+        "p90Ms": 8000
+      },
+      "proofToOnChain": {
+        "count": 1,
+        "medianMs": 90000,
+        "p90Ms": 90000
+      },
+      "coveredToDelivered": {
+        "count": 0,
+        "medianMs": null,
+        "p90Ms": null
+      },
+      "sentToDelivered": {
+        "count": 0,
+        "medianMs": null,
+        "p90Ms": null
+      }
+    },
+    "byDirection": {
+      "first-to-second": {
+        "workerWait": {
+          "count": 1,
+          "medianMs": 60000,
+          "p90Ms": 60000
+        },
+        "remote": {
+          "count": 1,
+          "medianMs": 38000,
+          "p90Ms": 38000
+        },
+        "workerQueue": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        },
+        "workerProve": {
+          "count": 1,
+          "medianMs": 33000,
+          "p90Ms": 33000
+        },
+        "total": {
+          "count": 1,
+          "medianMs": 100000,
+          "p90Ms": 100000
+        },
+        "webhookToBoard": {
+          "count": 1,
+          "medianMs": 9000,
+          "p90Ms": 9000
+        },
+        "boardPost": {
+          "count": 1,
+          "medianMs": 8000,
+          "p90Ms": 8000
+        },
+        "proofToOnChain": {
+          "count": 1,
+          "medianMs": 90000,
+          "p90Ms": 90000
+        },
+        "coveredToDelivered": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        },
+        "sentToDelivered": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        }
+      },
+      "second-to-first": {
+        "workerWait": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        },
+        "remote": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        },
+        "workerQueue": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        },
+        "workerProve": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        },
+        "total": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        },
+        "webhookToBoard": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        },
+        "boardPost": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        },
+        "proofToOnChain": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        },
+        "coveredToDelivered": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        },
+        "sentToDelivered": {
+          "count": 0,
+          "medianMs": null,
+          "p90Ms": null
+        }
+      }
+    },
+    "recent": [
+      {
+        "jobId": "old",
+        "direction": "first-to-second",
+        "startSlot": 97000,
+        "newSlot": 98000,
+        "provedAt": 1793499200000,
+        "waitWorkerMs": 60000,
+        "coldWorker": true,
+        "remoteMs": 38000,
+        "workerProveMs": 33000,
+        "totalMs": 100000,
+        "grindMs": 8000,
+        "boardPostedAt": 1793499210000,
+        "onChainAt": 1793499300000,
+        "endpoint": "serverless",
+        "workerGpu": "NVIDIA GeForce RTX 4090"
+      }
+    ],
+    "indexer": "ok"
+  }
+}

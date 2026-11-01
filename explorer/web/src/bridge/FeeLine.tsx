@@ -41,7 +41,7 @@ export type FeeGasLevel = 1 | 2 | 3;
 
 /** Props of {@link FeeLine}. */
 export type FeeLineProps = {
-  /** The arrangement in a few words for the first segment ("A bot delivers it · 0.39%"), short enough for a phone. */
+  /** The arrangement in a few words for the first segment ("Deliver for 0.39%, max $0.39"), short enough for a phone. */
   readonly summary: string;
   /** The whole arrangement and the fee, for the first segment's label and tooltip. */
   readonly summaryFull: string;

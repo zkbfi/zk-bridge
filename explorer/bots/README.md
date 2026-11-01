@@ -6,7 +6,7 @@ redactor) with the indexer and the terminal dashboard. Design: `docs/bots.md`.
 - The **publisher** makes light client update proofs on a remote graphics processor and posts them on msgboard. It holds no wallet.
 - The **runner** reads those proofs, posts `update` to the destination light client when it is behind, and delivers
   covered transfers and messages for the fee that each transfer offers. It holds a wallet on the destination chain.
-- The **traffic** bot (testnets) sends small test transfers back and forth on a schedule, so both chains see regular
+- The **traffic** bot (testnets) sends small test transfers back and forth, a random number each hour, so both chains see regular
   traffic and the runner and the prover have work to measure. It holds a wallet on both chains. See "The traffic bot".
 
 ## Commands
@@ -245,6 +245,31 @@ newer head of the light client and a backoff of 60 seconds that doubles with eac
 loops on a head that cannot work. Until the other light client has its first update the prover refuses with "it needs its
 first update"; that is the same wait.
 
+**The raw header of the remote block.** Besides `eth_getProof`, the proof needs the exact header of that block of S, which
+the prover asks with `debug_getRawHeader` (a Gloas header on Sepolia has fields that the block JSON does not show, so a
+rebuild from the JSON hashes to another value). One node rarely does both: on 2026-11-01 the keyless Sepolia node with
+enough proof history (`ethereum-sepolia-rpc.publicnode.com`, about 100 blocks) answers -32601 for `debug_getRawHeader`, and
+the keyed node that serves it keeps too short a proof window. So a chain may name **header RPCs**: point
+`chains.<chainId>.headerRpc` of `prover-setup.json` at a reference that holds a comma separated list of execution RPC URLs,
+or set `EXPLORER_HEADER_RPC_URL_<chainId>` in the environment of the bot:
+
+```json
+"chains": {
+  "11155111": {
+    "rpc": { "source": "environment", "variable": "EXPLORER_RPC_URL_11155111" },
+    "beacon": null,
+    "headerRpc": { "source": "environment", "variable": "EXPLORER_HEADER_RPC_URL_11155111" }
+  }
+}
+```
+
+The prover file then gets `header_rpc_urls = [...]` in the destination section of each route whose destination is that
+chain. The prover asks the main RPC first, then each header RPC in order, only for `debug_getRawHeader`, then the rebuild
+from the JSON. Every header must hash to the block hash that the own light client stored, so a header RPC is never trusted:
+a wrong one is refused and the next is asked. When all fail, the error names each source (`destination.rpc_url`,
+`destination.header_rpc_urls[0]`, ..., the rebuild from JSON) with its cause and no URL. Header RPC URLs can carry a key;
+each URL and its key-like parts are removed from every log line.
+
 ## The traffic bot
 
 Owner: "we should start out with a minimum of 1 proof/hour. this will help with keeping things current on both chains
@@ -258,10 +283,23 @@ prefix `z` (`ztUSD`, `ztTKN`). The script writes the test token file that `traff
 Owner, later: "seems like it would be best to have these proofs be posted if and only if they have erc20s moving across
 the bridge. otherwise they are useless. so perhaps we should be doing bridges 4x/hr".
 
-Each direction sends once in each interval, at its offset plus a jitter that a hash of the direction and the interval
-fixes, so a restart keeps it. The default is four sends an hour in each direction (every 15 minutes), the way back 7.5
-minutes after the way out, with up to 60 seconds of jitter. So every proof the backend makes carries token transfers.
-`intervalSeconds`, `jitterSeconds` and the offsets set another cadence. A send:
+Owner, later still: "perhaps the cadence that we should use is something like choose a number, 0-3, and that is how many
+bridges will be initated through the course of an hour. 0 because sometimes there will be no bridges. up to 3 because
+sometimes there will be multiple. we still use the profitability check because testnet gets us nothing, and that gets us
+<$40/month costs for proving + some gas money which we can get from faucets."
+
+At the start of each clock hour (UTC) each direction draws a count uniformly from `cadence.minPerHour` to
+`cadence.maxPerHour` (0 to 3 by default) and that many send times uniformly at random inside the hour, sorted, at least
+`cadence.minGapSeconds` (300) apart. The two directions draw independently, so some hours hold no send, some hold up
+to three in each direction. The bot logs `traffic_hour_planned` (direction, hour, count, times) at each hour start. The
+plan is written to the state file before the first send, so a restart in the middle of an hour resumes the same plan and
+never sends a time twice. An hour that passed while the bot was down is not caught up: what it still held is dropped and
+logged as `traffic_hour_skipped` (direction, hour, planned, unsent, hoursMissed), and the current hour gets a new draw.
+A time that came while the bot was down, inside the same hour, sends late (never closer than the gap to the last send).
+The source of randomness is injectable (`TrafficOverrides.random`); the tests seed it.
+
+The old keys `intervalSeconds`, `jitterSeconds` and `directions.*.offsetSeconds` are accepted and ignored, with one
+`config_ignored` warning at start, so a configuration from before still starts. A send:
 
 1. Lists what can move from the source chain: the test tokens native there, and the copies there of the destination's
    test tokens. Each draws an amount between `amount.minimum` and `amount.maximum` (in hundredths of a token; a copy
@@ -302,17 +340,20 @@ through the delivery router (anyone may). The copies then go home as ordinary re
 then on every send is one. That is one hand delivery for each test token: four on the testnet. The end-to-end stage
 `traffic` does exactly that.
 
-An attempt uses up its interval, sent or skipped. A slot is written to `stateDirectory/traffic-<pair>.json` before the
+An attempt uses up its planned time, sent or skipped. The time is marked in `stateDirectory/traffic-<pair>.json` before the
 first transaction leaves, so an attempt whose receipt never arrives is not sent twice. `--once` sends in each enabled
-direction at once, whatever the schedule.
+direction at once, whatever the plan, and leaves the plan as it was. A state file from before the hourly plans still
+loads; its old fields are dropped.
 
 | Field of `traffic` | Meaning |
 |---|---|
 | `signer` | As `runner.signer`. On the app server `env:TRAFFIC_PRIVATE_KEY`. |
 | `tokensFile` | The test token file. |
 | `tokens` | By symbol: `amount` and `balance`, each `{ "minimum", "maximum" }` in whole tokens as text. |
-| `intervalSeconds`, `jitterSeconds`, `pollSeconds` | 900, 60 and 60. |
-| `directions` | `first-to-second` and `second-to-first`, each `{ "enabled", "offsetSeconds" }`. Defaults: both on, offsets 0 and 450. |
+| `cadence` | `{ "minPerHour", "maxPerHour", "minGapSeconds" }`, defaults 0, 3 and 300. Refused: a maximum below the minimum, a negative number, and a maximum that cannot fit in an hour with the gap between its sends (`(maxPerHour - 1) * minGapSeconds` must be under 3600). |
+| `pollSeconds` | Seconds between two looks at the clock. Default 60. |
+| `directions` | `first-to-second` and `second-to-first`, each `{ "enabled" }`. Default: both on. |
+| `intervalSeconds`, `jitterSeconds`, `directions.*.offsetSeconds` | Removed. Accepted, ignored, `config_ignored` warning. |
 | `tipPercent` | The tip as a percentage of the amount. Default `0.1`, the dapp's default. |
 | `newCopyGasLimit` | By destination chain id: the gas limit of a send that deploys a copy there, at most the bridge's `maxGasPerTx` (10,000,000). Set `"11155111": "9000000"` on the testnet. |
 | `minimumNativeWei` | Required, by chain id, for each chain of the pair. |

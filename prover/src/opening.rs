@@ -16,6 +16,7 @@ use crate::chain::ChainClient;
 use crate::contracts::{LightClientContract, MessageBridgeContract, OpeningProof};
 use crate::error::{Error, Result};
 use crate::light_client::rebuild_execution_header;
+use crate::logging::redact_urls;
 use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use alloy_rlp::Header as RlpHeader;
 use alloy_sol_types::{SolCall, SolValue};
@@ -177,6 +178,9 @@ pub struct OpeningRequest<'a> {
     pub own_chain: &'a ChainClient,
     /// The other chain: it holds the remote light client.
     pub remote_chain: &'a ChainClient,
+    /// More nodes of the remote chain, asked in order for the raw header when `remote_chain` does not give it. Each is
+    /// named `<chain>.header_rpc_urls[i]`.
+    pub remote_header_sources: &'a [ChainClient],
     /// The bridge to open.
     pub bridge: Address,
     /// The remote light client that the configuration names. It must equal what the bridge stores.
@@ -241,24 +245,41 @@ fn hex_list(value: &Value, what: &str) -> Result<Vec<Bytes>> {
         .collect()
 }
 
-/// The RLP of the remote block header. The raw header of the node (`debug_getRawHeader`) is the exact source: a header of a
+/// The RLP of the remote block header. The raw header of a node (`debug_getRawHeader`) is the exact source: a header of a
 /// newer fork has fields that the JSON of the block does not show, and a rebuild from that JSON then hashes to another
-/// value (a live Sepolia block did). A node without the method, or with a wrong answer, leaves the rebuild from the JSON.
-/// Both sources are checked against `block_hash`, so neither is trusted.
+/// value (a live Sepolia block did). The main RPC of the remote chain is asked first, then each header endpoint in order
+/// (`destination.header_rpc_urls`), then the rebuild from the JSON. Every source is checked against `block_hash`, so none
+/// is trusted, and a header with another hash moves on to the next source.
 ///
 /// # Errors
-/// `Error::Malformed` when the raw header is missing and the rebuild does not hash to the block hash either. The message
-/// names both causes.
-fn remote_header_rlp(remote: &ChainClient, block: &Value, block_hash: B256) -> Result<Vec<u8>> {
-    let raw_error = match remote.raw_header(block_hash) {
+/// `Error::Malformed` when no source gives a header with the block hash. The message names each source (`<chain>.rpc_url`,
+/// `<chain>.header_rpc_urls[i]`, the rebuild from JSON) with its cause, and no URL.
+fn remote_header_rlp(
+    remote: &ChainClient,
+    header_sources: &[ChainClient],
+    block: &Value,
+    block_hash: B256,
+) -> Result<Vec<u8>> {
+    let mut failures = Vec::new();
+    match remote.raw_header(block_hash) {
         Ok(bytes) => return Ok(bytes),
-        Err(error) => error,
-    };
+        Err(error) => failures.push(format!("{}.rpc_url: {error}", remote.name())),
+    }
+    for source in header_sources {
+        match source.raw_header(block_hash) {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => failures.push(format!("{}: {error}", source.name())),
+        }
+    }
     match rebuild_execution_header(block) {
         Ok(rebuilt) => Ok(rebuilt.header_rlp.to_vec()),
-        Err(error) => Err(Error::Malformed(format!(
-            "the remote header: the raw header failed ({raw_error}) and the rebuild from JSON failed ({error})"
-        ))),
+        Err(error) => {
+            failures.push(format!("the rebuild from JSON: {error}"));
+            Err(Error::Malformed(redact_urls(&format!(
+                "the remote header: no source gave a header with the block hash {block_hash:#x} ({})",
+                failures.join("; ")
+            ))))
+        }
     }
 }
 
@@ -315,7 +336,12 @@ pub fn build_opening_proof(request: &OpeningRequest<'_>) -> Result<OpeningPackag
             remote.name()
         ))
     })?;
-    let header_rlp = remote_header_rlp(remote, &block, remote_block_hash)?;
+    let header_rlp = remote_header_rlp(
+        remote,
+        request.remote_header_sources,
+        &block,
+        remote_block_hash,
+    )?;
     let block_number = crate::rpc::parse_quantity(&block["number"])?;
 
     let stored_slot = match request.stored_slot {

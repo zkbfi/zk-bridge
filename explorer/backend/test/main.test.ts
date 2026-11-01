@@ -135,6 +135,16 @@ describe("endpoints in the configuration", () => {
     expect(() => makeConfig({ stateUrls: { "1": ["not a url"] } })).toThrow(BackendConfigError);
   });
 
+  it("passes the header RPCs of a chain to the pair, and lists them as addresses that can carry a key", () => {
+    const keyed = "https://header-1.invalid/v1/KEYHEADER777";
+    const config = makeConfig({ ...endpoints, headerRpcUrls: { "1": [keyed] } });
+    const pair = loadBackendPair(config, DEPLOYMENT);
+    expect(pair.sides[0].headerRpcUrls).toEqual([keyed]);
+    expect(pair.sides[1].headerRpcUrls).toEqual([]);
+    expect(endpointValues(config, pair)).toContain(keyed);
+    expect(() => makeConfig({ headerRpcUrls: { "1": ["not a url"] } })).toThrow(BackendConfigError);
+  });
+
   it("names the missing chain, or the unknown pair", () => {
     expect(() => loadBackendPair(makeConfig({ rpcUrls: { "1": "http://rpc-1.invalid" } }), DEPLOYMENT)).toThrow("rpcUrls needs an entry for chain 369");
     expect(() => loadBackendPair(makeConfig({ ...endpoints, pair: "nowhere" }), DEPLOYMENT)).toThrow('unknown pair "nowhere"');
