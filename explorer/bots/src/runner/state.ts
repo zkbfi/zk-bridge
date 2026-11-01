@@ -38,6 +38,11 @@ export const runnerStateSchema = z.object({
   deliverySpend: z.array(prerequisiteSpendEntrySchema).default([]),
   /** The unrecovered losses of the rolling window. */
   prerequisiteLosses: z.array(prerequisiteLossEntrySchema).default([]),
+  /**
+   * Whether the bridge on the destination chain reported open. It opens for good, so once true the runner never checks
+   * it again. A state file from before this field existed parses as closed, and the next check reads the chain.
+   */
+  depositsOpen: z.boolean().default(false),
 });
 
 /** The state of the runner for one pair and direction. */
@@ -47,4 +52,4 @@ export type RunnerState = z.infer<typeof runnerStateSchema>;
 export type PrerequisiteBudgetState = Pick<RunnerState, "prerequisiteSpend" | "deliverySpend" | "prerequisiteLosses">;
 
 /** The state of a runner that has done nothing yet. */
-export const INITIAL_RUNNER_STATE: RunnerState = { schemaVersion: 1, finished: {}, prerequisiteSpend: [], deliverySpend: [], prerequisiteLosses: [] };
+export const INITIAL_RUNNER_STATE: RunnerState = { schemaVersion: 1, finished: {}, prerequisiteSpend: [], deliverySpend: [], prerequisiteLosses: [], depositsOpen: false };

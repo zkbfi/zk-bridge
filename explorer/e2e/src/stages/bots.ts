@@ -3,7 +3,7 @@
  * a batch through Multicall3: the light client update first, then one `executeMessage` of the delivery router for each
  * message. A second batch, from an account that is not the runner, holds failing calls on purpose.
  */
-import { writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { decodeErrorResult, decodeEventLog, encodeFunctionData, formatUnits, type Address, type Hex, type TransactionReceipt } from "viem";
 import { beaconLightClientAbi, deliveryRouterAbi, MAX_GAS_PER_TX, messageBridgeAbi, requiredDeliveryGas, tipVersusCost, type BatchedCall } from "@zk-bridge/shared";
@@ -62,15 +62,19 @@ export const coveringTipFor = (gasPrice: bigint): string => {
 export const coveringTipOf = async (context: Context): Promise<string> => coveringTipFor(await chainOf(context, "b").publicClient.getGasPrice());
 
 /** The file paths of the bot run. */
-const paths = (context: Context) => ({
+export const paths = (context: Context) => ({
   setup: join(context.stateDirectory, "bots-setup.json"),
   config: join(context.stateDirectory, "bots.json"),
   state: join(context.stateDirectory, "bots-state"),
   boardUrl: join(context.stateDirectory, "board.url"),
 });
 
-/** Writes the setup file and the bot configuration. Neither holds a secret: each secret is the name of a variable. */
-export const writeBotConfiguration = async (context: Context, indexerUrl: string): Promise<void> => {
+/**
+ * Writes the setup file and the bot configuration. Neither holds a secret: each secret is the name of a variable.
+ *
+ * @param directions The directions of the setup file. The bots stage runs one; the open stage runs the runner in both.
+ */
+export const writeBotConfiguration = async (context: Context, indexerUrl: string, directions: readonly string[] = ["first-to-second"]): Promise<void> => {
   const file = paths(context);
   mkdirSync(file.state, { recursive: true });
   const envReference = (variable: string) => ({ source: "environment", variable });
@@ -86,7 +90,7 @@ export const writeBotConfiguration = async (context: Context, indexerUrl: string
         chains: { "1": { rpc: envReference("E2E_RPC_A"), beacon: envReference("E2E_BEACON_A") }, "369": { rpc: envReference("E2E_RPC_B"), beacon: envReference("E2E_BEACON_B") } },
         msgboardUrl: envReference("E2E_MSGBOARD_URL"),
         pair: "eth-pls",
-        directions: ["first-to-second"],
+        directions,
         policy: { proveWhenTransferWaits: true, intervalSeconds: 1 },
       },
       null,
@@ -134,7 +138,7 @@ export const writeBotConfiguration = async (context: Context, indexerUrl: string
 };
 
 /** The environment that the bots read. The RunPod key comes from the environment of this process. */
-const botEnvironment = (context: Context, boardUrl: string): Record<string, string> => ({
+export const botEnvironment = (context: Context, boardUrl: string): Record<string, string> => ({
   ...(process.env as Record<string, string>),
   E2E_RPC_A: context.a.rpcUrl,
   E2E_RPC_B: context.b.rpcUrl,
@@ -206,6 +210,19 @@ export const runBots = async (context: Context, options: { readonly resume: bool
   }
 };
 
+/** Starts the local msgboard and waits for its URL. */
+export const startBoard = async (context: Context, started: Background[]): Promise<string> => {
+  const file = paths(context);
+  // A URL file of an earlier board names a port that nothing listens on any more.
+  rmSync(file.boardUrl, { force: true });
+  const board = await spawnBackground(context, "board", ["bun", "run", join(context.repositoryRoot, "explorer/e2e/src/board.ts"), file.boardUrl], process.env as Record<string, string>);
+  started.push(board);
+  return waitUntil("the board URL", () => (existsSync(file.boardUrl) ? readFileSync(file.boardUrl, "utf8") : undefined), 30_000);
+};
+
+/** The command line of a bot of the run. */
+export const botCommand = (context: Context, role: string, extra: readonly string[] = []): string[] => ["node", join(context.repositoryRoot, "explorer/bots/bin/zk-bridge-bot.mjs"), role, "--config", paths(context).config, ...extra];
+
 const runBotsWithProcesses = async (context: Context, options: { readonly resume: boolean }, started: Background[]): Promise<void> => {
   const indexerUrl = Bun.env.E2E_INDEXER_URL ?? "http://127.0.0.1:42069";
   const file = paths(context);
@@ -223,19 +240,17 @@ const runBotsWithProcesses = async (context: Context, options: { readonly resume
 
   // 2. The board, the configuration and the runner. The indexer must list the messages as covered.
   await writeBotConfiguration(context, indexerUrl);
-  const board = await spawnBackground(context, "board", ["bun", "run", join(context.repositoryRoot, "explorer/e2e/src/board.ts"), file.boardUrl], process.env as Record<string, string>);
-  started.push(board);
-  const boardUrl = await waitUntil("the board URL", () => (existsSync(file.boardUrl) ? readFileSync(file.boardUrl, "utf8") : undefined), 30_000);
+  const boardUrl = await startBoard(context, started);
+  const board = started[started.length - 1]!;
   const environment = botEnvironment(context, boardUrl);
-  const botCommand = (role: string, extra: string[] = []) => ["node", join(context.repositoryRoot, "explorer/bots/bin/zk-bridge-bot.mjs"), role, "--config", file.config, ...extra];
   // 3. The publisher proves the newest update (a real proof on RunPod) and posts it on the board. The runner starts after the
   // post: it reads the proof from the board and must send the update itself.
   const publisherStarted = Date.now();
-  const publisher = await spawnBackground(context, "publisher", botCommand("publisher", ["--once"]), environment, join(context.repositoryRoot, "explorer/bots"));
+  const publisher = await spawnBackground(context, "publisher", botCommand(context, "publisher", ["--once"]), environment, join(context.repositoryRoot, "explorer/bots"));
   started.push(publisher);
   await publisher.exited;
   record(context, { stage: "bots", name: "publisher-run", ok: publisher.exitCode === 0, data: { exitCode: publisher.exitCode ?? -1, seconds: (Date.now() - publisherStarted) / 1000 } });
-  const runner = await spawnBackground(context, "runner", botCommand("runner"), environment, join(context.repositoryRoot, "explorer/bots"));
+  const runner = await spawnBackground(context, "runner", botCommand(context, "runner"), environment, join(context.repositoryRoot, "explorer/bots"));
   started.push(runner);
 
   // 4. The outcomes of the runner. The runner may split its work into batches as its packing decides, so the stage checks
