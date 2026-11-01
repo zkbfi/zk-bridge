@@ -69,6 +69,7 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `runner.maximumPrerequisiteSpendPerSweepWei` | Required. The most wei that the layout calls of one sweep may cost, counted at the worst case of each send. A sweep that reserved or sent a layout call counts toward `maximumDeliveriesPerSweep`. The example file uses 0.05 of the native coin. |
 | `runner.maximumPrerequisiteSpendPerDayWei` | Required. The most wei that layout calls may cost in a rolling 24 hours. The runner keeps the spend in its state file, so a restart does not reset it. At the limit the runner sends no layout call until the window rolls. The example file uses 0.2 of the native coin. |
 | `runner.maximumUnrecoveredPrerequisiteLossWei` | Required. The loss at which the runner stops sending layout calls, over a rolling 24 hours. A loss is the layout spend on an item that was then not delivered. The example file uses 0.1 of the native coin. |
+| `runner.openDeposits` | Open the bridge on the destination chain while it is closed (see "Opening the bridges" below). Default `true`. |
 | `runner.prerequisiteLossRefusalSeconds` | After layout calls were paid for an item and the delivery did not follow, the runner does not try the item for this long. Default 1800. |
 
 A secret is a reference: `env:NAME`, `op://vault/item/field`, or `{ "source": "store", "name": "..." }`. A secret value in
@@ -210,7 +211,39 @@ line in `stateDirectory/outcomes-<pair>.jsonl`. Fields: `time`, `kind` (`deliver
 `status` (`delivered`, `skipped`, `failed`, `posted`), `reason` (new: `insufficient-gas`, `anchor-not-stored`, `batch-did-not-settle`, `batch-result-missing`), `messageId`, `transactionHash`, `gasUsed`, `gasCostWei`,
 `prerequisiteCostWei`, `feeWei`, `feeExpectedWei`, `feeReceivedTokens`, `path` (`delivery-router` or `bridge`). Amounts are
 decimal strings. A skip is written once for each change of reason, not once for each pass. The state file
-`runner-<pair>-<direction>.json` holds the items that need no second look, and the layout spend and losses of the last 24 hours.
+`runner-<pair>-<direction>.json` holds the items that need no second look, the layout spend and losses of the last 24 hours,
+and `depositsOpen` once the bridge of the destination chain is open.
+
+### Opening the bridges
+
+Both bridges start closed. A bridge opens for good with `openDeposits(proof)`, which anyone may send. The proof shows that the
+bridge's own light client stored a block of the other chain, and that the other chain's light client had already stored a
+head in the state of that block. So the runner of the direction S to D, which posts the updates to the light client on D,
+opens the bridge on D. It can do that once the light client on S has its first update (from the runner of the other
+direction, or anyone), and the light client on D then stores a block of S that comes after it.
+
+With `runner.openDeposits` on (the default), each direction of the runner checks the bridge on its destination chain at
+start and after each pass, and also right after an update of its own is mined:
+
+1. When the state file says open, nothing happens, for good.
+2. It reads the head of the light client on D. When no attempt used a newer head, it waits: the proof needs a block that
+   a node still serves the state of, and an old head fails again with "distance to target block exceeds maximum proof
+   window".
+3. It reads `depositsOpen()` and logs `deposits_open_checked` (`bridge`, `headSlot`, `open`). Open: it writes
+   `depositsOpen: true` to the state file and stops checking.
+4. It runs `zk-bridge-prover opening-proof --route <D>_to_<S>`. For the prover this bridge is the source bridge of the
+   opposite route. With the default slots the prover takes the head of the light client on D, and runs `eth_getProof` on
+   S (the remote RPC of that route) at the block of S that the head stored, the newest one. It logs `deposits_opening`
+   (`route`, `remoteSlot`, `storedSlot`, `remoteBlockNumber`).
+5. It simulates `openDeposits` with `eth_call`. A revert sends nothing. It sends from the runner's signer, with the runner's
+   priority fee settings (0.01 gwei or more on chains 943 and 369), through the same queue as its other transactions, and
+   logs `deposits_opened` (`transactionHash`, `gasUsed`).
+
+A failure logs `deposits_open_failed` (warning) with `reason` (`read-failed`, `proof-failed`, `wrong-target`,
+`simulation-reverted`, `send-failed`, `transaction-reverted`), `detail` and `retryAfterSeconds`. The next attempt waits for a
+newer head of the light client and a backoff of 60 seconds that doubles with each failure up to 30 minutes, so it never
+loops on a head that cannot work. Until the other light client has its first update the prover refuses with "it needs its
+first update"; that is the same wait.
 
 ## The traffic bot
 

@@ -386,11 +386,17 @@ cast send "<light client on chain 943>" --data "$(jq -r .updateCalldata "$RUN_DI
 
 Repeat for the other direction with `--route pulsechain_testnet_to_sepolia`, the light client on Sepolia, and `--rpc-url sepolia`. Run each route again until the exit code is 3. Write down the wall time, the line `proved` in the log, and the cost in the RunPod console.
 
-## Step 8: open both bridges (sends transactions)
+## Step 8: open both bridges (automatic: the runner sends the transactions)
 
-A bridge opens only after its own light client stored a block that came after the first update of the other light client. Chains need about two epochs to finalize, so repeat step 7 once more for both directions before you open.
+The runner does this step. With `runner.openDeposits` on (the default), each direction of the runner opens the bridge on its destination chain: at start, after each pass, and right after an update of its own is mined, while the bridge is closed. It builds the proof below with `opening-proof`, simulates `openDeposits`, sends it from the runner's signer, and records the open bridge in its state file, after which it never checks again. The log lines are `deposits_open_checked`, `deposits_opening`, `deposits_opened` and `deposits_open_failed`; `explorer/bots/README.md`, "Opening the bridges", has the details. So start the bots (step 10) after step 7 and watch for `deposits_opened` in both directions.
 
-The call is `openDeposits(OpeningProof)` on the bridge of each chain. The proof holds a remote block, the state proof of the remote light client (from `eth_getProof`), and the storage proof of one stored head. See `docs/hardened-build-contract.md`, "Launch sequence", step 3. The prover builds the proof and checks it natively before it prints anything. It sends nothing.
+Which update opens which bridge: the runner of the direction Sepolia to 943 posts to the light client on chain 943, so it opens the bridge on chain 943. For the prover that is the source bridge of the opposite route (`pulsechain-testnet-v4_to_sepolia` in the file the runner writes), and `eth_getProof` runs on Sepolia. The runner of the direction 943 to Sepolia opens the bridge on Sepolia, with `eth_getProof` on chain 943. Both directions must run for both bridges to open.
+
+A bridge opens only after its own light client stored a block that came after the first update of the other light client. Chains need about two epochs to finalize, so the first round of updates for one direction only prepares the second; the runner tries again at each new head.
+
+The proof must be built soon after the light client stores the block. `eth_getProof` runs at that block on the other chain, and a node serves the state of a block only for a while: on 2026-11-01 a manual run hours after the last update failed for both routes with `rpc error 4444/-32602: distance to target block exceeds maximum proof window`. The runner builds the proof right after an update, with the default slots, which take the newest stored block.
+
+By hand, the steps are as follows. The call is `openDeposits(OpeningProof)` on the bridge of each chain. The proof holds a remote block, the state proof of the remote light client (from `eth_getProof`), and the storage proof of one stored head. See `docs/hardened-build-contract.md`, "Launch sequence", step 3. The prover builds the proof and checks it natively before it prints anything. It sends nothing.
 
 ```sh
 "$PROVER" --config "$RUN_DIR/prover.toml" opening-proof --route sepolia_to_pulsechain_testnet
@@ -404,7 +410,7 @@ cast call "<bridge on Sepolia>" 'depositsOpen()(bool)' --rpc-url sepolia
 cast call "<bridge on chain 943>" 'depositsOpen()(bool)' --rpc-url pulsechain_testnet_v4
 ```
 
-Both calls must print `true`. Until then, a send reverts with `DepositsNotOpen()`.
+Both calls must print `true`. Until then, a send reverts with `DepositsNotOpen()`. Run the manual commands right after an update of the light client of the bridge, or the proof window error above comes back.
 
 ## Step 9: confirm the gate on Sepolia
 
@@ -466,7 +472,7 @@ Two test tokens on each chain: `zkb Test Dollar` (`tUSD`, 6 decimals) and `zkb T
 
 1. **The traffic wallet.** A new account, used for nothing else. Create a 1Password item **"testnet traffic wallet"** in the vault **zkb.fi** with two fields: `address` and `private-key`. Generate it where you keep keys (for example `cast wallet new`, in a shell whose history you do not keep), store both fields, and close the shell. Nothing in this repository generates it.
 2. **Gas for the traffic wallet**, from the faucets (estimates below): about 2 Sepolia ETH and 10 tPLS to start.
-3. **Open bridges.** On 2026-11-01 `depositsOpen()` is `false` on both bridges (`0xb018...fb21` on Sepolia, `0xf59d...1fd1` on chain 943). Until step 8 opens them, every send skips with `deposits-not-open`.
+3. **Open bridges.** On 2026-11-01 `depositsOpen()` is `false` on both bridges (`0xb018...fb21` on Sepolia, `0xf59d...1fd1` on chain 943). Until the runner opens them (step 8), every send skips with `deposits-not-open`.
 4. **A confirmed gate on Sepolia, each epoch.** Sepolia's gate enforces (`confirmedEpoch()` is `(0, false)` on 2026-11-01). A send from Sepolia in an epoch that nobody confirmed reverts with `ForkNotConfirmed`, and the traffic bot logs `traffic_skipped` with `gate-not-confirmed`. No tool confirms it on a live chain yet (step 9): the evidence builder is `light-client/crates/lc-core/src/gate.rs`, with no command of the prover around it. Until a keeper confirms each epoch (6.4 minutes), only the direction 943 to Sepolia moves. The gate of chain 943 detects and admits.
 
 ### Deploy and mint (sends transactions)
