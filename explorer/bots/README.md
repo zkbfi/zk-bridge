@@ -283,11 +283,19 @@ The old keys `intervalSeconds`, `jitterSeconds` and `directions.*.offsetSeconds`
    `balance.minimum` after the send. A copy goes home first when its native token is below `balance.minimum` at home; a
    native token goes out first when its home balance is above `balance.maximum`. Otherwise the pick is uniform.
 3. Approves the mediator once for the largest amount, when the allowance is short (test tokens only).
-4. Relays with `relayTokensAndCall` to the delivery router of the destination, with the dapp's default tip:
+4. Confirms the deposit gate of the source chain when it enforces and nobody confirmed the epoch of the next block
+   (Sepolia): `ensureGateConfirmed` of `@zk-bridge/shared` (from `@zkb/data`) reads the gate, builds the evidence from the
+   beacon API of `gateBeaconUrls`, checks it with the contract's rules against the beacon root on chain, and simulates
+   `confirm` from the wallet. The bot sends that as its own transaction and logs `gate_confirmed` (direction, chain, gate,
+   epoch, `forkVersion`, `transactionHash`, gas, `validUntil`), then relays. In the first slot of an epoch no header of it
+   is on chain yet: the bot waits a slot, at most three times. A gate that does not enforce (chain 943, which detects) or
+   an epoch that someone confirmed costs only the reads of the gate. The bridge calls the gate on a send only, so the runner's
+   deliveries and updates never need a confirmation.
+5. Relays with `relayTokensAndCall` to the delivery router of the destination, with the dapp's default tip:
    `defaultTip` of `@zk-bridge/shared` (the share mode, 0.1 percent of the amount, `tipPercent`), the traffic wallet as
    recipient. When the copy does not exist on the destination yet, the delivery deploys it: the send asks for
    `newCopyGasLimit` of the destination chain when one is set. Sepolia needs one: a copy took 6,971,380 gas there in an estimate on 2026-11-01, and the mediator's default is 2,750,000 with the callback. A delivery that runs out of gas is final.
-5. Simulates each transaction first and keeps `minimumNativeWei` of the chain: a send whose worst case (gas limit times
+6. Simulates each transaction first and keeps `minimumNativeWei` of the chain: a send whose worst case (gas limit times
    maximum fee) would take the native balance below it does not go.
 
 Every attempt is a log line: `traffic_sent` (direction, symbol, kind, `tokenAddress`, amount, `transactionHash`, `messageId`,
@@ -299,8 +307,12 @@ a tip only in a token it has a value for.
 | Reason | Meaning |
 |---|---|
 | `no-eligible-token` | No candidate can go; `candidates` says why for each (`home-balance-at-minimum`, `copy-balance-below-amount`, `waiting-for-first-return`). |
-| `native-below-reserve` | The worst case of the approval or the relay would take the native coin below `minimumNativeWei`. |
-| `gate-not-confirmed` | The source gate enforces and nobody confirmed the current epoch (`ForkNotConfirmed`). Sepolia's gate enforces. |
+| `native-below-reserve` | The worst case of the approval, the confirmation of the gate (`step: "gate-confirm"`) or the relay would take the native coin below `minimumNativeWei`. |
+| `gate-evidence-failed` | No confirmation of the gate: `code` names why (`simulation-reverted`, `beacon-request-failed`, `no-proof`, ...; `detail` holds no URL). Nothing was sent. |
+| `gate-epoch-has-no-header` | The gate needs a confirmation and no header of the epoch came on chain in three slots. |
+| `gate-confirm-reverted` | The confirmation was mined and reverted (another sender confirmed first does not revert: `confirm` then does nothing). |
+| `gate-sealed` | The gate of the source chain is sealed for good. |
+| `gate-not-confirmed` | The relay still met `ForkNotConfirmed`: the epoch turned between the confirmation and the relay. The next attempt confirms again. |
 | `deposits-not-open` | The source bridge is still locked. |
 | `no-delivery-router` | The deployment names no delivery router on the destination. |
 | `approval-simulation-reverted`, `relay-simulation-reverted` | The node refused the call; `error` names the error when an ABI knows it. |
@@ -331,6 +343,7 @@ loads; its old fields are dropped.
 | `intervalSeconds`, `jitterSeconds`, `directions.*.offsetSeconds` | Removed. Accepted, ignored, `config_ignored` warning. |
 | `tipPercent` | The tip as a percentage of the amount. Default `0.1`, the dapp's default. |
 | `newCopyGasLimit` | By destination chain id: the gas limit of a send that deploys a copy there, at most the bridge's `maxGasPerTx` (10,000,000). Set `"11155111": "9000000"` on the testnet. |
+| `gateBeaconUrls` | By chain id: the beacon API whose state proofs confirm the gate. It needs the compact multiproof endpoint of Lodestar; the public `https://lodestar-sepolia.chainsafe.io` serves it. Default: the beacon URL of the pair (`EXPLORER_BEACON_URL_<chain id>`). Set `"11155111"` on the testnet. |
 | `minimumNativeWei` | Required, by chain id, for each chain of the pair. |
 | `priorityFeeWei`, `minimumPriorityFeeWei`, `receiptTimeoutSeconds` | As in the runner. Chains 943 and 369 never tip below 0.01 gwei. |
 

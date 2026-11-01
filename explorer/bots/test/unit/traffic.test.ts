@@ -1,9 +1,10 @@
 import { decodeFunctionData, encodeErrorResult, getAddress, type Address } from "viem";
 import { describe, expect, it, vi } from "vitest";
-import { beaconForkGateAbi, decodeFeeDirector, defaultTip, protectedAddressesOf, tokenMediatorAbi } from "@zk-bridge/shared";
+import { beaconForkGateAbi, decodeFeeDirector, defaultTip, GateEvidenceError, protectedAddressesOf, tokenMediatorAbi, type GateConfirmation } from "@zk-bridge/shared";
 import { boundsOf } from "../../src/traffic/plan.ts";
 import { parseTestTokens } from "../../src/traffic/tokens-file.ts";
-import { createTraffic, type TrafficSide } from "../../src/traffic/traffic.ts";
+import type { TrafficGate } from "../../src/traffic/gate.ts";
+import { createTraffic, GATE_WAITS, type TrafficSide } from "../../src/traffic/traffic.ts";
 import { memoryLogger } from "../support/builders.ts";
 import { DOLLAR, PLAIN, copyAddressOf, fakePort, fakeReader, requestLog, tokenFile, type FakePort, type FakeReaderState } from "../support/traffic.ts";
 
@@ -24,7 +25,7 @@ interface World {
   readonly traffic: ReturnType<typeof createTraffic>;
 }
 
-function sideOf(chainId: number, seed: number, options: { router?: boolean; reserve?: bigint; newCopyGasLimit?: bigint } = {}) {
+function sideOf(chainId: number, seed: number, options: { router?: boolean; reserve?: bigint; newCopyGasLimit?: bigint; gate?: TrafficGate } = {}) {
   const state: FakeReaderState = { native: 10n ** 18n, balances: new Map(), allowances: new Map() };
   const port = fakePort(chainId, WALLET);
   const side: TrafficSide = {
@@ -35,12 +36,13 @@ function sideOf(chainId: number, seed: number, options: { router?: boolean; rese
     contracts: contractsOf(seed, options.router ?? true),
     minimumNativeWei: options.reserve ?? 1_000n,
     newCopyGasLimit: options.newCopyGasLimit ?? null,
+    gate: options.gate ?? null,
   };
   return { side, port, state };
 }
 
-function world(options: { secondRouter?: boolean; symbols?: readonly string[]; random?: () => number; newCopyGasLimit?: bigint } = {}): World {
-  const first = sideOf(1, 0x10);
+function world(options: { secondRouter?: boolean; symbols?: readonly string[]; random?: () => number; newCopyGasLimit?: bigint; gate?: TrafficGate; reserve?: bigint; sleep?: (milliseconds: number) => Promise<void> } = {}): World {
+  const first = sideOf(1, 0x10, { ...(options.gate === undefined ? {} : { gate: options.gate }), ...(options.reserve === undefined ? {} : { reserve: options.reserve }) });
   const second = sideOf(369, 0x20, { router: options.secondRouter ?? true, ...(options.newCopyGasLimit === undefined ? {} : { newCopyGasLimit: options.newCopyGasLimit }) });
   const settings = { amount: { minimum: "1", maximum: "25" }, balance: { minimum: "1000", maximum: "900000" } };
   const symbols = options.symbols ?? ["tUSD"];
@@ -56,6 +58,7 @@ function world(options: { secondRouter?: boolean; symbols?: readonly string[]; r
     ]),
     random: options.random ?? (() => 0),
     logger: logs.logger,
+    ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
   });
   return { first, second, logs, traffic };
 }
@@ -254,5 +257,142 @@ describe("the token list for the runner", () => {
     expect(await traffic.describeTokens()).toEqual([{ symbol: "tUSD", chainId: 1, address: DOLLAR, copyChainId: 369, copyAddress: copyAddressOf(369, 1, DOLLAR) }]);
     // The tokens of chain 5 are no candidates either: only chain 1's tUSD is, and it has no balance.
     expect(await traffic.attempt({ direction: "second-to-first", beforeFirstSend: announce() })).toMatchObject({ reason: "no-eligible-token" });
+  });
+});
+
+describe("the gate of the source chain", () => {
+  const GATE = getAddress(`0x${"16".repeat(20)}`);
+  const CONFIRM_DATA = "0xb5b7d7b1" as const;
+  const confirmation: GateConfirmation = {
+    kind: "confirm",
+    call: { to: GATE, data: CONFIRM_DATA },
+    gas: 79_050n,
+    epoch: 358_932n,
+    forkVersion: "0x90000076",
+    shape: 255,
+    validUntil: 1_793_563_872n,
+    evidence: {} as never,
+  };
+  const gateAnswering = (...answers: Array<GateConfirmation | Error>): TrafficGate & { ensure: ReturnType<typeof vi.fn> } => {
+    const ensure = vi.fn(async () => {
+      const next = answers.length > 1 ? answers.shift()! : answers[0]!;
+      if (next instanceof Error) throw next;
+      return next;
+    });
+    return { ensure };
+  };
+  const funded = (built: World) => {
+    built.first.state.balances.set(DOLLAR.toLowerCase(), 100_000n * DOLLAR_UNIT);
+    built.first.state.allowances.set(DOLLAR.toLowerCase(), 10n ** 30n);
+  };
+
+  it("confirms the epoch first, as its own transaction from the wallet, then relays", async () => {
+    const gate = gateAnswering(confirmation);
+    const built = world({ gate });
+    funded(built);
+    const beforeFirstSend = announce();
+    const outcome = await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend });
+    expect(outcome).toMatchObject({ kind: "sent" });
+    expect(gate.ensure).toHaveBeenCalledWith(WALLET);
+    expect(beforeFirstSend).toHaveBeenCalledTimes(1);
+    expect(built.first.port.sent.map((sent) => sent.to)).toEqual([GATE, built.first.side.contracts.mediator]);
+    // The simulated gas of the confirmation plus 30 percent.
+    expect(built.first.port.sent[0]).toMatchObject({ data: CONFIRM_DATA, gas: 102_765n, maxFeePerGas: 22n, maxPriorityFeePerGas: 2n });
+    expect(eventsNamed(built.logs, "gate_confirmed")[0]).toMatchObject({
+      direction: "first-to-second",
+      chain: "chain-1",
+      gate: GATE,
+      epoch: "358932",
+      forkVersion: "0x90000076",
+      transactionHash: `0x${"1".padStart(64, "0")}`,
+      gasUsed: "50000",
+      gasCostWei: "600000",
+      validUntil: "2026-11-01T20:11:12.000Z",
+    });
+    // The second direction leaves from the other chain, which has no gate here.
+    await built.traffic.attempt({ direction: "second-to-first", beforeFirstSend: announce() });
+    expect(gate.ensure).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends nothing more when the epoch is confirmed or the gate does not enforce", async () => {
+    for (const reason of ["confirmed", "not-enforcing"] as const) {
+      const built = world({ gate: gateAnswering({ kind: "not-needed", reason, epoch: 5n }) });
+      funded(built);
+      expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ kind: "sent" });
+      expect(built.first.port.sent.map((sent) => sent.to)).toEqual([built.first.side.contracts.mediator]);
+      expect(eventsNamed(built.logs, "gate_confirmed")).toEqual([]);
+    }
+  });
+
+  it("waits a slot for a header of the new epoch, then confirms", async () => {
+    const wait: GateConfirmation = { kind: "wait", epoch: 6n, headerEpoch: 5n, retryAfterSeconds: 12 };
+    const sleep = vi.fn(async () => undefined);
+    const built = world({ gate: gateAnswering(wait, wait, confirmation), sleep });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ kind: "sent" });
+    expect(sleep.mock.calls).toEqual([[12_000], [12_000]]);
+    expect(built.first.port.sent).toHaveLength(2);
+  });
+
+  it("gives up after a few slots without a header, and sends nothing", async () => {
+    const sleep = vi.fn(async () => undefined);
+    const built = world({ gate: gateAnswering({ kind: "wait", epoch: 6n, headerEpoch: 5n, retryAfterSeconds: 12 }), sleep });
+    funded(built);
+    const beforeFirstSend = announce();
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend })).toMatchObject({ kind: "skipped", reason: "gate-epoch-has-no-header" });
+    expect(sleep).toHaveBeenCalledTimes(GATE_WAITS);
+    expect(eventsNamed(built.logs, "traffic_skipped")[0]).toMatchObject({ chain: "chain-1", epoch: "6", headerEpoch: "5" });
+    expect(built.first.port.sent).toHaveLength(0);
+    expect(beforeFirstSend).not.toHaveBeenCalled();
+  });
+
+  it("waits with a timer by default", async () => {
+    const built = world({ gate: gateAnswering({ kind: "wait", epoch: 6n, headerEpoch: 5n, retryAfterSeconds: 0 }, { kind: "not-needed", reason: "confirmed", epoch: 6n }) });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ kind: "sent" });
+  });
+
+  it("skips on a sealed gate", async () => {
+    const built = world({ gate: gateAnswering({ kind: "sealed", epoch: 6n }) });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "gate-sealed" });
+    expect(built.first.port.sent).toHaveLength(0);
+  });
+
+  it("sends nothing when the confirmation would revert or no evidence comes", async () => {
+    const built = world({ gate: gateAnswering(new GateEvidenceError("simulation-reverted", "confirm would revert: custom error (revert data 0x3c1c6fca)"), new Error("socket hang up")) });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "gate-evidence-failed" });
+    expect(eventsNamed(built.logs, "traffic_skipped")[0]).toMatchObject({ code: "simulation-reverted", detail: "confirm would revert: custom error (revert data 0x3c1c6fca)" });
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "gate-evidence-failed" });
+    expect(eventsNamed(built.logs, "traffic_skipped")[1]).toMatchObject({ code: null, detail: "socket hang up" });
+    expect(built.first.port.sent).toHaveLength(0);
+  });
+
+  it("keeps the native reserve before the confirmation", async () => {
+    const built = world({ gate: gateAnswering(confirmation), reserve: 10n ** 18n });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "native-below-reserve" });
+    expect(eventsNamed(built.logs, "traffic_skipped")[0]).toMatchObject({ step: "gate-confirm" });
+    expect(built.first.port.sent).toHaveLength(0);
+  });
+
+  it("stops when the confirmation reverts on chain", async () => {
+    const built = world({ gate: gateAnswering(confirmation) });
+    funded(built);
+    built.first.port.receipts.push({ success: false });
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "gate-confirm-reverted" });
+    expect(eventsNamed(built.logs, "traffic_skipped")[0]).toMatchObject({ epoch: "358932", transactionHash: `0x${"1".padStart(64, "0")}` });
+    expect(built.first.port.sent).toHaveLength(1);
+  });
+
+  it("counts what the confirmation spent against the reserve of the relay", async () => {
+    const built = world({ gate: gateAnswering(confirmation) });
+    funded(built);
+    // Enough for the confirmation (102,765 gas at 22 wei, plus the reserve) and, before it, for the relay (130,000 gas at
+    // 22 wei, plus the reserve); not for the relay once the confirmation spent 600,000 wei.
+    built.first.state.native = 3_000_000n;
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "native-below-reserve" });
+    expect(eventsNamed(built.logs, "traffic_skipped")[0]).toMatchObject({ step: "relay", nativeWei: "2400000" });
   });
 });
