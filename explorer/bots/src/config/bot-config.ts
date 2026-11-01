@@ -211,6 +211,12 @@ export const runnerSchema = z
     prerequisiteLossRefusalSeconds: positiveSeconds.default(1800),
     /** Seconds to wait for a receipt. */
     receiptTimeoutSeconds: positiveSeconds.default(300),
+    /**
+     * Open the bridge on the destination chain when it is closed: at start and after each light client update, the
+     * runner builds the opening proof with the prover, simulates `openDeposits` and sends it from its signer. Once the
+     * bridge is open the runner never checks again. Default on.
+     */
+    openDeposits: z.boolean().default(true),
   })
   .strict();
 

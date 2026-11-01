@@ -1,6 +1,6 @@
 import { decodeFunctionData, keccak256, toFunctionSelector, type Hex } from "viem";
 import { beaconLightClientAbi, deliveryRouterAbi, messageBridgeAbi, multicall3Abi, requiredDeliveryGas } from "@zk-bridge/shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Simulation } from "../../src/chain/transactions.ts";
 import type { FeedItem } from "../../src/indexer/client.ts";
 import type { StateStore } from "../../src/runtime/state-file.ts";
@@ -117,6 +117,7 @@ interface WorldOptions {
   state?: ReturnType<typeof memoryState>;
   startTime?: number;
   verifyGuard?: VerifyGuard;
+  onUpdatePosted?: () => Promise<void>;
 }
 
 /** A runner on fakes: chain, indexer, prover, board payloads. Base fee 10 wei, 300,000 gas: a cost of 3,000,000 wei. */
@@ -178,6 +179,7 @@ function world(options: WorldOptions = {}) {
     maximumDeliveriesPerSweep: options.maximumDeliveriesPerSweep ?? 10,
     prerequisiteLossRefusalMilliseconds: REFUSAL_WINDOW_MILLISECONDS,
     ...(options.verifyGuard === undefined ? {} : { verifyGuard: options.verifyGuard }),
+    ...(options.onUpdatePosted === undefined ? {} : { onUpdatePosted: options.onUpdatePosted }),
     logger,
   });
   return { runner, chain, prover, lightClient, state, outcomes, events, indexer, delivery, advance: (milliseconds: number) => (clock += milliseconds) };
@@ -193,6 +195,21 @@ describe("proof intake and the update", () => {
     expect(w.chain.log.every((entry) => entry.request.to === LIGHT_CLIENT && entry.request.data.startsWith(UPDATE))).toBe(true);
     expect(w.chain.unsimulatedSends()).toEqual([]);
     expect(w.outcomes.records[0]).toMatchObject({ kind: "update", status: "posted", newSlot: 164n });
+  });
+
+  it("calls the hook of a posted update after the update is recorded, so the bridge can open with the new head", async () => {
+    const seen: string[] = [];
+    const w = world({ onUpdatePosted: async () => void seen.push(String(w.outcomes.records.length)) });
+    await w.runner.handleProofPayload(proofPayload({ startSlot: 100n, newSlot: 164n }));
+    expect(seen).toEqual(["1"]);
+  });
+
+  it("does not call the hook when the update is skipped", async () => {
+    const onUpdatePosted = vi.fn(async () => undefined);
+    const w = world({ onUpdatePosted });
+    w.chain.simulateOverride = () => ({ ok: false, reason: "HeadNotAdvancing" });
+    expect(await w.runner.handleProofPayload(proofPayload({ startSlot: 100n, newSlot: 164n }))).toMatchObject({ handled: "update-skipped" });
+    expect(onUpdatePosted).not.toHaveBeenCalled();
   });
 
   it("refuses a proof that does not verify, and sends nothing", async () => {
