@@ -29,8 +29,12 @@ describe("the proofs the backend has, with where they are (2026-11-01)", () => {
       { startSlot: 100, newSlot: 170, where: "stored", since: 8 },
       { startSlot: 100, newSlot: 170, where: "job", since: 9 },
     ]);
+    // A failed job's slots are no proof; an applied one's are, and the head then shows it applied.
     updateJob(storage, "b", { status: "failed" }, 10, ["proving"]);
     expect(knownProofs(storage, "first-to-second")).toHaveLength(3);
+    insertJob(storage, { id: "c", direction: "first-to-second", now: 11 });
+    updateJob(storage, "c", { status: "on-chain", startSlot: "170", newSlot: "190" }, 12, ["queued"]);
+    expect(knownProofs(storage, "first-to-second").at(-1)).toEqual({ startSlot: 170, newSlot: 190, where: "job", since: 12 });
   });
 
   it("the furthest proof wins, the board over a stored copy; the head past it makes it applied", () => {

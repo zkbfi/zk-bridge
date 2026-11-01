@@ -4,7 +4,7 @@
  */
 import type { ProofDirection } from "@zk-bridge/shared";
 import type { HeldProof } from "../requests/held-proofs.ts";
-import { findLatestJob, type Job } from "../requests/jobs.ts";
+import type { Job } from "../requests/jobs.ts";
 import type { Storage } from "../storage.ts";
 import type { WatchDecision } from "../watch/decisions.ts";
 import type { IndexedHead } from "./indexer.ts";
@@ -49,7 +49,8 @@ const tableExists = (storage: Storage, name: string): boolean =>
 
 /**
  * Every proof of the direction the backend has, with where it is: `board` for the proof the msgboard indexer keeps and
- * for a webhook proof that was posted, `stored` for one the webhook holds unposted, `job` for slots a prover reported.
+ * for a webhook proof that was posted, `stored` for one the webhook holds unposted, `job` for the slots the prover of the newest job that did
+ * not fail reported (its proof may be applied already: the head then reaches it).
  */
 export function knownProofs(storage: Storage, direction: ProofDirection): HeldProof[] {
   type Row = { start_slot: string; new_slot: string; at: number; posted: number };
@@ -58,12 +59,11 @@ export function knownProofs(storage: Storage, direction: ProofDirection): HeldPr
   const webhook = tableExists(storage, "webhook_proofs")
     ? (storage.database.prepare("SELECT start_slot, new_slot, stored_at AS at, posted_at IS NOT NULL AS posted FROM webhook_proofs WHERE direction = ?").all(direction) as Row[]).map((row) => of(row, row.posted === 1 ? "board" : "stored"))
     : [];
-  const job = findLatestJob(storage, direction);
-  const fromJob: HeldProof[] =
-    job !== null && (job.status === "proving" || job.status === "published") && job.startSlot !== null && job.newSlot !== null
-      ? [{ startSlot: Number(job.startSlot), newSlot: Number(job.newSlot), where: "job", since: job.updatedAt }]
-      : [];
-  return [...board, ...webhook, ...fromJob];
+  // The newest job whose prover reported slots and that did not fail: a proof being posted, posted, or applied.
+  const job = storage.database
+    .prepare("SELECT start_slot, new_slot, updated_at AS at, 0 AS posted FROM jobs WHERE direction = ? AND new_slot IS NOT NULL AND status IN ('proving', 'published', 'on-chain') ORDER BY created_at DESC, rowid DESC LIMIT 1")
+    .get(direction) as Row | undefined;
+  return [...board, ...webhook, ...(job === undefined ? [] : [of(job, "job")])];
 }
 
 /** The proof that reaches furthest; on a tie the one further along (board before stored). */
