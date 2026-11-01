@@ -17,6 +17,8 @@ export interface GrindResult {
   readonly difficulty: bigint;
   readonly iterations: bigint;
   readonly durationMilliseconds: number;
+  /** The threads that searched for the nonce at once. */
+  readonly threads: number;
 }
 
 /** Finds the proof of work for a message. The real one runs in a worker thread in Node. */

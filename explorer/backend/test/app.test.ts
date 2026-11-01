@@ -73,7 +73,7 @@ describe("health of the real modules", () => {
 
   it("reports the webhook as running when its settings are usable", async () => {
     const backend = makeBackend({ enabled: ["webhook"], config: makeConfig({ msgboardUrl: "http://board.invalid" }) });
-    configureWebhook(backend.context, { environment: { BACKEND_WEBHOOK_BEARER: SECRETS.webhookBearer }, makeBoard: () => ({ post: async () => ({ messageHash: `0x${"99".repeat(32)}`, grindMilliseconds: 1 }) }) });
+    configureWebhook(backend.context, { environment: { BACKEND_WEBHOOK_BEARER: SECRETS.webhookBearer }, makeBoard: () => ({ post: async () => ({ messageHash: `0x${"99".repeat(32)}`, grindMilliseconds: 1, difficulty: 367_772n, threads: 4 }) }) });
     expect((await healthOf(backend)).modules.webhook).toEqual({ state: "running" });
   });
 

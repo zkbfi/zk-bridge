@@ -55,7 +55,7 @@ function setup(options: { head?: LightClientHead; source?: Partial<WebhookSource
       state.beforePost?.();
       if (state.boardFailure !== null) throw state.boardFailure;
       posts.push(input);
-      return { messageHash: word(0x99), grindMilliseconds: 7 };
+      return { messageHash: word(0x99), grindMilliseconds: 7, difficulty: 367_772n, threads: 4 };
     },
   };
   const controllable = controllableProver();
@@ -279,6 +279,15 @@ describe("the publisher", () => {
     expect(message).toMatchObject({ pair: "eth-pls", direction: "second-to-first", startSlot: 100n, newSlot: 200n });
     expect(getJob(fixture.storage, jobId)).toMatchObject({ status: "published", startSlot: "100", newSlot: "200", error: null });
     expect(storedRow(fixture)).toMatchObject({ message_hash: word(0x99), attempts: 0 });
+  });
+
+  it("logs how long the grind took, its difficulty and the threads that shared it, so that the effect of the threads shows", async () => {
+    const fixture = setup();
+    const jobId = createProvingJob(fixture, "second-to-first");
+    await send(fixture, jobId, proofPackage());
+    await settled(fixture.context);
+    const line = fixture.log.lines.map((text) => JSON.parse(text)).find((entry) => entry.event === "webhook_proof_posted");
+    expect(line).toMatchObject({ jobId, messageHash: word(0x99), grindMilliseconds: 7, difficulty: "367772", threads: 4 });
   });
 
   it("verifies with the prover before it posts", async () => {
@@ -609,7 +618,7 @@ describe("settings and health", () => {
 
   it("logs a settings failure once for each distinct reason, not on every tick", async () => {
     const fixture = setup({ source: { environment: {} } });
-    const board: BoardPublisher = { post: async () => ({ messageHash: word(0x99), grindMilliseconds: 1 }) };
+    const board: BoardPublisher = { post: async () => ({ messageHash: word(0x99), grindMilliseconds: 1, difficulty: 367_772n, threads: 4 }) };
     const unusable = () => fixture.log.lines.filter((line) => line.includes("webhook_unusable")).length;
     // Reason one: the bearer variable is not set. The first start logs it; more ticks do not.
     await (await start(fixture.context))();

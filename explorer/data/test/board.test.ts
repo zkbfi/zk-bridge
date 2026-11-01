@@ -38,6 +38,9 @@ describe("publishing on the board", () => {
     expect(message.data).toBe(payload);
     expect(message.workMultiplier).toBe(1n);
     expect(message.workDivisor).toBe(1_000_000n);
+    // The result says what the grind cost.
+    expect(posted).toMatchObject({ grindMilliseconds: expect.any(Number), difficulty: expect.any(BigInt), threads: 1 });
+    expect(posted.difficulty).toBeGreaterThan(0n);
   });
 
   it("refuses a payload over the size limit before it does any work", async () => {

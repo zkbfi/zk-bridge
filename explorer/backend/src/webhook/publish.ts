@@ -88,7 +88,7 @@ export function createProofPublisher(input: ProofPublisherInput): ProofPublisher
         const moved = updateJob(storage, stored.job_id, { status: "published", startSlot: stored.start_slot, newSlot: stored.new_slot }, input.now(), ["proving"]);
         if (!moved) logger.warn("webhook_job_moved_during_post", { jobId: stored.job_id });
       });
-      logger.info("webhook_proof_posted", { jobId: stored.job_id, messageHash: posted.messageHash, grindMilliseconds: posted.grindMilliseconds });
+      logger.info("webhook_proof_posted", { jobId: stored.job_id, messageHash: posted.messageHash, grindMilliseconds: posted.grindMilliseconds, difficulty: posted.difficulty, threads: posted.threads });
     } catch (error) {
       const attempts = stored.attempts + 1;
       storage.database

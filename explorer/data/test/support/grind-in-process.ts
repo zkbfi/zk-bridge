@@ -17,5 +17,6 @@ export const grindInProcess: GrindFunction = async (input) => {
     difficulty: BigInt(work.stats.difficulty),
     iterations: BigInt(work.stats.iterations),
     durationMilliseconds: work.stats.duration,
+    threads: 1,
   };
 };

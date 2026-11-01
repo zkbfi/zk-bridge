@@ -73,6 +73,8 @@ async function postPending(dependencies: PublisherDependencies, state: StateWith
       newSlot: pending.newSlot,
       postCount: pending.postCount + 1,
       grindMilliseconds: posted.grindMilliseconds,
+      difficulty: posted.difficulty,
+      threads: posted.threads,
     });
     return next;
   } catch (error) {
