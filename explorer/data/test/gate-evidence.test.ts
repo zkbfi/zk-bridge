@@ -11,6 +11,7 @@ import {
   GateEvidenceError,
   readGateStatus,
   SHAPE_REQUEST_ORDER,
+  SIMULATION_RETRY_MILLISECONDS,
   type BeaconProofSource,
   type GateChainClient,
   type GateStatus,
@@ -49,7 +50,8 @@ const clientOf = (overrides: Overrides = {}) => {
   };
   const parent = "parentBeaconBlockRoot" in overrides ? overrides.parentBeaconBlockRoot : fixture.block.parentBeaconBlockRoot;
   const client = {
-    getBlock: vi.fn(async () => ({ number: blockNumber, timestamp: BigInt(fixture.block.timestamp), parentBeaconBlockRoot: parent })),
+    // The latest block is two ahead of the recorded one, so the evidence block (latest - 2) is the recorded block.
+    getBlock: vi.fn(async (request?: { blockNumber?: bigint }) => ({ number: request?.blockNumber ?? blockNumber + 2n, timestamp: BigInt(fixture.block.timestamp), parentBeaconBlockRoot: parent })),
     readContract: vi.fn(async ({ functionName }: { functionName: string }) => reads[functionName]),
     call: vi.fn(async () => ({ data: "answer" in overrides ? overrides.answer : fixture.beaconRootCall.answer })),
     estimateGas: vi.fn(overrides.estimate ?? (async () => BigInt(fixture.estimatedGas))),
@@ -93,11 +95,11 @@ describe("readGateStatus", () => {
       secondsPerSlot: 12n,
       slotsPerEpoch: 32n,
       beaconRoots: "0x000f3df6d732807ef1319fb7b8bb8522d0beac02",
-      block: { number: blockNumber, parentBeaconBlockRoot: fixture.block.parentBeaconBlockRoot },
+      block: { number: blockNumber + 2n, parentBeaconBlockRoot: fixture.block.parentBeaconBlockRoot },
       epoch,
       needsConfirmation: true,
     });
-    expect(client.readContract).toHaveBeenCalledWith({ address: fixture.gate, abi: beaconForkGateAbi, functionName: "confirmedEpoch", blockNumber });
+    expect(client.readContract).toHaveBeenCalledWith({ address: fixture.gate, abi: beaconForkGateAbi, functionName: "confirmedEpoch", blockNumber: blockNumber + 2n });
   });
 
   it("needs no confirmation in a confirmed epoch, on a gate that does not enforce, or on a sealed gate", async () => {
@@ -106,6 +108,16 @@ describe("readGateStatus", () => {
     const detecting = await readGateStatus({ client: asClient(clientOf({ mode: 2, enforcing: false })), gate: fixture.gate });
     expect(detecting).toMatchObject({ mode: "detect-beacon-roots-and-registry", needsConfirmation: false });
     expect((await readGateStatus({ client: asClient(clientOf({ sealed: true })), gate: fixture.gate })).needsConfirmation).toBe(false);
+  });
+
+  it("pins the evidence to the block two behind the latest, and to the latest itself on a young chain", async () => {
+    const status = await readGateStatus({ client: asClient(clientOf()), gate: fixture.gate });
+    expect(status.block.number).toBe(blockNumber + 2n);
+    expect(status.evidenceBlock.number).toBe(blockNumber);
+    const young = clientOf();
+    young.getBlock.mockResolvedValue({ number: 1n, timestamp: BigInt(fixture.block.timestamp), parentBeaconBlockRoot: fixture.block.parentBeaconBlockRoot });
+    expect((await readGateStatus({ client: asClient(young), gate: fixture.gate })).evidenceBlock.number).toBe(1n);
+    expect(young.getBlock).toHaveBeenCalledTimes(1);
   });
 
   it("names a block without a parent beacon root, and refuses an unknown mode", async () => {
@@ -224,7 +236,65 @@ describe("ensureGateConfirmed", () => {
     const client = clientOf();
     const result = await ensure(client);
     expect(result).toMatchObject({ kind: "confirm", call: { to: fixture.gate, data: fixture.expected.calldata }, gas: 79_050n, epoch, forkVersion: "0x90000076", shape: 255, validUntil: BigInt(fixture.expected.validUntil) });
-    expect(client.estimateGas).toHaveBeenCalledWith({ account: fixture.account, to: fixture.gate, data: fixture.expected.calldata });
+    expect(client.estimateGas).toHaveBeenCalledWith({ account: fixture.account, to: fixture.gate, data: fixture.expected.calldata, blockNumber });
+  });
+
+  const unavailable = () =>
+    Object.assign(new Error("reverted"), { shortMessage: "Execution reverted.", cause: { data: "0xbad725f70000000000000000000000000000000000000000000000000000000069058c58" } });
+
+  it("simulates at the evidence block, not at the latest", async () => {
+    const client = clientOf();
+    await ensure(client);
+    expect(client.getBlock).toHaveBeenCalledWith({ blockNumber });
+    expect((client.estimateGas.mock.calls as unknown[][])[0]![0]).toMatchObject({ blockNumber });
+    expect(client.call).toHaveBeenCalledWith(expect.objectContaining({ blockNumber }));
+  });
+
+  it("passes with a node one block behind the latest, where the old unpinned simulation failed", async () => {
+    const head = blockNumber + 1n;
+    // A backend that lags: it has the root of a block only if it has the block.
+    const estimate = vi.fn(async (request?: unknown) => {
+      const at = (request as { blockNumber?: bigint }).blockNumber ?? head;
+      return at <= head && at <= blockNumber ? 79_050n : Promise.reject(unavailable());
+    });
+    expect(await ensure(clientOf({ estimate }))).toMatchObject({ kind: "confirm", gas: 79_050n });
+  });
+
+  it("asks again after a moment when a lagging node has no beacon root yet", async () => {
+    const estimate = vi.fn().mockRejectedValueOnce(unavailable()).mockResolvedValueOnce(81_000n);
+    const sleep = vi.fn(async (_milliseconds: number) => undefined);
+    const result = await ensureGateConfirmed({ client: asClient(clientOf({ estimate })), gate: fixture.gate, beacon: beaconOf(), account: fixture.account, sleep });
+    expect(result).toMatchObject({ kind: "confirm", gas: 81_000n });
+    expect(estimate).toHaveBeenCalledTimes(2);
+    expect(sleep.mock.calls).toEqual([[SIMULATION_RETRY_MILLISECONDS]]);
+  });
+
+  it("gives up after the one retry, and names the block", async () => {
+    const estimate = vi.fn(async () => Promise.reject(unavailable()));
+    const sleep = vi.fn(async (_milliseconds: number) => undefined);
+    const error = await failure(ensureGateConfirmed({ client: asClient(clientOf({ estimate })), gate: fixture.gate, beacon: beaconOf(), account: fixture.account, sleep }));
+    expect(error.code).toBe("simulation-reverted");
+    expect(error.message).toContain(`simulated at block ${blockNumber}`);
+    expect(error.message).toContain("revert data 0xbad725f7");
+    expect(estimate).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry another revert, and waits on a real timer by default", async () => {
+    const estimate = vi.fn(async () => Promise.reject(new Error("boom")));
+    const error = await failure(ensure(clientOf({ estimate })));
+    expect(error.code).toBe("simulation-reverted");
+    expect(estimate).toHaveBeenCalledTimes(1);
+    const timers = vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
+      callback();
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout);
+    try {
+      const flaky = vi.fn().mockRejectedValueOnce(unavailable()).mockResolvedValueOnce(5n);
+      expect(await ensure(clientOf({ estimate: flaky }))).toMatchObject({ kind: "confirm", gas: 5n });
+      expect(timers).toHaveBeenCalledWith(expect.any(Function), SIMULATION_RETRY_MILLISECONDS);
+    } finally {
+      timers.mockRestore();
+    }
   });
 
   it("passes on a wait", async () => {
@@ -242,7 +312,7 @@ describe("ensureGateConfirmed", () => {
     });
     const error = await failure(ensure(clientOf({ estimate: async () => Promise.reject(revert) })));
     expect(error.code).toBe("simulation-reverted");
-    expect(error.message).toBe("confirm would revert: Execution reverted with reason: custom error 0x3c1c6fca. (revert data 0x3c1c6fca)");
+    expect(error.message).toBe(`confirm would revert (simulated at block ${blockNumber}): Execution reverted with reason: custom error 0x3c1c6fca. (revert data 0x3c1c6fca)`);
     expect(error.message).not.toContain("secret-key");
   });
 });
