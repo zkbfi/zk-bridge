@@ -29,6 +29,13 @@ export type RateLimits = {
    * never move again, so keep it well below that.
    */
   readonly keepAliveSeconds: number;
+  /**
+   * How long a proof we already have (on the board, stored by the webhook, or made by a job) may wait to land before it
+   * no longer holds back a new proof. Until then, no job starts from the head that proof starts at: the runner posts
+   * it, and the next proof starts from the head it makes. Owner, 2026-11-01: "you should also have deduplication logic
+   * in place so that you are never re-proving some proof you already have".
+   */
+  readonly pendingProofStaleSeconds: number;
 };
 
 /** The limits that the example configuration shows. */
@@ -41,6 +48,7 @@ export const DEFAULT_RATE_LIMITS: RateLimits = {
   secondsBeforeRetryAfterFailure: 60,
   jobsPerDirectionPerDay: 96,
   keepAliveSeconds: 43_200,
+  pendingProofStaleSeconds: 600,
 };
 
 const MINUTE_MILLISECONDS = 60_000;

@@ -125,6 +125,14 @@ export async function receiveProofPackage(input: ReceiveInput): Promise<ReceiveO
     return { kind: "unavailable" };
   }
   if (!verdict.accept) return failJob(input, verdict.reason);
+  // The first proof of these slots stays: a second one would be posted and paid for again.
+  const first = input.storage.database
+    .prepare("SELECT job_id FROM webhook_proofs WHERE direction = ? AND start_slot = ? AND new_slot = ? AND job_id != ?")
+    .get(job.direction, String(proofPackage.startHeadSlot), String(proofPackage.newHeadSlot), job.id) as { job_id: string } | undefined;
+  if (first !== undefined) {
+    input.logger.warn("proof_duplicate", { jobId: job.id, direction: job.direction, startSlot: proofPackage.startHeadSlot, newSlot: proofPackage.newHeadSlot, firstJobId: first.job_id });
+    return failJob(input, "the same proof is held already");
+  }
   input.storage.database
     .prepare("INSERT OR IGNORE INTO webhook_proofs (job_id, direction, payload, start_slot, new_slot, stored_at) VALUES (?, ?, ?, ?, ?, ?)")
     .run(job.id, job.direction, payload, String(proofPackage.startHeadSlot), String(proofPackage.newHeadSlot), input.now());

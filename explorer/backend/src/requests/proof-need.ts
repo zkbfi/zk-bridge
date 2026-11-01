@@ -12,7 +12,10 @@ export const PROOF_NEED_TIMEOUT_MILLISECONDS = 5_000;
  * - `keep-alive`: the light client of the destination holds no head, or a head older than the keep-alive time. A light
  *   client that falls more than one sync committee period behind can never move again.
  */
-export type ProofNeed = { readonly needed: true; readonly why: "waiting-message" | "keep-alive" } | { readonly needed: false };
+export type ProofNeed =
+  /** `headSlot`: the head the light client stores, as the indexer read it, or null when unknown. */
+  | { readonly needed: true; readonly why: "waiting-message" | "keep-alive"; readonly headSlot?: number | null }
+  | { readonly needed: false };
 
 /**
  * Reads the need of a direction. `now` is in milliseconds since 1970.
@@ -72,11 +75,11 @@ export function createProofNeedReader(input: {
     const [source, destination] = direction === "first-to-second" ? [first, second] : [second, first];
     const query = new URLSearchParams({ direction: `${source.chainId}>${destination.chainId}`, status: "waiting_for_finality", limit: "1" });
     const [feed, heads] = await Promise.all([read(`/api/feed?${query}`, feedSchema, "the feed"), read("/api/heads", headsSchema, "the heads")]);
-    if (feed.items.length > 0) return { needed: true, why: "waiting-message" };
     const head = heads.heads.find((entry) => entry.chainId === destination.chainId && entry.trackedChainId === source.chainId);
+    if (feed.items.length > 0) return { needed: true, why: "waiting-message", headSlot: head?.storedHeadSlot ?? null };
     if (head === undefined) throw new Error(`the chain indexer knows no light client on chain ${destination.chainId}`);
     const headTime = head.storedHeadSlot === null ? null : head.storedHeadExecutionTimestamp;
-    if (headTime === null || now / 1000 - headTime > input.keepAliveSeconds) return { needed: true, why: "keep-alive" };
+    if (headTime === null || now / 1000 - headTime > input.keepAliveSeconds) return { needed: true, why: "keep-alive", headSlot: head.storedHeadSlot };
     return { needed: false };
   };
 }

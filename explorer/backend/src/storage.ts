@@ -65,6 +65,20 @@ CREATE TABLE IF NOT EXISTS warmup_sessions (
 CREATE INDEX IF NOT EXISTS warmup_sessions_by_time ON warmup_sessions (started_at);
 `;
 
+/**
+ * Brings an older file up to date. The planned slots of a job (the head it starts from and the finalized slot it
+ * targets, when the watcher names them) carry a unique index: one proof of a direction from one head to one slot never
+ * gets a second job, also after a restart or a failure.
+ */
+function migrate(database: DatabaseSync): void {
+  const columns = database.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "planned_start_slot")) {
+    database.exec("ALTER TABLE jobs ADD COLUMN planned_start_slot TEXT");
+    database.exec("ALTER TABLE jobs ADD COLUMN planned_new_slot TEXT");
+  }
+  database.exec("CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_per_target ON jobs (direction, planned_start_slot, planned_new_slot) WHERE planned_start_slot IS NOT NULL");
+}
+
 /** The backend database: one SQLite file. */
 export interface Storage {
   /** The open database. The modules run their own statements on it. */
@@ -88,6 +102,7 @@ export function openStorage(path: string): Storage {
   database.exec("PRAGMA journal_mode = WAL");
   database.exec("PRAGMA busy_timeout = 5000");
   database.exec(SCHEMA);
+  migrate(database);
   return {
     database,
     transaction(work) {

@@ -1,0 +1,215 @@
+import { describe, expect, it } from "vitest";
+import { encodeAbiParameters, encodeFunctionData, type Address, type Hex } from "viem";
+import { PROOF_COST_USD, PULSEX_FACTORIES, STABLES, USD, WAD, WPLS, tokenMediatorAbi } from "@zk-bridge/shared";
+import { makeConfig } from "./support.ts";
+import { batchCostUsd, batchRuleFor, marginWadOf, planBatch, usdText, type BatchMessage, type BatchRule, type Economics } from "../src/watch/batch.ts";
+import { DELIVERY_GAS, createEconomicsReader, type DestinationToken } from "../src/watch/economics.ts";
+
+const RULE: BatchRule = { maxWaitSeconds: 3600, lookaheadSeconds: 384, marginWad: WAD };
+const NOW = 1_000_000;
+const FINALIZED = 500;
+const msg = (messageId: string, slot: number, finalAt: number): BatchMessage => ({ messageId, slot, finalAt });
+const known = (fees: Record<string, bigint>, deliveryUsd = 0n): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd, unpriced: 0, block: "1" });
+const cents = (value: number) => (BigInt(value) * USD) / 100n;
+
+describe("batchRuleFor", () => {
+  it("takes a direction's field over its pair's, and the pair's over the global one", () => {
+    const watch = makeConfig({
+      watch: { maxWaitSeconds: 60, profitMargin: 1.5, pairs: { "sepolia-pls943": { maxWaitSeconds: 3600, lookaheadSeconds: 100, directions: { "first-to-second": { maxWaitSeconds: 1800 } } } } },
+    }).watch;
+    expect(batchRuleFor(watch, "sepolia-pls943", "first-to-second", 384)).toEqual({ maxWaitSeconds: 1800, lookaheadSeconds: 100, marginWad: (WAD * 3n) / 2n });
+    expect(batchRuleFor(watch, "sepolia-pls943", "second-to-first", 320)).toEqual({ maxWaitSeconds: 3600, lookaheadSeconds: 100, marginWad: (WAD * 3n) / 2n });
+    expect(batchRuleFor(watch, "eth-pls", "first-to-second", 384)).toEqual({ maxWaitSeconds: 60, lookaheadSeconds: 384, marginWad: (WAD * 3n) / 2n });
+  });
+
+  it("defaults to no wait, one epoch of lookahead and a margin of 1", () => {
+    expect(batchRuleFor(makeConfig().watch, "eth-pls", "first-to-second", 320)).toEqual({ maxWaitSeconds: 0, lookaheadSeconds: 320, marginWad: WAD });
+    expect(marginWadOf(1.25)).toBe((WAD * 5n) / 4n);
+  });
+
+  it("refuses an unknown pair or direction and a negative wait", () => {
+    expect(() => makeConfig({ watch: { pairs: { "nowhere-pair": { maxWaitSeconds: 1 } } } })).toThrow(/watch\.pairs/);
+    expect(() => makeConfig({ watch: { pairs: { "eth-pls": { directions: { sideways: { maxWaitSeconds: 1 } } } } } })).toThrow(/watch\.pairs\.eth-pls\.directions/);
+    expect(() => makeConfig({ watch: { maxWaitSeconds: -1 } })).toThrow(/watch\.maxWaitSeconds/);
+    expect(() => makeConfig({ watch: { pairs: { "eth-pls": { directions: { "first-to-second": { lookaheadSeconds: -5 } } } } } })).toThrow(/lookaheadSeconds/);
+    expect(() => makeConfig({ watch: { profitMargin: 0 } })).toThrow(/profitMargin/);
+    expect(() => makeConfig({ watch: { pairs: { "eth-pls": { other: 1 } } } })).toThrow(/watch\.pairs\.eth-pls/);
+  });
+});
+
+describe("the cost of a batch", () => {
+  it("is the proof plus a delivery per message, times the margin, rounded up", () => {
+    expect(batchCostUsd(0, 0n, WAD)).toBe(PROOF_COST_USD);
+    expect(batchCostUsd(2, cents(1), WAD)).toBe(PROOF_COST_USD + cents(2));
+    expect(batchCostUsd(1, 1n, WAD / 3n)).toBe(((PROOF_COST_USD + 1n) * (WAD / 3n) + WAD - 1n) / WAD);
+    expect(usdText(PROOF_COST_USD)).toBe("0.025000");
+    expect(usdText(12n * USD + 1n)).toBe("12.000000");
+  });
+});
+
+describe("planBatch", () => {
+  it("is null when nothing waits", () => {
+    expect(planBatch({ messages: [], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}) })).toBeNull();
+  });
+
+  it("with no wait, proves the final messages at once, whatever they pay", () => {
+    const plan = planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 300)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: { ...RULE, maxWaitSeconds: 0 }, economics: { kind: "unknown", why: "test" } });
+    expect(plan).toEqual({ due: true, trigger: "max-wait", messageIds: ["a"], feesUsd: null, costUsd: null, waitedSeconds: 10 });
+  });
+
+  it("a batch that pays proves at once, and the proof covers every final message", () => {
+    const plan = planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 450, NOW - 5)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(2), b: cents(1) }) });
+    expect(plan).toEqual({ due: true, trigger: "profit", messageIds: ["a", "b"], feesUsd: cents(3), costUsd: PROOF_COST_USD, waitedSeconds: 10 });
+  });
+
+  it("a batch that does not pay waits for its fallback, then proves", () => {
+    const messages = [msg("a", 400, NOW - 10)];
+    const waiting = planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1) }) });
+    expect(waiting).toEqual({ due: false, startAt: NOW - 10 + 3600, startWhy: "max-wait", maxWaitAt: NOW - 10 + 3600, ready: 1, oldestFinalAt: NOW - 10, feesUsd: cents(1), costUsd: PROOF_COST_USD, unknownWhy: null });
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW - 10 + 3600, rule: RULE, economics: known({ a: cents(1) }) })).toMatchObject({ due: true, trigger: "max-wait", waitedSeconds: 3600 });
+  });
+
+  it("expects the proof at the finality at which the fees of the final and the soon final messages cover the cost", () => {
+    // Two cents now, one more cent final in 100 s, another in 200 s: the batch pays at the second.
+    const messages = [msg("a", 400, NOW - 10), msg("c", 700, NOW + 200), msg("b", 600, NOW + 100)];
+    const plan = planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1), b: cents(1), c: cents(1) }) });
+    expect(plan).toMatchObject({ due: false, startAt: NOW + 200, startWhy: "profit", ready: 1, feesUsd: cents(1) });
+    // The deliveries count: with a cent of gas each, three cents never cover 2.5 + 3.
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1), b: cents(1), c: cents(1) }, cents(1)) })).toMatchObject({ due: false, startWhy: "max-wait" });
+  });
+
+  it("counts no message beyond the lookahead, and no profit after the fallback", () => {
+    const economics = known({ a: cents(1), b: cents(5) });
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 400)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics })).toMatchObject({ due: false, startWhy: "max-wait" });
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 300)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics })).toMatchObject({ due: false, startWhy: "profit", startAt: NOW + 300 });
+    // The fallback comes first.
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 300)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: { ...RULE, maxWaitSeconds: 60 }, economics })).toMatchObject({ due: false, startWhy: "max-wait", startAt: NOW + 50 });
+  });
+
+  it("never proves early on unknown prices, and counts an unpriced message as nothing", () => {
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 10)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: { kind: "unknown", why: "testnet tokens have no price" } })).toMatchObject({
+      due: false,
+      startWhy: "max-wait",
+      feesUsd: null,
+      costUsd: null,
+      unknownWhy: "testnet tokens have no price",
+    });
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}) })).toMatchObject({ due: false, feesUsd: 0n });
+  });
+
+  it("with nothing final yet, waits from the first message's finality, ordering equal times by identifier", () => {
+    const plan = planBatch({ messages: [msg("b", 600, NOW + 100), msg("a", 610, NOW + 100), msg("c", 620, NOW + 100)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ c: cents(3) }) });
+    expect(plan).toMatchObject({ due: false, ready: 0, oldestFinalAt: NOW + 100, startAt: NOW + 100, startWhy: "profit", feesUsd: 0n });
+  });
+});
+
+// PulseChain at one block: PLS at one cent (a USDC pool), a fee token at one dollar (100 PLS), WPLS itself.
+const ROUTER: Address = "0x00000000000000000000000000000000000000d1";
+const FEE_TOKEN: Address = "0x00000000000000000000000000000000000000f1";
+const POOL_USDC: Address = "0x0000000000000000000000000000000000000a01";
+const POOL_TOKEN: Address = "0x0000000000000000000000000000000000000a02";
+const ZERO = "0x0000000000000000000000000000000000000000";
+const USDC = STABLES[0]!.address;
+
+function pulsechain(options: { usdc?: boolean; failBlock?: boolean } = {}) {
+  const calls: string[] = [];
+  const pools: Record<string, { token0: Address; reserves: [bigint, bigint] }> = {
+    [POOL_USDC.toLowerCase()]: { token0: USDC, reserves: [10n ** 12n, 10n ** 26n] },
+    [POOL_TOKEN.toLowerCase()]: { token0: FEE_TOKEN, reserves: [10n ** 24n, 10n ** 26n] },
+  };
+  const pairOf = (a: string, b: string) => {
+    const pairKey = [a.toLowerCase(), b.toLowerCase()].sort().join("/");
+    if (options.usdc !== false && pairKey === [USDC.toLowerCase(), WPLS.toLowerCase()].sort().join("/")) return POOL_USDC;
+    if (pairKey === [FEE_TOKEN.toLowerCase(), WPLS.toLowerCase()].sort().join("/")) return POOL_TOKEN;
+    return ZERO;
+  };
+  return {
+    calls,
+    getBlockNumber: async () => {
+      if (options.failBlock === true) throw new Error("rpc down");
+      return 77n;
+    },
+    readContract: async (call: { address: Address; functionName: string; args?: readonly unknown[]; blockNumber?: bigint }) => {
+      calls.push(`${call.functionName}@${call.blockNumber}`);
+      if (call.functionName === "getPair") return call.address === PULSEX_FACTORIES[0] ? pairOf(call.args![0] as string, call.args![1] as string) : ZERO;
+      if (call.functionName === "bridgedTokenAddress") return ZERO;
+      const pool = pools[call.address.toLowerCase()]!;
+      return call.functionName === "token0" ? pool.token0 : [pool.reserves[0], pool.reserves[1], 0];
+    },
+  };
+}
+
+/** A relay of `value` to the router, with a fixed fee of `fee`, as the mediator call of a message. */
+function relay(fee: bigint, recipient: Address = ROUTER, value = 10n ** 20n): Hex {
+  const director = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], ["0x00000000000000000000000000000000000000e1", 1n, fee, 0n]);
+  return encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokensAndCall", args: [FEE_TOKEN, recipient, value, director] });
+}
+
+const token = (overrides: Partial<DestinationToken> = {}): DestinationToken => ({ address: FEE_TOKEN, decimals: 18, isBridgedCopy: false, homeChainId: 369, homeToken: FEE_TOKEN, ...overrides });
+const id = (digit: string): Hex => `0x${digit.repeat(64)}`;
+
+describe("createEconomicsReader", () => {
+  function reader(data: Record<string, Hex>, options: { chainId?: number; router?: Address | null; pulse?: ReturnType<typeof pulsechain> | null } = {}) {
+    const reads: Hex[] = [];
+    const pulse = options.pulse === undefined ? pulsechain() : options.pulse;
+    const read = createEconomicsReader({
+      destinationChainId: options.chainId ?? 369,
+      deliveryRouter: options.router === undefined ? ROUTER : options.router,
+      wrappedNative: WPLS,
+      dependencies: {
+        readMessageData: async (messageId) => {
+          reads.push(messageId);
+          return data[messageId] as Hex;
+        },
+        pulsechain: pulse,
+        destinationBaseFee: async () => 10n ** 9n,
+      },
+    });
+    return { read, reads, pulse };
+  }
+
+  it("values each fee for the fee address in dollars at one PulseChain block, and the delivery gas of one message", async () => {
+    const { read, reads, pulse } = reader({ [id("a")]: relay(2n * 10n ** 18n), [id("b")]: relay(10n ** 17n) });
+    const economics = await read([{ messageId: id("a"), destinationToken: token() }, { messageId: id("b"), destinationToken: token({ isBridgedCopy: true }) }]);
+    // Two tokens at a dollar, a tenth at a dollar; one delivery at 1 gwei plus the 0.01 gwei floor, PLS at one cent.
+    expect(economics).toEqual({ kind: "known", feesUsd: new Map([[id("a"), 2n * USD], [id("b"), USD / 10n]]), deliveryUsd: (DELIVERY_GAS * (10n ** 9n + 10n ** 7n) * 10n ** 16n) / 10n ** 18n, unpriced: 0, block: "77" });
+    expect(pulse!.calls.every((call) => call.endsWith("@77"))).toBe(true);
+    // The call data of a message is read once while it waits, and forgotten once it is gone.
+    await read([{ messageId: id("a"), destinationToken: token() }]);
+    await read([{ messageId: id("b"), destinationToken: token() }]);
+    expect(reads).toEqual([id("a"), id("b"), id("b")]);
+  });
+
+  it("counts nothing for a message that pays no fee or whose token has no price", async () => {
+    const plain = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokens", args: [FEE_TOKEN, ROUTER, 1n] });
+    const legacy = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokensAndCall", args: [FEE_TOKEN, ROUTER, 1n, "0x00000000000000000000000000000000000000e1"] });
+    const overflow = (() => {
+      const director = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], ["0x00000000000000000000000000000000000000e1", 0n, 1n, 2n ** 255n]);
+      return encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokensAndCall", args: [FEE_TOKEN, ROUTER, 10n ** 30n, director] });
+    })();
+    const data = { [id("1")]: "0x12345678" as Hex, [id("2")]: plain, [id("3")]: relay(5n, "0x00000000000000000000000000000000000000c3"), [id("4")]: legacy, [id("5")]: overflow, [id("6")]: relay(10n ** 18n), [id("7")]: relay(10n ** 18n), [id("8")]: relay(10n ** 18n), [id("9")]: relay(10n ** 18n) };
+    const { read } = reader(data);
+    const economics = await read([
+      { messageId: id("1"), destinationToken: token() },
+      { messageId: id("2"), destinationToken: token() },
+      { messageId: id("3"), destinationToken: token() },
+      { messageId: id("4"), destinationToken: token() },
+      { messageId: id("5"), destinationToken: token() },
+      // No token, no decimals, a token without pools, a testnet origin: no price.
+      { messageId: id("6") },
+      { messageId: id("7"), destinationToken: token({ decimals: null }) },
+      { messageId: id("8"), destinationToken: token({ address: "0x00000000000000000000000000000000000000f9", homeToken: null }) },
+      { messageId: id("9"), destinationToken: token({ isBridgedCopy: true, homeChainId: 943, homeToken: FEE_TOKEN }) },
+    ]);
+    expect(economics).toMatchObject({ kind: "known", feesUsd: new Map(), unpriced: 4 });
+    // A deployment without a delivery router takes no fee at all.
+    expect(await reader({ [id("6")]: relay(10n ** 18n) }, { router: null }).read([{ messageId: id("6"), destinationToken: token() }])).toMatchObject({ feesUsd: new Map() });
+  });
+
+  it("knows nothing on a testnet, without a PulseChain endpoint, or without a price of the destination's coin", async () => {
+    expect(await reader({}, { chainId: 943 }).read([])).toEqual({ kind: "unknown", why: "testnet tokens have no price" });
+    expect(await reader({}, { pulse: null }).read([])).toEqual({ kind: "unknown", why: "no PulseChain endpoint to read prices from" });
+    expect(await reader({}, { pulse: pulsechain({ usdc: false }) }).read([])).toEqual({ kind: "unknown", why: "no price for the destination's coin at PulseChain block 77" });
+    await expect(reader({}, { pulse: pulsechain({ failBlock: true }) }).read([])).rejects.toThrow("rpc down");
+  });
+});

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { DEFAULT_POLICY, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
+import { USD, WAD } from "@zk-bridge/shared";
+import type { BatchRule, Economics } from "../src/watch/batch.ts";
 import { MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE, decideProof, expectedFinalityAt, handoffKey, slotAtTime, warmupPlan, type WaitingMessage } from "../src/watch/decide.ts";
 
 // A PulseChain-like clock: 10 s slots, 32 slots per epoch, 8192 slots per period, genesis at 0 for easy numbers.
@@ -74,8 +76,12 @@ describe("decideProof", () => {
   it("a posted proof that still starts at the head covers its messages", () => {
     const pendingProof = { startSlot: HEAD, newSlot: FINALIZED - 3 };
     expect(decide({ pendingProof, messages: [message(FINALIZED - 5)] })).toMatchObject({ due: false, why: "proof-pending" });
-    // A message after the pending proof's head still needs a new proof.
-    expect(decide({ pendingProof, messages: [message(FINALIZED - 1)] })).toMatchObject({ due: true, why: "message" });
+    // A message after the pending proof's head waits for it to land: a second proof from the same head is never made.
+    expect(decide({ pendingProof: { ...pendingProof, where: "board" }, messages: [message(FINALIZED - 1)] })).toMatchObject({
+      due: false,
+      why: "proof-pending",
+      detail: `the proof from slot ${HEAD} to slot ${FINALIZED - 3} (board) waits to land; 1 message after it waits for it to land`,
+    });
     // The pending proof reaches the newest finalized header: nothing newer to prove.
     expect(decide({ pendingProof: { startSlot: HEAD, newSlot: FINALIZED } })).toMatchObject({ due: false, why: "not-newer" });
   });
@@ -286,5 +292,111 @@ describe("warmupPlan", () => {
       horizonSeconds: 600,
     });
     expect(plan).toEqual({ targets: [], live: new Set() });
+  });
+});
+
+describe("decideProof with a batch wait (2026-11-01)", () => {
+  const WAIT: BatchRule = { maxWaitSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
+  const unknown: Economics = { kind: "unknown", why: "testnet tokens have no price" };
+  const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, block: "9" });
+  const hex = (digit: string) => `0x${digit.repeat(64)}`;
+  const ready = message(FINALIZED - 5, "a");
+  const finalAt = expectedFinalityAt(ready.slot, facts(HEAD));
+
+  it("with no wait, or no batch, a message proves at once as before", () => {
+    expect(decide({ messages: [ready], batch: { rule: { ...WAIT, maxWaitSeconds: 0 }, economics: unknown } })).toMatchObject({ due: true, why: "message", messageIds: [hex("a")] });
+    expect(decide({ messages: [ready] })).not.toHaveProperty("trigger");
+  });
+
+  it("a batch that does not pay waits, saying until when and why", () => {
+    const decision = decide({ messages: [ready], batch: { rule: WAIT, economics: priced({}) } });
+    expect(decision).toMatchObject({ due: false, why: "waiting-for-profit", plan: { maxWaitAt: finalAt + 3600, startWhy: "max-wait", ready: 1 } });
+    expect(decision.detail).toBe(
+      `1 message waits, the oldest final since ${new Date(finalAt * 1000).toISOString()}: fees $0.000000 against a cost of $0.025000; no batch pays within the lookahead; proving at ${new Date((finalAt + 3600) * 1000).toISOString()} at the latest (max wait 3600 s)`,
+    );
+    expect(decide({ messages: [ready, message(FINALIZED - 4, "b")], batch: { rule: WAIT, economics: unknown } }).detail).toMatch(/^2 messages wait, .*: the fees cannot be valued \(testnet tokens have no price\);/);
+  });
+
+  it("says when an upcoming message is expected to make the batch pay", () => {
+    const upcoming = message(NOW_SLOT + 5, "b");
+    const decision = decide({ messages: [ready, upcoming], batch: { rule: WAIT, economics: priced({ [hex("b")]: USD }) } });
+    expect(decision).toMatchObject({ due: false, why: "waiting-for-profit", plan: { startWhy: "profit", startAt: expectedFinalityAt(upcoming.slot, facts(HEAD)) } });
+    expect(decision.detail).toContain(`the batch is expected to pay at ${new Date(expectedFinalityAt(upcoming.slot, facts(HEAD)) * 1000).toISOString()}`);
+  });
+
+  it("a batch that pays proves at once, with its facts; one past its fallback proves too", () => {
+    expect(decide({ messages: [ready, message(FINALIZED - 4, "b")], batch: { rule: WAIT, economics: priced({ [hex("a")]: USD }) } })).toMatchObject({
+      due: true,
+      why: "message",
+      trigger: "profit",
+      batch: 2,
+      feesUsd: "1.000000",
+      costUsd: "0.025000",
+      detail: `2 waiting messages are final at slot ${FINALIZED}: their fees cover the cost`,
+    });
+    const late = decide({ messages: [ready], nowSeconds: finalAt + 3600, batch: { rule: WAIT, economics: unknown } });
+    expect(late).toMatchObject({ due: true, why: "message", trigger: "max-wait", batch: 1, waitedSeconds: 3600, feesUsd: null, costUsd: null, detail: `1 waiting message is final at slot ${FINALIZED}: the oldest has been final 3600 s` });
+  });
+
+  it("never delays a handoff or an old head: the waiting messages ride along", () => {
+    const head = 100 * PERIOD + 8000;
+    const nowSlot = 102 * PERIOD - 1000;
+    const finalizedSlot = nowSlot - 64;
+    const handoff = decide({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot, messages: [message(finalizedSlot - 5)], batch: { rule: WAIT, economics: unknown } });
+    expect(handoff).toMatchObject({ due: true, why: "keep-alive", handoff: true, riders: 1 });
+    expect(handoff.detail).toMatch(/1 waiting message rides along$/);
+    const old = 100 * PERIOD + 10;
+    const oldNow = old + 13 * 360;
+    expect(decide({ facts: facts(old), nowSeconds: at(oldNow), finalizedSlot: oldNow - 64, messages: [message(oldNow - 70), message(oldNow - 71, "b")], batch: { rule: WAIT, economics: unknown } })).toMatchObject({
+      due: true,
+      why: "keep-alive",
+      handoff: false,
+      riders: 2,
+    });
+  });
+});
+
+describe("decideProof with a proof we have (2026-11-01)", () => {
+  const since = at(NOW_SLOT) * 1000;
+  const pendingProof = { startSlot: HEAD, newSlot: FINALIZED - 10, where: "stored" as const, since };
+
+  it("a proof that can still land holds back a new one, also for messages after it, until it is stale", () => {
+    expect(decide({ pendingProof, messages: [message(FINALIZED - 5)], pendingStaleSeconds: 600 })).toMatchObject({ due: false, why: "proof-pending" });
+    expect(decide({ pendingProof, messages: [message(FINALIZED - 5), message(FINALIZED - 4, "b")], pendingStaleSeconds: 600 }).detail).toMatch(/2 messages after it wait for it to land$/);
+    const stale = decide({ pendingProof, messages: [message(FINALIZED - 5)], pendingStaleSeconds: 600, nowSeconds: at(NOW_SLOT) + 601 });
+    expect(stale).toMatchObject({ due: true, why: "message", stalePending: pendingProof });
+    // Stale, with nothing after it: nothing is due.
+    expect(decide({ pendingProof, messages: [message(FINALIZED - 20)], pendingStaleSeconds: 600, nowSeconds: at(NOW_SLOT) + 601 })).toMatchObject({ due: false, why: "nothing-due" });
+    // Without a time, a pending proof never goes stale.
+    expect(decide({ pendingProof: { startSlot: HEAD, newSlot: FINALIZED - 10 }, messages: [message(FINALIZED - 5)], pendingStaleSeconds: 600, nowSeconds: at(NOW_SLOT) + 6000 })).toMatchObject({ due: false, why: "proof-pending" });
+  });
+
+  it("a pending handoff holds back a second one; a stale one lets the keep-alive through", () => {
+    const head = 100 * PERIOD + 10;
+    const nowSlot = head + 13 * 360;
+    const held = { startSlot: head, newSlot: head + 100, where: "board" as const, since: at(nowSlot) * 1000 };
+    expect(decide({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64, pendingProof: held, pendingStaleSeconds: 600 })).toMatchObject({ due: false, why: "proof-pending", detail: `the proof from slot ${head} to slot ${head + 100} (board) waits to land` });
+    expect(decide({ facts: facts(head), nowSeconds: at(nowSlot) + 700, finalizedSlot: nowSlot - 64, pendingProof: held, pendingStaleSeconds: 600 })).toMatchObject({ due: true, why: "keep-alive", stalePending: held });
+  });
+});
+
+describe("warmupPlan with a batch wait", () => {
+  const WAIT: BatchRule = { maxWaitSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
+  const hex = (digit: string) => `0x${digit.repeat(64)}`;
+  const base = { facts: facts(HEAD), finalizedSlot: FINALIZED, pendingProof: null, history: { kind: "not-needed" } as const, policy: DEFAULT_POLICY, nowSeconds: at(NOW_SLOT), horizonSeconds: 90 };
+
+  it("asks for one warm worker per batch, when the batch is expected to pay, else at its fallback", () => {
+    const upcoming = message(NOW_SLOT + 5, "b");
+    const messages = [message(FINALIZED - 5, "a"), upcoming];
+    const paying = warmupPlan({ ...base, messages, batch: { rule: WAIT, economics: { kind: "known", feesUsd: new Map([[hex("b"), USD]]), deliveryUsd: 0n, unpriced: 0, block: "1" } } });
+    expect(paying.targets).toEqual([{ at: expectedFinalityAt(upcoming.slot, facts(HEAD)), why: "message", keys: [hex("a"), hex("b")] }]);
+    const unpaid = warmupPlan({ ...base, messages, batch: { rule: WAIT, economics: { kind: "unknown", why: "testnet" } } });
+    expect(unpaid.targets).toEqual([{ at: expectedFinalityAt(FINALIZED - 5, facts(HEAD)) + 3600, why: "message", keys: [hex("a"), hex("b")] }]);
+  });
+
+  it("a batch due now asks for a worker now; no waiting message asks for nothing", () => {
+    const due = warmupPlan({ ...base, messages: [message(FINALIZED - 5, "a")], batch: { rule: WAIT, economics: { kind: "known", feesUsd: new Map([[hex("a"), USD]]), deliveryUsd: 0n, unpriced: 0, block: "1" } } });
+    expect(due.targets).toEqual([{ at: at(NOW_SLOT), why: "message", keys: [hex("a")] }]);
+    expect(warmupPlan({ ...base, messages: [], batch: { rule: WAIT, economics: { kind: "unknown", why: "x" } } }).targets).toEqual([]);
   });
 });

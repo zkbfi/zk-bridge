@@ -110,11 +110,28 @@ export function countQueuedJobs(storage: Storage): number {
   return row.total;
 }
 
-/** Stores a new queued job. */
-export function insertJob(storage: Storage, input: { id: string; direction: ProofDirection; now: number }): Job {
+/** The proof a job is planned to make: from the head `startSlot` to the finalized slot `newSlot`. */
+export type JobTarget = { readonly startSlot: number; readonly newSlot: number };
+
+/** The job of a direction planned for this target, whatever its status, or null. */
+export function findJobByTarget(storage: Storage, direction: ProofDirection, target: JobTarget): Job | null {
+  const row = storage.database
+    .prepare("SELECT * FROM jobs WHERE direction = ? AND planned_start_slot = ? AND planned_new_slot = ?")
+    .get(direction, String(target.startSlot), String(target.newSlot)) as JobRow | undefined;
+  return row === undefined ? null : toJob(row);
+}
+
+/** The identifiers of the other jobs of a direction whose prover reported these slots. */
+export function jobsWithSlots(storage: Storage, direction: ProofDirection, startSlot: string, newSlot: string, except: string): string[] {
+  const rows = storage.database.prepare("SELECT id FROM jobs WHERE direction = ? AND start_slot = ? AND new_slot = ? AND id != ? ORDER BY created_at, rowid").all(direction, startSlot, newSlot, except) as Array<{ id: string }>;
+  return rows.map((row) => row.id);
+}
+
+/** Stores a new queued job, with its planned target when the caller names one. */
+export function insertJob(storage: Storage, input: { id: string; direction: ProofDirection; now: number; target?: JobTarget }): Job {
   storage.database
-    .prepare("INSERT INTO jobs (id, direction, status, created_at, updated_at) VALUES (?, ?, 'queued', ?, ?)")
-    .run(input.id, input.direction, input.now, input.now);
+    .prepare("INSERT INTO jobs (id, direction, status, created_at, updated_at, planned_start_slot, planned_new_slot) VALUES (?, ?, 'queued', ?, ?, ?, ?)")
+    .run(input.id, input.direction, input.now, input.now, input.target === undefined ? null : String(input.target.startSlot), input.target === undefined ? null : String(input.target.newSlot));
   return { id: input.id, direction: input.direction, status: "queued", createdAt: input.now, updatedAt: input.now, startSlot: null, newSlot: null, error: null };
 }
 
