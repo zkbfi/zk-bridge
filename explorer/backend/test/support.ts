@@ -172,3 +172,17 @@ export const postFrom = (remoteAddress: string, overrides: Record<string, unknow
   init: { method: "POST", headers: { "content-type": "application/json" }, body: requestBody(overrides) },
   env: { incoming: { socket: { remoteAddress } } },
 });
+
+/**
+ * The answer of a node to `eth_getTransactionReceipt`: a receipt whose logs carry the given block-level indexes, in order.
+ * By default the logs are numbered 0 to 399, so the position of a log in the receipt equals its block index.
+ */
+export function receiptResponse(logIndexes: readonly number[] = Array.from({ length: 400 }, (_, index) => index)): Response {
+  return Response.json({ jsonrpc: "2.0", id: 1, result: { logs: logIndexes.map((logIndex) => ({ logIndex: `0x${logIndex.toString(16)}` })) } });
+}
+
+/** True for the JSON-RPC post that asks a node for a receipt. */
+export const isNodeRequest = (init: RequestInit | undefined): boolean => init?.method === "POST";
+
+/** The nodes of the two chains of the pair, for a test of the archive. */
+export const ARCHIVE_RPC_URLS = { "1": "https://rpc-1.example.org/", "369": "https://rpc-369.example.org/" };

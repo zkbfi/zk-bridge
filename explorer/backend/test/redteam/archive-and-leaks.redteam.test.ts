@@ -8,7 +8,7 @@ import { runArchiveCycle } from "../../src/archive/module.ts";
 import { endpointSecrets } from "../../src/config.ts";
 import { createLogger } from "../../src/logger.ts";
 import { MODULES } from "../../src/main.ts";
-import { makeBackend, makeConfig } from "../support.ts";
+import { ARCHIVE_RPC_URLS, isNodeRequest, makeBackend, makeConfig, receiptResponse } from "../support.ts";
 
 const id = (digit: string) => `0x${digit.repeat(64)}`;
 
@@ -31,12 +31,13 @@ const evidenceFor = (messageId: string) => ({
 });
 
 function setup(evidence: ProverBinary["evidence"], indexer: { work: Item[]; statuses: Record<string, string>; failWith?: string }) {
-  const base = makeBackend({ config: makeConfig({ indexerUrl: "http://indexer.test/" }), enabled: ["archive"] });
+  const base = makeBackend({ config: makeConfig({ indexerUrl: "http://indexer.test/", rpcUrls: ARCHIVE_RPC_URLS }), enabled: ["archive"] });
   const context = { ...base.context, prover: { ...base.prover.binary, evidence } };
   const app = createApp({ context, modules: MODULES, enabled: ["archive"] });
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: string | URL | Request) => {
+    vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (isNodeRequest(init)) return receiptResponse();
       if (indexer.failWith !== undefined) throw new Error(indexer.failWith);
       const url = new URL(String(input));
       if (url.pathname === "/api/undelivered") return Response.json({ items: indexer.work, nextCursor: null });

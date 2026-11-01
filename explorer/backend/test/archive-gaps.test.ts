@@ -3,7 +3,7 @@ import { ProverCommandError, type ProverBinary } from "@zk-bridge/shared/prover"
 import { MAXIMUM_WORK_LIST_PAGES, createIndexerClient } from "../src/archive/work-list.ts";
 import { RETRY_DELAY_MILLISECONDS } from "../src/archive/build.ts";
 import { health, runArchiveCycle } from "../src/archive/module.ts";
-import { makeBackend, makeConfig } from "./support.ts";
+import { ARCHIVE_RPC_URLS, isNodeRequest, makeBackend, makeConfig, receiptResponse } from "./support.ts";
 
 const id = (digit: string) => `0x${digit.repeat(64)}`;
 const workItem = {
@@ -46,10 +46,10 @@ describe("the chain indexer client", () => {
 
 describe("archive failures", () => {
   const setup = (evidence: ProverBinary["evidence"]) => {
-    const base = makeBackend({ config: makeConfig({ indexerUrl: "http://indexer.test/" }), enabled: ["archive"] });
+    const base = makeBackend({ config: makeConfig({ indexerUrl: "http://indexer.test/", rpcUrls: ARCHIVE_RPC_URLS }), enabled: ["archive"] });
     return { ...base, context: { ...base.context, prover: { ...base.prover.binary, evidence } } };
   };
-  const indexerWith = (respond: () => Response) => vi.fn(async () => respond());
+  const indexerWith = (respond: () => Response) => vi.fn(async (_input: string | URL | Request, init?: RequestInit) => (isNodeRequest(init) ? receiptResponse() : respond()));
   const workPage = () => Response.json({ items: [workItem], nextCursor: null });
 
   it("records a plain error, a thing that is no error, and an error with an exit code by name only", async () => {

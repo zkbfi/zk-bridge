@@ -6,7 +6,7 @@ export interface CallRequest {
   readonly to: Address;
   readonly data: Hex;
   /**
-   * The gas limit of a read-only {@link TransactionPort.call}. Without it the node picks its own, usually the block limit.
+   * The gas limit of a read-only {@link TransactionPort.call}. Without it the port uses {@link SIMULATION_GAS_LIMIT}.
    * A call that must show what a transaction with a given limit does (a batch skips items that lack gas) sets it.
    */
   readonly gas?: bigint;
@@ -158,15 +158,10 @@ export function createTransactionPort(input: TransactionPortInput): TransactionP
       }
     },
     async call(request) {
-      const quote = await feeQuote();
-      const result = await client.call({
-        account: signer.address,
-        to: request.to,
-        data: request.data,
-        ...(request.gas === undefined ? {} : { gas: request.gas }),
-        maxFeePerGas: quote.baseFee + quote.priorityFee,
-        maxPriorityFeePerGas: quote.priorityFee,
-      });
+      // The same terms as a simulation: the signer as `from`, an explicit gas limit and no fee fields. A call that names
+      // no gas runs with the node's own default (some nodes use the largest number they can), and a fee cap times that
+      // gas exceeds any wallet, so the node refuses a read for lack of balance.
+      const result = await client.call({ account: signer.address, to: request.to, data: request.data, gas: request.gas ?? SIMULATION_GAS_LIMIT });
       return result.data ?? "0x";
     },
     async send(request) {

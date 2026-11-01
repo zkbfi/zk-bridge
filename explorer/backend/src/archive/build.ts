@@ -2,6 +2,7 @@ import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, type ProofDirection } from "@zk-bri
 import type { ProverBinary } from "@zk-bridge/shared/prover";
 import type { Logger } from "../logger.ts";
 import type { Storage } from "../storage.ts";
+import type { ReceiptIndexReader } from "./receipt.ts";
 import { FINISHED_STATUSES, type IndexerClient, type WorkItem } from "./work-list.ts";
 
 /** How long the archive waits before it retries a failed build on the same head, in milliseconds. */
@@ -59,6 +60,8 @@ export interface ArchiveServiceInput {
   readonly storage: Storage;
   readonly prover: ProverBinary;
   readonly indexer: IndexerClient;
+  /** Turns the block-level log index of the work list into the receipt index that the prover takes. */
+  readonly receipts: ReceiptIndexReader;
   readonly pairName: string;
   readonly now: () => number;
   readonly logger: Logger;
@@ -75,6 +78,12 @@ export function directionOf(pairName: string, item: Pick<WorkItem, "sourceChainI
   if (item.sourceChainId === first.chainId && item.destinationChainId === second.chainId) return PROOF_DIRECTIONS[0];
   if (item.sourceChainId === second.chainId && item.destinationChainId === first.chainId) return PROOF_DIRECTIONS[1];
   return null;
+}
+
+/** The source chain of a direction of a known pair (the inverse of {@link directionOf}, which only lets known pairs into the table). */
+export function sourceChainIdOf(pairName: string, direction: ProofDirection): number {
+  const definition = PAIR_DEFINITIONS.find((candidate) => candidate.name === pairName)!;
+  return direction === PROOF_DIRECTIONS[0] ? definition.sides[0].chainId : definition.sides[1].chainId;
 }
 
 /** Builds the archive over the backend database. It creates its own table. */
@@ -141,7 +150,10 @@ export function createArchiveService(input: ArchiveServiceInput): ArchiveService
 
   async function build(entry: EntryRow): Promise<void> {
     try {
-      const evidence = await input.prover.evidence({ direction: entry.direction, transactionHash: entry.transaction_hash, logIndex: entry.log_index });
+      // The table keeps the index of the log inside its block, as the indexer reports it. The prover counts inside the receipt.
+      const chainId = sourceChainIdOf(input.pairName, entry.direction);
+      const logIndex = await input.receipts.receiptIndexOf({ chainId, transactionHash: entry.transaction_hash, blockLogIndex: entry.log_index });
+      const evidence = await input.prover.evidence({ direction: entry.direction, transactionHash: entry.transaction_hash, logIndex });
       if (evidence.message.messageId.toLowerCase() !== entry.message_id) {
         throw new Error("the prover built evidence for a different message");
       }

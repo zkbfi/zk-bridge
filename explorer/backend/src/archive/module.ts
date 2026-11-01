@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import type { BackendModuleContext } from "../module.ts";
 import type { ModuleHealth } from "../health.ts";
 import { createArchiveService, type ArchiveService } from "./build.ts";
+import { createReceiptIndexReader } from "./receipt.ts";
 import { createIndexerClient } from "./work-list.ts";
 
 /** How often the archive reads the work list, in milliseconds. */
@@ -22,6 +23,7 @@ function serviceFor(context: BackendModuleContext): ArchiveService | null {
           storage: context.storage,
           prover: context.prover,
           indexer: createIndexerClient({ baseUrl, fetchFunction: () => globalThis.fetch }),
+          receipts: createReceiptIndexReader({ rpcUrls: context.config.rpcUrls, fetchFunction: () => globalThis.fetch }),
           pairName: context.config.pair,
           now: context.now,
           logger: context.logger,
