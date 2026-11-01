@@ -67,7 +67,7 @@ The routes of the worker:
 | Route | Answer |
 |---|---|
 | `GET /ping` | 204 while the SP1 setup runs. 200 with `{"status":"ready"}` afterwards. |
-| `POST /prove` | 200 with `{"proof":"0x...","publicValues":"0x..."}`. |
+| `POST /prove` | 200 with `{"proof":"0x...","publicValues":"0x...","timings":{...}}`. `timings` is optional (see "Timing logs"). |
 
 The body of `POST /prove`:
 
@@ -240,6 +240,60 @@ The environment variables `ZK_BRIDGE_PROVER_PROVER_REMOTE_URL` and `ZK_BRIDGE_PR
 With a route, the `prove` command reads `programVKey()` from the destination light client and stops when `program_vkey` differs from it. In that case you can leave `program_vkey` out. A run that starts from an explicit head needs the key in the file or in `--program-vkey`. A fork observation proof uses the key that the fork registry stores. The proof check binds each key, so the remote backend needs no second copy.
 
 The timeout of 900 seconds covers the wait for a worker (2 minutes), the cold start and one proof. The RunPod page recommends at least 3 retries with delays of 5 to 10 seconds for cold starts. The defaults match that. Answers of a worker that is not ready yet do not use up `remote_attempts`. `remote_cold_start_wait_seconds` bounds them instead (next section).
+
+## Timing logs
+
+The producer measures each step of a proof run, so that "how long does one proof take" and "would a faster GPU help" have an answer from real runs. Every line goes to standard error in the usual style (`ts=... level=info event=... key=value`). No line holds a URL, a key or a token.
+
+One `prove_step` line per step, each with `elapsed_ms`:
+
+| `step` | Written by | What it covers |
+|---|---|---|
+| `build` | producer | The beacon reads and the assembly of the update (`plan_update`). |
+| `native` | producer | The native run of the program on the update and the checks that it starts at the stored head. |
+| `prover_native` | remote backend | The native run before the request (the backend runs the program again on the guest input). |
+| `wait_worker` | remote backend | From the first request until the start of the request that the worker accepted: every cold-start wait, every pause and every failed attempt. Also carries `not_ready_count` (answers that said no worker was ready) and `retry_count` (ordinary failures that were sent again). |
+| `remote` | remote backend | The accepted request, from the first byte sent to the last byte read. |
+| `worker` | remote backend | What the worker reported (the `worker_*` keys below), or `worker_timings=none`. |
+| `verify` | remote backend | The local Groth16 verification of the returned proof. |
+| `check` | producer | The producer's own second check of the answer (shape and Groth16 verification). |
+
+At the end of a run that produced a proof, one `prove_timing` line carries all of them:
+
+```
+ts=1793500000 level=info event=prove_timing build_ms=1200 native_ms=610 wait_worker_ms=60060 not_ready_count=2 retry_count=0 remote_ms=43000 verify_ms=10 prove_ms=103700 total_ms=105100 worker_timings=reported worker_queue_ms=3 worker_native_ms=400 worker_prove_ms=41000 worker_verify_ms=20 worker_total_ms=41500 remote_overhead_ms=1500 worker_gpu="NVIDIA GeForce RTX 4090" worker_cpu_model="AMD EPYC 9354 32-Core Processor" worker_cpu_count=32
+```
+
+| Key | Meaning |
+|---|---|
+| `build_ms` | The `build` step. |
+| `native_ms` | `native` plus `prover_native`. |
+| `wait_worker_ms`, `not_ready_count`, `retry_count`, `remote_ms` | The remote steps above. Only for the remote backend. |
+| `verify_ms` | `verify` plus `check`. |
+| `prove_ms` | The whole call of the backend (`native` of the backend, the wait, the request and the verification). For the local SP1 backend it is the proof. |
+| `total_ms` | The whole run, from the program key check to the checked proof. It does not include the handoff. |
+| `worker_timings` | `reported` or `none`. `none` means the worker sent no `timings` (an older image) or sent a value that does not fit. |
+| `worker_queue_ms` | How long this request stood behind another proof of the same worker. This is waiting for the GPU, not proving. |
+| `worker_native_ms` | The native run on the worker. |
+| `worker_prove_ms` | The SP1 Groth16 proof: core proof, compression and the Groth16 wrap together. The SP1 client does one call and does not report the three apart. |
+| `worker_verify_ms` | The worker's own verification of the new proof. |
+| `worker_total_ms` | The whole request on the worker. |
+| `remote_overhead_ms` | `remote_ms` minus `worker_total_ms`: network, proxy, and a cold start that RunPod hid inside the request. |
+| `worker_gpu`, `worker_cpu_model`, `worker_cpu_count` | The hardware the proof ran on (`nvidia-smi` and `/proc/cpuinfo`). Left out when the worker could not tell. |
+
+How to read them:
+
+- Time to get a worker: `wait_worker_ms` plus `remote_overhead_ms`. Cold starts and the RunPod wait are in here, and so is `worker_queue_ms`.
+- Time to prove: `worker_prove_ms`. This is the number to compare between GPUs. A faster GPU only shortens this value; the rest does not change with the GPU.
+- Without worker timings, `remote_ms` is the upper bound of the proof time. It still includes a cold start that the platform held inside the request.
+
+### The `timings` object of the answer
+
+`POST /prove` may add `"timings"` to the 200 answer. All keys are camelCase and all numbers are whole milliseconds: `queueMs`, `nativeMs`, `proveMs`, `verifyMs`, `totalMs`, and the optional texts and number `gpu`, `cpuModel`, `cpuCount`. The field is optional on both ends. A worker without it still works, and the producer logs `worker_timings=none`. A value that does not fit is ignored, never an error. The producer cuts every hardware name to 80 characters and removes control characters and URLs.
+
+Order of deployment: the producer must be updated before the image. An older producer rejects an answer with an unknown field. The worker part takes effect only after the GPU image is rebuilt and the endpoint points at the new image; until then the logs show `worker_timings=none`.
+
+The backend logs `job_proved` when a job succeeds. It carries the parsed `prove_timing` fields (`route`, `newHeadSlot`, `timingReported` and every key above), so the numbers are in the backend log without the prover's standard error, which the backend keeps only when a run fails.
 
 ## Cold start
 

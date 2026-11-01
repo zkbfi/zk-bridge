@@ -24,8 +24,12 @@ use crate::prover::{
     ProofStatement, Prover,
 };
 use crate::rpc::{build_agent, USER_AGENT};
+use crate::timing::{
+    millis, prover_step_lines, worker_fields, ProverTimings, RemoteTimings, WorkerTimings,
+};
 use alloy_primitives::{hex, B256};
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// The largest answer that the client reads. A proof is 356 bytes, so this only bounds a hostile worker.
@@ -57,6 +61,11 @@ pub struct ProveResponseBody {
     pub proof: String,
     /// The public values that the proof commits to, as `0x` hex.
     pub public_values: String,
+    /// What the worker measured (`crate::timing::WorkerTimings`). Optional: an older worker leaves it out, and the
+    /// producer then logs that the worker sent no timings. It is a plain JSON value here so that a field the producer
+    /// does not understand never fails a proof.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timings: Option<serde_json::Value>,
 }
 
 /// How the remote backend reaches its worker.
@@ -108,6 +117,8 @@ pub struct RemoteProver {
     settings: RemoteSettings,
     agent: ureq::Agent,
     logger: Logger,
+    /// The timings of the last `prove`, for `Prover::take_timings`.
+    last_timings: Mutex<Option<ProverTimings>>,
 }
 
 impl RemoteProver {
@@ -118,6 +129,7 @@ impl RemoteProver {
             settings,
             agent,
             logger,
+            last_timings: Mutex::new(None),
         }
     }
 
@@ -168,12 +180,35 @@ impl RemoteProver {
     /// `Error::Prover` when the worker refuses the job, stays not ready past `cold_start_wait`, or the attempts run
     /// out. `Error::Malformed` when a 200 answer is not a proof.
     pub fn request_proof(&self, request_body: &str) -> Result<ProveResponseBody> {
+        self.request_proof_timed(request_body)
+            .map(|(answer, _)| answer)
+    }
+
+    /// Like [`Self::request_proof`], and tells how long the job waited for a worker and how long the accepted request
+    /// took. The worker's own timings, when its answer carries them, are in the result too.
+    ///
+    /// # Errors
+    /// The errors of [`Self::request_proof`].
+    pub fn request_proof_timed(
+        &self,
+        request_body: &str,
+    ) -> Result<(ProveResponseBody, RemoteTimings)> {
         let started = Instant::now();
         let mut failures = 0;
         let mut not_ready = 0;
         loop {
+            let attempt_started = Instant::now();
             match self.send_once(request_body) {
-                Attempt::Done(answer) => return Ok(answer),
+                Attempt::Done(answer) => {
+                    let timings = RemoteTimings {
+                        wait_worker_ms: millis(attempt_started.duration_since(started)),
+                        not_ready_count: not_ready,
+                        retry_count: failures,
+                        remote_ms: millis(attempt_started.elapsed()),
+                        worker: answer.timings.as_ref().and_then(WorkerTimings::from_value),
+                    };
+                    return Ok((answer, timings));
+                }
                 Attempt::Refuse(error) => return Err(error),
                 Attempt::NotReady(reason) => {
                     not_ready += 1;
@@ -370,7 +405,9 @@ impl Prover for RemoteProver {
 
     fn prove(&self, program_vkey: B256, statement: &ProofStatement) -> Result<Proof> {
         // The native run comes first: it refuses a bad statement before anything is sent.
+        let native_started = Instant::now();
         let job = native_job(statement)?;
+        let native_ms = millis(native_started.elapsed());
         let request = ProveRequestBody {
             program_key: format!("{program_vkey:#x}"),
             statement_kind: job.kind,
@@ -378,8 +415,43 @@ impl Prover for RemoteProver {
         };
         let body = serde_json::to_string(&request)
             .map_err(|error| Error::Prover(format!("cannot encode the request: {error}")))?;
-        let answer = self.request_proof(&body)?;
-        accept_answer(program_vkey, &job, &answer)
+        let (answer, remote) = self.request_proof_timed(&body)?;
+        let verify_started = Instant::now();
+        let proof = accept_answer(program_vkey, &job, &answer)?;
+        let timings = ProverTimings {
+            native_ms,
+            verify_ms: millis(verify_started.elapsed()),
+            remote: Some(remote),
+        };
+        self.log_steps(&timings);
+        *self
+            .last_timings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(timings);
+        Ok(proof)
+    }
+
+    fn take_timings(&self) -> Option<ProverTimings> {
+        self.last_timings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+}
+
+impl RemoteProver {
+    /// Writes one `prove_step` line per step of the backend, and one for the worker's own numbers (or the note that the
+    /// worker sent none).
+    pub fn log_steps(&self, timings: &ProverTimings) {
+        for (step, mut fields) in prover_step_lines(timings) {
+            fields.insert(0, ("step", step.to_string()));
+            self.logger.info("prove_step", &fields);
+        }
+        if let Some(remote) = &timings.remote {
+            let mut fields = vec![("step", "worker".to_string())];
+            fields.extend(worker_fields(remote));
+            self.logger.info("prove_step", &fields);
+        }
     }
 }
 

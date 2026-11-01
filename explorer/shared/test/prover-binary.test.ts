@@ -98,6 +98,60 @@ describe("prove", () => {
     expect(await readdir(join(directory, "nested"))).toEqual([]);
   });
 
+  it("logs job_proved with the step timings that the prover wrote on standard error", async () => {
+    const stderr = [
+      "ts=1 level=info event=prove_started route=ethereum_to_pulsechain backend=remote",
+      "ts=2 level=info event=prove_step step=build elapsed_ms=1200",
+      'ts=9 level=info event=prove_timing build_ms=1200 native_ms=610 wait_worker_ms=60000 not_ready_count=2 retry_count=0 remote_ms=43000 verify_ms=10 prove_ms=100000 total_ms=101700 worker_timings=reported worker_prove_ms=41000 worker_total_ms=42000 remote_overhead_ms=1000 worker_gpu="NVIDIA L40S" worker_cpu_count=32',
+      "ts=10 level=info event=proof_handed_off new_head_slot=164",
+    ].join("\n");
+    const { binary, events } = await setup({ code: 0, stdout: JSON.stringify(proofPackage), stderr });
+    await binary.prove({ direction: "first-to-second" });
+    const logged = events().find((event) => event.event === "job_proved");
+    expect(logged).toEqual({
+      level: "info",
+      event: "job_proved",
+      route: "ethereum_to_pulsechain",
+      newHeadSlot: 164,
+      timingReported: true,
+      build_ms: 1200,
+      native_ms: 610,
+      wait_worker_ms: 60000,
+      not_ready_count: 2,
+      retry_count: 0,
+      remote_ms: 43000,
+      verify_ms: 10,
+      prove_ms: 100000,
+      total_ms: 101700,
+      worker_timings: "reported",
+      worker_prove_ms: 41000,
+      worker_total_ms: 42000,
+      remote_overhead_ms: 1000,
+      worker_gpu: "NVIDIA L40S",
+      worker_cpu_count: 32,
+    });
+  });
+
+  it("logs job_proved without timings when the prover wrote none", async () => {
+    const { binary, events } = await setup({ code: 0, stdout: JSON.stringify(proofPackage), stderr: "ts=1 level=info event=prove_started" });
+    await binary.prove({ direction: "first-to-second" });
+    expect(events().find((event) => event.event === "job_proved")).toEqual({
+      level: "info",
+      event: "job_proved",
+      route: "ethereum_to_pulsechain",
+      newHeadSlot: 164,
+      timingReported: false,
+    });
+  });
+
+  it("logs no job_proved when the run fails or has nothing to prove", async () => {
+    const failed = await setup({ code: 1, stderr: "ts=1 level=error event=boom" });
+    await expect(failed.binary.prove({ direction: "first-to-second" })).rejects.toBeInstanceOf(ProverCommandError);
+    const upToDate = await setup({ code: EXIT_UP_TO_DATE });
+    await upToDate.binary.prove({ direction: "first-to-second" });
+    expect([...failed.events(), ...upToDate.events()].some((event) => event.event === "job_proved")).toBe(false);
+  });
+
   it("names the state cache directory in the file when the caller keeps one", async () => {
     const { binary, seen } = await setup({ code: 0, stdout: JSON.stringify(proofPackage) }, { stateCacheDirectory: "/var/lib/bot/beacon-states" });
     await binary.prove({ direction: "first-to-second" });

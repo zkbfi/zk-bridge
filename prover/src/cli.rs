@@ -26,7 +26,7 @@ use crate::handoff::{Handoff, PackageDestination};
 use crate::light_client::ChainKind;
 use crate::logging::Logger;
 use crate::opening::{build_opening_proof, OpeningRequest};
-use crate::produce::{produce, ProduceRequest, Production, EXPLICIT_HEAD_ROUTE};
+use crate::produce::{produce_logged, ProduceRequest, Production, EXPLICIT_HEAD_ROUTE};
 use crate::prover::{require_groth16_shape, OracleProver, Prover};
 use crate::remote::verify_groth16;
 use crate::rpc::{HttpClient, HttpRpc};
@@ -549,7 +549,7 @@ fn run_prove(
         &plan.state_urls,
         plan.state_cache.as_ref(),
     );
-    match produce(&source, prover.as_ref(), &request)? {
+    match produce_logged(&source, prover.as_ref(), &request, &logger)? {
         Production::UpToDate { head_slot } => {
             logger.info("up_to_date", &[("head_slot", head_slot.to_string())]);
             Ok(EXIT_UP_TO_DATE)

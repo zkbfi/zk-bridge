@@ -13,6 +13,7 @@ import {
   type EvidencePackage,
   type ProofPackage,
 } from "./packages.js";
+import { parseProveTiming } from "./prove-timing.js";
 import { describeRoute, renderProverConfig, type BackendSection, type HandoffSection } from "./prover-config.js";
 
 /** The exit code of `prove` when the starting head already is the newest final header. */
@@ -152,6 +153,15 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary {
         if (output.code !== 0) throw new ProverCommandError("prove", output.code, tailOf(output.stderr));
         const parsed = proofPackageSchema.safeParse(parseSingleJsonLine(output.stdout, "prove"));
         if (!parsed.success) throw new ProverOutputError(`prove printed an unexpected package: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+        // The prover logs its step timings on standard error. A success logs them too, so that the duration of a proof and
+        // the share of the wait for a GPU worker can be read from real jobs. An older prover writes none.
+        const timing = parseProveTiming(output.stderr);
+        input.logger.info("job_proved", {
+          route,
+          newHeadSlot: parsed.data.newHeadSlot,
+          timingReported: timing !== null,
+          ...timing,
+        });
         return { kind: "proof", proofPackage: parsed.data } as const;
       });
     },
