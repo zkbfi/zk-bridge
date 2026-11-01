@@ -17,6 +17,7 @@ export * from "./fee-rules.js";
 export * from "./fixed-point.js";
 export * from "./transaction-cost.js";
 export * from "./multicall3.js";
+export * from "./gate-evidence.js";
 export * from "./tip-copy.js";
 export * from "./message-merge.js";
 export * from "./send-decoding.js";

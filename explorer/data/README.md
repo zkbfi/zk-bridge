@@ -93,6 +93,48 @@ Endpoints and fallback (`connection-settings`, `connection`, `fallback`, `connec
 | `parseConnectionUrl`, `normalizeEndpoint`, `maskUrl`, `redactConnectionText`, `redactSecrets`, `redactError` | Validate, mask and redact URLs. |
 | `testRpcChainId`, `testIndexerUrl`, `testHealthUrl`, `testJsonRpcUrl`, `testBeaconGenesis`, `fetchClient` | The "test this endpoint" checks of Settings. |
 
+Gate evidence (`gate-evidence`): the confirmation that a send needs first on a chain whose gate enforces (Sepolia today,
+Ethereum later). The bots, the terminal and the web app use the same functions:
+
+| Export | What it does |
+| --- | --- |
+| `readGateStatus({ client, gate })` | The gate at the latest block: `mode`, `enforcing`, `sealed`, `confirmedEpoch`, the clock, the block, the `epoch` of the next block and `needsConfirmation`. |
+| `createBeaconProofSource({ url, fetch? })` | The beacon node: a header by root, and a compact multiproof of a state (the Lodestar endpoint `/eth/v0/beacon/proof/state/{id}`; the public Lodestar nodes serve it). The proofs are checked, so the node need not be trusted. No message repeats the URL. |
+| `buildGateEvidence({ client, gate, beacon, status? })` | `{ kind: "ready", to, data, epoch, forkVersion, shape, timestamp, beaconRoot, header, validUntil, evidence, encoded }`, checked with `checkConfirmEvidence` against the root that the beacon roots contract holds on chain, or `{ kind: "wait", retryAfterSeconds }` when no header of the epoch is on chain yet. |
+| `ensureGateConfirmed({ client, gate, beacon, account })` | What a sender does before a send: `not-needed` (`not-enforcing` or `confirmed`), `sealed`, `wait`, or `confirm` with the `call` to send first and the `gas` of its simulation from `account`. A confirmation that would revert throws `GateEvidenceError` with the code `simulation-reverted`. |
+| `GateEvidenceError` (`code`), `describeRevert`, `GATE_MODES`, `SHAPE_REQUEST_ORDER` | The error, a revert for a log without the URL, the modes, the order in which shapes are asked for. |
+
+How the evidence is bound: the latest block names its `parentBeaconBlockRoot`, and EIP-4788 stores that root under the
+block's time. The evidence takes that time, the header of that root, and two branches under its state root
+(`fork.current_version` and `genesis_validators_root`). The gate accepts it only while the header lies in the epoch of the
+block that carries `confirm`, so it is good until `validUntil` (the start of the next epoch, at most 6.4 minutes on
+Ethereum). In the first slot of an epoch the newest header is from the epoch before: `wait` one slot.
+
+Send `call` as its own transaction, then the send. There is no Multicall3 bundle: inside a multicall, `msg.sender` of the
+send is the multicall, and the token mediator pulls the tokens from `msg.sender`. A wallet that batches and keeps the sender
+(EIP-5792 `wallet_sendCalls` on an account with code) can take `[call, send]` in one batch.
+
+**For the web app's send flow** (not built yet; `explorer/web` is unchanged). Before a send from a chain whose gate
+enforces, call `ensureGateConfirmed` with the wallet's public client, the gate of the pair side
+(`pair.sides[i].contracts.gate`), a beacon source for that chain and the connected account. On `confirm`, ask the wallet
+to send `call` first (one more signature, about 79,000 gas on Sepolia), wait for its receipt, then send. On `wait`, show
+"waiting for the next beacon block" and call again after `retryAfterSeconds`. On `not-needed`, send at once. On `sealed`,
+stop: the route is closed for good. If the send's own simulation still reverts with `ForkNotConfirmed`, the epoch turned
+between the two transactions: call `ensureGateConfirmed` again.
+
+```ts
+import { createBeaconProofSource, ensureGateConfirmed } from "@zkb/data";
+
+const step = await ensureGateConfirmed({
+  client, // a viem PublicClient of the chain of the gate
+  gate: pair.sides[0].contracts.gate,
+  beacon: createBeaconProofSource({ url: "https://lodestar-sepolia.chainsafe.io" }),
+  account,
+});
+if (step.kind === "confirm") await walletClient.sendTransaction({ account, ...step.call, gas: (step.gas * 13n) / 10n });
+// then the send; step.kind "wait": try again after step.retryAfterSeconds
+```
+
 ### Examples
 
 These run against the built `dist/` with fakes, and use no network.
