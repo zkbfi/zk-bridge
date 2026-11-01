@@ -2,7 +2,7 @@
  * Turns what the user typed in an action form into the steps of a transaction flow. Pure: it reads the form values
  * and the live snapshots, and throws {@link PlanInputError} with a message that tells the user what to fix.
  */
-import { readDeliveryTerms, routerCallbackGas, type DeliveryCall, type DeliveryCostReport } from '@zk-bridge/shared'
+import { MAX_CALLBACK_GAS, readDeliveryTerms, routerCallbackGas, type DeliveryCall, type DeliveryCostReport } from '@zk-bridge/shared'
 import type { Address, Hex } from 'viem'
 import { parseUnits, AmountParseError } from '../format/amounts'
 import type { ChainSnapshot, ChainSnapshotResult, RouterAddressesReading, TokenPosition } from '../chain/live-reads'
@@ -234,22 +234,33 @@ export function deliveryCallOf(values: Readonly<Record<string, string>>): Delive
 }
 
 /**
- * The callback gas of a relay with a call, as the mediator takes it. A number typed in the form wins. Without one, a
- * receiver that is a delivery router of the deployment gets the gas that the router needs for the terms in the data:
- * its own work, plus the call gas when the data asks for a call. Any other receiver needs a number, because nobody can
- * say how much gas its `onTokenBridged` needs.
+ * The callback gas of a relay with a call, as the mediator takes it. A receiver that is a delivery router of the
+ * deployment always gets at least what the router needs for the terms in the data: its own work, plus the call gas when
+ * the data asks for a call. A blank field takes that number, and a typed number below it is refused, because a callback
+ * with too little gas leaves the tokens in the router. Any other receiver needs a typed number, because nobody can say
+ * how much gas its `onTokenBridged` needs. No number may pass {@link MAX_CALLBACK_GAS}.
  */
 function callbackGasOf(values: Readonly<Record<string, string>>, input: { receiver: Address; data: Hex; pair: PairConfig }): bigint {
   const text = (values.callbackGas ?? '').trim()
-  if (text !== '') {
-    if (!/^\d+$/.test(text) || BigInt(text) === 0n) throw new PlanInputError('The callback gas must be a whole number above zero.')
-    return BigInt(text)
-  }
+  const typed = text === '' ? null : typedCallbackGas(text)
   if (isDeploymentDeliveryRouter(input.pair, input.receiver)) {
     const terms = readDeliveryTerms(input.data)
-    return routerCallbackGas(terms.kind === 'director' && terms.call !== null ? { callGas: terms.director.callGas } : {})
+    const needed = routerCallbackGas(terms.kind === 'director' && terms.call !== null ? { callGas: terms.director.callGas } : {})
+    if (typed === null) return needed
+    if (typed < needed) {
+      throw new PlanInputError(`The callback gas is too low for the router. It needs at least ${needed}: the router's own work and the gas of the call.`)
+    }
+    return typed
   }
+  if (typed !== null) return typed
   throw new PlanInputError('Enter the callback gas: the exact gas that onTokenBridged gets on the other chain. A relay with a call has no default.')
+}
+
+function typedCallbackGas(text: string): bigint {
+  if (!/^\d+$/.test(text) || BigInt(text) === 0n) throw new PlanInputError('The callback gas must be a whole number above zero.')
+  const gas = BigInt(text)
+  if (gas > MAX_CALLBACK_GAS) throw new PlanInputError(`The callback gas is above ${MAX_CALLBACK_GAS}, the most that a delivery can carry.`)
+  return gas
 }
 
 /** Builds the single step of the send-a-message form. */

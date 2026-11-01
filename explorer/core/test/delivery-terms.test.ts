@@ -21,6 +21,8 @@ import {
   MULTIPLIER_OF_TOTAL,
   ROUTER_CALLBACK_GAS_BASE,
   routerCallbackGas,
+  MAX_CALL_GAS,
+  MAX_CALLBACK_GAS,
   worstCaseFee,
   FEE_DIRECTOR_BYTES,
   NATIVE_GAS_OVERHEAD,
@@ -250,6 +252,21 @@ describe("against vectors printed by the compiled DeliveryRouter", () => {
   });
 });
 
+describe("the gas caps", () => {
+  it("cap the call gas below the block gas limit of the destination chains, and the callback gas at the router's need for it", () => {
+    expect(MAX_CALL_GAS).toBe(10_000_000n);
+    expect(MAX_CALLBACK_GAS).toBe(routerCallbackGas({ callGas: MAX_CALL_GAS }));
+    expect(MAX_CALLBACK_GAS).toBeLessThan(16_777_216n);
+  });
+  it("routerCallbackGas refuses a call gas above the cap", () => {
+    expect(routerCallbackGas({ callGas: MAX_CALL_GAS })).toBe(MAX_CALLBACK_GAS);
+    expect(() => routerCallbackGas({ callGas: MAX_CALL_GAS + 1n })).toThrow(new RangeError("The call gas is above 10000000, the most that a delivery can carry."));
+  });
+  it("encodeFeeDirector refuses a call gas above the cap", () => {
+    expect(() => encodeFeeDirector(director(person, 8n, MAX_CALL_GAS + 1n), context, { target: "0xabababababababababababababababababababab", data: "0x" })).toThrow(/call gas is above 10000000/);
+  });
+});
+
 describe("routerCallbackGas", () => {
   it("is the base for a delivery with no call", () => {
     expect(ROUTER_CALLBACK_GAS_BASE).toBe(300_000n);
@@ -418,6 +435,11 @@ describe("assertValidFeeTerms refuses what the router would send to its reward a
   });
   it("a call with no call gas", () => {
     refuses(callDirectorData(person, 0n, "ab".repeat(20)), /call has no gas/);
+  });
+  it("a call gas above MAX_CALL_GAS, with or without a call", () => {
+    refuses(callDirectorData(person, MAX_CALL_GAS + 1n, "ab".repeat(20)), /call gas is above 10000000/);
+    refuses(callDirectorData(person, MAX_CALL_GAS + 1n, ""), /call gas is above 10000000/);
+    expect(() => assertValidFeeTerms(input(callDirectorData(person, MAX_CALL_GAS, "ab".repeat(20))))).not.toThrow();
   });
   it("a call to the zero address, the router, a mediator, a bridge or a delivery router", () => {
     const calling = (target: string) => callDirectorData(person, 50_000n, `${target.slice(2).toLowerCase()}a9059cbb`);

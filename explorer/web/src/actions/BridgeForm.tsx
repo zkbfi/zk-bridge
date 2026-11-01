@@ -1,7 +1,7 @@
 import { Button, Flex, Stack, Text } from "@chakra-ui/react";
 import { useMemo } from "react";
 import type { Address } from "viem";
-import { routerCallbackGas } from "@zk-bridge/shared";
+import { MAX_CALL_GAS, routerCallbackGas } from "@zk-bridge/shared";
 import type { BridgeContext } from "@terminal/app/actions";
 import type { ChainSnapshot } from "@terminal/chain/live-reads";
 import type { ChainSide, PairConfig, TokenInfo } from "@terminal/model/types";
@@ -136,7 +136,7 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, query, onQ
   const showCall = values.mode !== "plain" && !tipOn && variant === "tokens";
   // A call after the delivery needs the call gas; the callback gas that the relay passes is shown, read only.
   const callWanted = hasCallText(values);
-  const callbackGasShown = /^\d+$/.test(values.callGas.trim()) && BigInt(values.callGas.trim()) > 0n ? routerCallbackGas({ callGas: BigInt(values.callGas.trim()) }).toString() : null;
+  const callbackGasShown = /^\d+$/.test(values.callGas.trim()) && BigInt(values.callGas.trim()) > 0n && BigInt(values.callGas.trim()) <= MAX_CALL_GAS ? routerCallbackGas({ callGas: BigInt(values.callGas.trim()) }).toString() : null;
 
   return (
     <form

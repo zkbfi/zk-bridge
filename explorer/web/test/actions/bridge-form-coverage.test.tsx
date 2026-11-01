@@ -7,7 +7,7 @@ import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fi
 import type { PairConfig, TokenInfo } from "@terminal/model/types";
 import { type BridgeFormProps } from "../../src/actions/BridgeForm";
 import type { WebStep } from "../../src/tx/bridge-steps";
-import { routerCallbackGas } from "@zk-bridge/shared";
+import { MAX_CALL_GAS, routerCallbackGas } from "@zk-bridge/shared";
 import { buildFixtureContext } from "../helpers";
 import { renderPage, type RenderPageOptions } from "../render";
 import { connectedWallet, walletWrapper } from "../app/support";
@@ -305,6 +305,15 @@ describe("the call fields", () => {
     await userEvent.type(screen.getByLabelText("Call target"), `0x${"77".repeat(20)}`);
     await userEvent.type(screen.getByLabelText("Call gas"), "200000");
     expect(screen.getByTestId("callback-gas")).toHaveTextContent(`Callback gas: ${routerCallbackGas({ callGas: 200_000n })} (the call gas plus the router's own work; the page sets it for you)`);
+  });
+
+  it("shows no callback gas and says why when the call gas is above what a delivery can carry", async () => {
+    await renderForm();
+    await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
+    await userEvent.type(screen.getByLabelText("Call target"), `0x${"77".repeat(20)}`);
+    await userEvent.type(screen.getByLabelText("Call gas"), String(MAX_CALL_GAS + 1n));
+    expect(screen.queryByTestId("callback-gas")).toBeNull();
+    expect((await screen.findAllByText(new RegExp(`The call gas is above ${MAX_CALL_GAS}, the most that a delivery can carry`))).length).toBeGreaterThan(0);
   });
 
   it("asks for the call gas when a call has none", async () => {

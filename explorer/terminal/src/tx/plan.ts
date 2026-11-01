@@ -3,7 +3,7 @@
  * {@link PlannedTransaction}. Nothing here reads a chain, signs, or sends, and nothing imports the terminal library,
  * so the later web interface can reuse this file as it is.
  */
-import { decodeDeliveryCall, decodeFeeDirector, routerCallbackGas, type DeliveryCall, type FeeDataSource, type FeeDirector } from '@zk-bridge/shared'
+import { MAX_CALLBACK_GAS, decodeDeliveryCall, decodeFeeDirector, routerCallbackGas, type DeliveryCall, type FeeDataSource, type FeeDirector } from '@zk-bridge/shared'
 import { encodeFunctionData, erc20Abi, getAddress, isAddress, isHex, type Address, type Hex } from 'viem'
 import { formatUnits } from '../format/amounts'
 import type { FeeDescriptionWithExpected } from '../app/worst-case-fee'
@@ -178,9 +178,13 @@ export function planRelay(input: RelayInput): PlannedTransaction {
   }
 }
 
-/** A relay with a call needs a callback gas above zero: the mediator refuses zero and has no default. */
+/**
+ * A relay with a call needs a callback gas above zero (the mediator refuses zero and has no default) and no more than
+ * {@link MAX_CALLBACK_GAS}: no delivery could give more, so the message would wait for good.
+ */
 function requireCallbackGas(callbackGas: bigint | undefined): bigint {
   if (callbackGas === undefined || callbackGas <= 0n) throw new PlanInputError('A relay with a call needs the callback gas: the exact gas that onTokenBridged gets, above zero.')
+  if (callbackGas > MAX_CALLBACK_GAS) throw new PlanInputError(`The callback gas is above ${MAX_CALLBACK_GAS}, the most that a delivery can carry.`)
   return callbackGas
 }
 

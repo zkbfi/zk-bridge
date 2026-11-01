@@ -7,7 +7,7 @@
  * delivery router) is a plain relay, and the draft says why, as the terminal does.
  */
 import { formatUnits, getAddress, type Address } from "viem";
-import { DEFAULT_GAS_MARGIN, defaultTipChoiceOf, UINT256_MAXIMUM, type DeliveryCostReport, type PayoutKind, type SenderPrice } from "@zk-bridge/shared";
+import { DEFAULT_GAS_MARGIN, MAX_CALL_GAS, defaultTipChoiceOf, UINT256_MAXIMUM, type DeliveryCostReport, type PayoutKind, type SenderPrice } from "@zk-bridge/shared";
 import { bridgeSourceOf, type BridgeContext } from "@terminal/app/actions";
 import { DEFAULT_TIP_PERCENT_TEXT, resolveDeliveryTarget, senderPriceText, type DeliveryTarget } from "@terminal/app/delivery-fee-form";
 import type { ChainSide, PairConfig, TokenInfo } from "@terminal/model/types";
@@ -195,6 +195,7 @@ const callGasOf = (values: BridgeFormValues): Parsed<bigint> => {
   if (!hasCallText(values)) return { ok: true, value: 0n };
   const text = values.callGas.trim();
   if (!/^\d+$/.test(text) || BigInt(text) === 0n) return failure("Enter the call gas: the exact gas the call gets, as a whole number above zero.");
+  if (BigInt(text) > MAX_CALL_GAS) return failure(`The call gas is above ${MAX_CALL_GAS}, the most that a delivery can carry.`);
   return { ok: true, value: BigInt(text) };
 };
 

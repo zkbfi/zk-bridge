@@ -92,11 +92,15 @@ contracts were within a few hundred bytes of these; the dry run prints the real 
 | 5 | 943 | n_B + 1 | create `TokenMediator` | about 5,700,000 (mediator 12,291 and factory 7,272 bytes of runtime; the old pair used 5,693,201) | about 1.2 x local |
 | 6 | 943 | n_B + 2 | create `DeliveryRouter` | about 1,400,000 (runtime 7,993 bytes; the old router used 1,396,348) | about 1.2 x local |
 
-Sepolia's block gas limit (200,000,000) holds each transaction; EIP-7825 caps one transaction at 16,777,216 gas, and
-the old Sepolia estimates of the bridge and the mediator were above that. Check, as `docs/testnet-run.md` step 5 asks,
-that the Foundry version and the node accept such a transaction before the run; if they do not, this redeploy cannot
-go to Sepolia until the cap question is settled for the first deployment too. Chain 943's block gas limit is about
-30,000,000, so each transaction fits.
+**The per-transaction gas cap (EIP-7825, 16,777,216).** The receipts of the first deployment (2026-10-26,
+`broadcast/multi/DeployBridge.s.sol-latest/run.json`, read only) show that Sepolia mined transactions far above it:
+`MessageBridge` used 35,555,393 gas, `TokenMediator` 31,857,637, `BeaconForkGate` 12,398,838 and `DeliveryRouter`
+13,073,116, all with status 1. So the cap did not bind on Sepolia then, and the same three transactions of this
+redeploy (sizes within a few hundred bytes of those) need about the same: some 35.6M, 31.9M and 13.1M gas. If the cap
+is active on Sepolia by the time of the run (check with a dry run with `--skip-simulation`: the node refuses a
+transaction above the cap at estimation), the bridge and the mediator must be split first; see "If the cap binds"
+below. Chain 943 used about 1.0 to 1.1 times the local figures (bridge 5,005,943, mediator 4,527,659, router
+1,859,232) and its block gas limit is about 30,000,000, so each transaction fits there.
 
 The script reads every value back from the new contracts and stops on the first mismatch
 (`DeploymentMismatch(<field>)`), before the next chain. It prints the new addresses.
@@ -151,6 +155,28 @@ One transaction (create `DeliveryRouter`, about 1,400,000 local gas) for the run
 token, reward address and failed delivery address. Then add it to the runner's router allowlist and to the frontends
 (`isKnownDeliveryRouter` is the frontend's own list). Messages already sent to the old router are still delivered to
 it: a router is the receiver named in each message, so the old router keeps working for them.
+
+## If the cap binds (a proposal, not built)
+
+Sepolia charged about 1,580 gas per byte of runtime code on 2026-10-26 (35,555,393 gas for the 22,465 bytes of the
+bridge), so one creation stays under 16,777,216 gas only up to about 10,000 bytes of runtime code and a small
+constructor. The smallest change that fits:
+
+| Transaction | Runtime bytes (estimate) | Sepolia gas (estimate at 1,580 per byte) |
+|---|---|---|
+| Library `ReceiptProofLib` (external, linked): the receipt, transaction and log checks (MerkleTrie, RLP) of `executeMessage` | about 7,000 | about 11,100,000 |
+| Library `BeaconProofLib` (external, linked): the ancestry and block hash branches, the layout rules, `_verifyOpening`; the layout tables stay in the bridge and pass as `storage` arguments | about 8,000 | about 12,600,000 |
+| `MessageBridge`, calling both libraries | about 8,000 | about 12,600,000 |
+| `TokenFactory`, deployed on its own with the predicted mediator address (the mediator takes the factory as a term instead of creating it) | 7,272 | about 11,500,000 |
+| Library `MediatorPayloads` (external, linked): `TokenReader` and the payload encoders | about 3,500 | about 5,500,000 |
+| `TokenMediator` | about 8,800 | about 13,900,000 |
+| `DeliveryRouter` (unchanged) | 7,993 | 13,073,116 (measured) |
+
+That is seven transactions on Sepolia instead of three, each under the cap with some room. The byte figures are
+estimates: the split must be measured with `forge build --sizes` before it is chosen, and each library call adds a
+`DELEGATECALL` (about 2,600 gas cold) to a delivery. Chain 943 would take the same seven contracts so that both chains
+run one codebase. The libraries keep layer 1 and layer 2 immutable: a linked library has no owner and its address is
+fixed in the bytecode that uses it.
 
 ## Tokens in flight
 

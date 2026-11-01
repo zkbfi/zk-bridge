@@ -68,6 +68,16 @@ export const CALL_GAS_RESERVE = 10_000n;
  */
 export const ROUTER_CALLBACK_GAS_BASE = 300_000n;
 
+/**
+ * The most gas that a follow-up call of a delivery may get. A delivery runs in one transaction on the destination chain,
+ * so the call gas, the callback gas around it and the proof must fit one block, and on Sepolia one transaction may use at
+ * most 16,777,216 gas (EIP-7825). Ten million leaves room for the rest of the delivery. The encoder, the guard of the
+ * terms and {@link routerCallbackGas} refuse more, and every form and link reads this one number.
+ */
+export const MAX_CALL_GAS = 10_000_000n;
+
+const callGasAboveCapText = `The call gas is above ${MAX_CALL_GAS}, the most that a delivery can carry.`;
+
 /** The bytes of the legacy form: one address. */
 export const LEGACY_RECEIVER_BYTES = 20;
 /** The size of an encoded director: five words. */
@@ -304,6 +314,7 @@ export const assertValidFeeTerms = (input: FeeTermsInput): void => {
   }
   if (length === LEGACY_RECEIVER_BYTES) assertLegacyToken(input);
   if (length >= FEE_DIRECTOR_BYTES) assertSettings(settingsOfData(data), input);
+  if (length >= FEE_DIRECTOR_BYTES && callGasOfData(data) > MAX_CALL_GAS) throw new FeeTermsError(callGasAboveCapText);
   const recipient = recipientOf(data, length);
   if (sameAddress(recipient, ZERO_ADDRESS)) throw new FeeTermsError("The recipient of the fee terms is the zero address. The router would hand the value to its failed delivery address.");
   if (sameAddress(recipient, router)) throw new FeeTermsError("The recipient of the fee terms is the router itself. The router would hand the value to its failed delivery address.");
@@ -527,8 +538,15 @@ export const maximumFee = (director: FeeDirector, value: bigint): bigint => {
 export const routerCallbackGas = (input: { callGas?: bigint }): bigint => {
   const callGas = input.callGas;
   if (callGas === undefined || callGas <= 0n) return ROUTER_CALLBACK_GAS_BASE;
+  if (callGas > MAX_CALL_GAS) throw new RangeError(callGasAboveCapText);
   return ROUTER_CALLBACK_GAS_BASE + callGas + divideRoundingUp(callGas, 63n) + CALL_GAS_RESERVE;
 };
+
+/**
+ * The most callback gas that a relay may state: what a router needs for a call of {@link MAX_CALL_GAS}. A form refuses
+ * more for any receiver, because no delivery could carry it.
+ */
+export const MAX_CALLBACK_GAS = routerCallbackGas({ callGas: MAX_CALL_GAS });
 
 /** Input of {@link worstCaseFee}. */
 export interface WorstCaseFeeInput {

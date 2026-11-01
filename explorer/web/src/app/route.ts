@@ -2,6 +2,7 @@
  * The address of a page. The page keeps its place in the URL hash, so a link opens the same view and the back button
  * works. Parsing and formatting are pure and tested together: every route survives a round trip.
  */
+import { MAX_CALL_GAS, MAX_CALLBACK_GAS } from "@zk-bridge/shared";
 import { DEFAULT_MAXIMUM_BLOCKS, type HistoryFilters } from "@zk-bridge/shared";
 import { FEED_STATUSES, type Direction } from "@terminal/model/types";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
@@ -246,6 +247,12 @@ const decimalText = (value: string | null): string | undefined => (value !== nul
 /** Whole-number text while it is typed. */
 const digitsText = (value: string | null): string | undefined => (value !== null && /^[0-9]{0,12}$/.test(value) ? value : undefined);
 
+/** A gas amount of a link: whole digits, at most `maximum`. A link cannot prefill a gas that no delivery can carry. */
+const gasText = (value: string | null, maximum: bigint): string | undefined => {
+  const digits = digitsText(value);
+  return digits === undefined || (digits !== "" && BigInt(digits) > maximum) ? undefined : digits;
+};
+
 const pairViewOf = (params: URLSearchParams): PairViewQuery | null => {
   const rowsText = params.get("rows");
   const rowsNumber = rowsText !== null && /^[0-9]{1,5}$/.test(rowsText) ? Number(rowsText) : PAIR_PAGE_SIZE;
@@ -403,8 +410,8 @@ const bridgeOf = (params: URLSearchParams): BridgeQuery => {
     ...optional("receiver", hexText(get("receiver"), 40)),
     ...optional("mode", oneOf(["plain", "call"] as const, get("mode"))),
     ...optional("data", hexText(get("data"), MAXIMUM_DATA_DIGITS)),
-    ...optional("callGas", digitsText(get("callGas"))),
-    ...optional("callbackGas", digitsText(get("callbackGas"))),
+    ...optional("callGas", gasText(get("callGas"), MAX_CALL_GAS)),
+    ...optional("callbackGas", gasText(get("callbackGas"), MAX_CALLBACK_GAS)),
     ...optional("callTarget", hexText(get("callTarget"), 40)),
     ...optional("callData", hexText(get("callData"), MAXIMUM_DATA_DIGITS)),
     ...(Object.keys(tip).length === 0 ? {} : { tip }),

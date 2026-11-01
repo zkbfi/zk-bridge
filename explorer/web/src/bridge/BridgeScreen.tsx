@@ -17,7 +17,7 @@ import { useWallet } from "../wallet/wallet-port";
 import { arrivesAsSymbol, isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
 import { DeliveryMenu, deliverySummary, type TipChoiceKey } from "./DeliveryMenu";
-import { nativeSymbolOf, ceilingCostUsd, ceilingWeiOf, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, routerCallbackGas, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
+import { nativeSymbolOf, ceilingCostUsd, ceilingWeiOf, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, routerCallbackGas, MAX_CALL_GAS, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
 import { formatUnits } from "viem";
 import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, ReviewNotice, ReviewRow, ReviewSheet, useDefaultFee, useFeeCaps, useFeeWarnings, useHardCap, useVerdict } from "@zkb/react";
 import { DirectionMenu } from "./DirectionMenu";
@@ -561,7 +561,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   // The callback gas that the relay passes: the call gas plus the router's own work, shown read only. No call, no number.
   const callbackGas = (() => {
     const text = (form.callGas ?? "").trim();
-    return form.callTarget !== undefined && /^\d+$/.test(text) && BigInt(text) > 0n ? routerCallbackGas({ callGas: BigInt(text) }) : null;
+    return form.callTarget !== undefined && /^\d+$/.test(text) && BigInt(text) > 0n && BigInt(text) <= MAX_CALL_GAS ? routerCallbackGas({ callGas: BigInt(text) }) : null;
   })();
 
   const autoCapRecommended = Math.min(DEFAULT_AUTO_CAP_PERCENT, hardCapPercent);

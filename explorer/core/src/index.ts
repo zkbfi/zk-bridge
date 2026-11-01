@@ -90,6 +90,8 @@ export {
   expectedFee,
   maximumFee,
   ROUTER_CALLBACK_GAS_BASE,
+  MAX_CALL_GAS,
+  MAX_CALLBACK_GAS,
   routerCallbackGas,
   type WorstCaseFeeInput,
   worstCaseFee,

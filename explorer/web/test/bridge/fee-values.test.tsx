@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
-import { routerCallbackGas } from "@zk-bridge/shared";
+import { routerCallbackGas , MAX_CALL_GAS } from "@zk-bridge/shared";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
 import { connectedWallet, renderWithWallet } from "../app/support";
@@ -82,7 +82,7 @@ describe("the fee values", () => {
     await waitFor(() => expect(window.location.hash).toMatch(/tip\.ceiling=100(&|$)/));
   });
 
-  it("names the call gas next to the call, shows the callback gas read only, and drops both with the call", async () => {
+  it("names the call gas next to the call, shows the callback gas read only (none above the cap), and drops both with the call", async () => {
     await at("bridge.amount=500");
     const scope = await menu();
     await advanced(scope);
@@ -93,6 +93,9 @@ describe("the fee values", () => {
     await userEvent.type(callGas, "200000");
     await waitFor(() => expect(window.location.hash).toMatch(/bridge\.callGas=200000/));
     expect(within(scope).getByTestId("callback-gas")).toHaveTextContent(routerCallbackGas({ callGas: 200_000n }).toLocaleString("en-US"));
+    await userEvent.clear(callGas);
+    await userEvent.type(callGas, String(MAX_CALL_GAS + 1n));
+    expect(within(scope).queryByTestId("callback-gas")).toBeNull();
     await userEvent.clear(callGas);
     await waitFor(() => expect(window.location.hash).not.toMatch(/bridge\.callGas/));
     expect(within(scope).queryByTestId("callback-gas")).toBeNull();

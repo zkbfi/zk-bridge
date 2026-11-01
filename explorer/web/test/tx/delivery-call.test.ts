@@ -1,3 +1,4 @@
+import { MAX_CALL_GAS } from "@zk-bridge/shared";
 import { decodeFunctionData, getAddress } from "viem";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_GAS_MARGIN, decodeDeliveryCall, decodeFeeDirector, encodeFeeDirector, routerCallbackGas, senderPriceOfToken, tokenMediatorAbi } from "@zk-bridge/shared";
@@ -133,6 +134,9 @@ describe("the call fields of the bridge form", () => {
       expect(blocked.status).toBe("blocked");
       expect(blocked.reason).toBe("Enter the call gas: the exact gas the call gets, as a whole number above zero.");
     }
+    const tooMuch = computeBridgeDraft(values({ callTarget, callGas: String(MAX_CALL_GAS + 1n) }), options, data);
+    expect(tooMuch.status).toBe("blocked");
+    expect(tooMuch.reason).toBe(`The call gas is above ${MAX_CALL_GAS}, the most that a delivery can carry.`);
     const ready = computeBridgeDraft(values({ callTarget, callGas: " 123456 " }), options, data);
     expect(ready.status).toBe("ready");
     expect(ready.delivery?.director.callGas).toBe(123_456n);

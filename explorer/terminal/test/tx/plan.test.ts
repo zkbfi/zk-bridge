@@ -10,6 +10,7 @@ import {
   planWrapAndRelay,
 } from '../../src/tx/plan'
 import { decodeKnownCall } from '../../src/tx/decode'
+import { MAX_CALLBACK_GAS } from '@zk-bridge/shared'
 
 // The expected calldata below was produced by Foundry `cast calldata`, an independent encoder, for these inputs:
 // token 0x...1001 (USDC, 6 decimals), receiver 0x...0abc, 2.5 tokens (2500000 base units), callback gas 1000000.
@@ -65,6 +66,14 @@ describe('planRelay', () => {
     const call = { kind: 'call', data: '0xdeadbeef' } as const
     expect(() => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: call })).toThrow(PlanInputError)
     expect(() => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: call, callbackGas: 0n })).toThrow(/needs the callback gas/)
+  })
+
+  test('a relay with a call refuses a callback gas above the most a delivery can carry, on every path', () => {
+    const call = { kind: 'call', data: '0xdeadbeef' } as const
+    expect(() => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: call, callbackGas: MAX_CALLBACK_GAS + 1n })).toThrow(
+      new PlanInputError(`The callback gas is above ${MAX_CALLBACK_GAS}, the most that a delivery can carry.`),
+    )
+    expect(planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: call, callbackGas: MAX_CALLBACK_GAS }).functionName).toBe('relayTokensAndCall')
   })
 
   test('the relay with a call decodes back to its arguments', () => {

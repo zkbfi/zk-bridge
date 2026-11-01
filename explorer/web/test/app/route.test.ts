@@ -1,3 +1,4 @@
+import { MAX_CALL_GAS, MAX_CALLBACK_GAS } from "@zk-bridge/shared";
 import { describe, expect, it } from "vitest";
 import { EMPTY_HISTORY_FILTERS } from "../../src/views/history-model";
 import {
@@ -178,6 +179,13 @@ describe("the dialog in the address", () => {
       + "&bridge.callTarget=0x12345678901234567890123456789012345678901&tip.mode=all&tip.router=nope&tip.native=yes";
     expect(parseOverlay(hash)).toEqual({ ...NO_OVERLAY, dialog: "bridge" });
     expect(parseOverlay(`#/?dialog=bridge&bridge.data=0x${"a".repeat(30_000)}`)).toEqual({ ...NO_OVERLAY, dialog: "bridge" });
+  });
+
+  it("drops a linked call gas or callback gas above what a delivery can carry, and keeps one at the cap", () => {
+    const over = `#/?dialog=bridge&bridge.callGas=${MAX_CALL_GAS + 1n}&bridge.callbackGas=${MAX_CALLBACK_GAS + 1n}`;
+    expect(parseOverlay(over)).toEqual({ ...NO_OVERLAY, dialog: "bridge" });
+    const at = `#/?dialog=bridge&bridge.callGas=${MAX_CALL_GAS}&bridge.callbackGas=${MAX_CALLBACK_GAS}`;
+    expect(parseOverlay(at)).toEqual({ ...NO_OVERLAY, dialog: "bridge", bridge: { callGas: String(MAX_CALL_GAS), callbackGas: String(MAX_CALLBACK_GAS) } });
   });
 
   it("names every field a link filled in that moves or spends funds, and not the user's own account", () => {
