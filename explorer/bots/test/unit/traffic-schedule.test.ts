@@ -1,42 +1,91 @@
 import { describe, expect, it } from "vitest";
-import { dueAt, jitterOf, slotDue, slotOf, type Schedule } from "../../src/traffic/schedule.ts";
+import { seeded } from "../support/seeded.ts";
+import { drawPlan, dueIndex, HOUR_MILLISECONDS, hourOf, unsentIn, type Cadence, type HourPlan } from "../../src/traffic/schedule.ts";
 
-const HOUR = 3_600_000;
-const forward: Schedule = { intervalMilliseconds: HOUR, offsetMilliseconds: 0, jitterMilliseconds: 300_000 };
-const back: Schedule = { intervalMilliseconds: HOUR, offsetMilliseconds: HOUR / 2, jitterMilliseconds: 300_000 };
+const cadence: Cadence = { minPerHour: 0, maxPerHour: 3, minGapSeconds: 300 };
+const HOUR = 480_000;
 
-describe("the traffic schedule", () => {
-  it("numbers the intervals from 1970, shifted by the offset", () => {
-    expect(slotOf(0, forward)).toBe(0);
-    expect(slotOf(HOUR - 1, forward)).toBe(0);
-    expect(slotOf(HOUR, forward)).toBe(1);
-    expect(slotOf(HOUR, back)).toBe(0);
-    expect(slotOf(HOUR / 2 - 1, back)).toBe(-1);
+describe("hourOf", () => {
+  it("numbers the clock hours from 1970 (UTC)", () => {
+    expect(hourOf(0)).toBe(0);
+    expect(hourOf(HOUR_MILLISECONDS - 1)).toBe(0);
+    expect(hourOf(HOUR_MILLISECONDS)).toBe(1);
+  });
+});
+
+describe("drawPlan", () => {
+  it("keeps the count, the hour and the gaps inside their bounds over many hours", () => {
+    const random = seeded(7);
+    const counts = new Set<number>();
+    for (let hour = HOUR; hour < HOUR + 2000; hour += 1) {
+      const plan = drawPlan({ hour, cadence, random });
+      counts.add(plan.count);
+      expect(plan.count).toBeGreaterThanOrEqual(0);
+      expect(plan.count).toBeLessThanOrEqual(3);
+      expect(plan.times).toHaveLength(plan.count);
+      expect(plan.sent).toEqual(plan.times.map(() => false));
+      plan.times.forEach((time, index) => {
+        expect(time).toBeGreaterThanOrEqual(hour * HOUR_MILLISECONDS);
+        expect(time).toBeLessThan((hour + 1) * HOUR_MILLISECONDS);
+        if (index > 0) expect(time - (plan.times[index - 1] as number)).toBeGreaterThanOrEqual(300_000);
+      });
+    }
+    expect([...counts].sort()).toEqual([0, 1, 2, 3]);
   });
 
-  it("draws a jitter that a restart keeps, within its bound", () => {
-    const jitter = jitterOf("first-to-second", 480_000, 300_000);
-    expect(jitter).toBe(jitterOf("first-to-second", 480_000, 300_000));
-    expect(jitter).toBeGreaterThanOrEqual(0);
-    expect(jitter).toBeLessThanOrEqual(300_000);
-    expect(jitterOf("first-to-second", 480_000, 0)).toBe(0);
-    const spread = new Set(Array.from({ length: 50 }, (_, slot) => jitterOf("second-to-first", slot, 300_000)));
-    expect(spread.size).toBeGreaterThan(40);
+  it("draws every count about equally often", () => {
+    const random = seeded(11);
+    const counts = [0, 0, 0, 0];
+    for (let at = 0; at < 4000; at += 1) {
+      const at2 = drawPlan({ hour: 1, cadence, random }).count;
+      counts[at2] = (counts[at2] as number) + 1;
+    }
+    for (const share of counts) expect(share).toBeGreaterThan(800);
   });
 
-  it("puts the two directions half an interval apart", () => {
-    const slot = 480_000;
-    const first = dueAt("first-to-second", slot, { ...forward, jitterMilliseconds: 0 });
-    const second = dueAt("second-to-first", slot, { ...back, jitterMilliseconds: 0 });
-    expect(second - first).toBe(HOUR / 2);
+  it("can draw no send at all, and always the same number when the bounds meet", () => {
+    expect(drawPlan({ hour: 5, cadence, random: () => 0 })).toEqual({ hour: 5, count: 0, times: [], sent: [] });
+    const fixed = drawPlan({ hour: 5, cadence: { minPerHour: 2, maxPerHour: 2, minGapSeconds: 300 }, random: seeded(3) });
+    expect(fixed.count).toBe(2);
   });
 
-  it("is due once in each slot, from its due time", () => {
-    const slot = 480_000;
-    const due = dueAt("first-to-second", slot, forward);
-    expect(slotDue({ direction: "first-to-second", nowMilliseconds: due - 1, lastSlot: slot - 1, schedule: forward })).toBeNull();
-    expect(slotDue({ direction: "first-to-second", nowMilliseconds: due, lastSlot: slot - 1, schedule: forward })).toBe(slot);
-    expect(slotDue({ direction: "first-to-second", nowMilliseconds: due, lastSlot: null, schedule: forward })).toBe(slot);
-    expect(slotDue({ direction: "first-to-second", nowMilliseconds: due + 1, lastSlot: slot, schedule: forward })).toBeNull();
+  it("packs the largest count against the end of the hour at the extreme draw", () => {
+    const plan = drawPlan({ hour: 0, cadence: { minPerHour: 3, maxPerHour: 3, minGapSeconds: 1799 }, random: () => 0.9999999 });
+    expect(plan.times).toHaveLength(3);
+    expect(plan.times[2]).toBe(HOUR_MILLISECONDS - 1);
+    expect((plan.times[2] as number) - (plan.times[1] as number)).toBe(1_799_000);
+    const earliest = drawPlan({ hour: 0, cadence: { minPerHour: 3, maxPerHour: 3, minGapSeconds: 1799 }, random: () => 0 });
+    expect(earliest.times).toEqual([0, 1_799_000, 3_598_000]);
+  });
+
+  it("is the same for the same seed and differs between seeds", () => {
+    const first = Array.from({ length: 20 }, (_, hour) => drawPlan({ hour, cadence, random: seeded(42 + hour) }));
+    const again = Array.from({ length: 20 }, (_, hour) => drawPlan({ hour, cadence, random: seeded(42 + hour) }));
+    expect(again).toEqual(first);
+    const other = seeded(43);
+    expect(drawPlan({ hour: 1, cadence, random: other })).not.toEqual(drawPlan({ hour: 1, cadence, random: seeded(42) }));
+  });
+});
+
+describe("dueIndex", () => {
+  const plan: HourPlan = { hour: 1, count: 2, times: [4_000_000, 5_000_000], sent: [false, false] };
+
+  it("waits for the first unused time", () => {
+    expect(dueIndex({ plan, nowMilliseconds: 3_999_999, lastAttemptAtMilliseconds: null, cadence })).toBeNull();
+    expect(dueIndex({ plan, nowMilliseconds: 4_000_000, lastAttemptAtMilliseconds: null, cadence })).toBe(0);
+  });
+
+  it("goes on with the next time once one is used, and ends when all are", () => {
+    const first = { ...plan, sent: [true, false] };
+    expect(unsentIn(first)).toBe(1);
+    expect(dueIndex({ plan: first, nowMilliseconds: 4_500_000, lastAttemptAtMilliseconds: 4_000_000, cadence })).toBeNull();
+    expect(dueIndex({ plan: first, nowMilliseconds: 5_000_000, lastAttemptAtMilliseconds: 4_000_000, cadence })).toBe(1);
+    expect(dueIndex({ plan: { ...plan, sent: [true, true] }, nowMilliseconds: 9_000_000, lastAttemptAtMilliseconds: null, cadence })).toBeNull();
+  });
+
+  it("holds a late send until the gap since the last attempt has passed", () => {
+    const late = { ...plan, sent: [true, false] };
+    expect(dueIndex({ plan: late, nowMilliseconds: 5_100_000, lastAttemptAtMilliseconds: 4_900_000, cadence })).toBeNull();
+    expect(dueIndex({ plan: late, nowMilliseconds: 5_200_000, lastAttemptAtMilliseconds: 4_900_000, cadence })).toBe(1);
   });
 });

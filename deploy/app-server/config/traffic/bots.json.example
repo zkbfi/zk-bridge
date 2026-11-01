@@ -23,12 +23,11 @@
         "balance": { "minimum": "100000", "maximum": "990000" }
       }
     },
-    "intervalSeconds": 900,
-    "jitterSeconds": 60,
+    "cadence": { "minPerHour": 0, "maxPerHour": 3, "minGapSeconds": 300 },
     "pollSeconds": 30,
     "directions": {
-      "first-to-second": { "enabled": true, "offsetSeconds": 0 },
-      "second-to-first": { "enabled": true, "offsetSeconds": 450 }
+      "first-to-second": { "enabled": true },
+      "second-to-first": { "enabled": true }
     },
     "tipPercent": "0.1",
     "newCopyGasLimit": { "11155111": "9000000" },
