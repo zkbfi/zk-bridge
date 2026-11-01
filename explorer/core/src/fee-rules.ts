@@ -34,8 +34,14 @@ export const HARD_CAP_STEP_WAD = PERCENT_WAD / 20n;
 /** The automatic fee without a price: 0.1% (or the cap, if lower). */
 export const NO_PRICE_SHARE_WAD = PERCENT_WAD / 10n;
 
-/** The gas level: 1 Normal, 2 High, 3 Highest. */
+/** The gas level: 1 Low, 2 Normal, 3 High. */
 export type GasLevel = 1 | 2 | 3;
+
+/**
+ * The gas level that a transfer starts at, and that no signed ceiling means: Normal (owner: "make normal (middle) as
+ * default"). Every default, baseline and reset reads this one constant.
+ */
+export const DEFAULT_GAS_LEVEL: GasLevel = 2;
 
 /**
  * Each gas level: the ceiling it writes (the highest base fee the deliverer may spend) as a multiple of today's base fee,
@@ -59,13 +65,13 @@ export const ceilingWeiOf = (baseFeeWei: bigint, level: GasLevel): bigint => bas
 
 /**
  * The level a signed ceiling stands for: the one whose ceiling is nearest, against today's base fee; a tie goes to the
- * lower level. No ceiling, or no base fee, is Normal.
+ * lower level. No ceiling, or no base fee, is the default level ({@link DEFAULT_GAS_LEVEL}, Normal).
  *
  * @param ceilingWei The ceiling, in wei, or null.
  * @param baseFeeWei Today's base fee, or null.
  */
 export const gasLevelOfCeiling = (ceilingWei: bigint | null, baseFeeWei: bigint | null): GasLevel => {
-  if (ceilingWei === null || baseFeeWei === null || baseFeeWei === 0n) return 1;
+  if (ceilingWei === null || baseFeeWei === null || baseFeeWei === 0n) return DEFAULT_GAS_LEVEL;
   const distance = (level: GasLevel): bigint => {
     const gap = ceilingWei - ceilingWeiOf(baseFeeWei, level);
     return gap < 0n ? -gap : gap;
@@ -149,13 +155,13 @@ export type DefaultFee = {
  * tie between curve and cost reads as the curve; the cap binds only when it is strictly lower. Without an amount, a
  * price or a cost, it is 0.1% (or the cap, if lower).
  *
- * A higher gas level adds what it is expected to cost over Normal (`levelExtraUsd`) on top of the curve, so the tip
+ * A gas level above the default adds what it is expected to cost over the default level (`levelExtraUsd`) on top of the curve, so the tip
  * before gas stays where the curve put it and the fee rises with the level (owner, quote 81: "numbers then adjust when
  * that happens because a new level of fee spend has been consented to"), the way a share the user set is rebased. At
- * Normal the extra is zero and this is the curve rule as specified.
+ * the default level, or below it, the extra is zero and this is the curve rule as specified.
  *
  * @param input The amount and the total cost at the gas level in USD × 1e18 (null when unpriced), the cap as a share,
- *   and the level's extra cost over Normal (0 when absent).
+ *   and the level's extra cost over the default level (0 when absent).
  */
 export const defaultFee = (input: { readonly amountUsd: bigint | null; readonly costUsd: bigint | null; readonly capWad: bigint; readonly levelExtraUsd?: bigint }): DefaultFee => {
   const { amountUsd: amount, costUsd: cost, capWad } = input;
@@ -191,10 +197,10 @@ export const highCapLine = (amountUsd: bigint | null): Fraction => {
 /**
  * Whether the tip is a "High cap %": the tip before gas (the fee less the total cost) over the amount is above
  * {@link highCapLine}. Without prices, the fee's share against 1%. {@link feeWarnings} passes the cost at the chosen
- * gas level, so what the level adds is never read as tip; {@link capWarns} passes the cost at Normal.
+ * gas level, so what the level adds is never read as tip; {@link capWarns} passes the cost at the default level.
  */
-export const highCap = (input: { readonly feeUsd: bigint | null; readonly costNormalUsd: bigint | null; readonly amountUsd: bigint | null; readonly shareWithoutPriceWad: bigint | null }): boolean => {
-  const { feeUsd: fee, costNormalUsd: cost, amountUsd: amount } = input;
+export const highCap = (input: { readonly feeUsd: bigint | null; readonly costDefaultUsd: bigint | null; readonly amountUsd: bigint | null; readonly shareWithoutPriceWad: bigint | null }): boolean => {
+  const { feeUsd: fee, costDefaultUsd: cost, amountUsd: amount } = input;
   if (fee !== null && cost !== null && amount !== null && amount > 0n) {
     const tip = fee > cost ? fee - cost : 0n;
     const line = highCapLine(amount);
@@ -225,13 +231,13 @@ export const ceilingCostUsd = (input: CostInput): bigint =>
  * Whether the review warns "High cap %" about the cap (owner, quotes 70–71). Only the gas-based mode can drift after
  * signing; percent and fixed fees are known ahead of time and never warn here. In gas-based mode the fee is recomputed
  * at the expanded cost ({@link ceilingCostUsd}) by the default rule, limited by the cap, and it warns when that fee
- * less the estimated total cost at Normal is above the {@link highCapLine}. One function, so the reading changes in one
+ * less the estimated total cost at the default level is above the {@link highCapLine}. One function, so the reading changes in one
  * place.
  */
-export const capWarns = (input: { readonly gasBased: boolean; readonly amountUsd: bigint | null; readonly capWad: bigint; readonly expandedCostUsd: bigint | null; readonly costNormalUsd: bigint | null }): boolean => {
-  if (!input.gasBased || input.expandedCostUsd === null || input.costNormalUsd === null) return false;
+export const capWarns = (input: { readonly gasBased: boolean; readonly amountUsd: bigint | null; readonly capWad: bigint; readonly expandedCostUsd: bigint | null; readonly costDefaultUsd: bigint | null }): boolean => {
+  if (!input.gasBased || input.expandedCostUsd === null || input.costDefaultUsd === null) return false;
   const atExpanded = defaultFee({ amountUsd: input.amountUsd, costUsd: input.expandedCostUsd, capWad: input.capWad }).feeUsd;
-  return atExpanded !== null && highCap({ feeUsd: atExpanded, costNormalUsd: input.costNormalUsd, amountUsd: input.amountUsd, shareWithoutPriceWad: null });
+  return atExpanded !== null && highCap({ feeUsd: atExpanded, costDefaultUsd: input.costDefaultUsd, amountUsd: input.amountUsd, shareWithoutPriceWad: null });
 };
 
 /** Everything {@link feeWarnings} reads. */
@@ -241,8 +247,8 @@ export type FeeWarningsInput = {
   readonly feeUsd: bigint | null;
   /** The total cost at the chosen gas level. */
   readonly costUsd: bigint | null;
-  /** The total cost at Normal, for the cap warning's tip before gas. */
-  readonly costNormalUsd: bigint | null;
+  /** The total cost at the default level, for the cap warning's tip before gas. */
+  readonly costDefaultUsd: bigint | null;
   readonly shareWithoutPriceWad: bigint | null;
   readonly belowBreakEven: boolean;
   /** The tip is gas-based (base fee / gas+), so it can drift after signing. */
@@ -264,8 +270,8 @@ export const feeWarnings = (input: FeeWarningsInput): FeeWarnings => {
   return {
     smallTransfer: small,
     lowFee: lowFee({ feeUsd: input.feeUsd, costUsd: input.costUsd, belowBreakEven: input.belowBreakEven }),
-    highCap: !small && highCap({ feeUsd: input.feeUsd, costNormalUsd: input.costUsd, amountUsd: input.amountUsd, shareWithoutPriceWad: input.shareWithoutPriceWad }),
-    capWarning: !small && capWarns({ gasBased: input.gasBased, amountUsd: input.amountUsd, capWad: input.capWad, expandedCostUsd: input.expandedCostUsd, costNormalUsd: input.costNormalUsd }),
+    highCap: !small && highCap({ feeUsd: input.feeUsd, costDefaultUsd: input.costUsd, amountUsd: input.amountUsd, shareWithoutPriceWad: input.shareWithoutPriceWad }),
+    capWarning: !small && capWarns({ gasBased: input.gasBased, amountUsd: input.amountUsd, capWad: input.capWad, expandedCostUsd: input.expandedCostUsd, costDefaultUsd: input.costDefaultUsd }),
   };
 };
 

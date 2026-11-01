@@ -38,7 +38,7 @@ describe('the live panel of the bridge form', () => {
         'A tip goes to the reward address of the delivery router. It is voluntary and it buys no promise. A low tip, or no tip, never makes a delivery fail.',
         'Percentage      4.62 zUSDC (exact)  (4.6246246246246247 percent of the transfer)',
         'Fixed           4.62 zUSDC (exact)  (a fixed amount)',
-        "Gas multiplier  about 5.425 zUSDC now (estimate, at most 10.85 zUSDC)  (the gas that the deliverer's transaction makes available times the gas price, at 0.0000000025 token units for each wei (your price and margin), never above the limit. Expect the tip to reach the limit)",
+        "Gas multiplier  about 5.425 zUSDC now (estimate, at most 16.275 zUSDC)  (the gas that the deliverer's transaction makes available times the gas price, at 0.0000000025 token units for each wei (your price and margin), never above the limit. Expect the tip to reach the limit)",
         'Tip mode        percentage of the transfer',
         'Your tip        0.0999 zUSDC (exact)',
         'At most         0.0999 zUSDC',

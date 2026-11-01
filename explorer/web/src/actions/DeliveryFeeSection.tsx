@@ -141,7 +141,7 @@ const ModeFields = ({ options, onChange }: Pick<TipFieldsProps, "options" | "onC
         </Field>
       </Box>
       <Box flex="1 1 10rem">
-        <Field label="Ceiling base fee (gwei)" hint="Empty means twice the base fee now. It sets the limit, which is the price ceiling.">
+        <Field label="Ceiling base fee (gwei)" hint="Empty means three times the base fee now. It sets the limit, which is the price ceiling.">
           {(id) => <TextInput id={id} inputMode="decimal" value={options.ceilingGweiText} onChange={(event) => onChange({ ...options, ceilingGweiText: event.target.value })} />}
         </Field>
       </Box>

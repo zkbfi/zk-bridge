@@ -68,7 +68,7 @@ describe("the fee values", () => {
     const scope = await menu();
     const slider = within(scope).getByRole("slider", { name: "Gas level" });
     fireEvent.change(slider, { target: { value: slider.getAttribute("max")! } });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: Highest. Change" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: High. Change" })).toBeInTheDocument());
     // A share the user set is rebased on the new cost, as the bars do.
     expect(window.location.hash).not.toMatch(/tip\.percent=0\.5(&|$)/);
     await retype(exact(scope, "Gas level"), "0");

@@ -294,7 +294,7 @@ const fromE18 = (value: bigint): number => Number(value) / 1e18;
 const toE18 = (value: number): bigint => BigInt(Math.round(value * 1e6)) * 10n ** 12n;
 
 /**
- * The default fee rule's fee for a transfer (fee-rules' defaultFee at the Normal gas level, the default 1% cap), in USD.
+ * The default fee rule's fee for a transfer (fee-rules' defaultFee at the default (Normal) gas level, the default 1% cap), in USD.
  *
  * @param usd The transfer's value.
  * @param totalCostE18 Its delivery's total cost, USD × 1e18 (fee-rules' totalCostUsd).

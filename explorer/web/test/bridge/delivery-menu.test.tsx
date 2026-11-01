@@ -143,20 +143,25 @@ describe("the delivery settings menu", () => {
 });
 
 describe("the gas level on the gas can", () => {
-  it("is the bars beside the can: each tap moves up a level, and Highest wraps back to Normal", async () => {
+  it("is the bars beside the can: each tap moves up a level, and High wraps back to Low, then Normal", async () => {
     renderWithWallet(<Shell />, { wallet: connectedWallet() });
     const bars = await screen.findByRole("button", { name: "Gas level: Normal. Change" });
     // No separate level picker anywhere.
     expect(screen.queryByRole("radiogroup", { name: "Gas level" })).toBeNull();
+    // Normal is the default: two bars, and no ceiling in the address.
+    expect(document.querySelector('[data-fee="gas"] svg[data-level]')).toHaveAttribute("data-level", "2");
+    expect(window.location.hash).not.toMatch(/tip\.ceiling=/);
     await userEvent.click(bars);
     // The level raises the gas price ceiling (in every tip mode), not the gas multiplier.
     await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: High. Change" })).toBeInTheDocument());
     expect(window.location.hash).toMatch(/tip\.ceiling=/);
     expect(window.location.hash).not.toMatch(/tip\.gas=/);
-    await userEvent.click(screen.getByRole("button", { name: "Gas level: High. Change" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: Highest. Change" })).toBeInTheDocument());
     expect(document.querySelector('[data-fee="gas"] svg[data-level]')).toHaveAttribute("data-level", "3");
-    await userEvent.click(screen.getByRole("button", { name: "Gas level: Highest. Change" }));
+    await userEvent.click(screen.getByRole("button", { name: "Gas level: High. Change" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: Low. Change" })).toBeInTheDocument());
+    expect(document.querySelector('[data-fee="gas"] svg[data-level]')).toHaveAttribute("data-level", "1");
+    expect(window.location.hash).toMatch(/tip\.ceiling=/);
+    await userEvent.click(screen.getByRole("button", { name: "Gas level: Low. Change" }));
     await waitFor(() => expect(window.location.hash).not.toMatch(/tip\.ceiling=/));
     expect(screen.getByRole("button", { name: "Gas level: Normal. Change" })).toBeInTheDocument();
   });
@@ -166,14 +171,18 @@ describe("the gas level on the gas can", () => {
     const bars = await screen.findByRole("button", { name: "Gas level: Normal. Change" });
     bars.focus();
     await userEvent.keyboard("{ArrowLeft}");
-    expect(window.location.hash).not.toMatch(/tip\.ceiling=/);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: Low. Change" })).toBeInTheDocument());
+    expect(window.location.hash).toMatch(/tip\.ceiling=/);
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(screen.getByRole("button", { name: "Gas level: Low. Change" })).toBeInTheDocument();
     await userEvent.keyboard("{ArrowRight}");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: Normal. Change" })).toBeInTheDocument());
+    expect(window.location.hash).not.toMatch(/tip\.ceiling=/);
+    await userEvent.keyboard("{ArrowUp}");
     await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: High. Change" })).toBeInTheDocument());
     await userEvent.keyboard("{ArrowUp}");
-    await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: Highest. Change" })).toBeInTheDocument());
-    await userEvent.keyboard("{ArrowUp}");
-    expect(screen.getByRole("button", { name: "Gas level: Highest. Change" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Gas level: High. Change" })).toBeInTheDocument();
     await userEvent.keyboard("{ArrowDown}");
-    await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: High. Change" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Gas level: Normal. Change" })).toBeInTheDocument());
   });
 });

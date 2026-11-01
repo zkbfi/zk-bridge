@@ -8,6 +8,7 @@
  */
 import type { Address, Hex } from "viem";
 import {
+  DEFAULT_GAS_LEVEL,
   RELEASE_GAS_LIMIT,
   TESTNETS,
   decodeMediatorMessage,
@@ -115,7 +116,7 @@ export function createEconomicsReader(input: EconomicsInput): (messages: readonl
       }
       feesUsd.set(message.messageId, usdOf(fee, token?.decimals as number, quote.usdE18));
     }
-    const deliveryUsd = deliveryGasUsd({ gasUsed: DELIVERY_GAS, ...gas, nativePriceE18: native.usdE18, level: 1 });
+    const deliveryUsd = deliveryGasUsd({ gasUsed: DELIVERY_GAS, ...gas, nativePriceE18: native.usdE18, level: DEFAULT_GAS_LEVEL });
     return { kind: "known", feesUsd, deliveryUsd, unpriced, block: String(block) };
   };
 }

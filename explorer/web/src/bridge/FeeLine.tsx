@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
+import { DEFAULT_GAS_LEVEL } from "@zk-bridge/shared";
 import { Chevron, ClockIcon, FloppyIcon, GasCan, TakeMyMoney } from "./icons";
 import type { TransferStep } from "./bridge-model";
 
@@ -36,7 +37,7 @@ export type FeeSlider = {
   readonly status?: { readonly text: string; readonly action?: { readonly label: ReactNode; readonly onClick: () => void } };
 };
 
-/** A gas level: 1 Normal, 2 High, 3 Highest. */
+/** A gas level: 1 Low, 2 Normal, 3 High. */
 export type FeeGasLevel = 1 | 2 | 3;
 
 /** Props of {@link FeeLine}. */
@@ -49,7 +50,7 @@ export type FeeLineProps = {
   readonly gasHelp: string;
   readonly gasLevel: 0 | FeeGasLevel;
   /**
-   * Called with the next gas level when the user taps the bars beside the gas can (Normal → High → Highest → Normal) or
+   * Called with the next gas level when the user taps the bars beside the gas can (Low → Normal → High → Low) or
    * presses an arrow key on them. Without it the can only shows the level.
    */
   readonly onGasLevel?: (level: FeeGasLevel) => void;
@@ -68,10 +69,10 @@ type Open = "tip" | "time" | null;
 export const SWAP_MILLISECONDS = 120;
 
 /** The name of each gas level. */
-export const GAS_LEVEL_NAMES: Readonly<Record<FeeGasLevel, string>> = { 1: "Normal", 2: "High", 3: "Highest" };
+export const GAS_LEVEL_NAMES: Readonly<Record<FeeGasLevel, string>> = { 1: "Low", 2: "Normal", 3: "High" };
 
-/** The level a tap on the bars moves to: one up, and from Highest back to Normal. */
-export const nextGasLevel = (level: 0 | FeeGasLevel): FeeGasLevel => (level === 1 ? 2 : level === 2 ? 3 : 1);
+/** The level a tap on the bars moves to: one up, and from High back to Low. */
+export const nextGasLevel = (level: FeeGasLevel): FeeGasLevel => (level === 1 ? 2 : level === 2 ? 3 : 1);
 
 const reducedMotion = (): boolean => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -185,9 +186,9 @@ export const FeeLine = ({ summary, summaryFull, gasHelp, gasLevel, onGasLevel, t
 
   const hoverProps = (key: "tip" | "gas" | "time") => ({ onMouseEnter: () => setHover(key), onMouseLeave: () => setHover(null), onFocus: () => setHover(key), onBlur: () => setHover(null) });
 
-  // The gas level: the can and its bars are one segment; a tap moves up a level (Highest wraps to Normal), the arrow
+  // The gas level: the can and its bars are one segment; a tap moves up a level (High wraps to Low), the arrow
   // keys step up and down without wrapping. Its tooltip stays while the pointer is on it, so the new level reads at once.
-  const level = gasLevel === 0 ? 1 : gasLevel;
+  const level = gasLevel === 0 ? DEFAULT_GAS_LEVEL : gasLevel;
   const levelKeys = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
     if (onGasLevel === undefined) return;
     const up = event.key === "ArrowUp" || event.key === "ArrowRight";
@@ -205,7 +206,7 @@ export const FeeLine = ({ summary, summaryFull, gasHelp, gasLevel, onGasLevel, t
         <GasCan title="Gas" level={gasLevel} />
       </span>
     ) : (
-      <button type="button" className="zb-dseg zb-gas" aria-label={`Gas level: ${GAS_LEVEL_NAMES[level]}. Change`} aria-describedby={ids.gas} data-fee="gas" data-level={gasLevel} onClick={() => onGasLevel(nextGasLevel(gasLevel))} onKeyDown={levelKeys} {...hoverProps("gas")}>
+      <button type="button" className="zb-dseg zb-gas" aria-label={`Gas level: ${GAS_LEVEL_NAMES[level]}. Change`} aria-describedby={ids.gas} data-fee="gas" data-level={gasLevel} onClick={() => onGasLevel(nextGasLevel(level))} onKeyDown={levelKeys} {...hoverProps("gas")}>
         <GasCan title="Gas" level={gasLevel} />
       </button>
     );

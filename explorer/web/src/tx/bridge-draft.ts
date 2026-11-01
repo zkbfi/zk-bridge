@@ -30,7 +30,7 @@ export type DeliveryOptions = {
   readonly marginPercentText: string;
   /** The factor on the gas cost for the gas based mode, as typed (`1`, the measured cost itself). */
   readonly gasMultiplierText: string;
-  /** The ceiling base fee in gwei, as typed. Empty takes twice the base fee now. */
+  /** The ceiling base fee in gwei, as typed. Empty takes three times the base fee now (the Normal gas level). */
   readonly ceilingGweiText: string;
   /**
    * The sender's price: how many whole tokens one whole native coin of the destination chain is worth. Null means the
@@ -301,7 +301,7 @@ export const DEFAULT_GAS_MARGIN_TEXT = formatUnits(DEFAULT_GAS_MARGIN, 18);
 
 /**
  * The tip options before the user touches them: the gas based tip at the base fee, equal to the measured cost. Its
- * limit is the price ceiling, twice the base fee now, and the deliverer's gas choice decides how much of it the tip takes.
+ * limit is the price ceiling, three times the base fee now (the Normal gas level), and the deliverer's gas choice decides how much of it the tip takes.
  */
 export const DEFAULT_DELIVERY_OPTIONS: DeliveryOptions = {
   mode: "gas-multiplier",
