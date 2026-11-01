@@ -13,6 +13,8 @@ import {
   type EvidencePackage,
   type ProofPackage,
 } from "./packages.js";
+import { openingPackageSchema, type OpeningPackage } from "./opening-package.js";
+import { parseProveTiming, type ProveTiming } from "./prove-timing.js";
 import { describeRoute, renderProverConfig, type BackendSection, type HandoffSection } from "./prover-config.js";
 
 /** The exit code of `prove` when the starting head already is the newest final header. */
@@ -20,7 +22,8 @@ export const EXIT_UP_TO_DATE = 3;
 
 /** The result of one `prove` run. */
 export type ProveOutcome =
-  | { readonly kind: "proof"; readonly proofPackage: ProofPackage }
+  /** `timing`: the prover's `prove_timing` fields, or null from an older prover that writes none. */
+  | { readonly kind: "proof"; readonly proofPackage: ProofPackage; readonly timing?: ProveTiming | null }
   | { readonly kind: "up-to-date" };
 
 /** A prover command failed. `detail` holds the tail of its standard error. The logger redacts it before it is written. */
@@ -68,6 +71,26 @@ export interface ProverBinary {
   verify(request: VerifyRequest): Promise<void>;
 }
 
+/**
+ * The `opening-proof` command. It is apart from {@link ProverBinary} because only the runner opens bridges, and the other
+ * users of the wrapper need not fake it.
+ */
+export interface OpeningProver {
+  /**
+   * `opening-proof --route <route>`: the proof that opens the bridge on the SOURCE chain of the route of `direction`.
+   * The prover reads the head of the light client of that bridge and runs `eth_getProof` on the other chain at the block
+   * that this head stored, so the call must follow a light client update while that block is inside the proof window
+   * of the node. @throws ProverCommandError when the prover refuses or a node fails.
+   */
+  openingProof(request: DirectionRequest): Promise<OpeningPackage>;
+}
+
+/** A secret of the prover: the NAME of the variable it reads and the value that the child gets under that name. */
+export interface ProverSecret {
+  readonly variable: string;
+  readonly value: string;
+}
+
 /** Input of {@link createProverBinary}. */
 export interface ProverBinaryInput {
   readonly binaryPath: string;
@@ -78,8 +101,11 @@ export interface ProverBinaryInput {
   readonly backend: BackendSection | null;
   /** Also send each proof package to a webhook. The bearer token travels in `baseEnvironment`, never in the file. */
   readonly handoff?: HandoffSection;
-  /** The variable and value that the prover reads its proving key from. Passed in the child environment only. */
-  readonly proverSecret: { readonly variable: string; readonly value: string } | null;
+  /**
+   * The variable and value that the prover reads its proving key from, or one for each endpoint of a list that has a
+   * key. Passed in the child environment only.
+   */
+  readonly proverSecret: ProverSecret | readonly ProverSecret[] | null;
   /** The variables that the child needs to find its libraries, such as `PATH`. */
   readonly baseEnvironment: Readonly<Record<string, string>>;
   readonly temporaryDirectory?: string;
@@ -111,9 +137,10 @@ function parseSingleJsonLine(stdout: string, command: string): unknown {
  * of mode 0700, writes it with mode 0600, and removes the directory when the command ends. The proving key goes to
  * the child through the environment variable that the file names. No secret is ever an argument.
  */
-export function createProverBinary(input: ProverBinaryInput): ProverBinary {
+export function createProverBinary(input: ProverBinaryInput): ProverBinary & OpeningProver {
   const environment: Record<string, string> = { ...input.baseEnvironment };
-  if (input.proverSecret !== null) environment[input.proverSecret.variable] = input.proverSecret.value;
+  const secrets: readonly ProverSecret[] = input.proverSecret === null ? [] : "variable" in input.proverSecret ? [input.proverSecret] : input.proverSecret;
+  for (const secret of secrets) environment[secret.variable] = secret.value;
 
   async function withConfigFile<Result>(direction: ProofDirection, backend: BackendSection | null, use: (path: string, route: string) => Promise<Result>): Promise<Result> {
     const route = describeRoute(input.pair, direction);
@@ -152,7 +179,16 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary {
         if (output.code !== 0) throw new ProverCommandError("prove", output.code, tailOf(output.stderr));
         const parsed = proofPackageSchema.safeParse(parseSingleJsonLine(output.stdout, "prove"));
         if (!parsed.success) throw new ProverOutputError(`prove printed an unexpected package: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
-        return { kind: "proof", proofPackage: parsed.data } as const;
+        // The prover logs its step timings on standard error. A success logs them too, so that the duration of a proof and
+        // the share of the wait for a GPU worker can be read from real jobs. An older prover writes none.
+        const timing = parseProveTiming(output.stderr);
+        input.logger.info("job_proved", {
+          route,
+          newHeadSlot: parsed.data.newHeadSlot,
+          timingReported: timing !== null,
+          ...timing,
+        });
+        return { kind: "proof", proofPackage: parsed.data, timing } as const;
       });
     },
     async evidence(request) {
@@ -171,6 +207,15 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary {
         if (output.code !== 0) throw new ProverCommandError("evidence", output.code, tailOf(output.stderr));
         const parsed = evidencePackageSchema.safeParse(parseSingleJsonLine(output.stdout, "evidence"));
         if (!parsed.success) throw new ProverOutputError(`evidence printed an unexpected package: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+        return parsed.data;
+      });
+    },
+    async openingProof(request) {
+      return withConfigFile(request.direction, null, async (path, route) => {
+        const output = await run("opening-proof", ["--config", path, "opening-proof", "--route", route]);
+        if (output.code !== 0) throw new ProverCommandError("opening-proof", output.code, tailOf(output.stderr));
+        const parsed = openingPackageSchema.safeParse(parseSingleJsonLine(output.stdout, "opening-proof"));
+        if (!parsed.success) throw new ProverOutputError(`opening-proof printed an unexpected package: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
         return parsed.data;
       });
     },

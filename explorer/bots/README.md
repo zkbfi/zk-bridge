@@ -1,11 +1,13 @@
-# Bots: proof publisher and delivery runner
+# Bots: proof publisher, delivery runner and testnet traffic
 
-Two bots in TypeScript. They share `explorer/shared` (ABIs, pair registry, message decoding, setup file, secret store,
+Three bots in TypeScript. They share `explorer/shared` (ABIs, pair registry, message decoding, setup file, secret store,
 redactor) with the indexer and the terminal dashboard. Design: `docs/bots.md`.
 
 - The **publisher** makes light client update proofs on a remote graphics processor and posts them on msgboard. It holds no wallet.
 - The **runner** reads those proofs, posts `update` to the destination light client when it is behind, and delivers
   covered transfers and messages for the fee that each transfer offers. It holds a wallet on the destination chain.
+- The **traffic** bot (testnets) sends small test transfers back and forth on a schedule, so both chains see regular
+  traffic and the runner and the prover have work to measure. It holds a wallet on both chains. See "The traffic bot".
 
 ## Commands
 
@@ -19,6 +21,7 @@ pnpm --filter @zk-bridge/bots run typecheck
 
 pnpm --filter @zk-bridge/bots run start publisher --config bots.json
 pnpm --filter @zk-bridge/bots run start runner --config bots.json
+pnpm --filter @zk-bridge/bots run start traffic --config bots.json
 # add --once to run one pass and exit
 ```
 
@@ -44,7 +47,7 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `maximumMessageBytes` | The largest msgboard message. Default 8192. |
 | `publisher.prover.binary`, `.timeoutSeconds` | The `zk-bridge-prover` binary. |
 | `publisher.apiKeyVariable` | The variable that the prover reads the RunPod key from. Default `RUNPOD_API_KEY`. |
-| `publisher.remote` | `{ "mode": "load-balancing" }`. The only mode today. |
+| `publisher.remote` | `{ "mode": "load-balancing" }`. The only mode today. It may add `endpoints`, a list of proving endpoints in priority order (`[{ "label", "url", "apiKeyVariable"?, "readyWaitSeconds"?, "timeoutSeconds"?, "attempts"? }]`, as in the backend, `explorer/backend/README.md`, "Proving endpoints"). With `endpoints` the setup file's `endpointUrl` and `runpodApiKey` are not used: each key comes from the environment variable that its entry names, and every endpoint address is removed from the logs. |
 | `publisher.backend` | `remote` (default) or `oracle`. The `oracle` backend is for local testing only. The prover signs with a test key, and only a local chain accepts that signature. Never set it on a live deployment. Only the tests and the end-to-end run set it. With it, the publisher posts the oracle form of the proof message (version 2). |
 | `publisher.oracleKeyVariable` | The variable that holds the test key of the `oracle` backend. Default `ORACLE_KEY`. With `oracle`, the setup file needs no remote prover endpoint and no RunPod key. |
 | `publisher.pollSeconds`, `.republishSeconds`, `.retryBackoffSeconds` | 30, 600 and 120. |
@@ -66,6 +69,7 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `runner.maximumPrerequisiteSpendPerSweepWei` | Required. The most wei that the layout calls of one sweep may cost, counted at the worst case of each send. A sweep that reserved or sent a layout call counts toward `maximumDeliveriesPerSweep`. The example file uses 0.05 of the native coin. |
 | `runner.maximumPrerequisiteSpendPerDayWei` | Required. The most wei that layout calls may cost in a rolling 24 hours. The runner keeps the spend in its state file, so a restart does not reset it. At the limit the runner sends no layout call until the window rolls. The example file uses 0.2 of the native coin. |
 | `runner.maximumUnrecoveredPrerequisiteLossWei` | Required. The loss at which the runner stops sending layout calls, over a rolling 24 hours. A loss is the layout spend on an item that was then not delivered. The example file uses 0.1 of the native coin. |
+| `runner.openDeposits` | Open the bridge on the destination chain while it is closed (see "Opening the bridges" below). Default `true`. |
 | `runner.prerequisiteLossRefusalSeconds` | After layout calls were paid for an item and the delivery did not follow, the runner does not try the item for this long. Default 1800. |
 
 A secret is a reference: `env:NAME`, `op://vault/item/field`, or `{ "source": "store", "name": "..." }`. A secret value in
@@ -207,7 +211,112 @@ line in `stateDirectory/outcomes-<pair>.jsonl`. Fields: `time`, `kind` (`deliver
 `status` (`delivered`, `skipped`, `failed`, `posted`), `reason` (new: `insufficient-gas`, `anchor-not-stored`, `batch-did-not-settle`, `batch-result-missing`), `messageId`, `transactionHash`, `gasUsed`, `gasCostWei`,
 `prerequisiteCostWei`, `feeWei`, `feeExpectedWei`, `feeReceivedTokens`, `path` (`delivery-router` or `bridge`). Amounts are
 decimal strings. A skip is written once for each change of reason, not once for each pass. The state file
-`runner-<pair>-<direction>.json` holds the items that need no second look, and the layout spend and losses of the last 24 hours.
+`runner-<pair>-<direction>.json` holds the items that need no second look, the layout spend and losses of the last 24 hours,
+and `depositsOpen` once the bridge of the destination chain is open.
+
+### Opening the bridges
+
+Both bridges start closed. A bridge opens for good with `openDeposits(proof)`, which anyone may send. The proof shows that the
+bridge's own light client stored a block of the other chain, and that the other chain's light client had already stored a
+head in the state of that block. So the runner of the direction S to D, which posts the updates to the light client on D,
+opens the bridge on D. It can do that once the light client on S has its first update (from the runner of the other
+direction, or anyone), and the light client on D then stores a block of S that comes after it.
+
+With `runner.openDeposits` on (the default), each direction of the runner checks the bridge on its destination chain at
+start and after each pass, and also right after an update of its own is mined:
+
+1. When the state file says open, nothing happens, for good.
+2. It reads the head of the light client on D. When no attempt used a newer head, it waits: the proof needs a block that
+   a node still serves the state of, and an old head fails again with "distance to target block exceeds maximum proof
+   window".
+3. It reads `depositsOpen()` and logs `deposits_open_checked` (`bridge`, `headSlot`, `open`). Open: it writes
+   `depositsOpen: true` to the state file and stops checking.
+4. It runs `zk-bridge-prover opening-proof --route <D>_to_<S>`. For the prover this bridge is the source bridge of the
+   opposite route. With the default slots the prover takes the head of the light client on D, and runs `eth_getProof` on
+   S (the remote RPC of that route) at the block of S that the head stored, the newest one. It logs `deposits_opening`
+   (`route`, `remoteSlot`, `storedSlot`, `remoteBlockNumber`).
+5. It simulates `openDeposits` with `eth_call`. A revert sends nothing. It sends from the runner's signer, with the runner's
+   priority fee settings (0.01 gwei or more on chains 943 and 369), through the same queue as its other transactions, and
+   logs `deposits_opened` (`transactionHash`, `gasUsed`).
+
+A failure logs `deposits_open_failed` (warning) with `reason` (`read-failed`, `proof-failed`, `wrong-target`,
+`simulation-reverted`, `send-failed`, `transaction-reverted`), `detail` and `retryAfterSeconds`. The next attempt waits for a
+newer head of the light client and a backoff of 60 seconds that doubles with each failure up to 30 minutes, so it never
+loops on a head that cannot work. Until the other light client has its first update the prover refuses with "it needs its
+first update"; that is the same wait.
+
+## The traffic bot
+
+Owner: "we should start out with a minimum of 1 proof/hour. this will help with keeping things current on both chains
+and giving us a benchmark to check against. we need to mint tokens on both sides too to test the bridge's utility" and
+"and then setup bots to move said tokens back and forth".
+
+The test tokens are `tUSD` (6 decimals) and `tTKN` (18 decimals), deployed on each chain by
+`script/testnet/DeployTestTokens.s.sol` (docs/testnet-run.md, "Test tokens and traffic"). Their bridged copies carry the
+prefix `z` (`ztUSD`, `ztTKN`). The script writes the test token file that `traffic.tokensFile` names.
+
+Owner, later: "seems like it would be best to have these proofs be posted if and only if they have erc20s moving across
+the bridge. otherwise they are useless. so perhaps we should be doing bridges 4x/hr".
+
+Each direction sends once in each interval, at its offset plus a jitter that a hash of the direction and the interval
+fixes, so a restart keeps it. The default is four sends an hour in each direction (every 15 minutes), the way back 7.5
+minutes after the way out, with up to 60 seconds of jitter. So every proof the backend makes carries token transfers.
+`intervalSeconds`, `jitterSeconds` and the offsets set another cadence. A send:
+
+1. Lists what can move from the source chain: the test tokens native there, and the copies there of the destination's
+   test tokens. Each draws an amount between `amount.minimum` and `amount.maximum` (in hundredths of a token; a copy
+   never more than its balance).
+2. Keeps balances in their band. A native token goes out only while its home balance stays at or above
+   `balance.minimum` after the send. A copy goes home first when its native token is below `balance.minimum` at home; a
+   native token goes out first when its home balance is above `balance.maximum`. Otherwise the pick is uniform.
+3. Approves the mediator once for the largest amount, when the allowance is short (test tokens only).
+4. Relays with `relayTokensAndCall` to the delivery router of the destination, with the dapp's default tip:
+   `defaultTip` of `@zk-bridge/shared` (the share mode, 0.1 percent of the amount, `tipPercent`), the traffic wallet as
+   recipient. When the copy does not exist on the destination yet, the delivery deploys it: the send asks for
+   `newCopyGasLimit` of the destination chain when one is set. Sepolia needs one: a copy took 6,971,380 gas there in an estimate on 2026-11-01, and the mediator's default is 2,750,000 with the callback. A delivery that runs out of gas is final.
+5. Simulates each transaction first and keeps `minimumNativeWei` of the chain: a send whose worst case (gas limit times
+   maximum fee) would take the native balance below it does not go.
+
+Every attempt is a log line: `traffic_sent` (direction, symbol, kind, `tokenAddress`, amount, `transactionHash`, `messageId`,
+`deployMessage`, `deploysCopy`, `messageGasLimit`, gas), `traffic_approved`, `traffic_skipped` with a reason, or `traffic_failed` (an error, for example
+an endpoint that does not answer; the next poll tries again). At start `traffic_tokens` lists each test token with the
+address of its copy on the other chain: the runner's `tokenValuationsWei` needs all of them, because the runner prices
+a tip only in a token it has a value for.
+
+| Reason | Meaning |
+|---|---|
+| `no-eligible-token` | No candidate can go; `candidates` says why for each (`home-balance-at-minimum`, `copy-balance-below-amount`, `waiting-for-first-return`). |
+| `native-below-reserve` | The worst case of the approval or the relay would take the native coin below `minimumNativeWei`. |
+| `gate-not-confirmed` | The source gate enforces and nobody confirmed the current epoch (`ForkNotConfirmed`). Sepolia's gate enforces. |
+| `deposits-not-open` | The source bridge is still locked. |
+| `no-delivery-router` | The deployment names no delivery router on the destination. |
+| `approval-simulation-reverted`, `relay-simulation-reverted` | The node refused the call; `error` names the error when an ABI knows it. |
+| `approval-reverted`, `relay-reverted` | The transaction was mined and reverted. |
+
+**The first send of each token is delivered by hand.** Until a copy of a native token came home once, the mediator
+sends every relay of it as a deploy message, and the runner skips a deploy message with `no-price-for-fee-token` (the
+indexer names no destination token for it). So a native token goes out once, when it was never relayed, and then waits
+(`waiting-for-first-return`) until a copy came home; its copies go home first. `traffic_sent` marks the one deploy
+message with `deployMessage: true` (and `deploysCopy: true` when the copy has no code yet). Deliver it once by hand
+through the delivery router (anyone may). The copies then go home as ordinary releases that the runner prices, and from
+then on every send is one. That is one hand delivery for each test token: four on the testnet. The end-to-end stage
+`traffic` does exactly that.
+
+An attempt uses up its interval, sent or skipped. A slot is written to `stateDirectory/traffic-<pair>.json` before the
+first transaction leaves, so an attempt whose receipt never arrives is not sent twice. `--once` sends in each enabled
+direction at once, whatever the schedule.
+
+| Field of `traffic` | Meaning |
+|---|---|
+| `signer` | As `runner.signer`. On the app server `env:TRAFFIC_PRIVATE_KEY`. |
+| `tokensFile` | The test token file. |
+| `tokens` | By symbol: `amount` and `balance`, each `{ "minimum", "maximum" }` in whole tokens as text. |
+| `intervalSeconds`, `jitterSeconds`, `pollSeconds` | 900, 60 and 60. |
+| `directions` | `first-to-second` and `second-to-first`, each `{ "enabled", "offsetSeconds" }`. Defaults: both on, offsets 0 and 450. |
+| `tipPercent` | The tip as a percentage of the amount. Default `0.1`, the dapp's default. |
+| `newCopyGasLimit` | By destination chain id: the gas limit of a send that deploys a copy there, at most the bridge's `maxGasPerTx` (10,000,000). Set `"11155111": "9000000"` on the testnet. |
+| `minimumNativeWei` | Required, by chain id, for each chain of the pair. |
+| `priorityFeeWei`, `minimumPriorityFeeWei`, `receiptTimeoutSeconds` | As in the runner. Chains 943 and 369 never tip below 0.01 gwei. |
 
 ## msgboard size limit
 

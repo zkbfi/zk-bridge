@@ -157,7 +157,7 @@ const useCostInput = (chainId: number, prices: ReadonlyMap<string, PriceQuote | 
  * proof's new slot × seconds per slot. The proof is read as the message page's proof panel reads it (the msgboard
  * indexer, else the msgboard node); the genesis comes from the indexer's stored heads.
  */
-const useProofReach = (enabled: boolean, heads: ExploreData["heads"]): ProofReach => {
+const useProofReach = (enabled: boolean, heads: ExploreData["heads"]): { readonly reach: ProofReach; readonly fetching: number } => {
   const services = useServices();
   const { pair, explore } = services;
   const clocks = useQuery({ queryKey: ["explore", "beacon-clocks"], queryFn: () => explore.beaconClocks(), enabled, refetchInterval: 300_000 });
@@ -173,7 +173,7 @@ const useProofReach = (enabled: boolean, heads: ExploreData["heads"]): ProofReac
   };
   const out = useQuery(read("first-to-second"));
   const back = useQuery(read("second-to-first"));
-  return useMemo(() => {
+  const reach = useMemo(() => {
     const reach: Partial<Record<ProofDirection, number>> = {};
     for (const [direction, reading, source] of [
       ["first-to-second", out.data, pair.first],
@@ -184,13 +184,14 @@ const useProofReach = (enabled: boolean, heads: ExploreData["heads"]): ProofReac
     }
     return reach;
   }, [out.data, back.data, clocks.data, pair]);
+  return { reach, fetching: [clocks, out, back].filter((query) => query.isFetching).length };
 };
 
 const InFlight = ({ data }: { readonly data: ExploreData }) => {
   const { pair, tokens, now } = data;
   const { configuration, explore } = useServices();
   const sample = configuration.dataMode === "fixture";
-  const reach = useProofReach(!sample, data.heads);
+  const { reach, fetching: proofFetching } = useProofReach(!sample, data.heads);
   const dayStart = dayStartOf(now);
   const sent = useFeed(pair.id, { status: "sent" }, 200);
   const waiting = useFeed(pair.id, { status: "waiting_for_finality" }, 200);
@@ -204,7 +205,8 @@ const InFlight = ({ data }: { readonly data: ExploreData }) => {
     // The sample stream moves one event per tick; read it as often.
     refetchInterval: SAMPLE_TICK * 1000,
   });
-  const prices = usePrices(tokens).data;
+  const priceQuery = usePrices(tokens);
+  const prices = priceQuery.data;
   const firstCost = useCostInput(pair.first.chainId, prices, configuration.dataMode === "live");
   const secondCost = useCostInput(pair.second.chainId, prices, configuration.dataMode === "live");
   const tracks = useMemo(
@@ -232,7 +234,10 @@ const InFlight = ({ data }: { readonly data: ExploreData }) => {
   );
   // Drawn once every list has answered, so the transfers already in flight appear in place, not out of the chains.
   const loading = sample ? samples.data === undefined : [sent, waiting, covered].some((query) => query.data === undefined && !query.isError);
-  return <InFlightOrbits tracks={tracks} now={now} loading={loading} />;
+  // Every request the loop is drawn from that is out now; a disabled query is never fetching, so the sample and live
+  // modes each count only their own.
+  const fetching = [sent, waiting, covered, delivered, aggregate, samples, priceQuery].filter((query) => query.isFetching).length + proofFetching;
+  return <InFlightOrbits tracks={tracks} now={now} loading={loading} fetching={fetching} />;
 };
 
 const Browse = ({ data }: { readonly data: ExploreData }) => {
@@ -379,7 +384,7 @@ const LatestTransfers = ({ feed, pair, now }: { readonly feed: readonly FeedItem
           <XRow
             key={item.id}
             href={href({ kind: "tx", chainId: source.chainId, id: item.sourceTransactionHash })}
-            icon={item.token === null ? undefined : <TokenIcon subject={{ chainId: source.chainId, address: item.token.address }} symbol={item.token.symbol} size={28} decorative />}
+            icon={item.token === null ? undefined : <TokenIcon subject={{ chainId: source.chainId, address: item.token.address }} symbol={item.token.symbol} isBridgedCopy={item.token.isBridgedCopy} size={28} decorative />}
             title={item.token === null || item.amount === null ? "Message" : <><Num text={amountText(item.amount, item.token.decimals)} /> {item.token.symbol}</>}
             sub={<><RouteIcons from={source.chainId} to={destination.chainId} names={names} /> {relativeTime(item.sentAt, now)}</>}
             status={statusWord(item.status)}

@@ -5,16 +5,20 @@
  */
 import { createPublicClient, http, type Hex } from "viem";
 import { z } from "zod";
-import { PROOF_DIRECTIONS, secondsPerSlot, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
+import { PROOF_DIRECTIONS, secondsPerSlot, type ContractCaller, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
 import { BackendConfigError, type BackendConfig } from "../config.ts";
 import { DEFAULT_POLICY, type LightClientFacts } from "../keepalive/plan.ts";
 import { fetchJsonGet, readHistory, readLightClient, type JsonGet } from "../keepalive/sources.ts";
 import type { BackendModuleContext } from "../module.ts";
-import { findActiveJob, findLatestJob } from "../requests/jobs.ts";
+import { readHeldProofs } from "../requests/held-proofs.ts";
+import { findActiveJob } from "../requests/jobs.ts";
 import type { RequestService } from "../requests/service.ts";
-import { MIN_PARTICIPANTS } from "./decide.ts";
+import { batchRuleFor } from "./batch.ts";
+import { MIN_PARTICIPANTS, SLOTS_PER_EPOCH } from "./decide.ts";
+import { createEconomicsReader, type DestinationToken } from "./economics.ts";
 import { createFinalityFeed } from "./feed.ts";
 import { createDirectionWatcher, type ListedMessage } from "./watcher.ts";
+import { createWarmupStore } from "./warmup-store.ts";
 
 /** How long one beacon or indexer read of the watcher may take, in milliseconds. Short: the watcher races the clock. */
 export const WATCH_READ_TIMEOUT_MILLISECONDS = 10_000;
@@ -55,14 +59,36 @@ export function watchedDirections(config: BackendConfig, pair: Pair): readonly P
   return [];
 }
 
+const addressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
+
+const tokenSchema = z
+  .object({ address: addressSchema, decimals: z.number().int().nullable(), isBridgedCopy: z.boolean().nullable(), homeChainId: z.number().int().nullable(), homeToken: addressSchema.nullable() })
+  .passthrough()
+  .nullable();
+
 const feedSchema = z.object({
   items: z.array(
     z.object({
       messageId: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
       sent: z.object({ timestamp: z.number().int() }).passthrough().nullable(),
+      transfer: z.object({ destinationToken: tokenSchema.optional() }).passthrough().nullable().optional(),
     }).passthrough(),
   ),
 });
+
+const messageSchema = z.object({ data: z.string().regex(/^0x([0-9a-fA-F]{2})*$/) }).passthrough();
+
+/** Reads the call data of one message from the indexer. */
+function messageDataReader(input: { indexerUrl: string; get: JsonGet }): (messageId: Hex) => Promise<Hex> {
+  const base = input.indexerUrl.replace(/\/+$/, "");
+  return async (messageId) => {
+    const answer = await input.get(`${base}/api/messages/${messageId}`);
+    if (answer.status !== 200) throw new Error(`the chain indexer answered ${answer.status} for a message`);
+    const parsed = messageSchema.safeParse(answer.body);
+    if (!parsed.success) throw new Error("the chain indexer sent a message in an unknown shape");
+    return parsed.data.data as Hex;
+  };
+}
 
 /** Reads the sent and waiting messages of a direction from the indexer. */
 function messageReader(input: { indexerUrl: string; source: PairSide; destination: PairSide; get: JsonGet }): () => Promise<readonly ListedMessage[]> {
@@ -73,7 +99,9 @@ function messageReader(input: { indexerUrl: string; source: PairSide; destinatio
     if (answer.status !== 200) throw new Error(`the chain indexer answered ${answer.status} for the feed`);
     const parsed = feedSchema.safeParse(answer.body);
     if (!parsed.success) throw new Error("the chain indexer sent the feed in an unknown shape");
-    return parsed.data.items.flatMap((item) => (item.sent === null ? [] : [{ messageId: item.messageId as Hex, timestamp: item.sent.timestamp }]));
+    return parsed.data.items.flatMap((item) =>
+      item.sent === null ? [] : [{ messageId: item.messageId as Hex, timestamp: item.sent.timestamp, destinationToken: (item.transfer?.destinationToken ?? null) as DestinationToken | null }],
+    );
   };
 }
 
@@ -83,7 +111,12 @@ export type WatchDependencies = {
   readonly fetchFunction?: () => typeof fetch;
   /** Reads the light client on the destination side. Default: viem over the side's RPC endpoint. */
   readonly readLightClient?: (side: PairSide) => Promise<LightClientFacts>;
+  /** The execution client of a side, for the prices and the base fee of a batch. Default: viem over the side's RPC endpoint. */
+  readonly chainClient?: (side: PairSide) => ChainClient;
 };
+
+/** What a batch reads from a chain: views at a block, the newest block number, and the newest block's base fee. */
+export type ChainClient = ContractCaller & { readonly getBlockNumber: () => Promise<bigint>; readonly getBlock: () => Promise<{ readonly baseFeePerGas: bigint | null }> };
 
 /**
  * Starts a feed and a watcher per watched direction. Resolves with the function that stops them all.
@@ -102,10 +135,22 @@ export async function startWatch(input: { context: BackendModuleContext; service
   const get: JsonGet = (url) => fetchJsonGet(fetchFunction(), WATCH_READ_TIMEOUT_MILLISECONDS)(url);
   const readFacts = input.dependencies?.readLightClient ?? ((side: PairSide) => readLightClient(createPublicClient({ transport: http(side.rpcUrl) }), side.contracts.lightClient));
   const ping = config.watch.warmup.enabled ? (context.pingProver ?? null) : null;
+  const { leadSeconds: ignoredLead, ...warmup } = config.watch.warmup;
+  if (ignoredLead !== undefined) logger.warn("config_ignored", { key: "watch.warmup.leadSeconds", detail: "the lead time is learned now; set defaultLeadSeconds, minLeadSeconds and maxLeadSeconds instead" });
+  const chainClient = input.dependencies?.chainClient ?? ((side: PairSide) => createPublicClient({ transport: http(side.rpcUrl) }) as unknown as ChainClient);
+  // The prices are PulseX's: read on PulseChain when the pair has it. A testnet pair needs none.
+  const pulseSide = pair.sides.find((side) => side.chainId === 369);
+  const pulsechain = pulseSide === undefined ? null : chainClient(pulseSide);
+  const warmupStore = createWarmupStore(context.storage);
+  // A session open from before this start ran in a process that is gone: end it so the daily cap stops counting it.
+  const closed = warmupStore.closeOpenSessions(context.now());
+  if (closed > 0) logger.info("warmup_sessions_closed", { count: closed });
   const stoppers: Array<() => Promise<void>> = [];
   for (const direction of directions) {
     const { source, destination } = sidesOf(pair, direction);
     const beaconUrl = source.beaconUrl as string;
+    const batchRule = batchRuleFor(config.watch, config.pair, direction, SLOTS_PER_EPOCH * secondsPerSlot(source.chainId));
+    const destinationClient = chainClient(destination);
     const watcher = createDirectionWatcher({
       pairName: config.pair,
       direction,
@@ -114,12 +159,25 @@ export async function startWatch(input: { context: BackendModuleContext; service
       readMessages: messageReader({ indexerUrl: config.indexerUrl as string, source, destination, get }),
       readHistory: (periods, slotsPerPeriod) => readHistory(get, beaconUrl, periods, slotsPerPeriod),
       findActiveJob: () => findActiveJob(context.storage, direction),
-      findLatestJob: () => findLatestJob(context.storage, direction),
+      readHeldProofs: () => readHeldProofs(context.storage, direction),
+      pendingStaleSeconds: config.limits.pendingProofStaleSeconds,
+      batchRule,
+      readEconomics: createEconomicsReader({
+        destinationChainId: destination.chainId,
+        deliveryRouter: destination.contracts.deliveryRouter,
+        wrappedNative: destination.contracts.wrappedNative,
+        dependencies: {
+          readMessageData: messageDataReader({ indexerUrl: config.indexerUrl as string, get }),
+          pulsechain,
+          destinationBaseFee: async () => (await destinationClient.getBlock()).baseFeePerGas ?? 0n,
+        },
+      }),
       submit: (request) => service.submit(request),
       ping,
       policy: { ...DEFAULT_POLICY, keepAliveSeconds: config.limits.keepAliveSeconds },
       minParticipants: MIN_PARTICIPANTS,
-      warmup: config.watch.warmup,
+      warmup,
+      warmupStore,
       maxRetrySeconds: MAX_RETRY_SECONDS,
       logger,
       now: context.now,
@@ -150,7 +208,14 @@ export async function startWatch(input: { context: BackendModuleContext; service
       await watcher.stop();
     });
   }
-  logger.info("watch_started", { directions, sse: config.watch.sse, warmup: ping !== null });
+  const batches = Object.fromEntries(directions.map((direction) => [direction, batchRuleFor(config.watch, config.pair, direction, SLOTS_PER_EPOCH * secondsPerSlot(sidesOf(pair, direction).source.chainId))]));
+  logger.info("watch_started", {
+    directions,
+    sse: config.watch.sse,
+    warmup: ping !== null,
+    lead: warmupStore.lead(warmup),
+    batch: Object.fromEntries(Object.entries(batches).map(([direction, rule]) => [direction, { maxWaitSeconds: rule.maxWaitSeconds, lookaheadSeconds: rule.lookaheadSeconds, profitMargin: Number(rule.marginWad) / 1e18 }])),
+  });
   return async () => {
     await Promise.all(stoppers.map((stop) => stop()));
   };

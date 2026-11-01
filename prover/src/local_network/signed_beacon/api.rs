@@ -160,13 +160,31 @@ fn block_root(chain: &SyntheticBeaconChain, id: &str) -> Answer {
 
 fn block(chain: &SyntheticBeaconChain, id: &str, accept: &str) -> Answer {
     if !accept.contains(SSZ) {
-        return Answer::missing("the synthetic beacon node serves blocks as SSZ only");
+        return block_json(chain, id);
     }
     let bytes = slot_of_block_id(chain, id).and_then(|slot| chain.block_bytes(slot));
     match bytes {
         Some(bytes) => Answer::ssz(bytes.to_vec()),
         None => Answer::missing("no block for this identifier"),
     }
+}
+
+/// A block as JSON, with the fields that a reader of the sync aggregate takes: the slot, the parent root and
+/// `body.sync_aggregate`. The SSZ answer is the full block.
+fn block_json(chain: &SyntheticBeaconChain, id: &str) -> Answer {
+    let found = slot_of_block_id(chain, id)
+        .and_then(|slot| Some((slot, chain.header_at(slot)?, chain.sync_aggregate_at(slot)?)));
+    let Some((slot, header, aggregate)) = found else {
+        return Answer::missing("no block for this identifier");
+    };
+    Answer::json(&json!({ "data": { "message": {
+        "slot": slot.to_string(),
+        "parent_root": format!("{:#x}", header.parent_root),
+        "body": { "sync_aggregate": {
+            "sync_committee_bits": format!("0x{}", alloy_primitives::hex::encode(aggregate.sync_committee_bits)),
+            "sync_committee_signature": format!("0x{}", alloy_primitives::hex::encode(aggregate.sync_committee_signature)),
+        }},
+    }}}))
 }
 
 fn slot_of_state_id(chain: &SyntheticBeaconChain, id: &str) -> Option<u64> {
@@ -331,7 +349,8 @@ mod tests {
     }
 
     /// Claim: a header is found by slot and by root and the two answers agree; an unknown slot, an unknown root and a path
-    /// that the node does not serve answer 404; a block is served as SSZ only, and the block root of a slot matches its header.
+    /// that the node does not serve answer 404; a block is served as SSZ, and as JSON with its slot, parent root and sync
+    /// aggregate; and the block root of a slot matches its header.
     #[test]
     fn headers_and_blocks_are_found_by_slot_and_by_root() {
         let kind = ChainKind::Ethereum;
@@ -367,10 +386,19 @@ mod tests {
         );
         assert_eq!(missing("/eth/v1/beacon/blocks/1/root"), 404);
         assert_eq!(missing("/eth/v1/node/version"), 404);
+        assert_eq!(missing("/eth/v2/beacon/blocks/1"), 404);
+        // As JSON, a block carries the slot, the parent root and the sync aggregate (the assembled update reads them).
+        let as_json = json_of(&answer(
+            &chain,
+            &format!("/eth/v2/beacon/blocks/{}", first_slot + 2),
+            JSON,
+        ));
+        let message = &as_json["data"]["message"];
+        let header = chain.header_at(first_slot + 2).unwrap();
+        assert_eq!(message["parent_root"], format!("{:#x}", header.parent_root));
         assert_eq!(
-            missing(&format!("/eth/v2/beacon/blocks/{}", first_slot + 2)),
-            404,
-            "JSON blocks are not served"
+            &lc_testkit::json::sync_aggregate(&message["body"]["sync_aggregate"]),
+            chain.sync_aggregate_at(first_slot + 2).unwrap()
         );
         let ssz = answer(&chain, &format!("/eth/v2/beacon/blocks/{root}"), SSZ);
         assert_eq!(ssz.status, 200);

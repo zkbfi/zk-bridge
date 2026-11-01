@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Hex } from "viem";
 import type { ProofDirection } from "@zk-bridge/shared";
-import { CommandTimeoutError, ProverCommandError, type ProverBinary } from "@zk-bridge/shared/prover";
+import { CommandTimeoutError, ProverCommandError, type ProveOutcome, type ProverBinary, type ProveTiming } from "@zk-bridge/shared/prover";
 import type { Logger } from "../logger.ts";
 import { UNKNOWN_CALLER } from "./caller.ts";
 import type { Storage } from "../storage.ts";
+import { describeHeld, isStale, pendingFrom, readHeldProofs } from "./held-proofs.ts";
 import type { ProofNeed, ProofNeedReader } from "./proof-need.ts";
 import {
   CALLER_WINDOW_MILLISECONDS,
@@ -16,8 +17,10 @@ import {
 } from "./rate-limit.ts";
 import {
   findActiveJob,
+  findJobByTarget,
   findLatestJob,
   insertJob,
+  jobsWithSlots,
   insertRequest,
   listActiveJobs,
   pruneRequests,
@@ -48,6 +51,11 @@ export type ProofRequest = {
    * no HTTP request can carry; every other check still applies.
    */
   readonly plannedHandoff?: boolean;
+  /**
+   * The proof the watcher plans: from the head it read to the finalized slot it acts on. The service starts one job per
+   * target and direction, ever: a second request for it is refused as `duplicate`, also after a restart or a failure.
+   */
+  readonly target?: { readonly startSlot: number; readonly newSlot: number };
 };
 
 /** The answer of {@link RequestService.submit}. */
@@ -55,6 +63,8 @@ export type SubmitResult =
   | { readonly requestId: string; readonly jobId: string }
   | { readonly refused: "rate-limited"; readonly retryAfterSeconds: number }
   | { readonly refused: "nothing-to-prove" }
+  /** A job for the same target ran already. Only a request that names a target gets it. */
+  | { readonly refused: "duplicate" }
   | { readonly refused: "cannot-check"; readonly retryAfterSeconds: number };
 
 /** How long an answer of the chain indexer serves the next requests of its direction, in milliseconds. */
@@ -98,6 +108,11 @@ export interface RequestServiceInput {
   /** A proving job older than this many milliseconds counts as lost. Use the prover limit. */
   readonly proverTimeoutMilliseconds: number;
   readonly logger: Logger;
+  /**
+   * Told of each proof the prover made, with its `prove_timing` fields (null from an older prover). The warm-up learns
+   * from it how long a cold worker takes. `startedAt`: when the job started proving, in milliseconds since 1970.
+   */
+  readonly onProved?: (event: { readonly jobId: string; readonly direction: ProofDirection; readonly startedAt: number; readonly timing: ProveTiming | null }) => void;
 }
 
 /** A reason for a failed job that is safe to show: it holds no path, no endpoint and no prover output. */
@@ -121,8 +136,10 @@ export function createRequestService(input: RequestServiceInput): RequestService
     // A job that is no longer queued (or proving without a proof after a restart) must not start the prover.
     const claimed = updateJob(storage, jobId, { status: "proving" }, now(), ["queued", "proving"]);
     if (!claimed) return;
+    const startedAt = now();
+    let outcome: ProveOutcome;
     try {
-      const outcome = await input.proverForJob(jobId).prove({ direction });
+      outcome = await input.proverForJob(jobId).prove({ direction });
       if (outcome.kind === "up-to-date") {
         updateJob(storage, jobId, { status: "on-chain" }, now(), ["proving"]);
         return;
@@ -130,9 +147,19 @@ export function createRequestService(input: RequestServiceInput): RequestService
       // The prover already handed the proof to the webhook. The webhook module moves the job on from here.
       const { startHeadSlot, newHeadSlot } = outcome.proofPackage;
       updateJob(storage, jobId, { status: "proving", startSlot: String(startHeadSlot), newSlot: String(newHeadSlot) }, now(), ["proving"]);
+      // The first proof of these slots stays; the webhook keeps only one of them for the board.
+      const earlier = jobsWithSlots(storage, direction, String(startHeadSlot), String(newHeadSlot), jobId);
+      if (earlier.length > 0) logger.warn("proof_duplicate", { jobId, direction, startSlot: startHeadSlot, newSlot: newHeadSlot, firstJobId: earlier[0] });
     } catch (error) {
       logger.warn("job_failed", { jobId, direction, error });
       updateJob(storage, jobId, { status: "failed", error: describeFailure(error) }, now(), ["proving"]);
+      return;
+    }
+    // Outside the job's own handling: a failure here never fails the job.
+    try {
+      input.onProved?.({ jobId, direction, startedAt, timing: outcome.timing ?? null });
+    } catch (error) {
+      logger.warn("job_proved_note_failed", { jobId, direction, error });
     }
   }
 
@@ -176,6 +203,7 @@ export function createRequestService(input: RequestServiceInput): RequestService
       insertRequest(storage, { ...stored(request), id: requestId, jobId: active.id, now: current });
       return { result: { requestId, jobId: active.id }, startedJobId: null };
     }
+    if (request.target !== undefined && findJobByTarget(storage, request.direction, request.target) !== null) return { result: { refused: "duplicate" }, startedJobId: null };
     const directionWait = directionWaitSeconds({ latest: findLatestJob(storage, request.direction), now: current, limits });
     if (directionWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: directionWait }, startedJobId: null };
     // A backstop behind the indexer check: it bounds what remote proofs cost even when the indexer reports wrong facts.
@@ -219,12 +247,24 @@ export function createRequestService(input: RequestServiceInput): RequestService
       }
       if (!need.needed && request.reason === "finality" && request.plannedHandoff === true) need = { needed: true, why: "keep-alive" };
       if (!need.needed) return { refused: "nothing-to-prove" };
+      // Never prove again what a proof we have can still land: it starts at the head, and the next proof starts from
+      // the head it makes. Only a proof that waited past its time lets a new one start from the same head.
+      const headSlot = request.target?.startSlot ?? need.headSlot ?? null;
+      const pending = headSlot === null ? null : pendingFrom(readHeldProofs(storage, request.direction), headSlot);
+      if (pending !== null) {
+        const fields = { direction: request.direction, startSlot: pending.startSlot, newSlot: pending.newSlot, where: pending.where, reason: request.reason };
+        if (!isStale(pending, asked, limits.pendingProofStaleSeconds)) {
+          logger.info("proof_pending", { ...fields, detail: `${describeHeld(pending)} waits to land` });
+          return { refused: "nothing-to-prove" };
+        }
+        logger.warn("proof_pending_stale", { ...fields, waitedSeconds: Math.round((asked - pending.since) / 1000) });
+      }
       // Another request may have made a job while the indexer answered, so every check runs again with the insert.
       const current = now();
       const { result, startedJobId } = storage.transaction((): Decision => {
         const decided = admit(request, current);
         if (decided !== null) return decided;
-        const job = insertJob(storage, { id: randomUUID(), direction: request.direction, now: current });
+        const job = insertJob(storage, { id: randomUUID(), direction: request.direction, now: current, ...(request.target === undefined ? {} : { target: request.target }) });
         const requestId = randomUUID();
         insertRequest(storage, { ...stored(request), id: requestId, jobId: job.id, now: current });
         return { result: { requestId, jobId: job.id }, startedJobId: job.id };

@@ -1,6 +1,7 @@
 import { MULTICALL3_ADDRESS, minimumPriorityFeeWei } from "@zk-bridge/shared";
 import { parseReferenceText, type SecretReference } from "@zk-bridge/shared/config";
 import { z } from "zod";
+import { remoteEndpointListSchema } from "@zk-bridge/shared/prover";
 
 /**
  * The bot configuration file: one JSON file that both bots read. It holds paths, numbers and references to secrets.
@@ -71,7 +72,19 @@ export type SignerConfig = z.infer<typeof signerSchema>;
  * answers when the proof is ready. A queue mode (submit, then poll or wait for a webhook) adds a case here and a case
  * in `renderProverConfig`. Nothing that calls the proof source changes.
  */
-export const remoteModeSchema = z.discriminatedUnion("mode", [z.object({ mode: z.literal("load-balancing") }).strict()]);
+export const remoteModeSchema = z.discriminatedUnion("mode", [
+  z
+    .object({
+      mode: z.literal("load-balancing"),
+      /**
+       * Proving endpoints in priority order, such as a dedicated worker first and the serverless endpoint as the
+       * fallback. Without it the publisher uses the one endpoint of the setup file (`endpointUrl`, `runpodApiKey`). Each
+       * key comes from the environment variable that its entry names.
+       */
+      endpoints: remoteEndpointListSchema.optional(),
+    })
+    .strict(),
+]);
 
 /** The remote mode of the publisher. */
 export type RemoteMode = z.infer<typeof remoteModeSchema>;
@@ -198,8 +211,100 @@ export const runnerSchema = z
     prerequisiteLossRefusalSeconds: positiveSeconds.default(1800),
     /** Seconds to wait for a receipt. */
     receiptTimeoutSeconds: positiveSeconds.default(300),
+    /**
+     * Open the bridge on the destination chain when it is closed: at start and after each light client update, the
+     * runner builds the opening proof with the prover, simulates `openDeposits` and sends it from its signer. Once the
+     * bridge is open the runner never checks again. Default on.
+     */
+    openDeposits: z.boolean().default(true),
   })
   .strict();
+
+/** An amount in whole tokens, as decimal text, such as `25` or `0.5`. */
+const wholeAmountSchema = z.string().regex(/^\d+(\.\d+)?$/, "must be an amount in whole tokens, as decimal text such as 25 or 0.5");
+
+/** A lower and an upper bound in whole tokens. The lower bound is at most the upper bound. */
+const boundsSchema = z
+  .object({ minimum: wholeAmountSchema, maximum: wholeAmountSchema })
+  .strict()
+  .refine((bounds) => Number(bounds.minimum) <= Number(bounds.maximum), "minimum must not be above maximum");
+
+/** The settings of one test token symbol. They apply to the token of that symbol on each chain and to its bridged copy. */
+export const trafficTokenSchema = z
+  .object({
+    /** The amount of one send, drawn at random between the bounds, in whole tokens. */
+    amount: boundsSchema,
+    /**
+     * The band of the balance on the token's home chain, in whole tokens. Below the minimum the bot sends no more of the
+     * token away and brings its copy home first. Above the maximum it sends the token away first.
+     */
+    balance: boundsSchema,
+  })
+  .strict();
+
+/** When one direction of the traffic bot sends. */
+export const trafficDirectionSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    /** Seconds after the start of each interval at which the direction is due. */
+    offsetSeconds: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/** The traffic bot section: test transfers in both directions on a schedule. */
+export const trafficSchema = z
+  .object({
+    /** The wallet that sends. It holds the test tokens and gas on both chains. */
+    signer: signerSchema,
+    /** The test token file that `script/testnet/DeployTestTokens.s.sol` writes: the native test tokens of each chain. */
+    tokensFile: pathSchema,
+    /** The settings by symbol. A token of the file without an entry here is not sent. */
+    tokens: z.record(z.string().min(1), trafficTokenSchema).refine((tokens) => Object.keys(tokens).length > 0, "name at least one token"),
+    /**
+     * Seconds between two sends of one direction. Default 900: four sends an hour in each direction. Owner: "seems like
+     * it would be best to have these proofs be posted if and only if they have erc20s moving across the bridge.
+     * otherwise they are useless. so perhaps we should be doing bridges 4x/hr".
+     */
+    intervalSeconds: positiveSeconds.default(900),
+    /** The most seconds that a send comes after its due time. Drawn once for each interval, so a restart keeps it. */
+    jitterSeconds: z.number().int().nonnegative().default(60),
+    /** Seconds between two looks at the clock. */
+    pollSeconds: positiveSeconds.default(60),
+    directions: z
+      .object({
+        "first-to-second": trafficDirectionSchema.default({ enabled: true, offsetSeconds: 0 }),
+        "second-to-first": trafficDirectionSchema.default({ enabled: true, offsetSeconds: 450 }),
+      })
+      .strict()
+      .default({ "first-to-second": { enabled: true, offsetSeconds: 0 }, "second-to-first": { enabled: true, offsetSeconds: 450 } }),
+    /**
+     * The tip, as a percentage of the amount, in the share mode of the delivery router. Default 0.1: the default tip
+     * of the dapp and the terminal (`DEFAULT_TIP_PERCENTAGE_MULTIPLIER`).
+     */
+    tipPercent: z.string().regex(/^\d+(\.\d+)?$/, "must be a percentage as decimal text, such as 0.1").default("0.1"),
+    /**
+     * The gas limit to ask for, by destination chain id, when a send carries a token whose bridged copy does not exist on
+     * the destination yet, so the delivery deploys it. Without an entry the mediator's default applies (2,000,000 plus
+     * the callback). Sepolia prices new code about seven times higher than the default assumes: the copy alone took
+     * 6,971,380 gas in an estimate on 2026-11-01, so a send to Sepolia needs an entry here, at most the bridge's
+     * `maxGasPerTx` (10,000,000).
+     */
+    newCopyGasLimit: z.record(z.string().regex(/^\d+$/, "must be a chain id"), z.string().regex(/^\d+$/, "must be a whole number of gas, as text")).default({}),
+    /** The native coin that the wallet keeps on each chain, by chain id: no send spends below it. Each chain of the pair needs an entry. */
+    minimumNativeWei: z.record(z.string().regex(/^\d+$/, "must be a chain id"), weiSchema),
+    /** The priority fee in wei. Default: what the node suggests. */
+    priorityFeeWei: weiSchema.optional(),
+    /** The smallest priority fee in wei, by chain id, as in the runner. Chains 369 and 943 default to 0.01 gwei. */
+    minimumPriorityFeeWei: z.record(z.string().regex(/^\d+$/, "must be a chain id"), weiSchema).default({}),
+    /** Seconds to wait for a receipt. */
+    receiptTimeoutSeconds: positiveSeconds.default(300),
+  })
+  .strict();
+
+/** The traffic section, parsed. */
+export type TrafficConfig = z.infer<typeof trafficSchema>;
+/** The settings of one test token symbol. */
+export type TrafficTokenConfig = z.infer<typeof trafficTokenSchema>;
 
 /** The whole bot configuration file. */
 export const botConfigSchema = z
@@ -217,6 +322,7 @@ export const botConfigSchema = z
     maximumMessageBytes: z.number().int().positive().default(8192),
     publisher: publisherSchema.optional(),
     runner: runnerSchema.optional(),
+    traffic: trafficSchema.optional(),
   })
   .strict();
 

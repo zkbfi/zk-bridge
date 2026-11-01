@@ -4,13 +4,8 @@
   "signatureUrl": "./version.json.sig",
   "downloadBaseUrl": "https://github.com/zkbfi/releases/releases/download/v{version}",
   "gateways": [
-    "https://{cid}.ipfs.inbrowser.link/",
-    "https://{cid}.ipfs.dweb.link/",
-    "https://{cid}.ipfs.w3s.link/",
-    "https://ipfs.io/ipfs/",
-    "https://dweb.link/ipfs/",
-    "https://w3s.link/ipfs/",
-    "https://gateway.pinata.cloud/ipfs/"
+    "https://gateway.zkb.fi/ipfs/",
+    "https://{cid}.ipfs.inbrowser.link/"
   ],
   "publicKeys": [
     {

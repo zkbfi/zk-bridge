@@ -282,6 +282,11 @@ impl SyntheticBeaconChain {
         self.record(slot).map(|record| record.ssz.as_slice())
     }
 
+    /// The sync aggregate that the block at `slot` carries (it signs the parent header).
+    pub fn sync_aggregate_at(&self, slot: u64) -> Option<&SyncAggregate> {
+        self.record(slot).map(|record| &record.aggregate)
+    }
+
     /// The `block_roots` ring of the state at `slot`: entry `i` holds the root of the newest slot below `slot` that is
     /// `i` modulo 8192.
     fn block_roots_at(&self, slot: u64) -> Vec<B256> {
@@ -498,6 +503,20 @@ impl SyntheticBeaconChain {
         }
         self.update_signed_at(last_slot, NextCommittee::Proven)
             .map(Some)
+    }
+
+    /// The update signed by the block at `signature_slot` that also proves the next committee: a handoff update that a
+    /// node may choose as the best update of its period although it is not the last one (a real node picks by
+    /// participation, so its pick can lie anywhere in the period).
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the chain holds no block at one of the slots.
+    #[cfg(test)]
+    pub(crate) fn handoff_update_signed_at(
+        &self,
+        signature_slot: u64,
+    ) -> Result<LightClientUpdate> {
+        self.update_signed_at(signature_slot, NextCommittee::Proven)
     }
 
     /// The `data` object of `/eth/v1/beacon/light_client/bootstrap/<root>` for the header at `slot`.

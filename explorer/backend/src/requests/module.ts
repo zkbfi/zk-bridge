@@ -7,6 +7,7 @@ import { UNKNOWN_CALLER, callerKey } from "./caller.ts";
 import { findActiveJob, findLatestJob, getJob, getRequest, type Job } from "./jobs.ts";
 import { createRequestService, type RequestService } from "./service.ts";
 import { startWatch } from "../watch/module.ts";
+import { createWarmupStore, noteJobWorkerWait } from "../watch/warmup-store.ts";
 
 /** The largest request body in bytes. A real body is under 300 bytes. */
 export const MAXIMUM_BODY_BYTES = 4096;
@@ -45,6 +46,12 @@ function serviceFor(context: BackendModuleContext): RequestService {
     limits: context.config.limits,
     proverTimeoutMilliseconds: context.config.prover.timeoutSeconds * 1000,
     logger: context.logger,
+    // A job that met a cold worker tells the warm-up how long a cold start takes.
+    onProved: (event) => {
+      const wait = noteJobWorkerWait(createWarmupStore(context.storage), { direction: event.direction, startedAt: event.startedAt, timing: event.timing, at: context.now() });
+      if (wait.kind === "cold") context.logger.info("warmup_observed", { direction: event.direction, source: "job", jobId: event.jobId, seconds: wait.seconds });
+      if (wait.kind === "missed") context.logger.warn("warmup_missed", { direction: event.direction, jobId: event.jobId, waitWorkerSeconds: wait.seconds });
+    },
   });
   services.set(context, created);
   return created;
@@ -95,7 +102,8 @@ export function register(app: Hono, context: BackendModuleContext): void {
       const result = await service.submit({ ...body.data, caller: callerOf(request, context.config) });
       if (!("refused" in result)) return request.json(result, 202);
       // The chains need no proof now: no message waits for a head and the head is fresh. Asking again changes nothing.
-      if (result.refused === "nothing-to-prove") return request.json({ error: "nothing-to-prove" }, 409);
+      // A request from outside never names a target, so it never meets "duplicate"; both mean that asking again changes nothing.
+      if (!("retryAfterSeconds" in result)) return request.json({ error: result.refused }, 409);
       request.header("Retry-After", String(result.retryAfterSeconds));
       return request.json({ error: result.refused, retryAfterSeconds: result.retryAfterSeconds }, result.refused === "cannot-check" ? 503 : 429);
     },

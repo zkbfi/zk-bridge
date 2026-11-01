@@ -6,7 +6,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { BackendConfigError, endpointSecrets, endpointValues, loadBackendPair, parseBackendConfig, readSecrets } from "../src/config.ts";
 import { main, parseArguments, startBackend } from "../src/main.ts";
-import { PAIR, SECRETS, makeConfig } from "./support.ts";
+import { PAIR, READ_SECRETS, SECRETS, makeConfig } from "./support.ts";
 
 const ENVIRONMENT = { RUNPOD_API_KEY: SECRETS.runpodApiKey, BACKEND_WEBHOOK_BEARER: SECRETS.webhookBearer, PATH: "/usr/bin" };
 const directories: string[] = [];
@@ -47,6 +47,7 @@ describe("configuration", () => {
       secondsBeforeRetryAfterFailure: 60,
       jobsPerDirectionPerDay: 96,
       keepAliveSeconds: 43_200,
+      pendingProofStaleSeconds: 600,
     });
     expect(config.trustedProxyHops).toBe(1);
     expect(config.trustForwardedHeader).toBe(false);
@@ -62,7 +63,7 @@ describe("configuration", () => {
   it("the example file is valid and holds only variable names", () => {
     const text = readFileSync(new URL("../backend.config.example.json", import.meta.url), "utf8");
     const config = parseBackendConfig(text);
-    expect(config.runpodApiKeyVariable).toBe("RUNPOD_API_KEY");
+    expect(config.remote.endpoints?.map((endpoint) => endpoint.apiKeyVariable)).toEqual([undefined, "RUNPOD_API_KEY"]);
     expect(config.webhookBearerVariable).toBe("BACKEND_WEBHOOK_BEARER");
     expect(config.modules).toEqual(["requests", "webhook", "msgboard-indexer", "archive"]);
   });
@@ -92,7 +93,7 @@ describe("configuration", () => {
 
   it("reads the two secrets from the environment and names the missing variable", () => {
     const config = makeConfig();
-    expect(readSecrets(config, ENVIRONMENT)).toEqual(SECRETS);
+    expect(readSecrets(config, ENVIRONMENT)).toEqual(READ_SECRETS);
     expect(() => readSecrets(config, { ...ENVIRONMENT, RUNPOD_API_KEY: undefined })).toThrow("set the environment variable RUNPOD_API_KEY");
     expect(() => readSecrets(config, { ...ENVIRONMENT, BACKEND_WEBHOOK_BEARER: "" })).toThrow("set the environment variable BACKEND_WEBHOOK_BEARER");
   });

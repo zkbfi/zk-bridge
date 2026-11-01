@@ -4,9 +4,9 @@ import { dirname } from "node:path";
 import { serve } from "@hono/node-server";
 import { redactError } from "@zk-bridge/shared/config";
 import type { Pair } from "@zk-bridge/shared";
-import { executeCommand, type CommandExecutor } from "@zk-bridge/shared/prover";
+import { endpointKeyVariables, executeCommand, type CommandExecutor } from "@zk-bridge/shared/prover";
 import { createApp } from "./app.ts";
-import { BackendConfigError, MODULE_NAMES, endpointSecrets, loadBackendPair, parseBackendConfig, readSecrets, type BackendConfig, type ModuleName } from "./config.ts";
+import { BackendConfigError, MODULE_NAMES, endpointSecrets, loadBackendPair, parseBackendConfig, readSecrets, remoteEndpoints, warmupTarget, type BackendConfig, type ModuleName } from "./config.ts";
 import { createLogger, type Logger } from "./logger.ts";
 import type { BackendModuleContext, ModuleTable } from "./module.ts";
 import * as archive from "./archive/module.ts";
@@ -72,7 +72,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     write: input.write ?? ((line) => process.stderr.write(`${line}\n`)),
     now,
     // The endpoints can carry keys, so every secret part of each one is removed from every line.
-    knownSecrets: () => [secrets.runpodApiKey, secrets.webhookBearer, ...endpointSecrets(config, input.pair)],
+    knownSecrets: () => [...secrets.proverKeys.map((key) => key.value), secrets.webhookBearer, ...endpointSecrets(config, input.pair)],
   });
   if (input.enabled.includes("requests")) {
     requireBeaconUrls(config, input.pair);
@@ -94,7 +94,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     path: input.environment.PATH ?? "/usr/bin:/bin",
     logger,
   });
-  const pingProver = createProverPing({ endpoint: config.remote.endpoint, apiKey: secrets.runpodApiKey, timeoutMilliseconds: config.watch.warmup.pingTimeoutSeconds * 1000 });
+  const pingProver = createProverPing({ ...warmupTarget(config, secrets), timeoutMilliseconds: config.watch.warmup.pingTimeoutSeconds * 1000 });
   const context: BackendModuleContext = { storage, config, pair: input.pair, prover: provers.utilityProver, proverForJob: provers.proverForJob, readProofNeed, now, logger, pingProver };
   const app = createApp({ context, modules: MODULES, enabled: input.enabled });
   const stoppers = await Promise.all(input.enabled.map((name) => MODULES[name].start(context)));
@@ -150,7 +150,7 @@ export interface MainOverrides {
 }
 
 function valuesToHide(config: BackendConfig, environment: Readonly<Record<string, string | undefined>>): string[] {
-  const named = [config.runpodApiKeyVariable, config.webhookBearerVariable].map((name) => environment[name] ?? "");
+  const named = [...endpointKeyVariables(remoteEndpoints(config)), config.webhookBearerVariable].map((name) => environment[name] ?? "");
   return [...named, ...endpointSecrets(config, null)].filter((value) => value !== "");
 }
 

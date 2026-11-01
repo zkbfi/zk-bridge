@@ -1,15 +1,25 @@
 import type { Pair, PairSide } from "../pairs.js";
 import type { ProofDirection } from "../proof-message.js";
+import type { RemoteEndpoint } from "./remote-endpoints.js";
 
 /** The proving backend section of the prover configuration file. */
 export type BackendSection =
   | {
-      /** The remote graphics processor backend. Today the load balancing endpoint is the only mode. */
+      /** The remote graphics processor backend with one endpoint. Today the load balancing endpoint is the only mode. */
       readonly kind: "remote";
       readonly mode: { readonly mode: "load-balancing" };
       readonly endpoint: string;
       /** The NAME of the variable that carries the key. The key itself never enters the file. */
       readonly apiKeyVariable: string;
+    }
+  | {
+      /**
+       * The remote backend with endpoints in priority order, such as a dedicated worker and then the serverless
+       * endpoint. The prover moves to the next endpoint only when one cannot give a proof (`docs/gpu-prover.md`).
+       */
+      readonly kind: "remote";
+      readonly mode: { readonly mode: "load-balancing" };
+      readonly endpoints: readonly RemoteEndpoint[];
     }
   | {
       /**
@@ -84,14 +94,36 @@ function backendLines(backend: BackendSection): readonly string[] {
   }
   if (backend.kind === "oracle") return ['backend = "oracle"', `oracle_key_env = ${quoted(backend.keyVariable, "oracle key variable")}`];
   // The only mode today is the load balancing endpoint. A queue mode adds its keys here.
+  // RunPod ends a request after 330 s. Three tries of 360 s, with their pauses, stay inside a job limit of 1800 s. An
+  // endpoint of a list may set its own values; these are the defaults for the ones that do not.
+  const limits = ["remote_timeout_seconds = 360", "remote_attempts = 3"];
+  if ("endpoints" in backend) return ['backend = "remote"', ...limits, ...backend.endpoints.flatMap(endpointLines)];
   return [
     'backend = "remote"',
     `remote_url = ${quoted(backend.endpoint, "remote endpoint")}`,
     `remote_api_key_env = ${quoted(backend.apiKeyVariable, "remote key variable")}`,
-    // RunPod ends a request after 330 s. Three tries of 360 s, with their pauses, stay inside a job limit of 1800 s.
-    "remote_timeout_seconds = 360",
-    "remote_attempts = 3",
+    ...limits,
   ];
+}
+
+/** One `[[prover.remote_endpoints]]` table. It stays inside the `[prover]` section: the next header ends it. */
+function endpointLines(endpoint: RemoteEndpoint): readonly string[] {
+  const lines = [
+    "",
+    "[[prover.remote_endpoints]]",
+    `label = ${quoted(endpoint.label, "remote endpoint label")}`,
+    `url = ${quoted(endpoint.url, "remote endpoint")}`,
+  ];
+  if (endpoint.apiKeyVariable !== undefined) lines.push(`api_key_env = ${quoted(endpoint.apiKeyVariable, "remote key variable")}`);
+  if (endpoint.readyWaitSeconds !== undefined) lines.push(`ready_wait_seconds = ${wholeNumber(endpoint.readyWaitSeconds, "ready wait")}`);
+  if (endpoint.timeoutSeconds !== undefined) lines.push(`timeout_seconds = ${wholeNumber(endpoint.timeoutSeconds, "timeout")}`);
+  if (endpoint.attempts !== undefined) lines.push(`attempts = ${wholeNumber(endpoint.attempts, "attempts")}`);
+  return lines;
+}
+
+function wholeNumber(value: number, field: string): string {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`the remote endpoint ${field} must be a whole number, zero or more`);
+  return String(value);
 }
 
 function stateLines(stateUrls: readonly string[], cacheDirectory: string | undefined): readonly string[] {

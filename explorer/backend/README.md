@@ -34,7 +34,8 @@ The backend reads no endpoint from the environment.
 | `modules` | The modules to run when the command line names none. |
 | `publicUrl` | How the prover reaches this service. The prover posts to `<publicUrl>/webhook/jobs/<id>`. |
 | `prover` | `binary` (path of `zk-bridge-prover`) and `timeoutSeconds`. |
-| `remote.endpoint` | The remote proving endpoint (the load balancing endpoint of the graphics processor service). |
+| `remote.endpoints` | The proving endpoints in priority order, such as a dedicated worker first and the serverless endpoint as the fallback. See "Proving endpoints". |
+| `remote.endpoint` | The older form: one load balancing endpoint, with its key in `runpodApiKeyVariable`. Set `remote.endpoint` or `remote.endpoints`, not both. |
 | `rpcUrls` | The execution endpoint of each chain, by chain identifier. Both chains of the pair are required. |
 | `beaconUrls` | The beacon endpoint of each chain. The `requests` module needs both. |
 | `stateUrls` | Optional. More beacon APIs of each chain, by chain identifier, as a list. The prover asks them in order, only for states, when the beacon endpoint does not serve an old state. The prover also keeps every state it verified in `beacon-states/` next to `databasePath`, and reads the start state of a job from there first. |
@@ -50,11 +51,43 @@ A secret is never in the file. The file names the environment variable, and the 
 
 | Variable (default name) | Set by field | Use |
 | --- | --- | --- |
-| `RUNPOD_API_KEY` | `runpodApiKeyVariable` | The key of the remote proving service. It reaches the prover only through the environment of the child process. |
+| `RUNPOD_API_KEY` | `apiKeyVariable` of an entry of `remote.endpoints`, or `runpodApiKeyVariable` with `remote.endpoint` | The key of a proving endpoint. Each entry with a key names its own variable; an entry without one (a dedicated worker on its TCP port) needs none. A key reaches the prover only through the environment of the child process. |
 | `BACKEND_WEBHOOK_BEARER` | `webhookBearerVariable` | The bearer value that the prover sends to the webhook. At least 32 bytes. The backend refuses to start with less. |
 
-The endpoints in `rpcUrls`, `beaconUrls`, `stateUrls`, `msgboardUrl`, `remote.endpoint` and `indexerUrl` can carry a key.
-They stay in the file, so protect the file. The logger removes every endpoint, and every long part of its path, from each log line.
+The endpoints in `rpcUrls`, `beaconUrls`, `stateUrls`, `msgboardUrl`, `remote.endpoints` (every entry), `remote.endpoint`
+and `indexerUrl` can carry a key. They stay in the file, so protect the file. The logger removes every endpoint, and every
+long part of its path, from each log line.
+
+## Proving endpoints
+
+The prover tries the entries of `remote.endpoints` in order, one at a time, and moves to the next only when one cannot
+give a proof: it is unreachable, it stays not ready past its `readyWaitSeconds`, it runs out of `attempts`, or it turns
+the request away (401, 403, 404). A refusal of the job (a 400 or 422 of the worker), a 200 that is not a proof and a
+proof that fails the local checks end the job at once: no other endpoint proves it again. The job never goes to two
+endpoints at the same time, so the serverless fallback bills nothing while the dedicated worker answers. The full table
+is in `docs/gpu-prover.md`, "Endpoint list".
+
+```json
+"remote": {
+  "endpoints": [
+    { "label": "dedicated", "url": "http://203.0.113.7:40123", "readyWaitSeconds": 20, "timeoutSeconds": 120, "attempts": 2 },
+    { "label": "serverless", "url": "https://ENDPOINT_IDENTIFIER.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY" }
+  ]
+}
+```
+
+| Entry field | Meaning |
+| --- | --- |
+| `label` | The name in the logs: 1 to 32 lower case letters, digits, `-` or `_`. Each label once. The logs never show the URL. |
+| `url` | The base URL of the worker. With `apiKeyVariable` it must be `https://` (or `http://` on the local machine). |
+| `apiKeyVariable` | Optional. The NAME of the variable with the key. Without it the prover sends no `Authorization` header. |
+| `readyWaitSeconds` | Optional. The longest wait for a worker that answers "not ready". Default 900. Keep it short for a dedicated worker. |
+| `timeoutSeconds` | Optional. One request. Default 360. |
+| `attempts` | Optional. Requests after ordinary failures before the prover moves on. Default 3. |
+
+The `prove_timing` fields of `job_proved` carry `endpoint` (the label that gave the proof) and `failover_count`.
+The warm-up ping goes to the first endpoint only, with its key when it has one: a ping of the serverless fallback would
+start a paid worker that a healthy dedicated worker never needs. With the older `remote.endpoint`, the label is `remote`.
 
 ## Callers and limits
 
@@ -87,7 +120,7 @@ seconds. The answers:
 | Status | Body | Meaning |
 | --- | --- | --- |
 | 202 | `{ requestId, jobId }` | The request joined a job or started one. |
-| 409 | `{ error: "nothing-to-prove" }` | No message waits and the head is fresh. Asking again changes nothing until a message waits. |
+| 409 | `{ error: "nothing-to-prove" }` | No message waits and the head is fresh, or a proof we already have waits to land (see "Proofs we already have"). Asking again changes nothing until a message waits or that proof lands. |
 | 429 | `{ error: "rate-limited", retryAfterSeconds }` | A limit refused it. `Retry-After` says when to ask again. |
 | 503 | `{ error: "cannot-check", retryAfterSeconds }` | The indexer did not answer in 5 seconds, or answered an error or an unknown shape. The backend starts no paid job it cannot justify. |
 
@@ -97,6 +130,26 @@ Two limits remain as a backstop when the indexer reports wrong facts:
   `secondsBeforeRetryAfterFailure` (default 60) after a failed job.
 - `jobsPerDirectionPerDay` (default 96) jobs that may pay for a proof, per direction, in any 24 hours. A job that found
   the chain up to date paid nothing and does not count.
+
+### Proofs we already have
+
+The backend never pays twice for the same proof. Before any job starts (a request from outside, the keep-alive march,
+or the watcher), it looks at every proof of the direction it has: the one the msgboard indexer keeps from the board
+(`proofs`), the ones the webhook stored (`webhook_proofs`, posted or not), and the slots the newest job's prover
+reported. A proof still counts while it starts at the light client's head (it can still land); one that ends at or
+below the head is applied already.
+
+- While such a proof waits to land, no job starts from that head, whether the messages to prove lie inside it or after
+  it: the runner posts it, and the next proof starts from the head it makes. The service answers `nothing-to-prove`
+  and logs `proof_pending` (its slots and `where`: `board`, `stored` or `job`). A pending handoff counts too.
+- Once it has waited longer than `limits.pendingProofStaleSeconds` (default 600), it holds nothing back any more:
+  `proof_pending_stale` is logged and a new proof from the head may start. Posting it ourselves is not the backend's
+  job.
+- The watcher names the proof it wants: from the head it read to the finalized slot it acts on. That target gets one
+  job per direction, ever (a unique index in SQLite), also after a failure, a retry wait or a restart; a second request
+  for it is refused as `duplicate`.
+- A proof whose slots another job already brought is not stored a second time: the webhook keeps the first, fails the
+  later job with `the same proof is held already`, and logs `proof_duplicate`.
 
 ## Proving on finality
 
@@ -112,28 +165,53 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
   prover takes. On a node that does not (the PulseChain nodes), the newest block and the sync aggregate of the block
   after it, as the prover builds its update there. A new finalized slot then counts one block later.
 - **When it starts a job.** At least 342 of the 512 sync committee members signed (the light-client program's
-  two-thirds rule), and either a waiting message lies between the light client head and the new finalized header, or
+  two-thirds rule), and either a waiting message lies between the light client head and the new finalized header and
+  its batch is due (see "Batching and profit"; by default at once), or
   the keep-alive planner (`src/keepalive/plan.ts`) calls for a proof that can make progress: the source finalized a
   header in a sync-committee period after the head's (or handoff steps are needed), the head is older than
   `limits.keepAliveSeconds`, or the light client has no head. A young head in the period of the source's finality starts
   nothing, however close its deadline: such a proof moves the head inside the period and hands off to no new committee
   (`proof_not_due` names the next possible handoff). Only a handoff skips the indexer's age rule (`plannedHandoff`); a
   keep-alive of the age rule meets it like any request. The watcher starts at most one keep-alive per period of the
-  source's finality unless the head has aged past the keep-alive age. A message that a proof already posted to the board
-  covers, while that proof still starts at the head, starts nothing. One finalized header starts at most one job, and
-  no job starts while one runs.
-- **Warm-up.** Shortly before a proof is expected (45 s before the expected finality of a sent message, or once before a
-  period handoff that the next finality makes due), the backend calls `GET <remote.endpoint>/ping` with the RunPod key.
-  One ping per direction is outstanding at most, and it waits up to `warmup.pingTimeoutSeconds` (300 s) because the
-  load-balancing endpoint holds it while a worker starts. Before a message it repeats every 30 s after an answer until
-  90 s past the expected finality, and a 200 (warm) ends the session. At most one session per direction in 5 minutes,
-  and never while a job runs. A ping that times out is logged as `warmup_ping_timeout` (info) and no new session starts
-  for 5 minutes. Set the endpoint's idle timeout to cover the prover's preparation (60 s is the documented value,
-  docs/gpu-prover.md).
+  source's finality unless the head has aged past the keep-alive age. While a proof we have still starts at the head,
+  nothing starts from that head (see "Proofs we already have"). One finalized header starts at most one job, and no
+  job starts while one runs.
+- **Warm-up.** The backend wakes the remote prover (`GET <first endpoint>/ping`, with that endpoint's key if it has one) a learned
+  lead time before a proof is expected, and keeps the worker warm until the job starts.
+  - *When a proof is expected:* at the expected finality of each sent message (the start of epoch e + 3, plus one
+    slot); with a batch wait, once per batch, when the batch is expected to pay or else at its fallback, worked out
+    again as messages arrive; and when the source's finality crosses into a new sync-committee period and so makes a handoff due (about
+    two epochs after the border, not when the clock crosses it). A keep-alive of the age rule gets no warm-up.
+  - *Lead time:* the p90 (`warmup.leadP`) of the last 20 (`leadObservations`) observed times to a ready worker,
+    clamped to 30 to 600 s; 90 s until there is one. Observations, kept in the `warmup_observations` table: the time
+    from a session's first ping to its first ready answer (200), when that took 5 s or more (a faster one found a
+    worker that was up already); the time a ping waited before it timed out (a cold start at least that long); and
+    `wait_worker_ms` of a job that met a cold worker (`not_ready_count` above 0) while no warm-up ran.
+  - *Session:* one per direction, started at the due time minus the lead time. One ping is outstanding at most; it
+    waits up to `pingTimeoutSeconds` (300 s), because the load-balancing endpoint holds it while a worker starts. Until
+    a worker answers ready, the ping repeats every 30 s after an answer. Once ready, a ping 40 s after the last ready
+    answer (`holdIntervalSeconds`, under the endpoint's 60 s idle timeout) keeps the worker; a ping to a warm worker
+    answers at once. A hold not answered ready, or failed, is followed by the next no sooner than 30 s later. The session ends when the job starts (`warmup_used`), when the message is delivered or covered,
+    when the due time is past by 90 s (`graceSeconds`), or when the daily cap is spent (each `warmup_wasted`). A ping
+    that times out ends the session, and no new one starts for 5 minutes. Sessions are kept in `warmup_sessions`; a
+    restart ends the ones left open.
+  - *Cost cap:* at most `dailyCapSeconds` (1 hour) of sessions in any 24 hours, both directions together. Over it, no
+    session starts (`warmup_capped`, once per target) and a warm one stops at its next hold.
+  - *Not done:* the backend never changes the endpoint's `workersMin`; the server holds no RunPod management key.
+    Set the endpoint's idle timeout to 60 s (docs/gpu-prover.md); `holdIntervalSeconds` must stay below it.
 - **The log.** `finality_seen` (slot, `source` sse or poll, `latencyMs` from the start of the signature slot),
-  `proof_due` (why), `proof_not_due` (why, at debug level unless signatures are short or the light client is stranded),
-  `job_started` (`reason: "finality"`, `latencyMs` from the arrival of the finality event; the aim is under 5 s) and
-  `warmup_ping` (the status only; the address and the key never appear), `warmup_ping_timeout`.
+  `proof_due` (why; for a message `trigger` profit or max-wait, `batch`, `waitedSeconds`, `feesUsd`, `costUsd`; for a
+  handoff or keep-alive that took waiting messages along, `riders`), `proof_not_due` (why, at debug level unless
+  signatures are short, the light client is stranded, a batch waits (`waiting-for-profit`, with `messages`, `feesUsd`,
+  `costUsd`, `startAt`, `startWhy` and `maxWaitAt`) or a proof we have waits to land (`proof-pending`)),
+  `proof_pending_stale`, `watch_economics_failed` (the prices could not be read: the batch waits for its fallback),
+  `job_started` (`reason: "finality"`, `latencyMs` from the arrival of the finality event; the aim is under 5 s), and
+  for the warm-up: `warmup_scheduled` (why, `dueAt`, `leadSeconds`, `leadBasis` default or observed), `warmup_ping`
+  (a non-ready answer: the status only; the address and the key never appear), `warmup_ready` (`readySeconds`, `cold`),
+  `warmup_held` (`holds`, `secondsToDue`), `warmup_used` (`warmSeconds`, `readyBeforeDueSeconds`), `warmup_wasted`
+  (`reason` covered, grace or cap, `warmSeconds`), `warmup_capped`, `warmup_ping_timeout`, `warmup_ping_failed`, and
+  from a finished job `warmup_observed` (a cold start learned from `wait_worker_ms`) or `warmup_missed` (a job met a
+  cold worker although a warm-up ran). The sum of `warmSeconds` is what the warm-ups cost.
 
 Settings, all optional (`watch` in the configuration file):
 
@@ -144,11 +222,54 @@ Settings, all optional (`watch` in the configuration file):
 | `sse` | `true` | `false` polls only. |
 | `pollSeconds` | one slot of the source chain | The poll interval while no stream runs. |
 | `scanSeconds` | 15 | How often the warm-up looks at the sent messages. |
+| `maxWaitSeconds` | 0 | The fallback of a batch: prove once the oldest waiting final message has been final this long, whether the batch pays or not. 0 proves at the first finality that covers a waiting message. |
+| `lookaheadSeconds` | one epoch of the source chain (384 s, 320 s on PulseChain) | How far ahead messages that are not final yet count toward the time a batch is expected to pay. |
+| `profitMargin` | 1.0 | A batch proves early when its fees reach the cost times this. |
+| `pairs` | none | Overrides per pair and per direction: `{ "sepolia-pls943": { "maxWaitSeconds": 3600, "directions": { "first-to-second": { "maxWaitSeconds": 1800 } } } }`. A direction's field beats its pair's, a pair's beats the global one. Unknown pair names and directions are refused. |
 | `warmup.enabled` | `true` | `false` sends no ping. |
-| `warmup.leadSeconds`, `intervalSeconds`, `graceSeconds`, `minGapSeconds` | 45, 30, 90, 300 | The warm-up timing above. |
+| `warmup.leadP`, `leadObservations` | 0.9, 20 | The quantile of the newest observations that the lead time takes. |
+| `warmup.defaultLeadSeconds`, `minLeadSeconds`, `maxLeadSeconds` | 90, 30, 600 | The lead time without observations, and its bounds. |
+| `warmup.holdIntervalSeconds` | 40 | The ping that keeps a warm worker, after its last ready answer. Below the endpoint's idle timeout. |
+| `warmup.intervalSeconds`, `graceSeconds`, `minGapSeconds` | 30, 90, 300 | Ping again while no worker is ready; end after the due time; the pause after a timed-out ping. |
+| `warmup.dailyCapSeconds` | 3600 | The most warm-up seconds in any 24 hours, both directions together. |
 | `warmup.pingTimeoutSeconds` | 300 | How long one ping may wait for a cold worker. |
+| `warmup.leadSeconds` | none | The fixed lead time of before 2026-11-01. Still accepted; it does nothing and the start log warns (`config_ignored`). |
+
+`limits.pendingProofStaleSeconds` (600) belongs to the same rules: see "Proofs we already have".
 
 The keep-alive timer (docs/testnet-run.md, "Keeping the light clients alive") stays as the backstop.
+
+### Batching and profit
+
+A message proof pays for itself only when the fees of the messages it carries cover what it costs. With
+`maxWaitSeconds` above 0 the watcher batches the waiting messages of a direction:
+
+- **The batch** is every waiting message the light client head does not cover. Its **fees** are what the fee address
+  receives: the fee in each message's delivery terms (the delivery router's `expectedFee`, for a message sent to the
+  router), valued in dollars with the dapp's PulseX price rules at one named PulseChain block. A token without a price
+  counts nothing; testnet tokens have no price, so a testnet batch never pays. Its **cost** is the proof
+  (`PROOF_COST_USD`, $0.025) plus the delivery gas of each message on the destination (`deliveryGasUsd` at the newest
+  base fee, the chain's minimum tip and `requiredDeliveryGas` of a release, which errs high), times `profitMargin`. The
+  runner that delivers is not paid by us: "pays" means the fee address's take covers our costs. Dollars are integers
+  (USD × 1e18), as in `@zkb/core`.
+- **Due** at a finality when the fees of the messages final by its slot reach the cost (`trigger: "profit"`), or when
+  the oldest of them has been final (from its expected finality) for `maxWaitSeconds` (`trigger: "max-wait"`). The proof
+  covers every message final by that slot; messages that arrive meanwhile ride along. The watcher wakes itself at the
+  fallback when no new finality comes first.
+- **Looking ahead.** Messages that are not final yet, within `lookaheadSeconds`, count toward the time the batch is
+  expected to pay: the expected finality at which the fees of the final and the soon final messages first cover the
+  cost. The watcher then waits for that finality rather than proving part of the batch, unless the fallback comes
+  first, and the warm-up is timed to it. A proof can only target a finalized header, so such a message is never proven
+  before its finality.
+- **Unknown prices** (no PulseChain endpoint, no route, an RPC error) never prove early: the batch waits for its
+  fallback, and the reason is in `proof_not_due`.
+- **Never delayed:** a period handoff and a keep-alive of the age rule prove at once, and the waiting messages ride
+  along (`riders`).
+- **What it means in practice.** With `maxWaitSeconds: 3600` on a testnet (where nothing pays) and steady traffic, a
+  direction gets at most about one message proof per hour: at most one per window per direction, not a fixed schedule.
+  Quiet hours prove nothing; a handoff still proves on time. With `maxWaitSeconds: 300` on mainnet, a batch that pays
+  proves at once and one that does not waits at most five minutes.
+
 
 ## Local testing with the oracle setting
 

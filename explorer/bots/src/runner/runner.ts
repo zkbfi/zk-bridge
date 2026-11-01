@@ -44,6 +44,11 @@ export interface RunnerDependencies {
    * every distinct payload that names the head spawns a check.
    */
   readonly verifyGuard?: VerifyGuard;
+  /**
+   * Called after this runner's update is mined and applied, alone or in a batch. The service opens the bridge here: the
+   * opening proof needs the block that the update stored while a node still serves its state.
+   */
+  readonly onUpdatePosted?: () => Promise<unknown>;
 }
 
 /** What the runner did with one message of the board. */
@@ -165,6 +170,7 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     logger.info("update_posted", { transactionHash: ending.transactionHash, newSlot: message.newSlot, gasUsed: ending.gasUsed });
     await dependencies.outcomes.record({ kind: "update", ...base, status: "posted", transactionHash: ending.transactionHash, ...fields, gasUsed: ending.gasUsed, gasCostWei: ending.gasCostWei });
     updateHandlings.set(message, { handled: "update-posted", transactionHash: ending.transactionHash });
+    await dependencies.onUpdatePosted?.();
   }
 
   /**

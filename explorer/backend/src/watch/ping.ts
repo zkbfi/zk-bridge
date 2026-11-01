@@ -7,15 +7,16 @@
 export const PING_TIMEOUT_MILLISECONDS = 300_000;
 
 /**
- * Builds the ping. It answers the HTTP status (200 ready, 204 a worker is starting) and throws when the endpoint cannot
+ * Builds the ping. `apiKey` is null for an endpoint without a key. It answers the HTTP status (200 ready, 204 a worker is starting) and throws when the endpoint cannot
  * be reached. The address and the key never leave this function; the caller logs only the status.
  */
-export function createProverPing(input: { endpoint: string; apiKey: string; fetchFunction?: () => typeof fetch; timeoutMilliseconds?: number }): () => Promise<number> {
+export function createProverPing(input: { endpoint: string; apiKey: string | null; fetchFunction?: () => typeof fetch; timeoutMilliseconds?: number }): () => Promise<number> {
   const url = `${input.endpoint.replace(/\/+$/, "")}/ping`;
   const fetchFunction = input.fetchFunction ?? (() => globalThis.fetch);
   return async () => {
     const answer = await fetchFunction()(url, {
-      headers: { authorization: `Bearer ${input.apiKey}` },
+      // A worker reached directly checks no key, so it gets no header.
+      headers: input.apiKey === null ? {} : { authorization: `Bearer ${input.apiKey}` },
       signal: AbortSignal.timeout(input.timeoutMilliseconds ?? PING_TIMEOUT_MILLISECONDS),
     });
     await answer.body?.cancel();

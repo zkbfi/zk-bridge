@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import type { Pair } from "@zk-bridge/shared";
-import { createProverBinary, type CommandExecutor, type ProverBinary } from "@zk-bridge/shared/prover";
-import type { BackendConfig } from "../config.ts";
+import { createProverBinary, type BackendSection, type CommandExecutor, type ProverBinary } from "@zk-bridge/shared/prover";
+import type { BackendConfig, BackendSecrets } from "../config.ts";
 import type { Logger } from "../logger.ts";
 
 /** Input of {@link createProverFactories}. */
@@ -9,8 +9,8 @@ export interface ProverFactoryInput {
   readonly config: BackendConfig;
   readonly pair: Pair;
   readonly executor: CommandExecutor;
-  /** The values of the two secrets. They travel only in the environment of the child process. */
-  readonly secrets: { readonly runpodApiKey: string; readonly webhookBearer: string };
+  /** The values of the secrets. They travel only in the environment of the child process. */
+  readonly secrets: BackendSecrets;
   /** The `PATH` of the child process. */
   readonly path: string;
   readonly logger: Logger;
@@ -41,13 +41,19 @@ export function createProverFactories(input: ProverFactoryInput): ProverFactorie
     logger: input.logger,
   };
   const webhookBase = config.publicUrl.replace(/\/+$/, "");
+  // The single endpoint keeps the file it always had; a list becomes `[[prover.remote_endpoints]]`.
+  const mode = { mode: "load-balancing" } as const;
+  const backend: BackendSection =
+    config.remote.endpoints === undefined
+      ? { kind: "remote", mode, endpoint: config.remote.endpoint as string, apiKeyVariable: config.runpodApiKeyVariable as string }
+      : { kind: "remote", mode, endpoints: config.remote.endpoints };
   return {
     proverForJob: (jobId) =>
       createProverBinary({
         ...common,
-        backend: { kind: "remote", mode: { mode: "load-balancing" }, endpoint: config.remote.endpoint, apiKeyVariable: config.runpodApiKeyVariable },
+        backend,
         handoff: { webhookUrl: `${webhookBase}/webhook/jobs/${jobId}`, bearerVariable: config.webhookBearerVariable },
-        proverSecret: { variable: config.runpodApiKeyVariable, value: input.secrets.runpodApiKey },
+        proverSecret: input.secrets.proverKeys,
         baseEnvironment: { PATH: input.path, [config.webhookBearerVariable]: input.secrets.webhookBearer },
       }),
     utilityProver: createProverBinary({ ...common, backend: null, proverSecret: null, baseEnvironment: { PATH: input.path } }),

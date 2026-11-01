@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const startPublisher = vi.fn(async (_input: unknown) => undefined);
 const startRunner = vi.fn(async (_input: unknown) => undefined);
+const startTraffic = vi.fn(async (_input: unknown) => undefined);
 const loadBotContext = vi.fn();
 vi.mock("../../src/publisher/service.ts", () => ({ startPublisher: (input: unknown) => startPublisher(input) }));
 vi.mock("../../src/runner/service.ts", () => ({ startRunner: (input: unknown) => startRunner(input) }));
+vi.mock("../../src/traffic/service.ts", () => ({ startTraffic: (input: unknown) => startTraffic(input) }));
 vi.mock("../../src/runtime/context.ts", () => ({ loadBotContext: (input: unknown) => loadBotContext(input) }));
 
 const { main } = await import("../../src/cli.ts");
@@ -42,6 +44,14 @@ describe("main", () => {
     expect(startPublisher).not.toHaveBeenCalled();
   });
 
+  it("starts the traffic bot and neither of the others", async () => {
+    loadBotContext.mockResolvedValue(context);
+    expect(await main(["traffic", "--config", "bots.json", "--once"], {})).toBe(0);
+    expect(startTraffic).toHaveBeenCalledWith(expect.objectContaining({ context, runOnce: true }));
+    expect(startRunner).not.toHaveBeenCalled();
+    expect(startPublisher).not.toHaveBeenCalled();
+  });
+
   it("writes each log line of the context to standard error with a line break", async () => {
     const { lines } = captureStandardError();
     loadBotContext.mockImplementation(async (input: { write: (text: string) => void }) => {
@@ -74,7 +84,7 @@ describe("main", () => {
   it("prints a usage error for a bad command line and exits with 1, without loading a context", async () => {
     const { lines } = captureStandardError();
     expect(await main(["relayer"], {})).toBe(1);
-    expect(lines.join("")).toContain("Choose publisher or runner.");
+    expect(lines.join("")).toContain("Choose publisher, runner or traffic.");
     expect(loadBotContext).not.toHaveBeenCalled();
   });
 

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { getAddress, type Address, type PublicClient } from "viem";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { proofCategory } from "@zk-bridge/shared";
+import { describeRoute } from "@zk-bridge/shared/prover";
 import { signerFromPrivateKeyText } from "../../../terminal/src/signing/key-sources.ts";
 import { BotConfigError, parseBotConfig } from "../../src/config/bot-config.ts";
 import type { BoardFeed, BoardMessage } from "@zk-bridge/shared/msgboard";
@@ -62,6 +63,8 @@ interface ClientAnswers {
   failRewardRead?: boolean;
   code?: string | undefined;
   failHead?: boolean;
+  /** The answer of `depositsOpen()` of the bridge. Default: open. */
+  depositsOpen?: boolean;
 }
 
 function clientWith(answers: ClientAnswers = {}) {
@@ -71,6 +74,7 @@ function clientWith(answers: ClientAnswers = {}) {
     if (functionName === "head" && answers.failHead === true) throw new Error("rpc down");
     if (functionName === "head") return 100n;
     if (functionName === "programVKey") return PROGRAM_KEY;
+    if (functionName === "depositsOpen") return answers.depositsOpen ?? true;
     if (functionName === "genesisTime") return 1_606_824_023n;
     if (functionName === "secondsPerSlot") return 12n;
     return word(101);
@@ -275,6 +279,58 @@ describe("startRunner runs one pass", () => {
     await run(started, rest);
     expect(started.node.requests.some((request) => request.method === "msgboard_content")).toBe(true);
     expect(started.created.events().find((event) => event.event === "runner_sweep")).toBeDefined();
+  });
+});
+
+describe("startRunner opens the bridge of the destination chain", () => {
+  const stateOf = (started: Started) => JSON.parse(readFileSync(join(started.created.directory, "state", "runner-eth-pls-first-to-second.json"), "utf8")) as { depositsOpen: boolean };
+
+  it("checks the bridge at start, and records an open bridge in the state file", async () => {
+    const started = await prepare();
+    const { overrides, client } = standardOverrides();
+    await run(started, overrides);
+    const bridge = started.created.context.pair.sides[1].contracts.bridge;
+    expect(client.readContract).toHaveBeenCalledWith({ address: bridge, abi: expect.anything(), functionName: "depositsOpen" });
+    expect(started.created.events().find((event) => event.event === "deposits_open_checked")).toMatchObject({ bridge, open: true, direction: "first-to-second" });
+    expect(started.created.events().find((event) => event.event === "runner_started")).toMatchObject({ openDeposits: true });
+    expect(stateOf(started).depositsOpen).toBe(true);
+  });
+
+  it("reads nothing when runner.openDeposits is false", async () => {
+    const started = await prepare({ runnerExtra: { openDeposits: false } });
+    const { overrides, client } = standardOverrides();
+    await run(started, overrides);
+    expect(client.readContract.mock.calls.some(([call]) => call.functionName === "depositsOpen")).toBe(false);
+    expect(started.created.events().find((event) => event.event === "runner_started")).toMatchObject({ openDeposits: false });
+  });
+
+  it("runs opening-proof of the opposite route with the prover of the configuration when the bridge is closed", async () => {
+    const started = await prepare();
+    const specs: Array<{ args: readonly string[] }> = [];
+    const { overrides } = standardOverrides({
+      publicClient: () => clientWith({ depositsOpen: false }),
+      executor: async (spec) => {
+        specs.push(spec);
+        return { code: 1, stdout: "", stderr: "rpc error 4444/-32602: distance to target block exceeds maximum proof window" };
+      },
+    });
+    await run(started, overrides);
+    const route = describeRoute(started.created.context.pair, "second-to-first").name;
+    expect(specs.map((spec) => spec.args.slice(2))).toEqual([["opening-proof", "--route", route]]);
+    expect(started.created.events().find((event) => event.event === "deposits_open_failed")).toMatchObject({ level: "warn", reason: "proof-failed", route, failures: 1 });
+    // Nothing to record: the state file was not written.
+    expect(existsSync(join(started.created.directory, "state", "runner-eth-pls-first-to-second.json"))).toBe(false);
+  });
+
+  it("uses the opening prover that the overrides give, with the direction of the opposite route", async () => {
+    const started = await prepare();
+    const openingProver = vi.fn((_direction: string) => ({
+      openingProof: async () => ({ route: "x", to: `0x${"ab".repeat(20)}`, calldata: "0x", chainId: 369, depositsOpen: false, remoteBlockNumber: 1, proof: { remoteSlot: 1, storedSlot: 1 } }),
+    }));
+    const { overrides } = standardOverrides({ publicClient: () => clientWith({ depositsOpen: false }), openingProver });
+    await run(started, overrides);
+    expect(openingProver).toHaveBeenCalledWith("second-to-first");
+    expect(started.created.events().find((event) => event.event === "deposits_open_failed")).toMatchObject({ reason: "wrong-target" });
   });
 });
 

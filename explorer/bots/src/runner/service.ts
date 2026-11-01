@@ -1,18 +1,19 @@
 import { join } from "node:path";
 import { createPublicClient, http, type Address, type PublicClient } from "viem";
-import { proofCategory, type ProofDirection } from "@zk-bridge/shared";
+import { messageBridgeAbi, proofCategory, type ProofDirection } from "@zk-bridge/shared";
 import { BotConfigError, runnerMinimumPriorityFeeWei, type RunnerConfig } from "../config/bot-config.ts";
 import { createTransactionPort, type TransactionPort } from "../chain/transactions.ts";
 import { createIndexerClient } from "../indexer/client.ts";
 import { createBoardFeed, type BoardFeed } from "@zk-bridge/shared/msgboard";
 import { executeCommand, type CommandExecutor } from "@zk-bridge/shared/prover";
-import { createLightClientReader, createProverBinary, createVerifyGuard, type ProverBinary } from "@zk-bridge/shared/prover";
+import { createLightClientReader, createProverBinary, createVerifyGuard, describeRoute, type OpeningProver, type ProverBinary } from "@zk-bridge/shared/prover";
 import { sidesOfDirection, type BotContext } from "../runtime/context.ts";
 import { acquireLock, type HeldLock } from "../runtime/lock-file.ts";
 import { runLoop } from "../runtime/loop.ts";
 import { createStateFile } from "../runtime/state-file.ts";
 import { openSigner, type Signer } from "../signing/open-signer.ts";
 import type { DeliveryDependencies, DeliverySettings } from "./delivery.ts";
+import { createDepositOpener, type DepositOpener } from "./opener.ts";
 import { createFileOutcomeSink } from "./outcomes.ts";
 import { createRunner, type Runner } from "./runner.ts";
 import { createSerialQueue } from "./serial-queue.ts";
@@ -28,6 +29,8 @@ export interface RunnerOverrides {
   readonly signer?: Signer;
   /** Replaces the prover wrapper of a direction. The integration test uses it to stand in for Groth16 verification. */
   readonly prover?: (direction: ProofDirection) => ProverBinary;
+  /** Replaces the `opening-proof` command. It gets the direction of the route whose source bridge opens. */
+  readonly openingProver?: (direction: ProofDirection) => OpeningProver;
   readonly now?: () => number;
 }
 
@@ -74,6 +77,11 @@ export function deliverySettingsOf(runnerConfig: RunnerConfig): DeliverySettings
 
 function valuations(settings: Readonly<Record<string, string>>): Readonly<Record<string, bigint>> {
   return Object.fromEntries(Object.entries(settings).map(([token, wei]) => [token.toLowerCase(), BigInt(wei)]));
+}
+
+/** The direction the other way round. */
+function oppositeOf(direction: ProofDirection): ProofDirection {
+  return direction === "first-to-second" ? "second-to-first" : "first-to-second";
 }
 
 function runnerStatePath(context: BotContext, direction: ProofDirection): string {
@@ -163,7 +171,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
     const directionLogger = logger.child({ bot: "runner", pair: pair.name, direction });
     const destinationPort = portOf(destination.rpcUrl, destination.chainId);
     const sourceClient = portOf(source.rpcUrl, source.chainId).client;
-    const prover = overrides.prover?.(direction) ?? createProverBinary({
+    const binary = createProverBinary({
       binaryPath: runnerConfig.prover.binary,
       pair,
       executor,
@@ -175,6 +183,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       stateCacheDirectory: join(context.config.stateDirectory, "beacon-states"),
       logger: directionLogger,
     });
+    const prover = overrides.prover?.(direction) ?? binary;
     const deliveryRouter = (runnerConfig.deliveryRouter ?? destination.contracts.deliveryRouter) as Address | null;
     // A runner that only delivers directly uses no router, and reads no reward address.
     const rewardAddress = deliveryRouter === null ? null : await readRewardAddress({ client: destinationPort.client, deliveryRouter, chainName: destination.name });
@@ -195,19 +204,38 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       settings: deliverySettingsOf(runnerConfig),
       logger: directionLogger,
     };
+    const state = createStateFile({
+      path: runnerStatePath(context, direction),
+      schema: runnerStateSchema,
+      initial: INITIAL_RUNNER_STATE,
+    });
+    const lightClient = createLightClientReader(destinationPort.client, destination.contracts.lightClient);
+    // The updates of this direction land on the destination chain, so they can open the bridge there: for the prover it is
+    // the source bridge of the opposite route (see `DepositOpenerDependencies`).
+    const openingDirection = oppositeOf(direction);
+    const opener: DepositOpener = createDepositOpener({
+      enabled: runnerConfig.openDeposits,
+      route: describeRoute(pair, openingDirection).name,
+      openingDirection,
+      bridge: destination.contracts.bridge,
+      readDepositsOpen: async () => (await destinationPort.client.readContract({ address: destination.contracts.bridge, abi: messageBridgeAbi, functionName: "depositsOpen" })) as boolean,
+      lightClient,
+      prover: overrides.openingProver?.(openingDirection) ?? binary,
+      chain: destinationPort.chain,
+      queue: queueOf(destination.chainId),
+      state,
+      now,
+      logger: directionLogger,
+    });
     const runner: Runner = createRunner({
       pairName: pair.name,
       direction,
       sourceChainId: source.chainId,
       destinationChainId: destination.chainId,
       lightClientAddress: destination.contracts.lightClient,
-      lightClient: createLightClientReader(destinationPort.client, destination.contracts.lightClient),
+      lightClient,
       delivery,
-      state: createStateFile({
-        path: runnerStatePath(context, direction),
-        schema: runnerStateSchema,
-        initial: INITIAL_RUNNER_STATE,
-      }),
+      state,
       outcomes,
       queue: queueOf(destination.chainId),
       now,
@@ -216,6 +244,8 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       logger: directionLogger,
       acceptOracleProof: runnerConfig.acceptOracleProof,
       verifyGuard,
+      // A posted update stored a new block: the bridge may open with it, and the proof needs that block while it is recent.
+      onUpdatePosted: opener.check,
     });
     const category = proofCategory(pair.name, direction);
     // `handleProofPayload` sweeps after it accepts a proof: the update goes with the first batch, or alone when none follows.
@@ -229,7 +259,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
         }),
       );
     }
-    directionLogger.info("runner_started", { category, pollSeconds: runnerConfig.pollSeconds, deliveryRouter, rewardAddress });
+    directionLogger.info("runner_started", { category, pollSeconds: runnerConfig.pollSeconds, deliveryRouter, rewardAddress, openDeposits: runnerConfig.openDeposits });
     jobs.push(
       runLoop({
         name: `runner ${direction}`,
@@ -238,6 +268,8 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
           for (const message of await feed.recent(category)) await onPayload(message.data);
           const summary = await runner.sweep();
           directionLogger.debug("runner_sweep", { ...summary });
+          // At start, and whenever the head moved: by an update of this runner, or of anyone else.
+          await opener.check();
         },
         signal,
         runOnce: input.runOnce,

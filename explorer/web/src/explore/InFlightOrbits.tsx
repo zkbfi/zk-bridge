@@ -4,7 +4,8 @@
  * on top and right to left on the bottom"): the first chain at the left end, the second at the right, each once; the
  * top lane carries first → second, the bottom lane second → first, each through the four steps of a transfer, each
  * transfer a planet circling the step it waits at. React draws the loop once per data refresh; the planets move in
- * orbit-engine.ts. A list of the same transfers is always there for screen readers, and "Show as a list" shows it.
+ * orbit-engine.ts. A list of the same transfers is always there for screen readers, and the list icon of the toggle
+ * shows it. The middle of the loop counts the requests out now.
  */
 import { forwardRef, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -15,6 +16,7 @@ import { shortAmountText } from "../bridge/number";
 import { Num } from "../bridge/Num";
 import { usdText } from "../bridge/price-oracle";
 import { TokenIcon } from "../bridge/TokenIcon";
+import { ListIcon, OrbitIcon } from "../bridge/icons";
 import { durationText } from "./explore-model";
 import { geometryFor, loopPath, NODE_RADIUS, OrbitEngine, stepX, type OrbitGeometry } from "./orbit-engine";
 import type { DirectionTiming } from "./explore-source";
@@ -32,6 +34,11 @@ export type InFlightOrbitsProps = {
   readonly reducedMotion?: boolean;
   /** True until every answer has arrived: nothing is drawn yet, so the first answer appears in place rather than emerging. */
   readonly loading?: boolean;
+  /**
+   * The requests behind the loop that are out now (owner: "whenever requests go out to update the orbit, that should
+   * show, and then decrement down to zero when no new data is loading"). Shown in the middle of the loop while above zero.
+   */
+  readonly fetching?: number;
 };
 
 /** Whether the user asked for reduced motion, following changes. */
@@ -123,7 +130,7 @@ const placeTip = (node: HTMLElement, x: number, y: number): void => {
 };
 
 /** The in-flight section: a heading with the list toggle, a line per direction, then the loop (or the list). */
-export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false }: InFlightOrbitsProps) => {
+export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false, fetching = 0 }: InFlightOrbitsProps) => {
   const prefers = usePrefersReducedMotion();
   const reduced = reducedMotion ?? prefers;
   const [asList, setAsList] = useState(false);
@@ -227,9 +234,15 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false }: 
       <XGroup
         title="In flight"
         right={
-          <button type="button" className="zb-orb-toggle" aria-pressed={asList} onClick={() => setAsList(!asList)}>
-            {asList ? "Show as orbits" : "Show as a list"}
-          </button>
+          // Two icons, one switch (owner: "a simple toggle with 2 icons"): the view shown is the one pressed.
+          <div className="zb-orb-toggle" role="group" aria-label="View">
+            <button type="button" aria-label="Show as orbits" title="Orbits" aria-pressed={!asList} onClick={() => setAsList(false)}>
+              <OrbitIcon />
+            </button>
+            <button type="button" aria-label="Show as a list" title="List" aria-pressed={asList} onClick={() => setAsList(true)}>
+              <ListIcon />
+            </button>
+          </div>
         }
       />
       <div ref={box} className="zb-orb-box" hidden={asList}>
@@ -296,6 +309,12 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false }: 
             </button>
           );
         })}
+        {/* The requests out now, counting down to zero; it fades once none is left. Silent to screen readers: it changes
+            on every poll, and the list beside the loop already says what is in flight. */}
+        <div className="zb-orb-loader" style={pct(middle, (geometry.yTop + geometry.yBottom) / 2)} data-on={fetching > 0} data-reduced={reduced} aria-hidden="true" title={`${fetching} ${fetching === 1 ? "request" : "requests"} loading`}>
+          <span className="zb-orb-loader-ring" />
+          <span className="zb-orb-loader-n">{fetching}</span>
+        </div>
       </div>
       {total === 0 ? <p className="zb-small zb-orb-empty">Nothing in flight right now</p> : null}
       {tracks.map((track) => (
@@ -303,7 +322,7 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false }: 
           {track.planets.map((planet) => (
             <li key={planet.id}>
               <a href={messageHref(planet)}>
-                {planet.token === null ? null : <TokenIcon subject={{ chainId: planet.source.chainId, address: planet.token.address }} symbol={planet.token.symbol} size={22} decorative />}
+                {planet.token === null ? null : <TokenIcon subject={{ chainId: planet.source.chainId, address: planet.token.address }} symbol={planet.token.symbol} isBridgedCopy={planet.token.isBridgedCopy} size={22} decorative />}
                 <span>{planetLabel(planet, now)}</span>
               </a>
             </li>
@@ -362,7 +381,7 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false }: 
         : createPortal(
             <div ref={tipNode} className="zb-orb-tip" role="tooltip">
               <div className="zb-orb-tip-amt">
-                {shown.token === null ? null : <TokenIcon subject={{ chainId: shown.source.chainId, address: shown.token.address }} symbol={shown.token.symbol} size={20} decorative />}
+                {shown.token === null ? null : <TokenIcon subject={{ chainId: shown.source.chainId, address: shown.token.address }} symbol={shown.token.symbol} isBridgedCopy={shown.token.isBridgedCopy} size={20} decorative />}
                 <b>{shown.token === null || shown.amount === null ? "Message" : <><Num text={amountText(shown.amount, shown.token.decimals)} /> {shown.token.symbol}</>}</b>
                 {shown.usd === null ? null : <span className="zb-orb-tip-muted">≈ ${usdText(shown.usd)}</span>}
               </div>
@@ -416,7 +435,7 @@ export const SunTip = forwardRef<HTMLDivElement, { readonly track: OrbitTrack; r
               <tr key={line.key}>
                 <th scope="row">
                   <span className="zb-orb-tip-tok">
-                    {line.token === null ? null : <TokenIcon subject={{ chainId: track.from.chainId, address: line.token.address }} symbol={line.token.symbol} size={14} decorative />}
+                    {line.token === null ? null : <TokenIcon subject={{ chainId: track.from.chainId, address: line.token.address }} symbol={line.token.symbol} isBridgedCopy={line.token.isBridgedCopy} size={14} decorative />}
                     {line.count}× {line.token?.symbol ?? "message"}
                   </span>
                 </th>

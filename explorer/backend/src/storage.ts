@@ -3,7 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 /**
  * The tables of the backend, in one file. The `jobs` table carries a unique index that lets only one job per direction
  * be queued or proving, so the rule "one job per direction" holds even if two processes share the file.
- * The `proofs` and `evidence` tables belong to the msgboard indexer and the archive module.
+ * The `proofs` and `evidence` tables belong to the msgboard indexer and the archive module, the `warmup_` tables to the
+ * warm-up of the remote prover (`watch/warmup-store.ts`).
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
@@ -43,7 +44,40 @@ CREATE TABLE IF NOT EXISTS evidence (
   body TEXT NOT NULL,
   stored_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS warmup_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  direction TEXT NOT NULL,
+  source TEXT NOT NULL,
+  seconds REAL NOT NULL,
+  observed_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS warmup_sessions (
+  id TEXT PRIMARY KEY,
+  direction TEXT NOT NULL,
+  why TEXT NOT NULL,
+  due_at INTEGER NOT NULL,
+  lead_seconds INTEGER NOT NULL,
+  started_at INTEGER NOT NULL,
+  ready_at INTEGER,
+  ended_at INTEGER,
+  outcome TEXT
+);
+CREATE INDEX IF NOT EXISTS warmup_sessions_by_time ON warmup_sessions (started_at);
 `;
+
+/**
+ * Brings an older file up to date. The planned slots of a job (the head it starts from and the finalized slot it
+ * targets, when the watcher names them) carry a unique index: one proof of a direction from one head to one slot never
+ * gets a second job, also after a restart or a failure.
+ */
+function migrate(database: DatabaseSync): void {
+  const columns = database.prepare("PRAGMA table_info(jobs)").all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === "planned_start_slot")) {
+    database.exec("ALTER TABLE jobs ADD COLUMN planned_start_slot TEXT");
+    database.exec("ALTER TABLE jobs ADD COLUMN planned_new_slot TEXT");
+  }
+  database.exec("CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_per_target ON jobs (direction, planned_start_slot, planned_new_slot) WHERE planned_start_slot IS NOT NULL");
+}
 
 /** The backend database: one SQLite file. */
 export interface Storage {
@@ -68,6 +102,7 @@ export function openStorage(path: string): Storage {
   database.exec("PRAGMA journal_mode = WAL");
   database.exec("PRAGMA busy_timeout = 5000");
   database.exec(SCHEMA);
+  migrate(database);
   return {
     database,
     transaction(work) {

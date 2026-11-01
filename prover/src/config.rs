@@ -124,7 +124,42 @@ pub struct ProverConfig {
     /// turns the wait off. The backend's job limit must exceed it plus one proof (`docs/gpu-prover.md`).
     #[serde(default = "default_remote_cold_start_wait_seconds")]
     pub remote_cold_start_wait_seconds: u64,
+    /// Proving endpoints in priority order, for the `remote` backend (`[[prover.remote_endpoints]]`). The backend tries
+    /// the first and moves to the next only when one is unreachable, stays not ready past its wait, or fails with an
+    /// error that another try can help (`docs/gpu-prover.md`, "Endpoint list"). Use either this list or `remote_url`,
+    /// not both. Each endpoint takes `remote_timeout_seconds`, `remote_attempts` and `remote_cold_start_wait_seconds`
+    /// unless it sets its own.
+    #[serde(default)]
+    pub remote_endpoints: Vec<RemoteEndpointConfig>,
 }
+
+/// One entry of `prover.remote_endpoints`.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteEndpointConfig {
+    /// A short name for the logs, such as `dedicated` or `serverless`: lower case letters, digits, `-` and `_`. The
+    /// logs name an endpoint by this label and its position, never by its URL.
+    pub label: String,
+    /// The base URL of the worker, without the path.
+    pub url: String,
+    /// The NAME of the environment variable that holds the API key of this endpoint. Optional: a worker that is reached
+    /// directly (a dedicated pod on a TCP port) checks no key, and then no `Authorization` header is sent.
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    /// The longest wait for a worker of this endpoint that is not ready yet. Default `remote_cold_start_wait_seconds`.
+    /// Short for a dedicated worker (it is up or it is not), long for a serverless endpoint that starts one.
+    #[serde(default)]
+    pub ready_wait_seconds: Option<u64>,
+    /// The time one request to this endpoint may take. Default `remote_timeout_seconds`.
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
+    /// How often a job is sent to this endpoint before the backend moves on. Default `remote_attempts`.
+    #[serde(default)]
+    pub attempts: Option<u32>,
+}
+
+/// The most endpoints that `prover.remote_endpoints` may list.
+pub const MAX_REMOTE_ENDPOINTS: usize = 8;
 
 fn default_remote_timeout_seconds() -> u64 {
     900
@@ -654,7 +689,7 @@ fn validate_route(name: &str, route: &RouteConfig) -> Result<()> {
     Ok(())
 }
 
-fn is_http_url(url: &str) -> bool {
+pub(crate) fn is_http_url(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
 

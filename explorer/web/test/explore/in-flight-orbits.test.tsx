@@ -276,7 +276,24 @@ describe("in-flight orbits", () => {
     expect(links[1]).toHaveTextContent(/Proof ready, waiting for a deliverer/);
     await userEvent.click(screen.getByRole("button", { name: "Show as a list" }));
     expect(screen.getAllByRole("list", { name: /transfers in flight/ })[0]).toHaveClass("zb-orb-list");
+    // Two icon buttons, one per view: the view shown is the one pressed.
+    expect(screen.getByRole("button", { name: "Show as a list" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Show as orbits" })).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(screen.getByRole("button", { name: "Show as orbits" }));
     expect(screen.getByRole("button", { name: "Show as orbits" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("counts the requests out in the middle of the loop, and hides the count at zero", () => {
+    const { rerender } = render(<InFlightOrbits tracks={tracksOf([row(1, "sent")])} now={FIXTURE_NOW} reducedMotion fetching={3} />);
+    const loader = document.querySelector<HTMLElement>(".zb-orb-loader")!;
+    expect(loader).toHaveAttribute("data-on", "true");
+    expect(loader).toHaveTextContent("3");
+    expect(loader).toHaveAttribute("title", "3 requests loading");
+    expect(loader).toHaveAttribute("aria-hidden", "true");
+    rerender(<InFlightOrbits tracks={tracksOf([row(1, "sent")])} now={FIXTURE_NOW} reducedMotion fetching={1} />);
+    expect(loader).toHaveAttribute("title", "1 request loading");
+    rerender(<InFlightOrbits tracks={tracksOf([row(1, "sent")])} now={FIXTURE_NOW} reducedMotion />);
+    expect(loader).toHaveAttribute("data-on", "false");
   });
 
   it("shows the tooltip on keyboard focus and opens the message page on Enter or a click", () => {

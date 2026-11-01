@@ -735,3 +735,20 @@ describe("the real outside world", () => {
     expect(head).toEqual({ headSlot: 123n, headRoot: START_ROOT, programKey: PROGRAM_KEY, clock: { genesisTime: 1_000n, secondsPerSlot: 10n } });
   });
 });
+
+describe("a second proof of the same slots (2026-11-01)", () => {
+  it("keeps the first and refuses the second, logging proof_duplicate", async () => {
+    const fixture = setup();
+    const first = createProvingJob(fixture, "first-to-second", "job-1");
+    expect((await send(fixture, first, proofPackage())).status).toBe(202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    updateJob(fixture.storage, first, { status: "on-chain" }, fixture.clock.now(), ["proving", "published"]);
+    const second = createProvingJob(fixture, "first-to-second", "job-2");
+    const answer = await send(fixture, second, proofPackage());
+    expect(await answer.json()).toEqual({ error: "the proof was refused", reason: "the same proof is held already" });
+    expect(storedCount(fixture)).toBe(1);
+    expect(getJob(fixture.storage, second)).toMatchObject({ status: "failed", error: "the proof was refused: the same proof is held already" });
+    const events = fixture.log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(events.filter((event) => event.event === "proof_duplicate")).toMatchObject([{ jobId: "job-2", firstJobId: "job-1", startSlot: 100, newSlot: 200 }]);
+  });
+});

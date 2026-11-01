@@ -8,8 +8,8 @@
 #   1. Base system: time zone, swap, journal size, packages (libudev-dev: node-hid and usb build from source on ARM64).
 #   2. Node.js 24 from the NodeSource apt repository, and pnpm through corepack.
 #   3. Rust 1.93.0 (prover/rust-toolchain.toml) in /opt/rust, to build the prover for this machine (ARM64).
-#   4. One system user per service. The publisher and the runner are separate users, so only the runner can read the
-#      wallet key, in its file or in its process environment.
+#   4. One system user per service. The publisher, the runner and the traffic bot are separate users, so only the runner
+#      can read its wallet key and only the traffic bot its own, in the file or in the process environment.
 #   5. Postgres for the explorer indexer: local socket only, peer login for the indexer's user.
 #   6. Caddy as the TLS proxy. Until the backend has a host name it answers 503 on port 80.
 #   7. An IPFS node (kubo) that pins the release archives. Its RPC API listens on 127.0.0.1:5001 only, and it runs no
@@ -37,6 +37,7 @@ SWAP_SIZE=2G
 KUBO_VERSION=v0.43.1
 IPFS_PATH=/var/lib/zk-bridge-ipfs/repo
 IPFS_HOST=${IPFS_HOST:-ipfs.zkb.fi}
+GATEWAY_HOST=${GATEWAY_HOST:-gateway.zkb.fi}
 
 # --- 1. Base system ---------------------------------------------------------------------------------------------
 log "base system"
@@ -104,6 +105,7 @@ ensure_user zkb_backend /var/lib/zk-bridge-backend
 ensure_user zkb_indexer /var/lib/zk-bridge-indexer
 ensure_user zkb_publisher /var/lib/zk-bridge-publisher
 ensure_user zkb_runner /var/lib/zk-bridge-runner
+ensure_user zkb_traffic /var/lib/zk-bridge-traffic
 
 # Code: owned by root, readable by the services, written only by the deploy step.
 install -d -m 0755 -o root -g root /opt/zk-bridge
@@ -113,6 +115,7 @@ install -d -m 0750 -o root -g zkb_backend /etc/zk-bridge/backend
 install -d -m 0750 -o root -g zkb_indexer /etc/zk-bridge/indexer
 install -d -m 0750 -o root -g zkb_publisher /etc/zk-bridge/publisher
 install -d -m 0750 -o root -g zkb_runner /etc/zk-bridge/runner
+install -d -m 0750 -o root -g zkb_traffic /etc/zk-bridge/traffic
 
 # Before 2026-10-29 both bots shared the user zkb_bots. Remove it while it holds nothing; refuse to guess otherwise.
 if id zkb_bots >/dev/null 2>&1; then
@@ -179,8 +182,11 @@ systemctl stop zk-bridge-ipfs.service 2>/dev/null || true
 # The server profile turns off local network discovery, which a public host must not do.
 [ -f "$IPFS_PATH/config" ] || ipfs_as init --profile server >/dev/null
 ipfs_as config Addresses.API /ip4/127.0.0.1/tcp/5001
-# No gateway: an open gateway serves anyone's content from this address.
-ipfs_as config --json Addresses.Gateway '[]'
+# A gateway on localhost only, behind Caddy at gateway.zkb.fi/ipfs/<cid>. NoFetch: it serves only what this node holds
+# (the release archives), never anyone else's content. Path style only, no subdomains, no DNSLink.
+ipfs_as config Addresses.Gateway /ip4/127.0.0.1/tcp/8080
+ipfs_as config --json Gateway.NoFetch true
+ipfs_as config --json Gateway.PublicGateways "$(jq -cn --arg h "$GATEWAY_HOST" '{($h): {Paths: ["/ipfs"], UseSubdomains: false, NoDNSLink: true}}')"
 ipfs_as config Datastore.StorageMax 20GB
 ipfs_as config Swarm.ResourceMgr.MaxMemory 1GB
 # Announce only what is pinned here: the release archives.
@@ -188,13 +194,18 @@ ipfs_as config Provide.Strategy pinned
 # Secure WebSockets with a libp2p.direct certificate: browsers (inbrowser.link, Safari) need them to fetch from us.
 # Set explicitly, the node asks for the certificate at once instead of after an hour.
 ipfs_as config --json AutoTLS.Enabled true
+# The secure WebSocket listener that AutoTLS fills, sharing TCP 4001. Safari and Firefox have no WebTransport and need it.
+ipfs_as config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001", "/ip6/::/tcp/4001",
+  "/ip4/0.0.0.0/tcp/4001/tls/sni/*.libp2p.direct/ws", "/ip6/::/tcp/4001/tls/sni/*.libp2p.direct/ws",
+  "/ip4/0.0.0.0/udp/4001/webrtc-direct", "/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/udp/4001/quic-v1/webtransport",
+  "/ip6/::/udp/4001/webrtc-direct", "/ip6/::/udp/4001/quic-v1", "/ip6/::/udp/4001/quic-v1/webtransport"]'
 # Announce the host name as well, so peers and pinning services can name the node: ipfs.zkb.fi (A and AAAA).
 ipfs_as config --json Addresses.AppendAnnounce "$(jq -cn --arg h "$IPFS_HOST" '[
   "/dns4/\($h)/tcp/4001", "/dns4/\($h)/udp/4001/quic-v1", "/dns6/\($h)/tcp/4001", "/dns6/\($h)/udp/4001/quic-v1"]')"
 # The unit is written here and not by deploy.sh: the node holds the pins and does not change with a release.
 cat > /etc/systemd/system/zk-bridge-ipfs.service <<EOF
 # The IPFS node (kubo) that pins the release archives. provision.sh writes this file. RPC API on 127.0.0.1:5001 only,
-# no gateway, peers on port 4001. The API token is in $IPFS_PATH/config (zkb-ipfs-api-token).
+# gateway on 127.0.0.1:8080 (only its own pins, behind gateway.zkb.fi), peers on port 4001. The API token is in $IPFS_PATH/config (zkb-ipfs-api-token).
 [Unit]
 Description=zk-bridge IPFS node (kubo)
 Wants=network-online.target

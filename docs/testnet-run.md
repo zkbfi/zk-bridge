@@ -386,11 +386,17 @@ cast send "<light client on chain 943>" --data "$(jq -r .updateCalldata "$RUN_DI
 
 Repeat for the other direction with `--route pulsechain_testnet_to_sepolia`, the light client on Sepolia, and `--rpc-url sepolia`. Run each route again until the exit code is 3. Write down the wall time, the line `proved` in the log, and the cost in the RunPod console.
 
-## Step 8: open both bridges (sends transactions)
+## Step 8: open both bridges (automatic: the runner sends the transactions)
 
-A bridge opens only after its own light client stored a block that came after the first update of the other light client. Chains need about two epochs to finalize, so repeat step 7 once more for both directions before you open.
+The runner does this step. With `runner.openDeposits` on (the default), each direction of the runner opens the bridge on its destination chain: at start, after each pass, and right after an update of its own is mined, while the bridge is closed. It builds the proof below with `opening-proof`, simulates `openDeposits`, sends it from the runner's signer, and records the open bridge in its state file, after which it never checks again. The log lines are `deposits_open_checked`, `deposits_opening`, `deposits_opened` and `deposits_open_failed`; `explorer/bots/README.md`, "Opening the bridges", has the details. So start the bots (step 10) after step 7 and watch for `deposits_opened` in both directions.
 
-The call is `openDeposits(OpeningProof)` on the bridge of each chain. The proof holds a remote block, the state proof of the remote light client (from `eth_getProof`), and the storage proof of one stored head. See `docs/hardened-build-contract.md`, "Launch sequence", step 3. The prover builds the proof and checks it natively before it prints anything. It sends nothing.
+Which update opens which bridge: the runner of the direction Sepolia to 943 posts to the light client on chain 943, so it opens the bridge on chain 943. For the prover that is the source bridge of the opposite route (`pulsechain-testnet-v4_to_sepolia` in the file the runner writes), and `eth_getProof` runs on Sepolia. The runner of the direction 943 to Sepolia opens the bridge on Sepolia, with `eth_getProof` on chain 943. Both directions must run for both bridges to open.
+
+A bridge opens only after its own light client stored a block that came after the first update of the other light client. Chains need about two epochs to finalize, so the first round of updates for one direction only prepares the second; the runner tries again at each new head.
+
+The proof must be built soon after the light client stores the block. `eth_getProof` runs at that block on the other chain, and a node serves the state of a block only for a while: on 2026-11-01 a manual run hours after the last update failed for both routes with `rpc error 4444/-32602: distance to target block exceeds maximum proof window`. The runner builds the proof right after an update, with the default slots, which take the newest stored block.
+
+By hand, the steps are as follows. The call is `openDeposits(OpeningProof)` on the bridge of each chain. The proof holds a remote block, the state proof of the remote light client (from `eth_getProof`), and the storage proof of one stored head. See `docs/hardened-build-contract.md`, "Launch sequence", step 3. The prover builds the proof and checks it natively before it prints anything. It sends nothing.
 
 ```sh
 "$PROVER" --config "$RUN_DIR/prover.toml" opening-proof --route sepolia_to_pulsechain_testnet
@@ -404,7 +410,7 @@ cast call "<bridge on Sepolia>" 'depositsOpen()(bool)' --rpc-url sepolia
 cast call "<bridge on chain 943>" 'depositsOpen()(bool)' --rpc-url pulsechain_testnet_v4
 ```
 
-Both calls must print `true`. Until then, a send reverts with `DepositsNotOpen()`.
+Both calls must print `true`. Until then, a send reverts with `DepositsNotOpen()`. Run the manual commands right after an update of the light client of the bridge, or the proof window error above comes back.
 
 ## Step 9: confirm the gate on Sepolia
 
@@ -455,6 +461,77 @@ Compare the numbers with the values in `docs/bots.md`.
 | Transaction base cost, once | 21,000 |
 
 The runner also writes the outcome of each item (gas and fee earned) to the state directory that `bots.json` names. A delivery is final when the bridge wrote `AffirmationCompleted` for the message identifier.
+
+## Test tokens and traffic
+
+Owner: "we should start out with a minimum of 1 proof/hour. this will help with keeping things current on both chains and giving us a benchmark to check against. we need to mint tokens on both sides too to test the bridge's utility" and "and then setup bots to move said tokens back and forth". Later: "seems like it would be best to have these proofs be posted if and only if they have erc20s moving across the bridge. otherwise they are useless. so perhaps we should be doing bridges 4x/hr".
+
+Two test tokens on each chain: `zkb Test Dollar` (`tUSD`, 6 decimals) and `zkb Test Token` (`tTKN`, 18 decimals), `src/testnet/TestToken.sol`. Only the deployer (the minter, fixed at deployment) mints; there is no public mint, so nobody can print an amount near the 256 bit limit and push it through the mediator. A tester who wants tokens asks the minter. Their bridged copies are `ztUSD` and `ztTKN`. The traffic bot (`explorer/bots`, "The traffic bot") sends one transfer every 15 minutes in each direction, the way back 7.5 minutes after the way out, so each proof carries token transfers.
+
+### What is needed first
+
+1. **The traffic wallet.** A new account, used for nothing else. Create a 1Password item **"testnet traffic wallet"** in the vault **zkb.fi** with two fields: `address` and `private-key`. Generate it where you keep keys (for example `cast wallet new`, in a shell whose history you do not keep), store both fields, and close the shell. Nothing in this repository generates it.
+2. **Gas for the traffic wallet**, from the faucets (estimates below): about 2 Sepolia ETH and 10 tPLS to start.
+3. **Open bridges.** On 2026-11-01 `depositsOpen()` is `false` on both bridges (`0xb018...fb21` on Sepolia, `0xf59d...1fd1` on chain 943). Until the runner opens them (step 8), every send skips with `deposits-not-open`.
+4. **A confirmed gate on Sepolia, each epoch.** Sepolia's gate enforces (`confirmedEpoch()` is `(0, false)` on 2026-11-01). A send from Sepolia in an epoch that nobody confirmed reverts with `ForkNotConfirmed`, and the traffic bot logs `traffic_skipped` with `gate-not-confirmed`. No tool confirms it on a live chain yet (step 9): the evidence builder is `light-client/crates/lc-core/src/gate.rs`, with no command of the prover around it. Until a keeper confirms each epoch (6.4 minutes), only the direction 943 to Sepolia moves. The gate of chain 943 detects and admits.
+
+### Deploy and mint (sends transactions)
+
+Run from the repository root, after step 0. The keystore account (`$KEYSTORE_NAME`, the deployer) becomes the minter. The key stays in the keystore; nothing goes on the command line. The traffic wallet's address is not secret.
+
+```sh
+export TRAFFIC_WALLET=$(op read 'op://zkb.fi/testnet traffic wallet/address')
+# Dry run first (no --broadcast): nothing reaches the chain and no file is written.
+forge script script/testnet/DeployTestTokens.s.sol --rpc-url sepolia --account "$KEYSTORE_NAME" --sender "$DEPLOYER" 2>&1 | redact
+# Sepolia: --skip-simulation and --slow, because Sepolia charges about 7 times what Foundry counts for new code (step 5).
+forge script script/testnet/DeployTestTokens.s.sol --rpc-url sepolia --account "$KEYSTORE_NAME" --sender "$DEPLOYER" \
+  --broadcast --slow --skip-simulation 2>&1 | redact
+# Chain 943: a priority fee of 0.01 gwei. Foundry's default of 1 wei never gets included there.
+forge script script/testnet/DeployTestTokens.s.sol --rpc-url pulsechain_testnet_v4 --account "$KEYSTORE_NAME" --sender "$DEPLOYER" \
+  --broadcast --slow --priority-gas-price 10000000 2>&1 | redact
+```
+
+Each run mints 1,000,000 tUSD and 1,000,000 tTKN to the traffic wallet (`TUSD_MINT_WHOLE`, `TTKN_MINT_WHOLE` change it) and writes the chain's section into `deploy/deployments/sepolia-pls943.test-tokens.json`. A second run on a chain that the file lists refuses, unless `TEST_TOKENS_REDEPLOY=true`. Commit the file: the traffic bot reads it from the release. The keystore asks for its password; to take it from 1Password instead, add `--password-file <(op read 'op://<vault>/<item>/password')`.
+
+Gas of the deploy, per chain: each token is one creation and one mint. On 2026-11-01 `eth_estimateGas` gave 3,585,793 gas for one token on Sepolia and 657,710 on chain 943 (548,092 on a local chain), so about 7.5 million on Sepolia and 1.5 million on chain 943 with the mints.
+
+### Start the traffic bot
+
+On the app server (`deploy/app-server/config/traffic/`): run `provision.sh` once more (it adds the user `zkb_traffic` and `/etc/zk-bridge/traffic`), then copy the four templates to `/etc/zk-bridge/traffic/` and fill `bots.env` (the two RPC endpoints) and `traffic.env`:
+
+```sh
+op read 'op://zkb.fi/testnet traffic wallet/private-key' | ssh zkbfi-app 'umask 027; { echo -n TRAFFIC_PRIVATE_KEY=; cat; echo; } > /etc/zk-bridge/traffic/traffic.env; chgrp zkb_traffic /etc/zk-bridge/traffic/traffic.env'
+```
+
+`deploy.sh` then starts `zk-bridge-traffic.service` with the others; it skips it while a file is missing. `ansible-playbook bots.yml -e commit=<hash> -e bots=traffic` moves it alone. Logs: `journalctl -u zk-bridge-traffic -g '"traffic_sent"\|"traffic_skipped"'`. At start the bot logs `traffic_tokens`: every test token with the address of its copy on the other chain.
+
+The settings of the template: amounts from 5 to 50 whole tokens, a home balance band from 100,000 to 990,000, the default tip of 0.1 percent, `newCopyGasLimit` 9,000,000 for sends to Sepolia, and native reserves of 0.05 ETH (Sepolia) and 1 tPLS (943).
+
+**Sepolia needs `newCopyGasLimit`.** The first send of a chain 943 token to Sepolia deploys its copy there. With the state of Sepolia overridden for an estimate, `TokenFactory.deploy` of a copy took 6,971,380 gas on 2026-11-01 (989,775 on a local chain). The mediator's default gas limit for that message is 2,750,000 (2,000,000 plus the callback to the router), and a delivery that runs out of gas is final: the tokens stay locked on chain 943 and the copy does not exist. The traffic bot asks for 9,000,000 (below the bridge's `maxGasPerTx` of 10,000,000) while the copy has no code. Anyone else who sends a new token to Sepolia meets the same limit.
+
+**The runner must value the test tokens.** The runner prices a tip only in a token it has a value for (`runner.tokenValuationsWei`), so without entries it skips every test transfer. Add each address of `traffic_tokens` (the four native tokens and the four copies), valued in wei of the coin of the chain where the token is paid out. The test tokens have no market value, so pick values at which the 0.1 percent tip covers a delivery: with 1 whole token worth `10000000000000000000` wei (10 coins) on Sepolia and `1000000000000000000` (1 coin) on chain 943, a 5 token transfer offers 0.05 ETH and 0.005 tPLS, which covers 750,000 gas (a delivery and its share of an update) up to about 66 gwei on Sepolia and 6.6 gwei on chain 943.
+
+**The first send of each token is delivered by hand.** Until a copy of a native token came home once, the mediator sends every relay of it as a deploy message, and the runner skips a deploy message with `no-price-for-fee-token`: the indexer names no destination token for it. So the traffic bot sends each native token once and then holds it back (`waiting-for-first-return`) until a copy came home; it marks that send `deployMessage: true` in `traffic_sent`. Deliver it as in step 11 (`zk-bridge-prover evidence`, then `executeMessage` at the delivery router, which anyone may call); on Sepolia that delivery needs about 7 million gas, because it deploys the copy. The copies then go home as ordinary releases that the runner prices, and from then on every send is one. Four hand deliveries in all: tUSD and tTKN of each chain. (An indexer that predicted the copy's address for a deploy message would let the runner price these too.)
+
+### What a month costs the traffic wallet
+
+Only the traffic wallet's own sends; the runner pays the deliveries and the light client updates. Four sends an hour in one direction from each chain: 2,880 relays a month on each chain, plus one approval for each token and copy (eight in all, once).
+
+| | Sepolia | Chain 943 |
+|---|---|---|
+| Gas of one relay | about 235,000. The estimate of a token's first relay was 362,203 (with the Sepolia state overridden, 2026-11-01); on a local chain a first relay took 138,939 and an ordinary one 90,428 (end-to-end stage `traffic`), so an ordinary one on Sepolia about 235,000 | about 110,000 (the local 90,428 times 1.2, the ratio of step 5) |
+| Gas of one approval | 129,344 (estimate) | about 55,000 |
+| Gas a month | about 0.68 billion | about 0.32 billion |
+| Gas price | 18 wei on 2026-11-01; it swings to several gwei | base fee 7 wei on 2026-11-01, plus the 0.01 gwei tip |
+| Native coin a month | 0.012 ETH at today's price, 0.68 ETH at 1 gwei, 3.4 ETH at 5 gwei | about 0.003 tPLS |
+
+Fund 2 Sepolia ETH and 10 tPLS to start, and watch `native-below-reserve` skips.
+
+**Token balances.** A send moves 5 to 50 tokens (27.5 on average). One direction makes 2,880 sends a month, so even with no way back the native balance of one token moves at most about 80,000 tokens a month, far inside the 900,000 above the band's minimum. The way back runs as often, and the band brings copies home first when a home balance falls below 100,000. What leaves for good is the tip, 0.1 percent of each send: about 80 tokens a month on each chain. A mint of 1,000,000 of each token lasts for years.
+
+### Checked on local chains
+
+`explorer/e2e` stage `traffic` (run after `open` and `gate`): it deploys the tokens with the script on both Anvil chains, runs `zk-bridge-bot traffic --once` (both directions send their native tUSD, each after one approval: the deploy messages) and delivers these two by hand; sends again, so that both copies go home, posts an update on both light clients, lets the runner deliver both through the delivery router for the default tip, and checks that the wallet got each returned amount back less the 0.1 percent tip; then sends once more, every send now an ordinary release, and the runner delivers both.
 
 ## Step 12: clean up
 

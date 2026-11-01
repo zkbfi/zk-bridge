@@ -20,9 +20,11 @@ use zk_bridge_prover::error::Error;
 use zk_bridge_prover::handoff::ProofPackage;
 use zk_bridge_prover::light_client::{ChainKind, LightClientOutput};
 use zk_bridge_prover::local_network::signed_beacon::checkpoint::{read_checkpoint, Checkpoint};
-use zk_bridge_prover::produce::{produce, ProduceRequest, Production};
-use zk_bridge_prover::prover::{oracle_digest, OracleProver};
+use zk_bridge_prover::logging::Logger;
+use zk_bridge_prover::produce::{produce, produce_logged, ProduceRequest, Production};
+use zk_bridge_prover::prover::{oracle_digest, OracleProver, ProofStatement, Prover};
 use zk_bridge_prover::signer::{recover_address, RecoverableSignature, Signer};
+use zk_bridge_prover::timing::{ProverTimings, RemoteTimings, WorkerTimings};
 
 /// A dummy key for the oracle. It has no value anywhere.
 const ORACLE_SECRET: [u8; 32] = [0x42; 32];
@@ -658,4 +660,134 @@ fn the_program_still_refuses_a_wrong_branch_in_a_plan() {
     let refused =
         Error::VerificationRefused(lc_core::Error::InvalidGenesisValidatorsRootBranch.to_string());
     assert_eq!(verify_update_natively(&plan.input).unwrap_err(), refused);
+}
+
+/// An oracle that reports the timings of a remote run, as the remote backend does.
+struct ReportingOracle {
+    inner: OracleProver,
+    timings: Mutex<Option<ProverTimings>>,
+}
+
+impl Prover for ReportingOracle {
+    fn name(&self) -> &'static str {
+        "reporting-oracle"
+    }
+
+    fn prove(
+        &self,
+        program_vkey: B256,
+        statement: &ProofStatement,
+    ) -> zk_bridge_prover::error::Result<zk_bridge_prover::prover::Proof> {
+        self.inner.prove(program_vkey, statement)
+    }
+
+    fn take_timings(&self) -> Option<ProverTimings> {
+        self.timings.lock().unwrap().take()
+    }
+}
+
+fn field(line: &str, key: &str) -> Option<String> {
+    line.split(' ')
+        .find_map(|part| part.strip_prefix(&format!("{key}=")))
+        .map(str::to_string)
+}
+
+/// Claim: a run logs one step line each for the build, the native run and the check, and ends with one `prove_timing`
+/// line that carries the producer's steps and, for a backend that reports them, the remote steps and the worker's
+/// numbers. A backend that reports nothing (the oracle) gives the producer's steps only. No line holds a URL.
+/// Why it matters: this is the data that answers how long a proof takes and where the time goes.
+#[test]
+fn a_run_ends_with_one_timing_summary() {
+    let (chain, checkpoint) = lagging_chain();
+    let source = chain.source();
+
+    let (logger, lines) = Logger::in_memory();
+    let oracle = OracleProver::new(oracle_signer());
+    produce_logged(&source, &oracle, &request(head_at(&checkpoint)), &logger).expect("a run");
+    let lines = lines.lock().unwrap().clone();
+    let steps: Vec<String> = lines
+        .iter()
+        .filter(|line| line.contains("event=prove_step"))
+        .filter_map(|line| field(line, "step"))
+        .collect();
+    assert_eq!(steps, ["build", "native", "check"], "{lines:?}");
+    let summaries: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.contains("event=prove_timing"))
+        .collect();
+    assert_eq!(summaries.len(), 1, "{lines:?}");
+    for key in ["build_ms", "native_ms", "verify_ms", "prove_ms", "total_ms"] {
+        assert!(
+            field(summaries[0], key).is_some(),
+            "{key} in {}",
+            summaries[0]
+        );
+    }
+    assert!(
+        field(summaries[0], "remote_ms").is_none()
+            && field(summaries[0], "worker_timings").is_none()
+    );
+
+    let reporting = ReportingOracle {
+        inner: OracleProver::new(oracle_signer()),
+        timings: Mutex::new(Some(ProverTimings {
+            native_ms: 11,
+            verify_ms: 3,
+            remote: Some(RemoteTimings {
+                wait_worker_ms: 90_000,
+                not_ready_count: 4,
+                retry_count: 0,
+                endpoint: "dedicated".into(),
+                failover_count: 0,
+                remote_ms: 50_000,
+                worker: Some(WorkerTimings {
+                    queue_ms: 0,
+                    native_ms: 300,
+                    prove_ms: 48_000,
+                    verify_ms: 25,
+                    total_ms: 49_000,
+                    gpu: Some("NVIDIA L40S".into()),
+                    cpu_model: None,
+                    cpu_count: Some(16),
+                }),
+            }),
+        })),
+    };
+    let (logger, lines) = Logger::in_memory();
+    produce_logged(&source, &reporting, &request(head_at(&checkpoint)), &logger).expect("a run");
+    let lines = lines.lock().unwrap().clone();
+    let summary = lines
+        .iter()
+        .find(|l| l.contains("event=prove_timing"))
+        .expect("summary");
+    for (key, value) in [
+        ("wait_worker_ms", "90000"),
+        ("not_ready_count", "4"),
+        ("endpoint", "dedicated"),
+        ("failover_count", "0"),
+        ("remote_ms", "50000"),
+        ("worker_timings", "reported"),
+        ("worker_prove_ms", "48000"),
+        ("worker_total_ms", "49000"),
+        ("remote_overhead_ms", "1000"),
+        ("worker_cpu_count", "16"),
+    ] {
+        assert_eq!(
+            field(summary, key).as_deref(),
+            Some(value),
+            "{key} in {summary}"
+        );
+    }
+    assert!(summary.contains("worker_gpu=\"NVIDIA L40S\""), "{summary}");
+    let all = lines.join("\n");
+    assert!(
+        !all.contains("http://") && !all.contains("https://"),
+        "{all}"
+    );
+
+    // `produce` itself stays quiet and gives the same result.
+    assert!(matches!(
+        produce(&source, &oracle, &request(head_at(&checkpoint))).unwrap(),
+        Production::Proof(_)
+    ));
 }
