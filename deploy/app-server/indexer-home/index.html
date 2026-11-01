@@ -43,12 +43,38 @@
   table.t { width: 100%; border-collapse: collapse; font-size: 14px; }
   table.t th, table.t td { text-align: right; padding: 8px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
   table.t th { color: var(--muted); font-weight: 600; } table.t th:first-child, table.t td:first-child { text-align: left; white-space: normal; }
+  /* Compact overview, tabs, and the search palette (⌘K, Ctrl+K or /; the same keys as the app). */
+  .searchbtn { margin-left: auto; font: inherit; font-size: 14px; display: inline-flex; gap: 8px; align-items: center; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--raised); color: var(--muted); cursor: pointer; }
+  .searchbtn:hover { color: var(--ink); border-color: var(--accent); }
+  header .live { margin-left: 12px !important; }
+  kbd { font: inherit; font-size: 12px; font-weight: 600; min-width: 20px; padding: 0 5px; border: 1.5px solid var(--line); border-radius: 5px; color: var(--ink); display: inline-grid; place-items: center; }
+  .tabs { display: flex; gap: 4px; margin: 28px 0 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  .tabs a { padding: 10px 14px; color: var(--muted); text-decoration: none; font-weight: 600; font-size: 14px; border-bottom: 2px solid transparent; white-space: nowrap; }
+  .tabs a:hover { color: var(--ink); } .tabs a.on { color: var(--accent-text); border-bottom-color: var(--accent); }
+  [hidden] { display: none !important; }
+  .x { display: block; font-size: 13px; } .x a { font-weight: 600; text-decoration: none; } .x a:hover { text-decoration: underline; }
+  .hit { padding: 12px 0; border-top: 1px solid var(--line); } .hit b { overflow-wrap: anywhere; }
+  .pal { position: fixed; inset: 0; z-index: 10; background: rgba(0,0,0,.45); display: flex; justify-content: center; align-items: flex-start; padding: 8vh 12px 0; }
+  .pal-box { width: min(640px, 100%); max-height: 80vh; display: flex; flex-direction: column; background: var(--raised); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .pal-in { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: var(--band); color: var(--band-ink); }
+  .pal-in input { flex: 1; min-width: 0; font: inherit; padding: 8px 10px; border: 0; border-radius: 8px; background: var(--raised); color: var(--ink); outline: 2px solid transparent; }
+  .pal-in input:focus { outline-color: var(--accent); }
+  .pal-in button { font: inherit; border: 0; background: transparent; color: inherit; font-size: 20px; line-height: 1; cursor: pointer; padding: 6px 10px; }
+  #pal-list { overflow: auto; padding-bottom: 6px; }
+  .pal-group { padding: 12px 16px 4px; font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .pal-row { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 9px 16px; cursor: pointer; }
+  .pal-row[aria-selected="true"] { background: var(--page); } .pal-row[aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
+  .pal-row .t { font-weight: 600; overflow-wrap: anywhere; } .pal-row .s { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+  .pal-row .x a { color: var(--accent-text); }
+  .pal-note { margin: 12px 16px; font-size: 13px; color: var(--muted); }
+  .pal-foot { display: flex; gap: 6px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
 </style>
 </head>
 <body>
 <header><div class="col">
   <svg viewBox="0 0 48 48" width="36" height="36" aria-hidden="true"><g fill="none" stroke="#eb6834" stroke-width="3"><path d="M18.76 42.26 A19 19 0 0 1 24 5"/><path d="M40.2 14.07 A19 19 0 0 1 37.44 37.44"/><path d="M1 29 H42.33"/><path d="M24 11 V29"/><path d="M24 25.5 L27.39 21.41"/><path d="M24 25.5 L28 29"/><path d="M31 11 V29"/><path d="M31 21 H32 A4 4 0 0 1 32 29"/></g><polygon fill="#eb6834" points="12.55,19.5 21.55,19.5 21.55,23.35 18.12,27.5 14.22,27.5 18.36,22.5 12.55,22.5"/><circle cx="36.83" cy="9.99" r="2.1" fill="#eb6834"/><circle cx="24" cy="43" r="2.1" fill="#eb6834"/></svg>
   <b>Indexer</b>
+  <button type="button" class="searchbtn" id="open-search" aria-label="Search" aria-keyshortcuts="Control+K Meta+K /">Search <kbd id="hint">Ctrl K</kbd></button>
   <span class="live" role="status"><span class="dot off" id="dot"></span><span id="live">connecting…</span></span>
 </div></header>
 <section class="band"><div class="col">
@@ -57,51 +83,101 @@
 </div></section>
 <main class="col">
   <h2>Light clients</h2><div id="heads"></div>
-  <h2>Gates</h2><div id="gates"></div>
-  <h2>Proving pipeline</h2><div id="pipeline"></div>
-  <h2>Transfers</h2><div id="flight"></div><div id="feed"></div>
-  <h2>Look up a transfer</h2>
-  <form class="lookup" id="lookup"><input id="lookup-id" name="id" placeholder="Message ID: 0x and 64 hex characters" autocomplete="off" spellcheck="false" aria-label="Message ID"><button type="submit">Look up</button></form>
-  <div id="progress"></div>
-  <h2>Recent proof timings</h2><div id="timings"></div>
-  <h2>Read it yourself</h2>
-  <ul class="api">
-    <li><a href="/api/summary">/api/summary</a><span class="sub">Heads, gates, transfers in flight, 24 h volume</span></li>
-    <li><a href="/api/feed">/api/feed</a><span class="sub">Latest transfers and messages, newest first</span></li>
-    <li><a href="/api/head-updates">/api/head-updates</a><span class="sub">Every light-client update with its transaction</span></li>
-    <li><a href="/api/pair">/api/pair</a><span class="sub">The chains and contract addresses</span></li>
-    <li><a href="/api/tokens">/api/tokens</a><span class="sub">Bridged tokens</span></li>
-    <li><span class="mono">/api/messages/&lt;id&gt;</span> · <span class="mono">/api/tx/&lt;chainId&gt;/&lt;hash&gt;</span><span class="sub">One message with its costs; one transaction's cost</span></li>
-    <li><a href="/graphql">/graphql</a><span class="sub">GraphQL over the same data</span></li>
-    <li><span class="mono">prove host: /progress/&lt;messageId&gt;</span><span class="sub">Where one transfer is in the proving pipeline and which service it waits on</span></li>
-    <li><span class="mono">prove host: /directions/&lt;direction&gt;/pipeline</span> · <span class="mono">/benchmarks?window=24h</span><span class="sub">The batch, job and proof of a direction; the time each step takes</span></li>
-  </ul>
+  <h2>Bridges</h2><div id="gates"></div>
+  <h2>Proving</h2><div id="pipeline-summary"></div><div id="flight"></div>
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
+    <a href="#tab=transfers" id="tab-transfers" role="tab" class="on">Transfers</a>
+    <a href="#tab=pipeline" id="tab-pipeline" role="tab">Pipeline</a>
+    <a href="#tab=timings" id="tab-timings" role="tab">Timings</a>
+    <a href="#tab=lookup" id="tab-lookup" role="tab">Look up</a>
+    <a href="#tab=api" id="tab-api" role="tab">API</a>
+  </nav>
+  <section id="panel-transfers" role="tabpanel"><div id="feed"></div></section>
+  <section id="panel-pipeline" role="tabpanel" hidden><div id="pipeline"></div></section>
+  <section id="panel-timings" role="tabpanel" hidden><div id="timings"></div></section>
+  <section id="panel-lookup" role="tabpanel" hidden>
+    <h2>Look up anything</h2>
+    <form class="lookup" id="lookup"><input id="lookup-id" name="id" placeholder="Message ID, transaction, address, token, slot, block or proof" autocomplete="off" spellcheck="false" aria-label="Look up"><button type="submit">Look up</button></form>
+    <p class="sub">Press <kbd>Ctrl K</kbd> or <kbd>/</kbd> anywhere on this page to search.</p>
+    <div id="results"></div>
+    <div id="progress"></div>
+  </section>
+  <section id="panel-api" role="tabpanel" hidden>
+    <h2>Read it yourself</h2>
+    <ul class="api">
+      <li><a href="/api/search?q=usdc">/api/search?q=</a><span class="sub">The same search as the box above: a message, transaction, address, token, slot, block, proof or release, with its links to the dapp, this page, the status page, the backend and the block explorers</span></li>
+      <li><a href="/api/summary">/api/summary</a><span class="sub">Heads, gates, transfers in flight, 24 h volume</span></li>
+      <li><a href="/api/feed">/api/feed</a><span class="sub">Latest transfers and messages, newest first</span></li>
+      <li><a href="/api/head-updates">/api/head-updates</a><span class="sub">Every light-client update with its transaction</span></li>
+      <li><a href="/api/pair">/api/pair</a><span class="sub">The chains and contract addresses</span></li>
+      <li><a href="/api/tokens">/api/tokens</a><span class="sub">Bridged tokens</span></li>
+      <li><span class="mono">/api/messages/&lt;id&gt;</span> · <span class="mono">/api/tx/&lt;chainId&gt;/&lt;hash&gt;</span><span class="sub">One message with its costs; one transaction's cost</span></li>
+      <li><a href="/graphql">/graphql</a><span class="sub">GraphQL over the same data</span></li>
+      <li><span class="mono">prove host: /progress/&lt;messageId&gt;</span><span class="sub">Where one transfer is in the proving pipeline and which service it waits on</span></li>
+      <li><span class="mono">prove host: /directions/&lt;direction&gt;/pipeline</span> · <span class="mono">/benchmarks?window=24h</span><span class="sub">The batch, job and proof of a direction; the time each step takes</span></li>
+    </ul>
+  </section>
 </main>
+<div class="pal" id="palette" hidden>
+  <div class="pal-box" role="dialog" aria-modal="true" aria-label="Search and jump">
+    <div class="pal-in">
+      <input id="pal-input" role="combobox" aria-label="Search messages, transactions, addresses, tokens, slots, blocks and views" aria-expanded="true" aria-controls="pal-list" aria-autocomplete="list" placeholder="Search anything" autocomplete="off" spellcheck="false">
+      <button type="button" id="pal-close" aria-label="Close">×</button>
+    </div>
+    <div id="pal-list" role="listbox" aria-label="Results"></div>
+    <div class="pal-foot"><kbd>↑</kbd><kbd>↓</kbd> move <kbd>↵</kbd> open <kbd>esc</kbd> close</div>
+  </div>
+</div>
 <footer class="col">Use the bridge at <a href="https://next.zkb.fi">next.zkb.fi</a> · docs at <a href="https://docs.zkb.fi">docs.zkb.fi</a>. Send <span class="mono">Accept: application/json</span> to this address for the summary as JSON.</footer>
+<script src="zkb-search.js"></script>
 <script>
-  const CHAINS = { 1: ["Ethereum", "https://etherscan.io"], 369: ["PulseChain", "https://scan.pulsechain.com"],
-    11155111: ["Sepolia", "https://sepolia.etherscan.io"], 943: ["PulseChain testnet v4", "https://scan.v4.testnet.pulsechain.com"] };
-  const name = (id) => (CHAINS[id] || [`chain ${id}`])[0];
-  const scan = (id) => (CHAINS[id] || [null, null])[1];
+  // zkb-search.js holds the code that the dapp and the search route share: how to read a search text, the names of the
+  // chains, and the links of everything to every page (the dapp, this page, the status page, the backend, the explorers).
+  const Z = typeof ZkbSearch === "undefined" ? null : ZkbSearch;
+  const name = (id) => (Z && Z.chainNameOf(id)) || `chain ${id}`;
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const num = (n) => Number(n).toLocaleString("en-US");
   // A base-unit amount (decimal string) as a short number: up to 6 decimals, cut, never an exponent.
   const units = (value, decimals) => { const v = BigInt(value), s = 10n ** BigInt(decimals), w = v / s; const f = (v % s).toString().padStart(decimals, "0").slice(0, 6).replace(/0+$/, ""); return f ? `${w.toLocaleString("en-US")}.${f}` : w.toLocaleString("en-US"); };
   const ago = (seconds) => { const s = Math.max(0, Math.round(seconds)); if (s < 90) return `${s} s`; if (s < 5400) return `${Math.round(s / 60)} min`; if (s < 172800) return `${Math.round(s / 3600)} h`; return `${Math.round(s / 86400)} days`; };
   const row = (k, sub, v) => `<div class="row"><span class="k">${k}${sub ? `<span class="sub">${sub}</span>` : ""}</span><span class="v">${v}</span></div>`;
-  const tx = (chainId, hash) => scan(chainId) ? `<a class="mono" href="${scan(chainId)}/tx/${esc(hash)}">${esc(hash.slice(0, 10))}…</a>` : `<span class="mono">${esc(hash.slice(0, 10))}…</span>`;
+  // The pages that this page links to are decided by its own host: indexer.example → next.example, status.example,
+  // prove.example, gateway.example. No link can point this page at another server.
+  function sitesFor(loc) {
+    const host = String((loc && loc.hostname) || "");
+    if (host.startsWith("indexer.")) {
+      const base = host.slice("indexer.".length);
+      return { dapp: `https://next.${base}`, indexer: "", status: `https://status.${base}`, backend: `https://prove.${base}`, gateway: `https://gateway.${base}` };
+    }
+    return { ...(Z ? Z.ZKB_SITES : {}), indexer: "" };
+  }
+  // The links of a thing, from the same builder as everywhere. The chains come from /api/pair, once it has answered.
+  const CTX = { sites: sitesFor(typeof location === "undefined" ? null : location), chains: [] };
+  let PAIR = null;
+  function usePair(pair) {
+    PAIR = pair;
+    try { CTX.chains = Z && pair && pair.sides ? Z.searchChainsFromPair(pair) : []; } catch (error) { CTX.chains = []; }
+  }
+  const linksOf = (target) => (Z ? Z.crossLinks(target, CTX) : []);
+  const linkHtml = (list) => list.map((l) => `<a href="${esc(l.url)}"${l.surface === "dapp" || l.surface === "indexer" ? "" : ' target="_blank" rel="noreferrer"'}>${esc(l.label)}</a>`).join(" · ");
+  const xlinks = (target, label) => { const list = linksOf(target); return list.length ? `<span class="sub x">${label ? `${esc(label)}: ` : ""}${linkHtml(list)}</span>` : ""; };
+  const contractOf = (chainId, role) => { const side = PAIR && PAIR.sides && PAIR.sides.find((x) => x.chainId === chainId); return side && side.contracts ? side.contracts[role] || null : null; };
+  const contractLinks = (chainId, role, label) => { const address = contractOf(chainId, role); return address ? xlinks({ type: "address", address: address.toLowerCase(), chainId, role }, label) : ""; };
+  const directionFrom = (chainId) => { const c = CTX.chains.find((x) => x.chainId === chainId); return c ? (c.side === "first" ? "first-to-second" : "second-to-first") : null; };
+  const tx = (chainId, hash) => { const first = linksOf({ type: "transaction", chainId, hash })[0]; const text = `${esc(hash.slice(0, 10))}…`; return first ? `<a class="mono" href="${esc(first.url)}">${text}</a>` : `<span class="mono">${text}</span>`; };
   // One light client: its head is the newest update, or the checkpoint it was deployed with. "Not started" only when
   // it holds no head at all. The lag is orange past an hour, and "unknown" when the indexer cannot measure it.
   function headRow(h, u, now) {
     const holds = h.initialized ?? (h.storedHeadSlot !== null && h.storedHeadSlot !== undefined);
-    if (!holds) return row(`${esc(name(h.chainId))} does not trust ${esc(name(h.trackedChainId))} yet`, "This light client has not been started, so nothing can be proven in this direction.", `<span class="warn">not started</span>`);
+    const lc = contractLinks(h.chainId, "lightClient");
+    if (!holds) return row(`${esc(name(h.chainId))} does not trust ${esc(name(h.trackedChainId))} yet`, `This light client has not been started, so nothing can be proven in this direction.${lc}`, `<span class="warn">not started</span>`);
     const behind = h.lagSeconds === null || h.lagSeconds === undefined ? `<span class="warn">lag unknown</span>`
       : `<span class="${h.lagSeconds > 3600 ? "warn" : "ok"}">${ago(h.lagSeconds)} behind</span>`;
     if (!h.updateCount) return row(`${esc(name(h.chainId))} trusts ${esc(name(h.trackedChainId))} from slot ${num(h.storedHeadSlot)} (set at deployment)`,
-      "no updates since, so nothing sent after that slot can be proven yet", behind);
+      `no updates since, so nothing sent after that slot can be proven yet${lc}`, behind);
     const started = h.initializedAtSlot ? ` · started at slot ${num(h.initializedAtSlot)}` : "";
     return row(`${esc(name(h.chainId))} trusts ${esc(name(h.trackedChainId))} up to block ${num(h.storedHeadExecutionBlock)}`,
-      `slot ${num(h.storedHeadSlot)} · ${num(h.updateCount)} update${h.updateCount === 1 ? "" : "s"}${started}${u ? ` · last ${ago(now - u.timestamp)} ago in ${tx(h.chainId, u.transactionHash)}` : ""}`,
+      `slot ${num(h.storedHeadSlot)} · ${num(h.updateCount)} update${h.updateCount === 1 ? "" : "s"}${started}${u ? ` · last ${ago(now - u.timestamp)} ago in ${tx(h.chainId, u.transactionHash)}` : ""}${lc}`,
       behind);
   }
   // The proving service (the backend) answers on the prove host of this deployment: indexer.example → prove.example.
@@ -161,6 +237,14 @@
       : row("Latest proof: none held", p.head && p.head.slot !== null ? `light client at slot ${num(p.head.slot)}` : "", "—"));
     return out.join("");
   }
+  // The overview line of one direction: what is happening now, in one row. The Pipeline tab has the rest.
+  function pipelineLine(p, label) {
+    const now = p.now, b = p.batch, j = p.job, pr = p.latestProof;
+    if (j) return row(esc(label), `proving: ${esc(SERVICE_NAME[j.step] || j.step)} for ${dur(j.elapsedMs)}${j.eta !== undefined ? ` · expected done ${rel(j.eta, now)}` : ""}`, `<span class="warn">running</span>`);
+    if (b) return row(esc(label), `${num(b.count)} transfer${b.count === 1 ? "" : "s"} wait for a proof · it starts ${rel(b.eta, now)}`, `<span class="warn">waiting</span>`);
+    if (pr) return row(esc(label), `latest proof ${slots(pr)} · ${WHERE[pr.where] || esc(pr.where)}`, `<span class="${pr.where === "applied" ? "ok" : "warn"}">${esc(pr.where)}</span>`);
+    return row(esc(label), "no batch waits and no proof is held", "idle");
+  }
   // The timings of each step (GET /benchmarks) and the newest proofs.
   const STEP = [["workerWait", "Wait for a GPU worker"], ["remote", "Remote request"], ["workerQueue", "Queue on the worker"], ["workerProve", "Proof on the GPU"],
     ["total", "Whole prover run"], ["webhookToBoard", "Proof stored → on the message board"], ["boardPost", "Message board proof of work"],
@@ -189,21 +273,27 @@
     return `${waiting}<ol class="stages">${items}</ol>${proof}`;
   }
   const proveGet = (path) => fetch(`${PROVE}${path}`, { cache: "no-store" });
-  let directions = null, lastBenchmarks = 0, shown = null;
+  let directions = null, lastBenchmarks = 0, shown = null, pairRequest = null;
+  // /api/pair, asked once: the names of the directions, and the chains and contracts that the links need.
+  function getPair() {
+    if (!pairRequest) pairRequest = fetch("/api/pair").then((r) => r.json()).then((pair) => { usePair(pair); return pair; });
+    return pairRequest.catch((error) => { pairRequest = null; throw error; });
+  }
   async function loadPipeline() {
-    const box = document.getElementById("pipeline"), table = document.getElementById("timings");
-    if (!PROVE) { box.innerHTML = row("The proving service of this host is not known", "This page reads it from prove.&lt;domain&gt; when it is served at indexer.&lt;domain&gt;.", "—"); table.innerHTML = ""; return; }
+    const box = document.getElementById("pipeline"), table = document.getElementById("timings"), summary = document.getElementById("pipeline-summary");
+    if (!PROVE) { const none = row("The proving service of this host is not known", "This page reads it from prove.&lt;domain&gt; when it is served at indexer.&lt;domain&gt;.", "—"); box.innerHTML = none; summary.innerHTML = none; table.innerHTML = ""; return; }
     try {
-      if (!directions) { const pair = await fetch("/api/pair").then((r) => r.json()); const [a, b] = pair.sides.map((x) => name(x.chainId));
+      if (!directions) { const pair = await getPair(); const [a, b] = pair.sides.map((x) => name(x.chainId));
         directions = [["first-to-second", `${a} → ${b}`], ["second-to-first", `${b} → ${a}`]]; }
       const parts = await Promise.all(directions.map(([d]) => proveGet(`/directions/${d}/pipeline`).then((r) => { if (!r.ok) throw new Error(String(r.status)); return r.json(); })));
       box.innerHTML = parts.map((p, i) => pipelineRows(p, directions[i][1])).join("");
+      summary.innerHTML = parts.map((p, i) => pipelineLine(p, directions[i][1])).join("");
       if (Date.now() - lastBenchmarks >= 60000) {
         const r = await proveGet("/benchmarks?window=24h"); if (!r.ok) throw new Error(String(r.status));
         table.innerHTML = timingsTable(await r.json()); lastBenchmarks = Date.now();
       }
     } catch (error) {
-      box.innerHTML = row("The proving service did not answer", "This page asks again every 15 seconds.", `<span class="warn">unreachable</span>`);
+      box.innerHTML = summary.innerHTML = row("The proving service did not answer", "This page asks again every 15 seconds.", `<span class="warn">unreachable</span>`);
     }
   }
   async function lookup(id) {
@@ -222,18 +312,177 @@
       box.innerHTML = row("The proving service did not answer", "", `<span class="warn">unreachable</span>`);
     }
   }
-  const form = document.getElementById("lookup");
-  if (form.addEventListener) form.addEventListener("submit", (event) => { event.preventDefault(); const id = document.getElementById("lookup-id").value.trim(); if (typeof history !== "undefined") history.replaceState(null, "", `#progress=${id}`); lookup(id); });
-  const fromHash = () => { const m = /progress=(0x[0-9a-fA-F]{64})/.exec(typeof location === "undefined" ? "" : location.hash); if (m) { document.getElementById("lookup-id").value = m[1]; lookup(m[1]); } };
+  // ---- Tabs and anchors. #tab=<name> shows a section; #lookup=<text> looks that text up (other pages link here);
+  // #progress=<id> is the older form of the same.
+  const TABS = ["transfers", "pipeline", "timings", "lookup", "api"];
+  function showTab(tab) {
+    const on = TABS.includes(tab) ? tab : "transfers";
+    for (const t of TABS) {
+      const panel = document.getElementById(`panel-${t}`), link = document.getElementById(`tab-${t}`);
+      panel.hidden = t !== on; link.className = t === on ? "on" : "";
+      if (link.setAttribute) link.setAttribute("aria-selected", String(t === on));
+    }
+    return on;
+  }
+  function routeOf(hash) {
+    const h = String(hash || "").replace(/^#/, "");
+    const find = /^(?:lookup|progress)=(.*)$/.exec(h);
+    if (find) { let q = find[1]; try { q = decodeURIComponent(q); } catch (error) { /* keep the text as typed */ } return { tab: "lookup", q }; }
+    const tab = /^tab=([a-z]+)$/.exec(h);
+    return { tab: tab && TABS.includes(tab[1]) ? tab[1] : "transfers", q: null };
+  }
+  const goTo = (hash) => { if (typeof history !== "undefined") history.pushState(null, "", hash); fromHash(); };
+  // ---- Look up anything: GET /api/search, and for a transfer its place in the proving pipeline.
+  let searched = null;
+  function resultsHtml(body, q) {
+    if (body.unsupported) return row("Names are not searched", "ENS-like names are not resolved. Try an address, a hash or a number.", "—");
+    const hits = (body.results || []).map((r) => `<div class="hit"><b>${esc(r.title)}</b><span class="sub">${esc(r.subtitle)}</span>${xlinks(r.target) || (r.links ? `<span class="sub x">${linkHtml(r.links)}</span>` : "")}</div>`).join("");
+    const problems = (body.problems || []).map((p) => `<p class="sub warn">${esc(p)}</p>`).join("");
+    return (hits || row(`Nothing found for ${esc(q)}`, "Try a message ID, a transaction hash, an address, a token symbol, a slot, a block or a proof number.", "—")) + problems;
+  }
+  async function runSearch(text) {
+    const q = String(text).trim(), box = document.getElementById("results");
+    searched = q; shown = null; document.getElementById("progress").innerHTML = "";
+    if (q === "") { box.innerHTML = row("Type something to look up", "A message ID, a transaction hash, an address, a token symbol, a slot, a block or a proof number.", "—"); return; }
+    box.innerHTML = row("Looking up…", "", "");
+    getPair().catch(() => null); // the links of a contract need the chains; the results show without them
+    try {
+      const r = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=20`, { cache: "no-store" });
+      if (searched !== q) return;
+      if (!r.ok) throw new Error(String(r.status));
+      const body = await r.json();
+      if (searched !== q) return;
+      box.innerHTML = resultsHtml(body, q);
+      const message = (body.results || []).find((x) => x.target && x.target.type === "message");
+      if (message) lookup(message.target.messageId);
+    } catch (error) {
+      if (searched === q) box.innerHTML = row("The search did not answer", "", `<span class="warn">unreachable</span>`);
+    }
+  }
+  const on = (id, type, handler) => { const el = document.getElementById(id); if (el && el.addEventListener) el.addEventListener(type, handler); };
+  on("lookup", "submit", (event) => { event.preventDefault(); const q = document.getElementById("lookup-id").value.trim(); if (typeof history !== "undefined") history.replaceState(null, "", `#lookup=${encodeURIComponent(q)}`); runSearch(q); });
+  function fromHash() {
+    const route = routeOf(typeof location === "undefined" ? "" : location.hash);
+    showTab(route.tab);
+    if (route.q !== null) { document.getElementById("lookup-id").value = route.q; runSearch(route.q); }
+  }
   if (typeof addEventListener === "function") addEventListener("hashchange", fromHash);
+  // ---- The search palette: ⌘K or Ctrl+K, or the slash key outside a field. Arrow keys move, Enter opens, Esc closes.
+  const VIEWS = [["transfers", "Transfers", "The latest transfers and messages", "feed latest recent"], ["pipeline", "Pipeline", "The batch, job and proof of each direction", "proving batch job gpu proof"],
+    ["timings", "Timings", "The time each step takes", "benchmarks median duration"], ["lookup", "Look up", "Search one thing in full", "find message transaction"], ["api", "API", "Read the data yourself", "json graphql endpoints"]];
+  const GROUPS = [["message", "Transfers and messages"], ["transaction", "Transactions"], ["address", "Addresses"], ["token", "Tokens"], ["proof", "Proofs"], ["slot", "Beacon slots"],
+    ["block", "Blocks"], ["release", "Releases"], ["view", "Views"]];
+  const pal = { items: [], active: 0, seq: 0, timer: null, open: false, note: "" };
+  // The highlight moves as in the app: down at the end wraps to the start, up at the start wraps to the end.
+  function moveHighlight(current, count, key) {
+    if (count === 0) return -1;
+    if (key === "Home") return 0;
+    if (key === "End") return count - 1;
+    if (key === "ArrowDown") return current < 0 || current >= count - 1 ? 0 : current + 1;
+    return current <= 0 ? count - 1 : current - 1;
+  }
+  function viewItems(q) {
+    const words = q.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w !== "");
+    return VIEWS.filter(([id, title, sub, keywords]) => words.every((w) => `${id} ${title} ${sub} ${keywords}`.toLowerCase().includes(w)))
+      .map(([id, title, sub]) => ({ kind: "view", title, subtitle: sub, view: id, links: [] }));
+  }
+  function apiItems(body) {
+    return (body.results || []).map((r) => ({ kind: r.kind, title: r.title, subtitle: r.subtitle, target: r.target, links: Z && r.target ? linksOf(r.target) : r.links || [] }));
+  }
+  // The items in the order of the groups, which is the order of the arrow keys.
+  const ordered = (items) => GROUPS.flatMap(([kind]) => items.filter((i) => i.kind === kind));
+  function palHtml() {
+    let index = 0, out = "";
+    for (const [kind, title] of GROUPS) {
+      const rows = pal.items.filter((i) => i.kind === kind);
+      if (rows.length === 0) continue;
+      out += `<div class="pal-group" role="presentation">${esc(title)}</div>` + rows.map((item) => {
+        const i = index++;
+        return `<div class="pal-row" id="pal-opt-${i}" role="option" data-i="${i}" aria-selected="${i === pal.active}"><span class="t">${esc(item.title)}</span><span class="s">${esc(item.subtitle)}</span>`
+          + (item.links.length ? `<span class="x">${linkHtml(item.links)}</span>` : "") + `</div>`;
+      }).join("");
+    }
+    return out + (pal.note ? `<p class="pal-note" role="status">${esc(pal.note)}</p>` : "");
+  }
+  // Moves the highlight without redrawing the list, so a click that starts on a row ends on the same row.
+  function palMark(next, scroll) {
+    const before = document.getElementById(`pal-opt-${pal.active}`), input = document.getElementById("pal-input");
+    if (before && before.setAttribute) before.setAttribute("aria-selected", "false");
+    pal.active = next;
+    const row = document.getElementById(`pal-opt-${pal.active}`);
+    if (row && row.setAttribute) row.setAttribute("aria-selected", "true");
+    if (input.setAttribute) { if (next >= 0) input.setAttribute("aria-activedescendant", `pal-opt-${next}`); else input.removeAttribute("aria-activedescendant"); }
+    if (scroll && row && row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+  }
+  function palRender() {
+    document.getElementById("pal-list").innerHTML = palHtml();
+    palMark(pal.active, true);
+  }
+  function palSet(items, note) { pal.items = ordered(items); pal.note = note; pal.active = pal.items.length ? 0 : -1; palRender(); }
+  async function palSearch(text) {
+    const q = String(text).trim(), mine = ++pal.seq, views = viewItems(q);
+    if (q === "") { palSet(views, ""); return; }
+    palSet(views, "Searching…");
+    try {
+      const r = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=12`, { cache: "no-store" });
+      if (mine !== pal.seq) return;
+      if (!r.ok) throw new Error(String(r.status));
+      const body = await r.json();
+      if (mine !== pal.seq) return;
+      const found = apiItems(body);
+      palSet([...found, ...views], body.unsupported ? "Names such as ENS names are not searched. Try an address, a hash or a number."
+        : (body.problems || [])[0] || (found.length + views.length === 0 ? "Nothing matches. Try a token symbol, an address, a transaction hash or a number." : ""));
+    } catch (error) {
+      if (mine === pal.seq) palSet(views, "The indexer search did not answer.");
+    }
+  }
+  function palOpen() {
+    pal.open = true; document.getElementById("palette").hidden = false;
+    const input = document.getElementById("pal-input"); input.value = "";
+    palSearch(""); if (input.focus) input.focus();
+  }
+  function palClose() { pal.open = false; pal.seq += 1; document.getElementById("palette").hidden = true; }
+  function palPick(item) {
+    if (!item) return;
+    palClose();
+    if (item.view) goTo(`#tab=${item.view}`);
+    else if (Z && item.target) goTo(`#lookup=${encodeURIComponent(Z.lookupTextOf(item.target))}`);
+  }
+  function palKey(event) {
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); palMark(moveHighlight(pal.active, pal.items.length, event.key), true); return; }
+    if (event.key === "Enter") { event.preventDefault(); palPick(pal.items[pal.active]); return; }
+    if (event.key === "Escape") { event.preventDefault(); palClose(); }
+  }
+  const typing = (target) => !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable === true);
+  // Opens the palette with Ctrl+K, Command+K and the slash key, unless the viewer is typing in a field.
+  function globalKey(event) {
+    const chord = (event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === "k";
+    const slash = event.key === "/" && !typing(event.target) && !event.ctrlKey && !event.metaKey && !event.altKey;
+    if (chord || slash) { event.preventDefault(); palOpen(); return; }
+    if (event.key === "Escape" && pal.open) palClose();
+  }
+  if (typeof addEventListener === "function") addEventListener("keydown", globalKey);
+  on("open-search", "click", palOpen);
+  on("pal-close", "click", palClose);
+  on("palette", "click", (event) => { if (event.target && event.target.id === "palette") palClose(); });
+  on("pal-input", "keydown", palKey);
+  on("pal-input", "input", (event) => { clearTimeout(pal.timer); pal.timer = setTimeout(() => palSearch(event.target.value), 120); });
+  on("pal-list", "mousemove", (event) => { const row = event.target && event.target.closest ? event.target.closest("[data-i]") : null; if (row && Number(row.dataset.i) !== pal.active) palMark(Number(row.dataset.i), false); });
+  on("pal-list", "click", (event) => {
+    if (event.target && event.target.closest && event.target.closest("a")) { palClose(); return; } // a link opens its own page
+    const row = event.target && event.target.closest ? event.target.closest("[data-i]") : null;
+    if (row) palPick(pal.items[Number(row.dataset.i)]);
+  });
+  { const hint = document.getElementById("hint"); if (typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || "")) hint.textContent = "⌘K"; }
   async function load() {
     try {
       const [summary, feed] = await Promise.all(["/api/summary", "/api/feed"].map((p) => fetch(p, { cache: "no-store" }).then((r) => { if (!r.ok) throw new Error(`${p} ${r.status}`); return r.json(); })));
+      await getPair().catch(() => null); // the links need the contracts; the page still shows its data without them
       document.getElementById("pair").textContent = summary.heads.map((h) => name(h.trackedChainId)).join(" ↔ ");
       const updates = Object.fromEntries((summary.lastHeadUpdates || []).map((u) => [u.chainId, u.update]));
       document.getElementById("heads").innerHTML = summary.heads.map((h) => headRow(h, updates[h.chainId], summary.now)).join("");
-      document.getElementById("gates").innerHTML = (summary.gates || []).map((g) => row(`${esc(name(g.chainId))} gate`,
-        `${g.enforcing ? "enforcing" : "not enforcing"} · ${num(g.confirmations)} confirmation${g.confirmations === 1 ? "" : "s"}${g.lastConfirmedTimestamp ? ` · last ${ago(summary.now - g.lastConfirmedTimestamp)} ago` : ""}`,
+      document.getElementById("gates").innerHTML = (summary.gates || []).map((g) => row(`${esc(name(g.chainId))} bridge`,
+        `gate ${g.enforcing ? "enforcing" : "not enforcing"} · ${num(g.confirmations)} confirmation${g.confirmations === 1 ? "" : "s"}${g.lastConfirmedTimestamp ? ` · last ${ago(summary.now - g.lastConfirmedTimestamp)} ago` : ""}${contractLinks(g.chainId, "bridge", "Bridge")}${contractLinks(g.chainId, "gate", "Gate")}`,
         g.depositsOpen ? `<span class="ok">deposits open</span>` : `<span class="warn">deposits closed</span>`)).join("");
       const f = summary.inFlight || { total: 0, byStatus: {} };
       document.getElementById("flight").innerHTML = row("In flight", Object.entries(f.byStatus || {}).map(([k, v]) => `${esc(k.replace(/_/g, " "))} ${num(v)}`).join(" · "), num(f.total));
@@ -246,7 +495,7 @@
           const what = t ? `${amount ?? "?"} ${esc((token && token.symbol) || "token")}` : "Message";
           const when = m.sent ? `${ago(summary.now - m.sent.timestamp)} ago` : "";
           const link = m.sent && m.sent.transactionHash ? ` · ${tx(d.sourceChainId, m.sent.transactionHash)}` : "";
-          const track = PROVE && /^0x[0-9a-fA-F]{64}$/.test(m.messageId || "") ? ` · <a href="#progress=${m.messageId}">progress</a>` : "";
+          const track = /^0x[0-9a-fA-F]{64}$/.test(m.messageId || "") ? xlinks({ type: "message", messageId: m.messageId.toLowerCase(), direction: directionFrom(d.sourceChainId) }) : "";
           return row(what, `${esc(name(d.sourceChainId))} → ${esc(name(d.destinationChainId))} · ${when}${link}${track}`, esc(String(m.status || "").replace(/_/g, " ")));
         }).join("");
       document.getElementById("dot").className = "dot"; document.getElementById("live").textContent = "live";

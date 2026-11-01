@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:indexer-search": "vite build --config vite.indexer-search.config.ts",
     "preview": "vite preview",
     "test": "vitest run --coverage",
     "test:unit": "vitest run",

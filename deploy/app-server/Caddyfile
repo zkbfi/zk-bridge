@@ -85,5 +85,10 @@ import /etc/caddy/upstreams/indexer.caddy
 		rewrite * /index.html
 		file_server
 	}
+	# The search code that the page shares with the dapp (built by `pnpm --filter @zk-bridge/web run build:indexer-search`).
+	handle /zkb-search.js {
+		root * /opt/zk-bridge/current/deploy/app-server/indexer-home
+		file_server
+	}
 	import not_found
 }

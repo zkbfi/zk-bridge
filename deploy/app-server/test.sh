@@ -192,10 +192,13 @@ fi
 # deploy.sh moves one service at a time on request.
 if grep -q 'ZKB_SERVICES' "$DIR/deploy.sh"; then pass "deploy.sh honours ZKB_SERVICES"; else fail "deploy.sh lacks ZKB_SERVICES"; fi
 
-# The light client lines of the indexer's live page (indexer-home/heads.test.mjs).
+# The indexer's live page (indexer-home): light client lines, pipeline, timings, the search palette, the tabs and the
+# cross-links, and that zkb-search.js is built from the current sources.
 if command -v node >/dev/null; then
-  if node --test "$DIR/indexer-home/heads.test.mjs" >/dev/null 2>&1; then pass "indexer-home: light client lines"; else fail "indexer-home: light client lines (node --test $DIR/indexer-home/heads.test.mjs)"; fi
+  if node --test "$DIR/indexer-home" >/dev/null 2>&1; then pass "indexer-home: live page, search and cross-links"; else fail "indexer-home: live page (node --test $DIR/indexer-home)"; fi
 fi
+# Caddy serves the shared search script next to the page.
+if grep -q 'zkb-search.js' "$DIR/Caddyfile"; then pass "Caddyfile serves indexer-home/zkb-search.js"; else fail "Caddyfile does not serve indexer-home/zkb-search.js"; fi
 
 printf '%d failure(s)\n' "$FAILURES"
 [ "$FAILURES" -eq 0 ]
