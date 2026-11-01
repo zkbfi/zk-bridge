@@ -59,3 +59,7 @@ light_client = "0x0000000000000000000000000000000000000002"   # REPLACE
 bridge = "0x0000000000000000000000000000000000000003"          # REPLACE
 start_block = 0              # the block where the light client was deployed
 # log_block_range = 2000     # the largest block range of one eth_getLogs call
+# More execution RPCs of the destination chain, asked in order only for `debug_getRawHeader` when `rpc_url` lacks it. The
+# `opening-proof` command needs the raw header of a block of this chain (a Gloas header has fields the block JSON does not
+# show). Every header is checked against the block hash, so none is trusted.
+# header_rpc_urls = ["https://REPLACE"]

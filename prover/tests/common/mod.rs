@@ -182,6 +182,15 @@ pub fn serve_beacon(chain: &Chain) -> String {
 pub fn serve_rpc(
     answer: impl Fn(&serde_json::Value) -> serde_json::Value + Send + 'static,
 ) -> String {
+    serve_rpc_replies(move |call| Ok(answer(call)))
+}
+
+/// Like [`serve_rpc`], but `answer` returns `Err(error object)` for a JSON-RPC error such as a missing method.
+pub fn serve_rpc_replies(
+    answer: impl Fn(&serde_json::Value) -> std::result::Result<serde_json::Value, serde_json::Value>
+        + Send
+        + 'static,
+) -> String {
     let server = tiny_http::Server::http("127.0.0.1:0").expect("a free port");
     let port = server.server_addr().to_ip().expect("an ip address").port();
     std::thread::spawn(move || {
@@ -189,8 +198,14 @@ pub fn serve_rpc(
             let mut body = String::new();
             std::io::Read::read_to_string(request.as_reader(), &mut body).unwrap();
             let call: serde_json::Value = serde_json::from_str(&body).expect("a JSON-RPC call");
-            let result = answer(&call);
-            let reply = serde_json::json!({ "jsonrpc": "2.0", "id": call["id"], "result": result });
+            let reply = match answer(&call) {
+                Ok(result) => {
+                    serde_json::json!({ "jsonrpc": "2.0", "id": call["id"], "result": result })
+                }
+                Err(error) => {
+                    serde_json::json!({ "jsonrpc": "2.0", "id": call["id"], "error": error })
+                }
+            };
             let _ = request.respond(tiny_http::Response::from_string(reply.to_string()));
         }
     });
