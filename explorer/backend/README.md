@@ -179,8 +179,9 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
 - **Warm-up.** The backend wakes the remote prover (`GET <first endpoint>/ping`, with that endpoint's key if it has one) a learned
   lead time before a proof is expected, and keeps the worker warm until the job starts.
   - *When a proof is expected:* at the expected finality of each sent message (the start of epoch e + 3, plus one
-    slot); with a batch wait, once per batch, when the batch is expected to pay or else at its fallback, worked out
-    again as messages arrive; and when the source's finality crosses into a new sync-committee period and so makes a handoff due (about
+    slot); with a minimum interval, once per batch, when the batch is expected to pay or else when the interval since
+    the last proof ends (never before the batch's first finality), worked out again as messages arrive; nothing while
+    no message waits; and when the source's finality crosses into a new sync-committee period and so makes a handoff due (about
     two epochs after the border, not when the clock crosses it). A keep-alive of the age rule gets no warm-up.
   - *Lead time:* the p90 (`warmup.leadP`) of the last 20 (`leadObservations`) observed times to a ready worker,
     clamped to 30 to 600 s; 90 s until there is one. Observations, kept in the `warmup_observations` table: the time
@@ -200,11 +201,12 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
   - *Not done:* the backend never changes the endpoint's `workersMin`; the server holds no RunPod management key.
     Set the endpoint's idle timeout to 60 s (docs/gpu-prover.md); `holdIntervalSeconds` must stay below it.
 - **The log.** `finality_seen` (slot, `source` sse or poll, `latencyMs` from the start of the signature slot),
-  `proof_due` (why; for a message `trigger` profit or max-wait, `batch`, `waitedSeconds`, `feesUsd`, `costUsd`; for a
+  `proof_due` (why; for a message `trigger` profit or interval, `batch`, `waitedSeconds`, `feesUsd`, `costUsd`; for a
   handoff or keep-alive that took waiting messages along, `riders`), `proof_not_due` (why, at debug level unless
-  signatures are short, the light client is stranded, a batch waits (`waiting-for-profit`, with `messages`, `feesUsd`,
-  `costUsd`, `startAt`, `startWhy` and `maxWaitAt`) or a proof we have waits to land (`proof-pending`)),
-  `proof_pending_stale`, `watch_economics_failed` (the prices could not be read: the batch waits for its fallback),
+  signatures are short, the light client is stranded, a batch waits for the minimum interval (`min-interval`, with
+  `messages`, `feesUsd`, `costUsd`, `startAt`, `startWhy`, `lastProofAt` and `dueAt`) or a proof we have waits to land
+  (`proof-pending`)), `proof_pending_stale`, `watch_economics_failed` (the prices could not be read: the batch waits
+  for the interval), `config_deprecated` (at the start, for each `maxWaitSeconds` the configuration still names),
   `job_started` (`reason: "finality"`, `latencyMs` from the arrival of the finality event; the aim is under 5 s), and
   for the warm-up: `warmup_scheduled` (why, `dueAt`, `leadSeconds`, `leadBasis` default or observed), `warmup_ping`
   (a non-ready answer: the status only; the address and the key never appear), `warmup_ready` (`readySeconds`, `cold`),
@@ -222,10 +224,11 @@ Settings, all optional (`watch` in the configuration file):
 | `sse` | `true` | `false` polls only. |
 | `pollSeconds` | one slot of the source chain | The poll interval while no stream runs. |
 | `scanSeconds` | 15 | How often the warm-up looks at the sent messages. |
-| `maxWaitSeconds` | 0 | The fallback of a batch: prove once the oldest waiting final message has been final this long, whether the batch pays or not. 0 proves at the first finality that covers a waiting message. |
+| `minIntervalSeconds` | 0 | The fallback of a batch that does not pay: prove once the direction's last proof started at least this long ago (rolling, not clock hours). With no waiting message nothing proves, however long ago the last proof was. 0 proves at the first finality that covers a waiting message. |
+| `maxWaitSeconds` | none | Deprecated: the old name of `minIntervalSeconds`, read as it on the same level (`minIntervalSeconds` wins when a level names both). The start log warns (`config_deprecated`) with the key to rename. |
 | `lookaheadSeconds` | one epoch of the source chain (384 s, 320 s on PulseChain) | How far ahead messages that are not final yet count toward the time a batch is expected to pay. |
 | `profitMargin` | 1.0 | A batch proves early when its fees reach the cost times this. |
-| `pairs` | none | Overrides per pair and per direction: `{ "sepolia-pls943": { "maxWaitSeconds": 3600, "directions": { "first-to-second": { "maxWaitSeconds": 1800 } } } }`. A direction's field beats its pair's, a pair's beats the global one. Unknown pair names and directions are refused. |
+| `pairs` | none | Overrides per pair and per direction: `{ "sepolia-pls943": { "minIntervalSeconds": 3600, "directions": { "first-to-second": { "minIntervalSeconds": 1800 } } } }`. A direction's field beats its pair's, a pair's beats the global one. Unknown pair names and directions are refused. |
 | `warmup.enabled` | `true` | `false` sends no ping. |
 | `warmup.leadP`, `leadObservations` | 0.9, 20 | The quantile of the newest observations that the lead time takes. |
 | `warmup.defaultLeadSeconds`, `minLeadSeconds`, `maxLeadSeconds` | 90, 30, 600 | The lead time without observations, and its bounds. |
@@ -242,7 +245,9 @@ The keep-alive timer (docs/testnet-run.md, "Keeping the light clients alive") st
 ### Batching and profit
 
 A message proof pays for itself only when the fees of the messages it carries cover what it costs. With
-`maxWaitSeconds` above 0 the watcher batches the waiting messages of a direction:
+`minIntervalSeconds` above 0 the watcher asks three questions of a direction at each finality, in the owner's words "is
+there a bridge? is it profitable? has it been an hour", where the hour runs from the last proof ("no, the last proof
+was in a previous hour"):
 
 - **The batch** is every waiting message the light client head does not cover. Its **fees** are what the fee address
   receives: the fee in each message's delivery terms (the delivery router's `expectedFee`, for a message sent to the
@@ -252,23 +257,33 @@ A message proof pays for itself only when the fees of the messages it carries co
   base fee, the chain's minimum tip and `requiredDeliveryGas` of a release, which errs high), times `profitMargin`. The
   runner that delivers is not paid by us: "pays" means the fee address's take covers our costs. Dollars are integers
   (USD × 1e18), as in `@zkb/core`.
-- **Due** at a finality when the fees of the messages final by its slot reach the cost (`trigger: "profit"`), or when
-  the oldest of them has been final (from its expected finality) for `maxWaitSeconds` (`trigger: "max-wait"`). The proof
-  covers every message final by that slot; messages that arrive meanwhile ride along. The watcher wakes itself at the
-  fallback when no new finality comes first.
+- **Nothing waits:** no final message the head does not cover. Nothing proves, however long ago the last proof was,
+  and no worker is warmed ("if there were no transfers over the bridge that are waiting from the last hour or before
+  then do nothing"). Only a due handoff or the age keep-alive (`limits.keepAliveSeconds`) can prove then.
+- **Due** at a finality that covers a waiting message when the fees of the messages final by its slot reach the cost
+  (`trigger: "profit"`, at once, inside the interval too), or when the direction's **last proof** started at least
+  `minIntervalSeconds` ago (`trigger: "interval"`; at once when the direction has no proof). The last proof is the
+  newest job of the direction in the `jobs` table, whatever asked for it (a message, a handoff, a keep-alive, a user),
+  except a job that failed or ended on chain without a proof; it is read on each decision, so a restart keeps the
+  interval. A message that arrives long after the last proof is therefore proven at its finality, with no extra wait.
+  Inside the interval the batch is due at the last proof plus `minIntervalSeconds` (`dueAt`); the watcher wakes itself
+  then when no new finality comes first, and the proof covers every message final by then.
 - **Looking ahead.** Messages that are not final yet, within `lookaheadSeconds`, count toward the time the batch is
   expected to pay: the expected finality at which the fees of the final and the soon final messages first cover the
-  cost. The watcher then waits for that finality rather than proving part of the batch, unless the fallback comes
-  first, and the warm-up is timed to it. A proof can only target a finalized header, so such a message is never proven
+  cost. The watcher then waits for that finality rather than proving part of the batch, unless the interval ends
+  first, and the warm-up is timed to it (else to `dueAt`, and never before the batch's first finality). A proof can only target a finalized header, so such a message is never proven
   before its finality.
-- **Unknown prices** (no PulseChain endpoint, no route, an RPC error) never prove early: the batch waits for its
-  fallback, and the reason is in `proof_not_due`.
-- **Never delayed:** a period handoff and a keep-alive of the age rule prove at once, and the waiting messages ride
-  along (`riders`).
-- **What it means in practice.** With `maxWaitSeconds: 3600` on a testnet (where nothing pays) and steady traffic, a
-  direction gets at most about one message proof per hour: at most one per window per direction, not a fixed schedule.
-  Quiet hours prove nothing; a handoff still proves on time. With `maxWaitSeconds: 300` on mainnet, a batch that pays
-  proves at once and one that does not waits at most five minutes.
+- **Unknown prices** (no PulseChain endpoint, no route, an RPC error) never prove early: the batch waits for the
+  interval, and the reason is in `proof_not_due`.
+- **Never delayed:** a period handoff and a keep-alive of the age rule prove at once, inside the interval too, and the
+  waiting messages ride along (`riders`). They count as a proof: the next interval runs from them.
+- **What it means in practice.** With `minIntervalSeconds: 3600` on a testnet (where nothing pays), a direction gets at
+  most one message proof per rolling hour: a message after a quiet hour proves at its finality, and the ones that follow
+  within the hour wait for its end and go together. Quiet hours prove nothing; a handoff still proves on time. On
+  mainnet `minIntervalSeconds: 0` with the profit rule proves every waiting message at its finality.
+- **The wire keeps its first names.** `GET /directions/:direction/pipeline` reports a batch that waits for the interval
+  as `trigger: "max-wait"` with `fallbackAt` (the `dueAt`), and `GET /progress/:messageId` as the service
+  `batch-max-wait`, so the web app's readers stay as they are. The `decision` object carries the new names.
 
 
 ## Pipeline reads
@@ -320,7 +335,7 @@ pair), 503 when the indexer is not configured or cannot be read.
   | --- | --- | --- |
   | `source-chain-finality` | the block is not final; or the watcher has not acted on a finality covering it yet | the expected finality |
   | `batch-profit` | the batch waits until its fees cover the proof | when the batch is expected to pay |
-  | `batch-max-wait` | the batch waits for its fallback | the fallback |
+  | `batch-max-wait` | the batch waits for the minimum interval since the direction's last proof (the name is the first one) | the last proof + `minIntervalSeconds` |
   | `proof-dedup-pending` | a proof we have from the head waits to land; this message goes in the next proof | none |
   | `gpu-worker-start` | the job is queued, or (estimated) a cold worker starts | job start + median prover run |
   | `gpu-proving` | the job runs past the median cold start, or a warm-up had a worker ready | job start + median prover run |
@@ -346,12 +361,12 @@ pair), 503 when the indexer is not configured or cannot be read.
   "latestJob": { "jobId": "…", "status": "proving", "createdAt": 0, "updatedAt": 0, "startSlot": null, "newSlot": null, "error": null },
   "latestProof": { "startSlot": 11463040, "newSlot": 11477760, "where": "board", "since": 1793499880000 },
   "head": { "slot": 11463040, "finalizedSlot": 11478000, "lastUpdateAt": 1793497000000, "lagSeconds": 600 },
-  "decision": { "at": 1793499970000, "finalizedSlot": 11478000, "headSlot": 11463040, "due": false, "why": "waiting-for-profit",
-    "detail": "…", "batch": { "messages": 2, "startAt": 1793503000000, "startWhy": "max-wait", "maxWaitAt": 1793503000000, "…": "…" } }
+  "decision": { "at": 1793499970000, "finalizedSlot": 11478000, "headSlot": 11463040, "due": false, "why": "min-interval",
+    "detail": "…", "batch": { "messages": 2, "startAt": 1793503000000, "startWhy": "interval", "dueAt": 1793503000000, "lastProofAt": 1793499400000, "…": "…" } }
 }
 ```
 
-`batch` is null unless the watcher's latest decision is `waiting-for-profit`. `job` is the queued or proving job, or
+`batch` is null unless the watcher's latest decision is `min-interval`. `job` is the queued or proving job, or
 null. `latestProof` is the proof that reaches furthest among the msgboard indexer's, the webhook's and the newest job's
 that did not fail. `head` is null when the indexer cannot be read. `decision` carries the `why` and `detail` of
 `proof_due` / `proof_not_due`, and for a due proof `trigger`, `batchSize`, `feesUsd`, `costUsd` and `outcome`
