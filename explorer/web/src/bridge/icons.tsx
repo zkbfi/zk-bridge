@@ -44,6 +44,23 @@ export const FloppyIcon = ({ title }: IconProps) => (
   </svg>
 );
 
+/** Three bulleted lines: show as a list. */
+export const ListIcon = ({ title }: IconProps) => (
+  <svg viewBox="0 0 16 16" {...svgProps(title)}>
+    <path d="M6 4h7.5M6 8h7.5M6 12h7.5" />
+    <path d="M2.75 4h.01M2.75 8h.01M2.75 12h.01" strokeWidth="2.4" />
+  </svg>
+);
+
+/** A planet on its orbit around a sun: show as orbits. */
+export const OrbitIcon = ({ title }: IconProps) => (
+  <svg viewBox="0 0 16 16" {...svgProps(title)}>
+    <ellipse cx="8" cy="8" rx="6.25" ry="3.75" />
+    <circle cx="8" cy="8" r="1.6" />
+    <circle cx="13.4" cy="6.1" r="1.25" fill="currentColor" stroke="none" />
+  </svg>
+);
+
 /** The credit the take-my-money icon's licence asks for (CC BY 3.0), shown in Settings and in the docs footer. */
 export const ICON_CREDIT = "Take-my-money icon from game-icons.net (game-icons.net contributors), CC BY 3.0.";
 
