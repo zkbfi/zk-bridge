@@ -32,6 +32,7 @@ zkb_indexer_unit: zk-bridge-indexer
 zkb_backend_unit: zk-bridge-backend
 zkb_publisher_unit: zk-bridge-publisher
 zkb_runner_unit: zk-bridge-runner
+zkb_traffic_unit: zk-bridge-traffic
 zkb_keepalive_service: zk-bridge-keepalive.service
 zkb_keepalive_timer: zk-bridge-keepalive.timer
 zkb_green_indexer_unit: zk-bridge-indexer-pre
@@ -84,6 +85,12 @@ zkb_bot_required_files:
     - runner/prover-setup.json
     - runner/bots.env
     - runner/runner.env
+    - deployment.json
+  traffic:
+    - traffic/bots.json
+    - traffic/prover-setup.json
+    - traffic/bots.env
+    - traffic/traffic.env
     - deployment.json
 
 # The journal events that tell whether the publisher is in the middle of a paid proof (explorer/bots/src/publisher).

@@ -198,6 +198,7 @@ describe("the command line", () => {
   it("reads a role, a configuration file and --once", () => {
     expect(parseCommandLine(["runner", "--config", "bots.json", "--once"])).toEqual({ role: "runner", configPath: "bots.json", runOnce: true });
     expect(parseCommandLine(["publisher", "--config", "bots.json"])).toEqual({ role: "publisher", configPath: "bots.json", runOnce: false });
+    expect(parseCommandLine(["traffic", "--config", "bots.json"])).toEqual({ role: "traffic", configPath: "bots.json", runOnce: false });
   });
 
   it("refuses an unknown role, a missing file and a stray flag", () => {

@@ -79,12 +79,17 @@ check_unit backend zkb_backend /var/lib/zk-bridge-backend backend backend
 check_unit indexer zkb_indexer /var/lib/zk-bridge-indexer indexer indexer
 check_unit publisher zkb_publisher /var/lib/zk-bridge-publisher publisher bots
 check_unit runner zkb_runner /var/lib/zk-bridge-runner runner bots
+check_unit traffic zkb_traffic /var/lib/zk-bridge-traffic traffic bots
 
 # The wallet key: only the runner's user can read it. The publisher runs as another user, so it can read neither the
 # file nor the runner's environment in /proc.
 has_line zk-bridge-runner.service "EnvironmentFile=/etc/zk-bridge/runner/runner.env"
 lacks zk-bridge-publisher.service 'runner\.env'
 lacks zk-bridge-publisher.service 'zkb_runner'
+# The traffic wallet key: only the traffic bot's user can read it, and the traffic bot reads no other wallet key.
+has_line zk-bridge-traffic.service "EnvironmentFile=/etc/zk-bridge/traffic/traffic.env"
+for unit in zk-bridge-publisher.service zk-bridge-runner.service; do lacks "$unit" 'traffic\.env'; done
+lacks zk-bridge-traffic.service 'runner\.env'
 # The indexer reaches Postgres on the socket, with peer login, and listens on loopback only.
 has_line zk-bridge-indexer.service "Environment=DATABASE_URL=postgresql:///zkb_indexer?host=/var/run/postgresql"
 if grep -q '^ExecStart=.*--hostname 127\.0\.0\.1' "$DIR/zk-bridge-indexer.service"; then pass "indexer listens on 127.0.0.1"; else fail "indexer: ExecStart lacks --hostname 127.0.0.1"; fi

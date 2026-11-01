@@ -14,7 +14,7 @@
 #   5. Point /opt/zk-bridge/current at the release, in one rename.
 #   6. Install the systemd units of the release and the directories that the services write.
 #   7. Restart each service whose configuration exists. A service without its files is skipped, with a log line.
-#      ZKB_SERVICES="backend publisher" restarts only those (default: all four). the playbooks in deploy/ansible use it to move one
+#      ZKB_SERVICES="backend publisher" restarts only those (default: all five). the playbooks in deploy/ansible use it to move one
 #      service at a time. The others keep running the process they have; the Vite cache of the indexer is left alone
 #      unless the indexer is restarted.
 #   8. Remove old releases.
@@ -38,7 +38,7 @@ UNIT_DIR=/etc/systemd/system
 DEFAULT_REPO_URL=https://github.com/zkbfi/zk-bridge.git
 
 # The services in start order: the indexer first, because the others read it.
-SERVICES=(indexer backend publisher runner)
+SERVICES=(indexer backend publisher runner traffic)
 
 # The services to restart in step 7: ZKB_SERVICES, in the order of SERVICES, or all of them.
 restart_wanted() {
@@ -53,6 +53,7 @@ required_files() {
     indexer) echo indexer/indexer.env deployment.json ;;
     publisher) echo publisher/bots.json publisher/prover-setup.json publisher/bots.env deployment.json ;;
     runner) echo runner/bots.json runner/prover-setup.json runner/bots.env runner/runner.env deployment.json ;;
+    traffic) echo traffic/bots.json traffic/prover-setup.json traffic/bots.env traffic/traffic.env deployment.json ;;
   esac
 }
 
@@ -63,6 +64,7 @@ service_user() {
     indexer) echo zkb_indexer ;;
     publisher) echo zkb_publisher ;;
     runner) echo zkb_runner ;;
+    traffic) echo zkb_traffic ;;
   esac
 }
 
@@ -174,6 +176,8 @@ main() {
     local user dir
     user=$(service_user "$service")
     dir=$ETC/${user#zkb_}
+    # A service added after the server was provisioned has no directory until provision.sh runs again.
+    [ -d "$dir" ] || continue
     find "$dir" -maxdepth 1 -type f -exec chown root:"$user" {} + -exec chmod 0640 {} +
   done
   [ ! -f "$ETC/deployment.json" ] || { chown root:root "$ETC/deployment.json"; chmod 0644 "$ETC/deployment.json"; }
@@ -188,6 +192,10 @@ main() {
     done
     if [ -n "$missing" ]; then
       log "skip $service: $missing is missing (see deploy/app-server/config/)"
+      continue
+    fi
+    if ! id "$(service_user "$service")" >/dev/null 2>&1; then
+      log "skip $service: its user $(service_user "$service") does not exist (run provision.sh)"
       continue
     fi
     log "restart $service"

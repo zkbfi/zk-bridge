@@ -3,20 +3,23 @@ import { loadBotContext, type BotContext } from "./runtime/context.ts";
 import { BotConfigError } from "./config/bot-config.ts";
 import { startPublisher } from "./publisher/service.ts";
 import { startRunner } from "./runner/service.ts";
+import { startTraffic } from "./traffic/service.ts";
 import type { Environment } from "./runtime/secrets.ts";
 
-const USAGE = `Usage: zk-bridge-bot <publisher|runner> --config <file> [--once]
+const USAGE = `Usage: zk-bridge-bot <publisher|runner|traffic> --config <file> [--once]
 
   publisher   prove light client updates on the remote graphics processor and post them on msgboard
   runner      check proof messages, post updates and deliver covered transfers for their fee
+  traffic     send test transfers back and forth on a schedule (testnets)
 
   --config    the bot configuration file (JSON)
-  --once      run one pass and exit, instead of running until stopped
+  --once      run one pass and exit, instead of running until stopped (traffic: send once in each
+              enabled direction now)
 `;
 
 /** The parsed command line. */
 export interface CommandLine {
-  readonly role: "publisher" | "runner";
+  readonly role: "publisher" | "runner" | "traffic";
   readonly configPath: string;
   readonly runOnce: boolean;
 }
@@ -28,7 +31,7 @@ export interface CommandLine {
  */
 export function parseCommandLine(argv: readonly string[]): CommandLine {
   const [role, ...rest] = argv;
-  if (role !== "publisher" && role !== "runner") throw new BotConfigError(`Choose publisher or runner.\n\n${USAGE}`);
+  if (role !== "publisher" && role !== "runner" && role !== "traffic") throw new BotConfigError(`Choose publisher, runner or traffic.\n\n${USAGE}`);
   let configPath: string | undefined;
   let runOnce = false;
   for (let index = 0; index < rest.length; index += 1) {
@@ -54,6 +57,10 @@ async function run(line: CommandLine, context: BotContext): Promise<void> {
   const controller = abortOnSignals();
   if (line.role === "publisher") {
     await startPublisher({ context, signal: controller.signal, runOnce: line.runOnce });
+    return;
+  }
+  if (line.role === "traffic") {
+    await startTraffic({ context, signal: controller.signal, runOnce: line.runOnce });
     return;
   }
   await startRunner({ context, signal: controller.signal, runOnce: line.runOnce });

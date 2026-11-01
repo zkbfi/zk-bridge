@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "setupFile": "/etc/zk-bridge/traffic/prover-setup.json",
+  "deploymentFile": "/etc/zk-bridge/deployment.json",
+  "stateDirectory": "/var/lib/zk-bridge-traffic",
+  "secretStore": {
+    "kind": "none"
+  },
+  "logLevel": "info",
+  "traffic": {
+    "signer": {
+      "kind": "private-key",
+      "key": "env:TRAFFIC_PRIVATE_KEY"
+    },
+    "tokensFile": "/opt/zk-bridge/current/deploy/deployments/sepolia-pls943.test-tokens.json",
+    "tokens": {
+      "tUSD": {
+        "amount": { "minimum": "5", "maximum": "50" },
+        "balance": { "minimum": "100000", "maximum": "990000" }
+      },
+      "tTKN": {
+        "amount": { "minimum": "5", "maximum": "50" },
+        "balance": { "minimum": "100000", "maximum": "990000" }
+      }
+    },
+    "intervalSeconds": 900,
+    "jitterSeconds": 60,
+    "pollSeconds": 30,
+    "directions": {
+      "first-to-second": { "enabled": true, "offsetSeconds": 0 },
+      "second-to-first": { "enabled": true, "offsetSeconds": 450 }
+    },
+    "tipPercent": "0.1",
+    "newCopyGasLimit": { "11155111": "9000000" },
+    "minimumNativeWei": { "11155111": "50000000000000000", "943": "1000000000000000000" },
+    "minimumPriorityFeeWei": { "943": "10000000" },
+    "receiptTimeoutSeconds": 300
+  }
+}
