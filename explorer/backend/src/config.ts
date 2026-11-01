@@ -19,9 +19,12 @@ const nonNegativeInteger = z.number().int().min(0);
  */
 const batchFields = {
   /**
-   * The fallback: prove once the oldest waiting final message has been final this long, whether or not the batch pays.
-   * 0 proves at the first finality that covers a waiting message, whatever it pays.
+   * The fallback: a batch that does not pay proves once the direction's last proof started at least this long ago.
+   * With no waiting message nothing proves, however long ago the last proof was. 0 proves at the first finality that
+   * covers a waiting message, whatever it pays.
    */
+  minIntervalSeconds: nonNegativeInteger.optional(),
+  /** Deprecated: the old name of `minIntervalSeconds`, read as it (`minIntervalSeconds` wins on the same level). */
   maxWaitSeconds: nonNegativeInteger.optional(),
   /** How far ahead the fees of messages that are not final yet count toward the time the proof is expected. Default: one epoch of the source chain. */
   lookaheadSeconds: nonNegativeInteger.optional(),

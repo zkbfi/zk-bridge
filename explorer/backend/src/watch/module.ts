@@ -11,9 +11,9 @@ import { DEFAULT_POLICY, type LightClientFacts } from "../keepalive/plan.ts";
 import { fetchJsonGet, readHistory, readLightClient, type JsonGet } from "../keepalive/sources.ts";
 import type { BackendModuleContext } from "../module.ts";
 import { readHeldProofs } from "../requests/held-proofs.ts";
-import { findActiveJob } from "../requests/jobs.ts";
+import { findActiveJob, lastProofStartedAt } from "../requests/jobs.ts";
 import type { RequestService } from "../requests/service.ts";
-import { batchRuleFor } from "./batch.ts";
+import { batchRuleFor, deprecatedBatchKeys } from "./batch.ts";
 import { MIN_PARTICIPANTS, SLOTS_PER_EPOCH } from "./decide.ts";
 import { createEconomicsReader, type DestinationToken } from "./economics.ts";
 import { createFinalityFeed } from "./feed.ts";
@@ -138,6 +138,9 @@ export async function startWatch(input: { context: BackendModuleContext; service
   const ping = config.watch.warmup.enabled ? (context.pingProver ?? null) : null;
   const { leadSeconds: ignoredLead, ...warmup } = config.watch.warmup;
   if (ignoredLead !== undefined) logger.warn("config_ignored", { key: "watch.warmup.leadSeconds", detail: "the lead time is learned now; set defaultLeadSeconds, minLeadSeconds and maxLeadSeconds instead" });
+  for (const key of deprecatedBatchKeys(config.watch)) {
+    logger.warn("config_deprecated", { key, detail: `read as ${key.replace(/maxWaitSeconds$/, "minIntervalSeconds")}, the minimum time from the direction's last proof; rename it` });
+  }
   const chainClient = input.dependencies?.chainClient ?? ((side: PairSide) => createPublicClient({ transport: http(side.rpcUrl) }) as unknown as ChainClient);
   // The prices are PulseX's: read on PulseChain when the pair has it. A testnet pair needs none.
   const pulseSide = pair.sides.find((side) => side.chainId === 369);
@@ -161,6 +164,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
       readHistory: (periods, slotsPerPeriod) => readHistory(get, beaconUrl, periods, slotsPerPeriod),
       findActiveJob: () => findActiveJob(context.storage, direction),
       readHeldProofs: () => readHeldProofs(context.storage, direction),
+      readLastProofAt: () => lastProofStartedAt(context.storage, direction),
       pendingStaleSeconds: config.limits.pendingProofStaleSeconds,
       batchRule,
       readEconomics: createEconomicsReader({
@@ -216,7 +220,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
     sse: config.watch.sse,
     warmup: ping !== null,
     lead: warmupStore.lead(warmup),
-    batch: Object.fromEntries(Object.entries(batches).map(([direction, rule]) => [direction, { maxWaitSeconds: rule.maxWaitSeconds, lookaheadSeconds: rule.lookaheadSeconds, profitMargin: Number(rule.marginWad) / 1e18 }])),
+    batch: Object.fromEntries(Object.entries(batches).map(([direction, rule]) => [direction, { minIntervalSeconds: rule.minIntervalSeconds, lookaheadSeconds: rule.lookaheadSeconds, profitMargin: Number(rule.marginWad) / 1e18 }])),
   });
   return async () => {
     await Promise.all(stoppers.map((stop) => stop()));

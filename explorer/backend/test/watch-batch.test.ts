@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, encodeFunctionData, type Address, type Hex } from "viem";
 import { PROOF_COST_USD, PULSEX_FACTORIES, STABLES, USD, WAD, WPLS, tokenMediatorAbi } from "@zk-bridge/shared";
 import { makeConfig } from "./support.ts";
-import { batchCostUsd, batchRuleFor, marginWadOf, planBatch, usdText, type BatchMessage, type BatchRule, type Economics } from "../src/watch/batch.ts";
+import { batchCostUsd, batchRuleFor, deprecatedBatchKeys, marginWadOf, planBatch, usdText, type BatchMessage, type BatchRule, type Economics } from "../src/watch/batch.ts";
 import { DELIVERY_GAS, createEconomicsReader, type DestinationToken } from "../src/watch/economics.ts";
 
-const RULE: BatchRule = { maxWaitSeconds: 3600, lookaheadSeconds: 384, marginWad: WAD };
+const RULE: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 384, marginWad: WAD };
 const NOW = 1_000_000;
 const FINALIZED = 500;
+/** The direction's last proof started ten minutes ago: well inside the hour. */
+const RECENT = NOW - 600;
 const msg = (messageId: string, slot: number, finalAt: number): BatchMessage => ({ messageId, slot, finalAt });
 const known = (fees: Record<string, bigint>, deliveryUsd = 0n): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd, unpriced: 0, block: "1" });
 const cents = (value: number) => (BigInt(value) * USD) / 100n;
@@ -15,21 +17,41 @@ const cents = (value: number) => (BigInt(value) * USD) / 100n;
 describe("batchRuleFor", () => {
   it("takes a direction's field over its pair's, and the pair's over the global one", () => {
     const watch = makeConfig({
-      watch: { maxWaitSeconds: 60, profitMargin: 1.5, pairs: { "sepolia-pls943": { maxWaitSeconds: 3600, lookaheadSeconds: 100, directions: { "first-to-second": { maxWaitSeconds: 1800 } } } } },
+      watch: { minIntervalSeconds: 60, profitMargin: 1.5, pairs: { "sepolia-pls943": { minIntervalSeconds: 3600, lookaheadSeconds: 100, directions: { "first-to-second": { minIntervalSeconds: 1800 } } } } },
     }).watch;
-    expect(batchRuleFor(watch, "sepolia-pls943", "first-to-second", 384)).toEqual({ maxWaitSeconds: 1800, lookaheadSeconds: 100, marginWad: (WAD * 3n) / 2n });
-    expect(batchRuleFor(watch, "sepolia-pls943", "second-to-first", 320)).toEqual({ maxWaitSeconds: 3600, lookaheadSeconds: 100, marginWad: (WAD * 3n) / 2n });
-    expect(batchRuleFor(watch, "eth-pls", "first-to-second", 384)).toEqual({ maxWaitSeconds: 60, lookaheadSeconds: 384, marginWad: (WAD * 3n) / 2n });
+    expect(batchRuleFor(watch, "sepolia-pls943", "first-to-second", 384)).toEqual({ minIntervalSeconds: 1800, lookaheadSeconds: 100, marginWad: (WAD * 3n) / 2n });
+    expect(batchRuleFor(watch, "sepolia-pls943", "second-to-first", 320)).toEqual({ minIntervalSeconds: 3600, lookaheadSeconds: 100, marginWad: (WAD * 3n) / 2n });
+    expect(batchRuleFor(watch, "eth-pls", "first-to-second", 384)).toEqual({ minIntervalSeconds: 60, lookaheadSeconds: 384, marginWad: (WAD * 3n) / 2n });
+    // A direction's 0 beats its pair's hour: no minimum.
+    const zero = makeConfig({ watch: { pairs: { "sepolia-pls943": { minIntervalSeconds: 3600, directions: { "second-to-first": { minIntervalSeconds: 0 } } } } } }).watch;
+    expect(batchRuleFor(zero, "sepolia-pls943", "second-to-first", 320).minIntervalSeconds).toBe(0);
   });
 
-  it("defaults to no wait, one epoch of lookahead and a margin of 1", () => {
-    expect(batchRuleFor(makeConfig().watch, "eth-pls", "first-to-second", 320)).toEqual({ maxWaitSeconds: 0, lookaheadSeconds: 320, marginWad: WAD });
+  it("reads the deprecated maxWaitSeconds as minIntervalSeconds, level by level, and names where it is used", () => {
+    // The server's backend.json of 2026-11-01.
+    const server = makeConfig({ watch: { pairs: { "sepolia-pls943": { maxWaitSeconds: 3600 } } } }).watch;
+    expect(batchRuleFor(server, "sepolia-pls943", "first-to-second", 384).minIntervalSeconds).toBe(3600);
+    expect(deprecatedBatchKeys(server)).toEqual(["watch.pairs.sepolia-pls943.maxWaitSeconds"]);
+    const mixed = makeConfig({
+      watch: { maxWaitSeconds: 60, pairs: { "sepolia-pls943": { minIntervalSeconds: 900, maxWaitSeconds: 7200, directions: { "first-to-second": { maxWaitSeconds: 1800 }, "second-to-first": { lookaheadSeconds: 5 } } } } },
+    }).watch;
+    // On one level the new name wins; a deeper level wins whatever its name.
+    expect(batchRuleFor(mixed, "sepolia-pls943", "second-to-first", 384).minIntervalSeconds).toBe(900);
+    expect(batchRuleFor(mixed, "sepolia-pls943", "first-to-second", 384).minIntervalSeconds).toBe(1800);
+    expect(batchRuleFor(mixed, "eth-pls", "first-to-second", 384).minIntervalSeconds).toBe(60);
+    expect(deprecatedBatchKeys(mixed)).toEqual(["watch.maxWaitSeconds", "watch.pairs.sepolia-pls943.maxWaitSeconds", "watch.pairs.sepolia-pls943.directions.first-to-second.maxWaitSeconds"]);
+    expect(deprecatedBatchKeys(makeConfig({ watch: { minIntervalSeconds: 5 } }).watch)).toEqual([]);
+  });
+
+  it("defaults to no minimum interval, one epoch of lookahead and a margin of 1", () => {
+    expect(batchRuleFor(makeConfig().watch, "eth-pls", "first-to-second", 320)).toEqual({ minIntervalSeconds: 0, lookaheadSeconds: 320, marginWad: WAD });
     expect(marginWadOf(1.25)).toBe((WAD * 5n) / 4n);
   });
 
-  it("refuses an unknown pair or direction and a negative wait", () => {
-    expect(() => makeConfig({ watch: { pairs: { "nowhere-pair": { maxWaitSeconds: 1 } } } })).toThrow(/watch\.pairs/);
-    expect(() => makeConfig({ watch: { pairs: { "eth-pls": { directions: { sideways: { maxWaitSeconds: 1 } } } } } })).toThrow(/watch\.pairs\.eth-pls\.directions/);
+  it("refuses an unknown pair or direction and a negative interval", () => {
+    expect(() => makeConfig({ watch: { pairs: { "nowhere-pair": { minIntervalSeconds: 1 } } } })).toThrow(/watch\.pairs/);
+    expect(() => makeConfig({ watch: { pairs: { "eth-pls": { directions: { sideways: { minIntervalSeconds: 1 } } } } } })).toThrow(/watch\.pairs\.eth-pls\.directions/);
+    expect(() => makeConfig({ watch: { minIntervalSeconds: -1 } })).toThrow(/watch\.minIntervalSeconds/);
     expect(() => makeConfig({ watch: { maxWaitSeconds: -1 } })).toThrow(/watch\.maxWaitSeconds/);
     expect(() => makeConfig({ watch: { pairs: { "eth-pls": { directions: { "first-to-second": { lookaheadSeconds: -5 } } } } } })).toThrow(/lookaheadSeconds/);
     expect(() => makeConfig({ watch: { profitMargin: 0 } })).toThrow(/profitMargin/);
@@ -47,59 +69,71 @@ describe("the cost of a batch", () => {
   });
 });
 
-describe("planBatch", () => {
-  it("is null when nothing waits", () => {
-    expect(planBatch({ messages: [], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}) })).toBeNull();
+describe("planBatch: is there a bridge? is it profitable? has it been an hour since the last proof?", () => {
+  it("is null when nothing waits, however long ago the last proof was, or with none at all", () => {
+    expect(planBatch({ messages: [], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}), lastProofAt: NOW - 5 * 3600 })).toBeNull();
+    expect(planBatch({ messages: [], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}), lastProofAt: null })).toBeNull();
   });
 
-  it("with no wait, proves the final messages at once, whatever they pay", () => {
-    const plan = planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 300)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: { ...RULE, maxWaitSeconds: 0 }, economics: { kind: "unknown", why: "test" } });
-    expect(plan).toEqual({ due: true, trigger: "max-wait", messageIds: ["a"], feesUsd: null, costUsd: null, waitedSeconds: 10 });
+  it("with no minimum interval, proves the final messages at once, whatever they pay", () => {
+    const plan = planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 300)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: { ...RULE, minIntervalSeconds: 0 }, economics: { kind: "unknown", why: "test" }, lastProofAt: RECENT });
+    expect(plan).toEqual({ due: true, trigger: "interval", messageIds: ["a"], feesUsd: null, costUsd: null, waitedSeconds: 10 });
   });
 
-  it("a batch that pays proves at once, and the proof covers every final message", () => {
-    const plan = planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 450, NOW - 5)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(2), b: cents(1) }) });
+  it("a batch that pays proves at once, inside the interval, and the proof covers every final message", () => {
+    const plan = planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 450, NOW - 5)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(2), b: cents(1) }), lastProofAt: RECENT });
     expect(plan).toEqual({ due: true, trigger: "profit", messageIds: ["a", "b"], feesUsd: cents(3), costUsd: PROOF_COST_USD, waitedSeconds: 10 });
   });
 
-  it("a batch that does not pay waits for its fallback, then proves", () => {
+  it("a batch that does not pay proves at its finality when the last proof is an interval or more ago, or there is none", () => {
     const messages = [msg("a", 400, NOW - 10)];
-    const waiting = planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1) }) });
-    expect(waiting).toEqual({ due: false, startAt: NOW - 10 + 3600, startWhy: "max-wait", maxWaitAt: NOW - 10 + 3600, ready: 1, oldestFinalAt: NOW - 10, feesUsd: cents(1), costUsd: PROOF_COST_USD, unknownWhy: null });
-    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW - 10 + 3600, rule: RULE, economics: known({ a: cents(1) }) })).toMatchObject({ due: true, trigger: "max-wait", waitedSeconds: 3600 });
+    // The owner's case: a message long after the last proof waits no extra hour.
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1) }), lastProofAt: NOW - 5 * 3600 })).toEqual({ due: true, trigger: "interval", messageIds: ["a"], feesUsd: cents(1), costUsd: PROOF_COST_USD, waitedSeconds: 10 });
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}), lastProofAt: NOW - 3600 })).toMatchObject({ due: true, trigger: "interval" });
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}), lastProofAt: null })).toMatchObject({ due: true, trigger: "interval" });
+  });
+
+  it("inside the interval, waits until the last proof plus the interval, then proves", () => {
+    const messages = [msg("a", 400, NOW - 10)];
+    const waiting = planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1) }), lastProofAt: RECENT });
+    expect(waiting).toEqual({ due: false, startAt: RECENT + 3600, startWhy: "interval", dueAt: RECENT + 3600, lastProofAt: RECENT, ready: 1, oldestFinalAt: NOW - 10, feesUsd: cents(1), costUsd: PROOF_COST_USD, unknownWhy: null });
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: RECENT + 3600 - 1, rule: RULE, economics: known({ a: cents(1) }), lastProofAt: RECENT })).toMatchObject({ due: false });
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: RECENT + 3600, rule: RULE, economics: known({ a: cents(1) }), lastProofAt: RECENT })).toMatchObject({ due: true, trigger: "interval", waitedSeconds: 3010 });
   });
 
   it("expects the proof at the finality at which the fees of the final and the soon final messages cover the cost", () => {
     // Two cents now, one more cent final in 100 s, another in 200 s: the batch pays at the second.
     const messages = [msg("a", 400, NOW - 10), msg("c", 700, NOW + 200), msg("b", 600, NOW + 100)];
-    const plan = planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1), b: cents(1), c: cents(1) }) });
+    const plan = planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1), b: cents(1), c: cents(1) }), lastProofAt: RECENT });
     expect(plan).toMatchObject({ due: false, startAt: NOW + 200, startWhy: "profit", ready: 1, feesUsd: cents(1) });
     // The deliveries count: with a cent of gas each, three cents never cover 2.5 + 3.
-    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1), b: cents(1), c: cents(1) }, cents(1)) })).toMatchObject({ due: false, startWhy: "max-wait" });
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1), b: cents(1), c: cents(1) }, cents(1)), lastProofAt: RECENT })).toMatchObject({ due: false, startWhy: "interval" });
   });
 
-  it("counts no message beyond the lookahead, and no profit after the fallback", () => {
+  it("counts no message beyond the lookahead, and no profit after the interval ends", () => {
     const economics = known({ a: cents(1), b: cents(5) });
-    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 400)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics })).toMatchObject({ due: false, startWhy: "max-wait" });
-    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 300)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics })).toMatchObject({ due: false, startWhy: "profit", startAt: NOW + 300 });
-    // The fallback comes first.
-    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 300)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: { ...RULE, maxWaitSeconds: 60 }, economics })).toMatchObject({ due: false, startWhy: "max-wait", startAt: NOW + 50 });
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 400)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics, lastProofAt: RECENT })).toMatchObject({ due: false, startWhy: "interval" });
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 300)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics, lastProofAt: RECENT })).toMatchObject({ due: false, startWhy: "profit", startAt: NOW + 300 });
+    // The interval ends first.
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 300)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: { ...RULE, minIntervalSeconds: 660 }, economics, lastProofAt: RECENT })).toMatchObject({ due: false, startWhy: "interval", startAt: NOW + 60 });
   });
 
   it("never proves early on unknown prices, and counts an unpriced message as nothing", () => {
-    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 10)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: { kind: "unknown", why: "testnet tokens have no price" } })).toMatchObject({
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 10)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: { kind: "unknown", why: "testnet tokens have no price" }, lastProofAt: RECENT })).toMatchObject({
       due: false,
-      startWhy: "max-wait",
+      startWhy: "interval",
       feesUsd: null,
       costUsd: null,
       unknownWhy: "testnet tokens have no price",
     });
-    expect(planBatch({ messages: [msg("a", 400, NOW - 10)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}) })).toMatchObject({ due: false, feesUsd: 0n });
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}), lastProofAt: RECENT })).toMatchObject({ due: false, feesUsd: 0n });
   });
 
-  it("with nothing final yet, waits from the first message's finality, ordering equal times by identifier", () => {
-    const plan = planBatch({ messages: [msg("b", 600, NOW + 100), msg("a", 610, NOW + 100), msg("c", 620, NOW + 100)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ c: cents(3) }) });
+  it("with nothing final yet, expects the proof no earlier than the first finality, ordering equal times by identifier", () => {
+    const plan = planBatch({ messages: [msg("b", 600, NOW + 100), msg("a", 610, NOW + 100), msg("c", 620, NOW + 100)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ c: cents(3) }), lastProofAt: RECENT });
     expect(plan).toMatchObject({ due: false, ready: 0, oldestFinalAt: NOW + 100, startAt: NOW + 100, startWhy: "profit", feesUsd: 0n });
+    // Long after the last proof, the expected start is the first finality itself.
+    expect(planBatch({ messages: [msg("b", 600, NOW + 100)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}), lastProofAt: NOW - 5 * 3600 })).toMatchObject({ due: false, ready: 0, startAt: NOW + 100, dueAt: NOW + 100, startWhy: "interval" });
   });
 });
 

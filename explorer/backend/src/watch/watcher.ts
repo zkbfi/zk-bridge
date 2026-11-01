@@ -56,8 +56,13 @@ export type DirectionWatcherInput = {
   readonly readHeldProofs: () => readonly HeldProof[];
   /** A proof we have that waited to land longer than this no longer holds a new proof back. */
   readonly pendingStaleSeconds: number;
-  /** When a message proof is due (`watch.maxWaitSeconds` and its overrides). */
+  /** When a message proof is due (`watch.minIntervalSeconds` and its overrides). */
   readonly batchRule: BatchRule;
+  /**
+   * When the direction's newest proof job started (milliseconds since 1970), whatever asked for it, or null. Read from
+   * the jobs table on each decision, so the minimum interval survives a restart.
+   */
+  readonly readLastProofAt: () => number | null;
   /** Values the waiting messages. Only asked when the rule waits. */
   readonly readEconomics: (messages: readonly ListedMessage[]) => Promise<Economics>;
   readonly submit: (request: ProofRequest) => Promise<SubmitResult>;
@@ -120,10 +125,10 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
    * calling for proofs that cannot hand off.
    */
   let keepAlivePeriod: number | null = null;
-  /** Wakes the watcher at the fallback of a batch that waits, when no new finality may come before it. */
+  /** Wakes the watcher when a batch that waits is due, when no new finality may come before it. */
   let batchTimer: ReturnType<typeof setTimeout> | null = null;
   let valued: { key: string; at: number; economics: Economics } | null = null;
-  const waits = input.batchRule.maxWaitSeconds > 0;
+  const waits = input.batchRule.minIntervalSeconds > 0;
 
   /** The pending proof we have from the head, or null. */
   const pendingAt = (headSlot: number): PendingProof | null => pendingFrom(input.readHeldProofs(), headSlot);
@@ -147,7 +152,8 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
   async function batchOf(listed: readonly ListedMessage[], facts: LightClientFacts) {
     const uncovered = listed.filter((message) => slotAtTime(message.timestamp, facts) > facts.headSlot);
     if (!waits || uncovered.length === 0) return undefined;
-    return { rule: input.batchRule, economics: await economicsOf(uncovered) };
+    const lastProofAt = input.readLastProofAt();
+    return { rule: input.batchRule, economics: await economicsOf(uncovered), lastProofAt: lastProofAt === null ? null : lastProofAt / 1000 };
   }
 
   function wakeAt(seconds: number, observation: FinalityObservation): void {
@@ -230,9 +236,10 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
     const noteOutcome = (outcome: DecisionOutcome): void => note({ ...dueFacts, outcome });
     let dueFacts: Partial<WatchDecision> = {};
     if (!decision.due) {
-      const level = decision.why === "stranded" ? "warn" : decision.why === "insufficient-signatures" || decision.why === "waiting-for-profit" || decision.why === "proof-pending" ? "info" : "debug";
+      const level = decision.why === "stranded" ? "warn" : decision.why === "insufficient-signatures" || decision.why === "min-interval" || decision.why === "proof-pending" ? "info" : "debug";
       const plan = decision.plan;
-      const batchFields = plan === undefined ? {} : { messages: plan.ready, feesUsd: plan.feesUsd === null ? null : usdText(plan.feesUsd), costUsd: plan.costUsd === null ? null : usdText(plan.costUsd), startAt: iso(plan.startAt), startWhy: plan.startWhy, maxWaitAt: iso(plan.maxWaitAt) };
+      // A batch waits only for the interval since a proof: its last proof is known (with none, the batch is due).
+      const batchFields = plan === undefined ? {} : { messages: plan.ready, feesUsd: plan.feesUsd === null ? null : usdText(plan.feesUsd), costUsd: plan.costUsd === null ? null : usdText(plan.costUsd), startAt: iso(plan.startAt), startWhy: plan.startWhy, lastProofAt: iso(plan.lastProofAt as number), dueAt: iso(plan.dueAt) };
       logger[level]("proof_not_due", { direction, finalizedSlot: observation.finalizedSlot, why: decision.why, detail: decision.detail, ...batchFields });
       note(
         plan === undefined
@@ -246,11 +253,12 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
                 oldestFinalAt: plan.oldestFinalAt * 1000,
                 startAt: plan.startAt * 1000,
                 startWhy: plan.startWhy,
-                maxWaitAt: plan.maxWaitAt * 1000,
+                dueAt: plan.dueAt * 1000,
+                lastProofAt: (plan.lastProofAt as number) * 1000,
               },
             },
       );
-      if (plan !== undefined) wakeAt(plan.maxWaitAt, observation);
+      if (plan !== undefined) wakeAt(plan.dueAt, observation);
       return;
     }
     if (decision.stalePending !== undefined) {

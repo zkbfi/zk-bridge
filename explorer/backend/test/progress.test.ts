@@ -96,15 +96,16 @@ describe("the progress of a transfer (2026-11-01)", () => {
     expect(progress.waitingOn).toMatchObject({ service: "source-chain-finality", since: FINAL_MS, detail: expect.stringContaining("decided nothing") });
   });
 
-  it("a batch that waits for profit, or for its fallback, names that wait and when it ends", () => {
-    const batch = { messages: 2, feesUsd: "0.01", costUsd: "0.05", unknownWhy: null, oldestFinalAt: FINAL_MS, startAt: FINAL_MS + 100_000, startWhy: "profit" as const, maxWaitAt: FINAL_MS + 3_600_000 };
+  it("a batch that waits for profit, or for the minimum interval since the last proof, names that wait and when it ends", () => {
+    const batch = { messages: 2, feesUsd: "0.01", costUsd: "0.05", unknownWhy: null, oldestFinalAt: FINAL_MS, startAt: FINAL_MS + 100_000, startWhy: "profit" as const, dueAt: FINAL_MS + 3_600_000, lastProofAt: FINAL_MS - 600_000 };
     const final = { head: head({ finalizedSlot: 10_016 }), now: FINAL_MS + 60_000 };
-    const profit = buildProgress(input({ ...final, decision: decision({ why: "waiting-for-profit", detail: "2 messages wait", batch }) }));
+    const profit = buildProgress(input({ ...final, decision: decision({ why: "min-interval", detail: "2 messages wait", batch }) }));
     expect(profit.waitingOn).toEqual({ service: "batch-profit", since: FINAL_MS, eta: FINAL_MS + 100_000, detail: "2 messages wait" });
-    const fallback = buildProgress(input({ ...final, decision: decision({ why: "waiting-for-profit", detail: "2 messages wait", batch: { ...batch, startWhy: "max-wait" } }) }));
+    const fallback = buildProgress(input({ ...final, decision: decision({ why: "min-interval", detail: "2 messages wait", batch: { ...batch, startWhy: "interval" } }) }));
+    // The service keeps its first name on the wire.
     expect(fallback.waitingOn).toMatchObject({ service: "batch-max-wait", eta: FINAL_MS + 3_600_000 });
     // The decision's finalized slot stands in for the indexer's when the indexer gave none.
-    const noHead = buildProgress(input({ head: null, decision: decision({ why: "waiting-for-profit", detail: "x", batch }) }));
+    const noHead = buildProgress(input({ head: null, decision: decision({ why: "min-interval", detail: "x", batch }) }));
     expect(statuses(noHead)).toMatchObject({ final: "done", batched: "current" });
     expect(noHead.stages[1]?.detail).toBe(`slot ${MESSAGE_SLOT}; the source chain finalized slot 10016`);
   });
@@ -114,7 +115,7 @@ describe("the progress of a transfer (2026-11-01)", () => {
     expect(pending.waitingOn).toMatchObject({ service: "proof-dedup-pending", detail: "the proof from slot 9900 to slot 9990 (board) waits to land" });
     const other = buildProgress(input({ head: head({ finalizedSlot: 10_016 }), decision: decision() }));
     expect(other.waitingOn).toMatchObject({ service: "source-chain-finality", detail: "the watcher acts on the next finality of the source chain; its last decision: the head is fresh" });
-    const noBatch = buildProgress(input({ head: head({ finalizedSlot: 10_016 }), decision: decision({ why: "waiting-for-profit" }) }));
+    const noBatch = buildProgress(input({ head: head({ finalizedSlot: 10_016 }), decision: decision({ why: "min-interval" }) }));
     expect(noBatch.waitingOn.service).toBe("source-chain-finality");
   });
 

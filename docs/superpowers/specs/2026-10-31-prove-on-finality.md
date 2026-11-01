@@ -153,3 +153,48 @@ The rule now (branch `feat/watch-batch-window`; code in `explorer/backend/src/wa
   (`proof_duplicate`).
 - **Logs.** `proof_not_due` why `waiting-for-profit` (fees, cost, `startAt`, `maxWaitAt`); `proof_due` why `message`
   with `trigger` (profit or max-wait), `batch`, `waitedSeconds`, `feesUsd`, `costUsd`; `riders` on a handoff.
+
+## The interval counts from the last proof, 2026-11-01
+
+Owner, verbatim, in order:
+
+- "it seems like you do not have the requisite logic in place to check the following: is there a bridge? is it profitable? has it been an hour"
+- Correcting the summary "the oldest waiting transfer has been waiting an hour": "no, the last proof was in a previous hour"
+- "if there were no transfers over the bridge that are waiting from the last hour or before then do nothing (cover the zero case)"
+
+The section above timed the fallback from the oldest waiting message ("the oldest of them has been final for
+`maxWaitSeconds`"). So a transfer after a quiet day waited an extra hour although no proof had run in it. The rule
+now, per direction, at each finality (branch `fix/watch-min-interval`; code in `explorer/backend/src/watch/batch.ts`,
+`decide.ts`, `watcher.ts`, `module.ts`, `src/requests/jobs.ts`):
+
+1. **Is there a bridge?** No waiting message (final, not covered by the head): nothing proves, however long ago the
+   last proof was, and no worker is warmed (`proof_not_due` why `nothing-due`). Only a due handoff, or the age
+   keep-alive (`limits.keepAliveSeconds`; 7 days on the server), can prove then.
+2. **Is it profitable?** The fees of the final and soon final messages cover the proof and the deliveries: prove now,
+   inside the interval too (`trigger: "profit"`). The look-ahead is as before.
+3. **Has it been an hour?** Otherwise prove now when the direction's **last proof** started at least
+   `minIntervalSeconds` ago, or the direction has none (`trigger: "interval"`). Rolling, not clock-hour buckets. The
+   last proof is the newest job of the direction in the `jobs` table, of any reason (a message, a handoff, a keep-alive,
+   a user), except a job that failed or ended on chain without a proof. It is read on every decision, so a restart
+   keeps it. Inside the interval the batch is due at the last proof plus `minIntervalSeconds`: `proof_not_due` why
+   `min-interval` with `lastProofAt` and `dueAt`, a timer wakes the watcher then, the warm-up is timed to it, and the
+   proof covers every message waiting by then. A message that arrives long after the last proof proves at its
+   finality, with no extra wait.
+
+- **Never delayed:** a handoff and the age keep-alive prove at once, inside the interval too; they count as the last
+  proof, so the next interval runs from them.
+- **Config.** `watch.minIntervalSeconds`, scoped as before (global, `pairs.<name>`, `pairs.<name>.directions.<dir>`;
+  the deeper level wins). 0 means no minimum: a message proves at its finality. `maxWaitSeconds` stays accepted as a
+  deprecated alias, read as `minIntervalSeconds` on its level (the new name wins on the same level), with a
+  `config_deprecated` warning at start naming the key. So the server's
+  `watch.pairs.sepolia-pls943.maxWaitSeconds: 3600` keeps working. The example: testnet `minIntervalSeconds: 3600`,
+  mainnet 0 with the profit rule.
+- **Wire.** `GET /directions/:direction/pipeline` keeps `trigger: "max-wait"` and `fallbackAt`, and
+  `GET /progress/:messageId` keeps the service `batch-max-wait`, now meaning the interval since the last proof and
+  its end, so the web app's schemas stay valid. The decision object carries `min-interval`, `interval`, `dueAt` and
+  `lastProofAt`.
+- **Tests** (vitest, fake clock): no message, the last proof 5 h ago, or no proof ever: nothing due, no warm-up; a
+  message arriving after it proves by the rule; profitable: at once inside the interval; unprofitable, the last proof
+  over the interval ago: at its finality; unprofitable inside the interval: due at the last proof plus the interval,
+  then one proof for all waiting; a handoff inside the interval: not delayed, and the next message waits for an
+  interval from it; the interval read from the jobs table after a restart; the alias and its warning; scoping.
