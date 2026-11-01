@@ -69,6 +69,12 @@ export interface ProverBinary {
   verify(request: VerifyRequest): Promise<void>;
 }
 
+/** A secret of the prover: the NAME of the variable it reads and the value that the child gets under that name. */
+export interface ProverSecret {
+  readonly variable: string;
+  readonly value: string;
+}
+
 /** Input of {@link createProverBinary}. */
 export interface ProverBinaryInput {
   readonly binaryPath: string;
@@ -79,8 +85,11 @@ export interface ProverBinaryInput {
   readonly backend: BackendSection | null;
   /** Also send each proof package to a webhook. The bearer token travels in `baseEnvironment`, never in the file. */
   readonly handoff?: HandoffSection;
-  /** The variable and value that the prover reads its proving key from. Passed in the child environment only. */
-  readonly proverSecret: { readonly variable: string; readonly value: string } | null;
+  /**
+   * The variable and value that the prover reads its proving key from, or one for each endpoint of a list that has a
+   * key. Passed in the child environment only.
+   */
+  readonly proverSecret: ProverSecret | readonly ProverSecret[] | null;
   /** The variables that the child needs to find its libraries, such as `PATH`. */
   readonly baseEnvironment: Readonly<Record<string, string>>;
   readonly temporaryDirectory?: string;
@@ -114,7 +123,8 @@ function parseSingleJsonLine(stdout: string, command: string): unknown {
  */
 export function createProverBinary(input: ProverBinaryInput): ProverBinary {
   const environment: Record<string, string> = { ...input.baseEnvironment };
-  if (input.proverSecret !== null) environment[input.proverSecret.variable] = input.proverSecret.value;
+  const secrets: readonly ProverSecret[] = input.proverSecret === null ? [] : "variable" in input.proverSecret ? [input.proverSecret] : input.proverSecret;
+  for (const secret of secrets) environment[secret.variable] = secret.value;
 
   async function withConfigFile<Result>(direction: ProofDirection, backend: BackendSection | null, use: (path: string, route: string) => Promise<Result>): Promise<Result> {
     const route = describeRoute(input.pair, direction);

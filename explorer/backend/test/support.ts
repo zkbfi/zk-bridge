@@ -1,6 +1,6 @@
 import type { Pair, PairSide } from "@zk-bridge/shared";
 import type { ProveOutcome, ProverBinary, ProofPackage } from "@zk-bridge/shared/prover";
-import { parseBackendConfig, type BackendConfig, type ModuleName } from "../src/config.ts";
+import { parseBackendConfig, type BackendConfig, type BackendSecrets, type ModuleName } from "../src/config.ts";
 import { createLogger } from "../src/logger.ts";
 import type { BackendModuleContext, ModuleTable } from "../src/module.ts";
 import { createApp } from "../src/app.ts";
@@ -36,6 +36,9 @@ export const PAIR: Pair = { name: "eth-pls", sides: [side("ethereum", 1, "1"), s
 
 /** The secret values of the tests. Their text is easy to find in a leak check. */
 export const SECRETS = { runpodApiKey: "runpod-secret-value-1234", webhookBearer: "bearer-value-0123456789-abcdefghijklmnop-5678" };
+
+/** The secrets as `readSecrets` gives them for {@link makeConfig}: the RunPod key under its variable, and the bearer. */
+export const READ_SECRETS: BackendSecrets = { proverKeys: [{ variable: "RUNPOD_API_KEY", value: SECRETS.runpodApiKey }], webhookBearer: SECRETS.webhookBearer };
 
 /** A valid configuration. The watch is off unless a test turns it on: it would read beacon nodes over the network. */
 export function makeConfig(overrides: Record<string, unknown> = {}): BackendConfig {

@@ -7,3 +7,4 @@ export * from "./prove-timing.js";
 export * from "./verify-guard.js";
 export * from "./prover-binary.js";
 export * from "./prover-config.js";
+export * from "./remote-endpoints.js";

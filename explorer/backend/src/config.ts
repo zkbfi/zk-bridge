@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, beaconVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
+import { SINGLE_ENDPOINT_LABEL, endpointKeyVariables, remoteEndpointListSchema, type ProverSecret, type RemoteEndpoint } from "@zk-bridge/shared/prover";
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
 import { DEFAULT_WARMUP } from "./watch/decide.ts";
 
@@ -42,10 +43,17 @@ export const backendConfigSchema = z
     /** The address of this service as the prover reaches it. The prover posts its proof to `<publicUrl>/webhook/jobs/<id>`. */
     publicUrl: z.url(),
     prover: z.object({ binary: z.string().min(1), timeoutSeconds: positiveInteger.default(1800) }).strict(),
-    /** The remote proving endpoint (the load balancing endpoint of the graphics processor service). */
-    remote: z.object({ endpoint: z.url() }).strict(),
-    /** The NAME of the variable that holds the key of the remote proving service. */
-    runpodApiKeyVariable: variableName,
+    /**
+     * Where the prover sends a proof job. Either `endpoint`, one load balancing endpoint whose key is in
+     * `runpodApiKeyVariable`, or `endpoints`, a list in priority order (a dedicated worker first, the serverless
+     * endpoint as the fallback), each with its own key variable and limits. See README.md, "Proving endpoints".
+     */
+    remote: z
+      .object({ endpoint: z.url().optional(), endpoints: remoteEndpointListSchema.optional() })
+      .strict()
+      .refine((remote) => (remote.endpoint === undefined) !== (remote.endpoints === undefined), { message: "set remote.endpoint or remote.endpoints, not both and not neither" }),
+    /** The NAME of the variable that holds the key of `remote.endpoint`. Not used with `remote.endpoints`. */
+    runpodApiKeyVariable: variableName.optional(),
     /** The NAME of the variable that holds the bearer token the webhook checks. */
     webhookBearerVariable: variableName,
     limits: z
@@ -120,6 +128,10 @@ export const backendConfigSchema = z
       .prefault({}),
   })
   .strict()
+  .refine((config) => config.remote.endpoint === undefined || config.runpodApiKeyVariable !== undefined, {
+    message: "remote.endpoint needs runpodApiKeyVariable, the NAME of the variable with its key",
+    path: ["runpodApiKeyVariable"],
+  })
   .refine((config) => config.limits.requestRetentionHours * 3600 >= config.prover.timeoutSeconds, {
     message: "limits.requestRetentionHours must not be shorter than prover.timeoutSeconds, or a waiting caller loses its request",
     path: ["limits", "requestRetentionHours"],
@@ -157,23 +169,51 @@ export function parseBackendConfig(text: string): BackendConfig {
 export const MINIMUM_BEARER_BYTES = 32;
 
 /**
+ * The proving endpoints in the order the prover tries them: `remote.endpoints`, or `remote.endpoint` as a list of one
+ * endpoint labelled `remote` with the key of `runpodApiKeyVariable`.
+ */
+export function remoteEndpoints(config: BackendConfig): readonly RemoteEndpoint[] {
+  const { endpoint, endpoints } = config.remote;
+  if (endpoints !== undefined) return endpoints;
+  // The schema makes sure that exactly one of the two is set, and that `endpoint` comes with its key variable.
+  return [{ label: SINGLE_ENDPOINT_LABEL, url: endpoint as string, apiKeyVariable: config.runpodApiKeyVariable as string }];
+}
+
+/** The secrets that the backend reads from its environment. */
+export interface BackendSecrets {
+  /** The key of each proving endpoint that has one, under the NAME of its variable. */
+  readonly proverKeys: readonly ProverSecret[];
+  readonly webhookBearer: string;
+}
+
+/**
  * Reads the secrets that the configuration names from the environment.
  *
  * @throws BackendConfigError when a named variable is empty or missing, or when the webhook bearer value is shorter
  *   than 32 bytes. The message names the variable and never shows a value.
  */
-export function readSecrets(config: BackendConfig, environment: Readonly<Record<string, string | undefined>>): { runpodApiKey: string; webhookBearer: string } {
+export function readSecrets(config: BackendConfig, environment: Readonly<Record<string, string | undefined>>): BackendSecrets {
   const read = (variable: string): string => {
     const value = environment[variable];
     if (value === undefined || value === "") throw new BackendConfigError(`set the environment variable ${variable}`);
     return value;
   };
-  const runpodApiKey = read(config.runpodApiKeyVariable);
+  const proverKeys = endpointKeyVariables(remoteEndpoints(config)).map((variable) => ({ variable, value: read(variable) }));
   const webhookBearer = read(config.webhookBearerVariable);
   if (Buffer.byteLength(webhookBearer) < MINIMUM_BEARER_BYTES) {
     throw new BackendConfigError(`the environment variable ${config.webhookBearerVariable} must hold at least ${MINIMUM_BEARER_BYTES} bytes`);
   }
-  return { runpodApiKey, webhookBearer };
+  return { proverKeys, webhookBearer };
+}
+
+/**
+ * Where the warm-up ping goes: the first endpoint, with its key, or null for an endpoint without one. Only the first:
+ * with a dedicated worker first, a ping of the serverless fallback would start a paid worker that no job may need.
+ */
+export function warmupTarget(config: BackendConfig, secrets: BackendSecrets): { endpoint: string; apiKey: string | null } {
+  const first = remoteEndpoints(config)[0] as RemoteEndpoint;
+  const key = secrets.proverKeys.find((candidate) => candidate.variable === first.apiKeyVariable);
+  return { endpoint: first.url, apiKey: key === undefined ? null : key.value };
 }
 
 /**
@@ -205,7 +245,7 @@ export function loadBackendPair(config: BackendConfig, deployment: unknown): Pai
  */
 export function endpointValues(config: BackendConfig, pair: Pair | null): string[] {
   const fromPair = (pair?.sides ?? []).flatMap((side) => [side.rpcUrl, side.beaconUrl ?? "", ...(side.stateUrls ?? [])]);
-  return [...Object.values(config.rpcUrls), ...Object.values(config.beaconUrls), ...Object.values(config.stateUrls).flat(), config.msgboardUrl ?? "", config.remote.endpoint, config.indexerUrl ?? "", ...fromPair].filter((value) => value !== "");
+  return [...Object.values(config.rpcUrls), ...Object.values(config.beaconUrls), ...Object.values(config.stateUrls).flat(), config.msgboardUrl ?? "", ...remoteEndpoints(config).map((endpoint) => endpoint.url), config.indexerUrl ?? "", ...fromPair].filter((value) => value !== "");
 }
 
 /** The shortest path segment that counts as a key. Shorter segments, such as `rpc` or `evm`, are plain words. */

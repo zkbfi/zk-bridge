@@ -6,7 +6,7 @@ import { createProverFactories } from "../src/requests/job-prover.ts";
 import { DEFAULT_RATE_LIMITS } from "../src/requests/rate-limit.ts";
 import { createRequestService } from "../src/requests/service.ts";
 import { openStorage } from "../src/storage.ts";
-import { PAIR, SECRETS, makeClock, makeConfig, memoryLogger, fakeProofNeed } from "./support.ts";
+import { PAIR, READ_SECRETS, SECRETS, makeClock, makeConfig, memoryLogger, fakeProofNeed } from "./support.ts";
 
 function recordingExecutor() {
   const runs: Array<{ spec: CommandSpec; file: string }> = [];
@@ -22,7 +22,7 @@ describe("the prover of a job", () => {
   it("the job runs prove with a webhook to /webhook/jobs/<id> and the bearer variable name only", async () => {
     const { executor, runs } = recordingExecutor();
     const log = memoryLogger();
-    const factories = createProverFactories({ config: makeConfig(), pair: PAIR, executor, secrets: SECRETS, path: "/usr/bin", logger: log.logger });
+    const factories = createProverFactories({ config: makeConfig(), pair: PAIR, executor, secrets: READ_SECRETS, path: "/usr/bin", logger: log.logger });
     const service = createRequestService({
       storage: openStorage(":memory:"),
       proverForJob: factories.proverForJob,
@@ -58,7 +58,7 @@ describe("the prover of a job", () => {
 
   it("the utility prover has no proving backend", async () => {
     const { executor } = recordingExecutor();
-    const factories = createProverFactories({ config: makeConfig(), pair: PAIR, executor, secrets: SECRETS, path: "/usr/bin", logger: memoryLogger().logger });
+    const factories = createProverFactories({ config: makeConfig(), pair: PAIR, executor, secrets: READ_SECRETS, path: "/usr/bin", logger: memoryLogger().logger });
     await expect(factories.utilityProver.prove({ direction: "first-to-second" })).rejects.toThrow(/no proving backend/);
   });
 });
