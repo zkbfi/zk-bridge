@@ -13,6 +13,7 @@ import {
   type EvidencePackage,
   type ProofPackage,
 } from "./packages.js";
+import { openingPackageSchema, type OpeningPackage } from "./opening-package.js";
 import { parseProveTiming, type ProveTiming } from "./prove-timing.js";
 import { describeRoute, renderProverConfig, type BackendSection, type HandoffSection } from "./prover-config.js";
 
@@ -70,6 +71,20 @@ export interface ProverBinary {
   verify(request: VerifyRequest): Promise<void>;
 }
 
+/**
+ * The `opening-proof` command. It is apart from {@link ProverBinary} because only the runner opens bridges, and the other
+ * users of the wrapper need not fake it.
+ */
+export interface OpeningProver {
+  /**
+   * `opening-proof --route <route>`: the proof that opens the bridge on the SOURCE chain of the route of `direction`.
+   * The prover reads the head of the light client of that bridge and runs `eth_getProof` on the other chain at the block
+   * that this head stored, so the call must follow a light client update while that block is inside the proof window
+   * of the node. @throws ProverCommandError when the prover refuses or a node fails.
+   */
+  openingProof(request: DirectionRequest): Promise<OpeningPackage>;
+}
+
 /** A secret of the prover: the NAME of the variable it reads and the value that the child gets under that name. */
 export interface ProverSecret {
   readonly variable: string;
@@ -122,7 +137,7 @@ function parseSingleJsonLine(stdout: string, command: string): unknown {
  * of mode 0700, writes it with mode 0600, and removes the directory when the command ends. The proving key goes to
  * the child through the environment variable that the file names. No secret is ever an argument.
  */
-export function createProverBinary(input: ProverBinaryInput): ProverBinary {
+export function createProverBinary(input: ProverBinaryInput): ProverBinary & OpeningProver {
   const environment: Record<string, string> = { ...input.baseEnvironment };
   const secrets: readonly ProverSecret[] = input.proverSecret === null ? [] : "variable" in input.proverSecret ? [input.proverSecret] : input.proverSecret;
   for (const secret of secrets) environment[secret.variable] = secret.value;
@@ -192,6 +207,15 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary {
         if (output.code !== 0) throw new ProverCommandError("evidence", output.code, tailOf(output.stderr));
         const parsed = evidencePackageSchema.safeParse(parseSingleJsonLine(output.stdout, "evidence"));
         if (!parsed.success) throw new ProverOutputError(`evidence printed an unexpected package: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+        return parsed.data;
+      });
+    },
+    async openingProof(request) {
+      return withConfigFile(request.direction, null, async (path, route) => {
+        const output = await run("opening-proof", ["--config", path, "opening-proof", "--route", route]);
+        if (output.code !== 0) throw new ProverCommandError("opening-proof", output.code, tailOf(output.stderr));
+        const parsed = openingPackageSchema.safeParse(parseSingleJsonLine(output.stdout, "opening-proof"));
+        if (!parsed.success) throw new ProverOutputError(`opening-proof printed an unexpected package: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
         return parsed.data;
       });
     },
