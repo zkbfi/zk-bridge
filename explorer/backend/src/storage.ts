@@ -3,7 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 /**
  * The tables of the backend, in one file. The `jobs` table carries a unique index that lets only one job per direction
  * be queued or proving, so the rule "one job per direction" holds even if two processes share the file.
- * The `proofs` and `evidence` tables belong to the msgboard indexer and the archive module.
+ * The `proofs` and `evidence` tables belong to the msgboard indexer and the archive module, the `warmup_` tables to the
+ * warm-up of the remote prover (`watch/warmup-store.ts`).
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
@@ -43,6 +44,25 @@ CREATE TABLE IF NOT EXISTS evidence (
   body TEXT NOT NULL,
   stored_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS warmup_observations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  direction TEXT NOT NULL,
+  source TEXT NOT NULL,
+  seconds REAL NOT NULL,
+  observed_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS warmup_sessions (
+  id TEXT PRIMARY KEY,
+  direction TEXT NOT NULL,
+  why TEXT NOT NULL,
+  due_at INTEGER NOT NULL,
+  lead_seconds INTEGER NOT NULL,
+  started_at INTEGER NOT NULL,
+  ready_at INTEGER,
+  ended_at INTEGER,
+  outcome TEXT
+);
+CREATE INDEX IF NOT EXISTS warmup_sessions_by_time ON warmup_sessions (started_at);
 `;
 
 /** The backend database: one SQLite file. */

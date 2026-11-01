@@ -3,6 +3,8 @@ import { CommandTimeoutError, ProverCommandError } from "@zk-bridge/shared/prove
 import { DEFAULT_RATE_LIMITS } from "../src/requests/rate-limit.ts";
 import { createRequestService } from "../src/requests/service.ts";
 import { openStorage } from "../src/storage.ts";
+import { DEFAULT_WARMUP } from "../src/watch/warmup.ts";
+import { createWarmupStore } from "../src/watch/warmup-store.ts";
 import { makeBackend, makeClock, memoryLogger, makeConfig, makeProofPackage, postFrom, controllableProver, fakeProofNeed } from "./support.ts";
 
 const countJobs = (storage: ReturnType<typeof makeBackend>["storage"]) =>
@@ -139,6 +141,56 @@ describe("job life", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const job = ((await (await backend.app.request("/directions/first-to-second")).json()) as { job: { jobId: string; status: string; startSlot: string; newSlot: string } }).job;
     expect(job).toMatchObject({ jobId, status: "proving", startSlot: "10", newSlot: "42" });
+  });
+
+  it("a proof that met a cold worker teaches the warm-up how long a cold start takes", async () => {
+    const backend = makeBackend();
+    await post(backend, "10.0.0.1");
+    backend.prover.settleAll({ kind: "proof", proofPackage: makeProofPackage(10, 42), timing: { wait_worker_ms: 61_500, not_ready_count: 2, worker_gpu: "RTX 5090" } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const events = backend.log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(events.filter((event) => event.event === "warmup_observed")).toMatchObject([{ direction: "first-to-second", source: "job", seconds: 61.5 }]);
+    expect(createWarmupStore(backend.storage).lead(DEFAULT_WARMUP)).toMatchObject({ seconds: 62, basis: "observed" });
+  });
+
+  it("a cold worker despite a warm-up is a miss, not a cold start; a warm worker or an older prover teaches nothing", async () => {
+    const backend = makeBackend();
+    const store = createWarmupStore(backend.storage);
+    store.openSession({ direction: "first-to-second", why: "message", dueAt: backend.clock.now(), leadSeconds: 90, at: backend.clock.now() - 60_000 });
+    await post(backend, "10.0.0.1");
+    backend.prover.settleAll({ kind: "proof", proofPackage: makeProofPackage(10, 42), timing: { wait_worker_ms: 20_000, not_ready_count: 1 } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await post(backend, "10.0.0.2", { direction: "second-to-first" });
+    backend.prover.settleAll({ kind: "proof", proofPackage: makeProofPackage(10, 42), timing: { wait_worker_ms: 0, not_ready_count: 0 } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const events = backend.log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(events.filter((event) => event.event === "warmup_missed")).toMatchObject([{ level: "warn", direction: "first-to-second", waitWorkerSeconds: 20 }]);
+    expect(events.filter((event) => event.event === "warmup_observed")).toEqual([]);
+    expect(store.lead(DEFAULT_WARMUP)).toMatchObject({ basis: "default" });
+  });
+
+  it("a failure to note the proof never fails the job", async () => {
+    const storage = openStorage(":memory:");
+    const log = memoryLogger();
+    const prover = controllableProver();
+    const service = createRequestService({
+      storage,
+      proverForJob: () => prover.binary,
+      readProofNeed: fakeProofNeed().read,
+      now: makeClock().now,
+      limits: DEFAULT_RATE_LIMITS,
+      proverTimeoutMilliseconds: 1_800_000,
+      logger: log.logger,
+      onProved: (event) => {
+        expect(event).toMatchObject({ direction: "first-to-second", timing: null });
+        throw new Error("database locked");
+      },
+    });
+    await service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "user", caller: "a" });
+    prover.settleAll({ kind: "proof", proofPackage: makeProofPackage(10, 42) });
+    await service.settled();
+    expect(storage.database.prepare("SELECT status, new_slot FROM jobs").get()).toEqual({ status: "proving", new_slot: "42" });
+    expect(log.lines.map((line) => JSON.parse(line) as Record<string, unknown>).filter((event) => event.event === "job_proved_note_failed")).toMatchObject([{ error: { message: "database locked" } }]);
   });
 
   it("an up-to-date answer ends the job as on-chain", async () => {

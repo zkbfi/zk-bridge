@@ -1,17 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { DEFAULT_POLICY, type LightClientFacts } from "../src/keepalive/plan.ts";
-import {
-  DEFAULT_WARMUP,
-  MIN_PARTICIPANTS,
-  SYNC_COMMITTEE_SIZE,
-  decideProof,
-  expectedFinalityAt,
-  slotAtTime,
-  warmupStep,
-  warmupTargets,
-  type WaitingMessage,
-} from "../src/watch/decide.ts";
+import { DEFAULT_POLICY, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
+import { MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE, decideProof, expectedFinalityAt, handoffKey, slotAtTime, warmupPlan, type WaitingMessage } from "../src/watch/decide.ts";
 
 // A PulseChain-like clock: 10 s slots, 32 slots per epoch, 8192 slots per period, genesis at 0 for easy numbers.
 const PERIOD = 8192;
@@ -206,65 +196,86 @@ describe("expectedFinalityAt", () => {
   });
 });
 
-describe("warmupTargets", () => {
-  it("each message that is not final yet asks for a warm worker at its expected finality", () => {
-    const targets = warmupTargets({
+describe("warmupPlan", () => {
+  const id = (digit: string) => `0x${digit.repeat(64)}`;
+
+  it("each message that is not final yet asks for a warm worker at its expected finality; every uncovered one is live", () => {
+    const plan = warmupPlan({
       facts: facts(HEAD),
       finalizedSlot: FINALIZED,
-      messages: [message(FINALIZED - 5), message(NOW_SLOT + 40), message(NOW_SLOT - 2), message(NOW_SLOT - 3), message(HEAD - 1)],
+      messages: [message(FINALIZED - 5, "f"), message(NOW_SLOT + 40, "b"), message(NOW_SLOT - 2, "c"), message(NOW_SLOT - 3, "d"), message(HEAD - 1, "e")],
       pendingProof: null,
       history: { kind: "not-needed" },
       policy: DEFAULT_POLICY,
       nowSeconds: at(NOW_SLOT),
+      horizonSeconds: 90,
     });
-    // Sorted by time, one target per time.
-    expect(targets).toEqual([
-      { at: expectedFinalityAt(NOW_SLOT - 2, facts(HEAD)), why: "message" },
-      { at: expectedFinalityAt(NOW_SLOT + 40, facts(HEAD)), why: "message" },
+    // Sorted by time, one target per time with the keys of all its messages.
+    expect(plan.targets).toEqual([
+      { at: expectedFinalityAt(NOW_SLOT - 2, facts(HEAD)), why: "message", keys: [id("c"), id("d")] },
+      { at: expectedFinalityAt(NOW_SLOT + 40, facts(HEAD)), why: "message", keys: [id("b")] },
     ]);
+    // The final message still waits for its proof; the covered one does not.
+    expect([...plan.live].sort()).toEqual([id("b"), id("c"), id("d"), id("f")]);
   });
 
-  it("a period handoff that the next finality makes due asks for a warm worker then", () => {
-    // The head in period 100 with only its own committee; the clock crosses into period 101 during the current epoch.
+  describe("a period handoff", () => {
+    // The head in period 100 with only its own committee; the clock nears period 101. The source's finality crosses
+    // the border two epochs after it: the first slot of epoch border + 2, plus one for the signatures.
     const head = 100 * PERIOD + 8000;
-    const nowSlot = 101 * PERIOD - 5;
-    const targets = warmupTargets({
-      facts: facts(head, false),
-      finalizedSlot: nowSlot - 70,
-      messages: [],
-      pendingProof: null,
-      history: { kind: "not-needed" },
-      policy: DEFAULT_POLICY,
-      nowSeconds: at(nowSlot),
+    const border = 101 * PERIOD;
+    const crossing = at(border + 65);
+    const plan = (nowSlot: number, horizonSeconds: number, history: SourceHistory = { kind: "not-needed" }) =>
+      warmupPlan({ facts: facts(head, false), finalizedSlot: Math.min(nowSlot - 70, border - 70), messages: [], pendingProof: null, history, policy: DEFAULT_POLICY, nowSeconds: at(nowSlot), horizonSeconds });
+
+    it("asks for a warm worker when finality crosses the border, not when the clock does, looking as far ahead as the lead time", () => {
+      const nowSlot = border - 5;
+      expect(plan(nowSlot, crossing - at(nowSlot))).toEqual({ targets: [{ at: crossing, why: "keep-alive", keys: [handoffKey(head)] }], live: new Set([handoffKey(head)]) });
+      // A shorter lead time does not reach it yet.
+      expect(plan(nowSlot, crossing - at(nowSlot) - 1)).toEqual({ targets: [], live: new Set() });
+      // While the source signs in the new period and finality has not crossed, the handoff is ahead, not due.
+      expect(plan(border + 10, 600).targets).toEqual([{ at: crossing, why: "keep-alive", keys: [handoffKey(head)] }]);
     });
-    const nextEpochStart = (Math.floor(nowSlot / 32) + 1) * 32;
-    expect(targets).toEqual([{ at: at(nextEpochStart + 1), why: "keep-alive" }]);
-    // A source known to lack the handoff leaves the light client stranded: nothing to warm up for.
-    expect(warmupTargets({ facts: facts(head, false), finalizedSlot: nowSlot - 70, messages: [], pendingProof: null, history: { kind: "missing", period: 100 }, policy: DEFAULT_POLICY, nowSeconds: at(nowSlot) })).toEqual([]);
+
+    it("shares a time with a message: one target with both keys", () => {
+      const sent = message(border - 32 + 3, "a");
+      const both = warmupPlan({ facts: facts(head, false), finalizedSlot: border - 75, messages: [sent], pendingProof: null, history: { kind: "not-needed" }, policy: DEFAULT_POLICY, nowSeconds: at(border - 5), horizonSeconds: 900 });
+      expect(expectedFinalityAt(sent.slot, facts(head))).toBe(crossing);
+      expect(both.targets).toEqual([{ at: crossing, why: "message", keys: [id("a"), handoffKey(head)] }]);
+    });
+
+    it("is live while it is due, and asks for no new start", () => {
+      const due = warmupPlan({ facts: facts(head, false), finalizedSlot: border + 1, messages: [], pendingProof: null, history: { kind: "serves" }, policy: DEFAULT_POLICY, nowSeconds: crossing, horizonSeconds: 90 });
+      expect(due).toEqual({ targets: [], live: new Set([handoffKey(head)]) });
+    });
+
+    it("a source known to lack the handoff leaves the light client stranded: nothing to warm up for", () => {
+      expect(plan(border - 5, 10_000, { kind: "missing", period: 100 })).toEqual({ targets: [], live: new Set() });
+    });
   });
 
   it("a keep-alive the age rule makes due, or one inside the period of finality, asks for no warm worker", () => {
     // The head turns 12 hours old during the current epoch: the indexer's gate takes it, no warm-up.
     const head = 100 * PERIOD + 10;
     const nowSlot = head + 12 * 360 - 5;
-    const input = { facts: facts(head), finalizedSlot: nowSlot - 70, messages: [], pendingProof: null, history: { kind: "not-needed" } as const, policy: DEFAULT_POLICY };
-    expect(warmupTargets({ ...input, nowSeconds: at(nowSlot) })).toEqual([]);
+    const input = { facts: facts(head), finalizedSlot: nowSlot - 70, messages: [], pendingProof: null, history: { kind: "not-needed" } as const, policy: DEFAULT_POLICY, horizonSeconds: 600 };
+    expect(warmupPlan({ ...input, nowSeconds: at(nowSlot) }).targets).toEqual([]);
     // Today's loop: a young head in period 1368, 1.5 h before its deadline.
     const young = 11_214_304;
-    expect(warmupTargets({ ...input, facts: facts(young, false), finalizedSlot: young + 32, nowSeconds: at(young + 40) })).toEqual([]);
+    expect(warmupPlan({ ...input, facts: facts(young, false), finalizedSlot: young + 32, nowSeconds: at(young + 40) }).targets).toEqual([]);
   });
 
   it("a keep-alive that is due already, or a pending proof, asks for nothing", () => {
     const head = 100 * PERIOD + 10;
     const nowSlot = head + 13 * 360;
-    const input = { facts: facts(head), finalizedSlot: nowSlot - 70, messages: [], history: { kind: "not-needed" } as const, policy: DEFAULT_POLICY, nowSeconds: at(nowSlot) };
-    expect(warmupTargets({ ...input, pendingProof: null })).toEqual([]);
+    const input = { facts: facts(head), finalizedSlot: nowSlot - 70, messages: [], history: { kind: "not-needed" } as const, policy: DEFAULT_POLICY, nowSeconds: at(nowSlot), horizonSeconds: 600 };
+    expect(warmupPlan({ ...input, pendingProof: null })).toEqual({ targets: [], live: new Set() });
     const soon = head + 12 * 360 - 5;
-    expect(warmupTargets({ ...input, nowSeconds: at(soon), finalizedSlot: soon - 70, pendingProof: { startSlot: head, newSlot: head + 10 } })).toEqual([]);
+    expect(warmupPlan({ ...input, nowSeconds: at(soon), finalizedSlot: soon - 70, pendingProof: { startSlot: head, newSlot: head + 10 } }).targets).toEqual([]);
   });
 
-  it("messages covered by a pending proof ask for nothing", () => {
-    const targets = warmupTargets({
+  it("messages covered by a pending proof ask for nothing and are not live", () => {
+    const plan = warmupPlan({
       facts: facts(HEAD),
       finalizedSlot: FINALIZED,
       messages: [message(NOW_SLOT - 2)],
@@ -272,59 +283,8 @@ describe("warmupTargets", () => {
       history: { kind: "not-needed" },
       policy: DEFAULT_POLICY,
       nowSeconds: at(NOW_SLOT),
+      horizonSeconds: 600,
     });
-    expect(targets).toEqual([]);
-  });
-});
-
-describe("warmupStep", () => {
-  const config = DEFAULT_WARMUP;
-  const target = { at: 10_000, why: "message" as const };
-  const empty = { sessionStartedAt: null, sessionEndsAt: null, lastPingAt: null };
-
-  it("pings when the lead time before a target begins, and not before", () => {
-    expect(warmupStep({ nowSeconds: target.at - config.leadSeconds - 1, targets: [target], state: empty, config, jobActive: false, pingOutstanding: false })).toEqual({ ping: false });
-    const step = warmupStep({ nowSeconds: target.at - config.leadSeconds, targets: [target], state: empty, config, jobActive: false, pingOutstanding: false });
-    expect(step).toEqual({
-      ping: true,
-      newSession: true,
-      target,
-      state: { sessionStartedAt: target.at - config.leadSeconds, sessionEndsAt: target.at + config.graceSeconds, lastPingAt: target.at - config.leadSeconds },
-    });
-  });
-
-  it("repeats the ping every interval inside the session, then stops at its end", () => {
-    const start = target.at - config.leadSeconds;
-    const state = { sessionStartedAt: start, sessionEndsAt: target.at + config.graceSeconds, lastPingAt: start };
-    expect(warmupStep({ nowSeconds: start + config.intervalSeconds - 1, targets: [target], state, config, jobActive: false, pingOutstanding: false })).toEqual({ ping: false });
-    const again = warmupStep({ nowSeconds: start + config.intervalSeconds, targets: [target], state, config, jobActive: false, pingOutstanding: false });
-    expect(again).toMatchObject({ ping: true, newSession: false, state: { sessionStartedAt: start, lastPingAt: start + config.intervalSeconds } });
-    expect(warmupStep({ nowSeconds: target.at + config.graceSeconds + 1, targets: [target], state, config, jobActive: false, pingOutstanding: false })).toEqual({ ping: false });
-  });
-
-  it("opens no new session within the minimum gap of the last one", () => {
-    const start = target.at - config.leadSeconds;
-    const state = { sessionStartedAt: start, sessionEndsAt: start + 10, lastPingAt: start };
-    const later = { at: start + 60, why: "message" as const };
-    expect(warmupStep({ nowSeconds: start + 30, targets: [later], state, config, jobActive: false, pingOutstanding: false })).toEqual({ ping: false });
-    const farLater = { at: start + config.minGapSeconds + config.leadSeconds, why: "keep-alive" as const };
-    expect(warmupStep({ nowSeconds: start + config.minGapSeconds, targets: [farLater], state, config, jobActive: false, pingOutstanding: false })).toMatchObject({ ping: true, newSession: true, target: farLater });
-  });
-
-  it("never sends a second ping while one is outstanding", () => {
-    expect(warmupStep({ nowSeconds: target.at, targets: [target], state: empty, config, jobActive: false, pingOutstanding: true })).toEqual({ ping: false });
-  });
-
-  it("pings once before a handoff: no repeat inside its session", () => {
-    const handoff = { at: 10_000, why: "keep-alive" as const };
-    const start = handoff.at - config.leadSeconds;
-    const first = warmupStep({ nowSeconds: start, targets: [handoff], state: empty, config, jobActive: false, pingOutstanding: false });
-    expect(first).toMatchObject({ ping: true, newSession: true });
-    const state = (first as { state: typeof empty }).state;
-    expect(warmupStep({ nowSeconds: start + config.intervalSeconds * 2, targets: [handoff], state, config, jobActive: false, pingOutstanding: false })).toEqual({ ping: false });
-  });
-
-  it("does not ping while a job of the direction runs: the prover holds the worker", () => {
-    expect(warmupStep({ nowSeconds: target.at, targets: [target], state: empty, config, jobActive: true, pingOutstanding: false })).toEqual({ ping: false });
+    expect(plan).toEqual({ targets: [], live: new Set() });
   });
 });

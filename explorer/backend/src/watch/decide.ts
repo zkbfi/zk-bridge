@@ -4,6 +4,7 @@
  */
 import type { Hex } from "viem";
 import { assess, currentSlotAt, formatHours, type Assessment, type LightClientFacts, type Policy, type SourceHistory } from "../keepalive/plan.ts";
+import type { WarmupTarget } from "./warmup.ts";
 
 /** Public keys in a sync committee on both chains (`lc_core::chain::SYNC_COMMITTEE_SIZE`). */
 export const SYNC_COMMITTEE_SIZE = 512;
@@ -149,82 +150,60 @@ export function expectedFinalityAt(slot: number, facts: Pick<LightClientFacts, "
   return slotTime((epoch + 3) * SLOTS_PER_EPOCH + 1, facts);
 }
 
-/** A time at which the remote prover should be warm, and why. */
-export type WarmupTarget = { readonly at: number; readonly why: "message" | "keep-alive" };
+/** What the warm-up looks at: the times a proof is expected, and the keys that still wait for one. */
+export type WarmupPlan = { readonly targets: readonly WarmupTarget[]; readonly live: ReadonlySet<string> };
+
+/** The key of a period handoff from the head `headSlot`: a new head is another handoff. */
+export const handoffKey = (headSlot: number) => `handoff:${headSlot}`;
 
 /**
- * The times at which a proof is expected to start: the expected finality of each message that is not final yet, and
- * the next finality when a period handoff turns due by then (it is not due now). A keep-alive of the age rule asks
- * for no warm worker. Sorted by time.
+ * The times at which a proof is expected to start, sorted, one per time: the expected finality of each message that is
+ * not final yet, and the first finality within `horizonSeconds` (the lead time) that makes a period handoff due, when no
+ * keep-alive is due now. A handoff is due once the source's finality crosses into the new period, about two epochs
+ * after the border, not when the clock crosses it. A keep-alive of the age rule asks for no warm worker.
+ *
+ * `live` holds every message the head (or a pending proof that still applies) does not cover, final or not, and the
+ * handoff while one is due now or ahead: a warm-up for a key that left it is over.
  */
-export function warmupTargets(input: Omit<DecisionInput, "participants" | "minParticipants">): WarmupTarget[] {
+export function warmupPlan(input: Omit<DecisionInput, "participants" | "minParticipants"> & { readonly horizonSeconds: number }): WarmupPlan {
   const { facts, finalizedSlot, policy, nowSeconds, history } = input;
   const covered = coveredSlot(facts, input.pendingProof);
-  const targets: WarmupTarget[] = input.messages
-    .filter((message) => message.slot > covered && message.slot > finalizedSlot)
-    .map((message) => ({ at: expectedFinalityAt(message.slot, facts), why: "message" }));
+  const waiting = input.messages.filter((message) => message.slot > covered);
+  const live = new Set<string>(waiting.map((message) => message.messageId));
+  const byTime = new Map<number, { why: WarmupTarget["why"]; keys: string[] }>();
+  for (const message of waiting.filter((candidate) => candidate.slot > finalizedSlot)) {
+    const at = expectedFinalityAt(message.slot, facts);
+    const entry = byTime.get(at) ?? { why: "message" as const, keys: [] };
+    entry.keys.push(message.messageId);
+    byTime.set(at, entry);
+  }
   if (applicable(input.pendingProof, facts) === null) {
-    const nextEpoch = Math.floor(currentSlotAt(facts, nowSeconds) / SLOTS_PER_EPOCH) + 1;
-    const nextFinality = slotTime(nextEpoch * SLOTS_PER_EPOCH + 1, facts);
-    const projected = Math.max(finalizedSlot, (nextEpoch - 2) * SLOTS_PER_EPOCH);
-    const dueNow = keepAliveCall(assess({ facts, source: { finalizedSlot }, history, policy, nowSeconds }), facts, policy);
+    const key = handoffKey(facts.headSlot);
+    // What a proof could do at a time, as decideProof would see it: nothing while the source signs in a period that
+    // finality has not reached (the prover and the contract refuse the handoff until finality crosses the border).
+    const callAt = (finalized: number, known: SourceHistory, time: number) => {
+      const assessment = assess({ facts, source: { finalizedSlot: finalized }, history: known, policy, nowSeconds: time });
+      return assessment.waitForFinality ? null : keepAliveCall(assessment, facts, policy);
+    };
+    const dueNow = callAt(finalizedSlot, history, nowSeconds);
+    if (dueNow === "handoff") live.add(key);
     // The source has served the handoffs so far; a period it has not been asked for yet is not counted as missing.
     const nextHistory: SourceHistory = history.kind === "not-needed" ? { kind: "serves" } : history;
-    const dueNext = keepAliveCall(assess({ facts, source: { finalizedSlot: projected }, history: nextHistory, policy, nowSeconds: nextFinality }), facts, policy);
-    if (dueNow === null && dueNext === "handoff") targets.push({ at: nextFinality, why: "keep-alive" });
+    const firstEpoch = Math.floor(currentSlotAt(facts, nowSeconds) / SLOTS_PER_EPOCH) + 1;
+    for (let epoch = firstEpoch; dueNow === null; epoch += 1) {
+      const finalityAt = slotTime(epoch * SLOTS_PER_EPOCH + 1, facts);
+      // The next finality is always looked at; later ones while they lie within the horizon.
+      if (epoch > firstEpoch && finalityAt > nowSeconds + input.horizonSeconds) break;
+      // At the start of epoch E the checkpoint of epoch E - 2 finalizes.
+      if (callAt(Math.max(finalizedSlot, (epoch - 2) * SLOTS_PER_EPOCH), nextHistory, finalityAt) === "handoff") {
+        live.add(key);
+        const entry = byTime.get(finalityAt) ?? { why: "keep-alive" as const, keys: [] };
+        entry.keys.push(key);
+        byTime.set(finalityAt, entry);
+        break;
+      }
+    }
   }
-  return [...new Map(targets.map((target) => [target.at, target])).values()].sort((left, right) => left.at - right.at);
-}
-
-/** When to ping the remote prover. Seconds. */
-export type WarmupConfig = {
-  /** Ping this long before the expected start. Cover the cold start (about 24 s) and a scan interval. */
-  readonly leadSeconds: number;
-  /** Ping again this often inside a session. Keep it below the idle timeout of the endpoint. */
-  readonly intervalSeconds: number;
-  /** A session ends this long after its target. */
-  readonly graceSeconds: number;
-  /** No new session starts within this long of the last one, nor of a ping that timed out. */
-  readonly minGapSeconds: number;
-  /**
-   * How long one ping may wait. The load-balancing endpoint holds a ping until a worker is up, so this covers a cold
-   * start; an earlier timeout only costs a failed request and a spun-up worker.
-   */
-  readonly pingTimeoutSeconds: number;
-};
-
-/** The defaults: a 24 s cold start, the 60 s idle timeout of the endpoint, one session per five minutes at most. */
-export const DEFAULT_WARMUP: WarmupConfig = { leadSeconds: 45, intervalSeconds: 30, graceSeconds: 90, minGapSeconds: 300, pingTimeoutSeconds: 300 };
-
-/** The warm-up state of one direction. Seconds, or null before the first session. */
-export type WarmupState = { readonly sessionStartedAt: number | null; readonly sessionEndsAt: number | null; readonly lastPingAt: number | null };
-
-/** The state before the first warm-up. */
-export const NO_WARMUP: WarmupState = { sessionStartedAt: null, sessionEndsAt: null, lastPingAt: null };
-
-/**
- * Whether to ping now. A session opens when a target is within the lead time (or past it by less than the grace), and
- * at most once per `minGapSeconds`. Inside a session of a message the ping repeats every `intervalSeconds` until the
- * session ends (a ping answered 200 ends it early); a handoff gets one ping. No ping goes out while one is outstanding,
- * nor while a job runs: the prover's own requests hold the worker.
- */
-export function warmupStep(input: {
-  readonly nowSeconds: number;
-  readonly targets: readonly WarmupTarget[];
-  readonly state: WarmupState;
-  readonly config: WarmupConfig;
-  readonly jobActive: boolean;
-  readonly pingOutstanding: boolean;
-}): { readonly ping: false } | { readonly ping: true; readonly newSession: boolean; readonly target: WarmupTarget; readonly state: WarmupState } {
-  const { nowSeconds: now, state, config } = input;
-  if (input.jobActive || input.pingOutstanding) return { ping: false };
-  const target = input.targets.find((candidate) => now >= candidate.at - config.leadSeconds && now <= candidate.at + config.graceSeconds);
-  if (target === undefined) return { ping: false };
-  if (state.sessionEndsAt !== null && now <= state.sessionEndsAt) {
-    if (target.why !== "message") return { ping: false };
-    if (state.lastPingAt !== null && now - state.lastPingAt < config.intervalSeconds) return { ping: false };
-    return { ping: true, newSession: false, target, state: { ...state, lastPingAt: now } };
-  }
-  if (state.sessionStartedAt !== null && now - state.sessionStartedAt < config.minGapSeconds) return { ping: false };
-  return { ping: true, newSession: true, target, state: { sessionStartedAt: now, sessionEndsAt: target.at + config.graceSeconds, lastPingAt: now } };
+  const targets = [...byTime.entries()].map(([at, entry]) => ({ at, why: entry.why, keys: entry.keys })).sort((left, right) => left.at - right.at);
+  return { targets, live };
 }

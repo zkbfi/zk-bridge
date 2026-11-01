@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, beaconVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
-import { DEFAULT_WARMUP } from "./watch/decide.ts";
+import { DEFAULT_WARMUP } from "./watch/warmup.ts";
 
 /** The modules that the backend can run, in the order that the example file lists them. */
 export const MODULE_NAMES = ["requests", "webhook", "msgboard-indexer", "archive"] as const;
@@ -102,18 +102,36 @@ export const backendConfigSchema = z
         pollSeconds: positiveInteger.optional(),
         /** How often to look at the sent messages for a warm-up. */
         scanSeconds: positiveInteger.default(15),
-        /** Ping the remote prover (`<remote.endpoint>/ping`) shortly before a proof is expected. */
+        /**
+         * Wake the remote prover (`<remote.endpoint>/ping`) a learned lead time before a proof is expected, and keep the
+         * worker warm until the job starts. See README.md, "Proving on finality".
+         */
         warmup: z
           .object({
             enabled: z.boolean().default(true),
-            leadSeconds: positiveInteger.default(DEFAULT_WARMUP.leadSeconds),
+            /** The quantile of the observed times to a ready worker that the lead time takes. */
+            leadP: z.number().gt(0).max(1).default(DEFAULT_WARMUP.leadP),
+            /** How many of the newest observations count. */
+            leadObservations: positiveInteger.default(DEFAULT_WARMUP.leadObservations),
+            /** The lead time until there is an observation. */
+            defaultLeadSeconds: positiveInteger.default(DEFAULT_WARMUP.defaultLeadSeconds),
+            minLeadSeconds: positiveInteger.default(DEFAULT_WARMUP.minLeadSeconds),
+            maxLeadSeconds: positiveInteger.default(DEFAULT_WARMUP.maxLeadSeconds),
+            /** Ping a warm worker again this long after its last ready answer. Below the endpoint's idle timeout. */
+            holdIntervalSeconds: positiveInteger.default(DEFAULT_WARMUP.holdIntervalSeconds),
+            /** Ping again this often while no worker is ready. */
             intervalSeconds: positiveInteger.default(DEFAULT_WARMUP.intervalSeconds),
             graceSeconds: positiveInteger.default(DEFAULT_WARMUP.graceSeconds),
             minGapSeconds: positiveInteger.default(DEFAULT_WARMUP.minGapSeconds),
+            /** The most warm-up seconds of both directions together in any 24 hours. */
+            dailyCapSeconds: positiveInteger.default(DEFAULT_WARMUP.dailyCapSeconds),
             /** How long one ping may wait while the load-balancing endpoint starts a worker. */
             pingTimeoutSeconds: positiveInteger.default(DEFAULT_WARMUP.pingTimeoutSeconds),
+            /** Replaced by the learned lead time on 2026-11-01. Still accepted so an older file loads; it does nothing. */
+            leadSeconds: positiveInteger.optional(),
           })
           .strict()
+          .refine((warmup) => warmup.minLeadSeconds <= warmup.maxLeadSeconds, { message: "minLeadSeconds must not be above maxLeadSeconds", path: ["minLeadSeconds"] })
           .prefault({}),
       })
       .strict()

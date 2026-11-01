@@ -3,7 +3,10 @@ import type { Hex } from "viem";
 import { DEFAULT_POLICY, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
 import type { Job } from "../src/requests/jobs.ts";
 import type { ProofRequest, SubmitResult } from "../src/requests/service.ts";
-import { DEFAULT_WARMUP, MIN_PARTICIPANTS, expectedFinalityAt } from "../src/watch/decide.ts";
+import { openStorage } from "../src/storage.ts";
+import { MIN_PARTICIPANTS, expectedFinalityAt } from "../src/watch/decide.ts";
+import { DEFAULT_WARMUP, type WarmupConfig } from "../src/watch/warmup.ts";
+import { createWarmupStore } from "../src/watch/warmup-store.ts";
 import type { FinalityObservation } from "../src/watch/feed.ts";
 import { createDirectionWatcher, pendingProofOf, REFUSED_RETRIES, REFUSED_RETRY_SECONDS, type ListedMessage } from "../src/watch/watcher.ts";
 import { memoryLogger } from "./support.ts";
@@ -30,8 +33,10 @@ const job = (overrides: Partial<Job> = {}): Job => ({
   ...overrides,
 });
 
-function setup(options: { messages?: ListedMessage[]; facts?: LightClientFacts; submit?: (request: ProofRequest) => SubmitResult; ping?: boolean | (() => Promise<number>) } = {}) {
+function setup(options: { messages?: ListedMessage[]; facts?: LightClientFacts; submit?: (request: ProofRequest) => SubmitResult; ping?: boolean | (() => Promise<number>); warmup?: Partial<WarmupConfig> } = {}) {
   const log = memoryLogger();
+  const storage = openStorage(":memory:");
+  const store = createWarmupStore(storage);
   const state = {
     facts: options.facts ?? facts(),
     messages: options.messages ?? [],
@@ -78,13 +83,15 @@ function setup(options: { messages?: ListedMessage[]; facts?: LightClientFacts; 
           },
     policy: DEFAULT_POLICY,
     minParticipants: MIN_PARTICIPANTS,
-    warmup: DEFAULT_WARMUP,
+    warmup: { ...DEFAULT_WARMUP, ...options.warmup },
+    warmupStore: store,
     maxRetrySeconds: 600,
     logger: log.logger,
     now: Date.now,
   });
   const events = () => log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
-  return { watcher, state, submitted, pings, reads, named: (name: string) => events().filter((event) => event.event === name) };
+  const sessions = () => storage.database.prepare("SELECT why, lead_seconds AS lead, started_at AS startedAt, ready_at AS readyAt, ended_at AS endedAt, outcome FROM warmup_sessions ORDER BY started_at").all();
+  return { watcher, state, submitted, pings, reads, store, sessions, named: (name: string) => events().filter((event) => event.event === name) };
 }
 
 /** A reading that arrived `delay` ms after its signature slot began. */
@@ -333,90 +340,313 @@ describe("the direction watcher, warm-ups", () => {
   // A message sent in the epoch of slot HEAD + 100: final at the start of epoch + 3, plus a slot.
   const SENT = HEAD + 100;
   const expected = expectedFinalityAt(SENT, facts()) * 1000;
+  const LEAD = DEFAULT_WARMUP.defaultLeadSeconds * 1000;
+  /** A ping the test answers: `answer` settles the oldest outstanding one. */
+  function heldPing() {
+    const waiting: Array<{ resolve: (status: number) => void; reject: (error: Error) => void }> = [];
+    return {
+      ping: () => new Promise<number>((resolve, reject) => waiting.push({ resolve, reject })),
+      answer: (status: number) => waiting.shift()?.resolve(status),
+      fail: (error: Error) => waiting.shift()?.reject(error),
+      outstanding: () => waiting.length,
+    };
+  }
 
-  it("pings the remote prover once the lead time before the message's expected finality begins", async () => {
+  it("starts a warm-up the default lead time (90 s) before the message's expected finality while nothing is learned", async () => {
     const run = setup({ messages: [listed(SENT)] });
-    vi.setSystemTime(expected - DEFAULT_WARMUP.leadSeconds * 1000 - 1000);
+    vi.setSystemTime(expected - LEAD - 1000);
     await run.watcher.scan();
     expect(run.pings).toEqual([]);
-    vi.setSystemTime(expected - DEFAULT_WARMUP.leadSeconds * 1000);
+    vi.setSystemTime(expected - LEAD);
     await run.watcher.scan();
-    expect(run.pings).toEqual([expected - DEFAULT_WARMUP.leadSeconds * 1000]);
-    expect(run.named("warmup_ping")).toMatchObject([{ direction: "first-to-second", why: "message", session: "new", secondsToStart: DEFAULT_WARMUP.leadSeconds, status: 204 }]);
-    // Inside the session: again after the interval, not before.
-    vi.setSystemTime(expected - DEFAULT_WARMUP.leadSeconds * 1000 + 15_000);
+    expect(run.pings).toEqual([expected - LEAD]);
+    expect(run.named("warmup_scheduled")).toMatchObject([
+      { direction: "first-to-second", why: "message", dueAt: new Date(expected).toISOString(), dueInSeconds: 90, leadSeconds: 90, leadBasis: "default", observations: 0 },
+    ]);
+    // 204: a worker is starting. Ask again after the interval, not before.
+    expect(run.named("warmup_ping")).toMatchObject([{ kind: "start", status: 204, secondsToDue: 90 }]);
+    vi.setSystemTime(expected - LEAD + 15_000);
     await run.watcher.scan();
     expect(run.pings).toHaveLength(1);
-    vi.setSystemTime(expected - DEFAULT_WARMUP.leadSeconds * 1000 + DEFAULT_WARMUP.intervalSeconds * 1000);
+    vi.setSystemTime(expected - LEAD + DEFAULT_WARMUP.intervalSeconds * 1000);
     await run.watcher.scan();
     expect(run.pings).toHaveLength(2);
-    expect(run.named("warmup_ping")[1]).toMatchObject({ session: "repeat" });
+    expect(run.named("warmup_ping")[1]).toMatchObject({ kind: "repeat" });
+    expect(run.named("warmup_scheduled")).toHaveLength(1);
+    expect(run.sessions()).toMatchObject([{ why: "message", lead: 90, startedAt: expected - LEAD, readyAt: null, endedAt: null }]);
   });
 
-  it("stops pinging once the job runs, and after the session's end", async () => {
+  it("starts as early as the learned cold start (p90) asks", async () => {
     const run = setup({ messages: [listed(SENT)] });
-    vi.setSystemTime(expected - 10_000);
+    for (const seconds of [200, 210, 24]) run.store.recordObservation({ direction: "second-to-first", source: "job", seconds, at: 0 });
+    vi.setSystemTime(expected - 211_000);
     await run.watcher.scan();
+    expect(run.pings).toEqual([]);
+    vi.setSystemTime(expected - 210_000);
+    await run.watcher.scan();
+    expect(run.named("warmup_scheduled")).toMatchObject([{ leadSeconds: 210, leadBasis: "observed", observations: 3, dueInSeconds: 210 }]);
+  });
+
+  it("learns how long the worker took, holds it with a ping before its idle timeout, and stops once the job starts", async () => {
+    const held = heldPing();
+    const run = setup({ messages: [listed(SENT)], ping: held.ping });
+    vi.setSystemTime(expected - LEAD);
+    const scan = run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(0);
+    // A cold worker: the endpoint holds the ping 40 s. Scans meanwhile send nothing.
+    await vi.advanceTimersByTimeAsync(35_000);
+    await run.watcher.scan();
+    expect(run.pings).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    held.answer(200);
+    await scan;
+    expect(run.named("warmup_ready")).toMatchObject([{ why: "message", readySeconds: 40, cold: true, secondsToDue: 50, sessionEnded: false }]);
+    expect(run.store.lead(DEFAULT_WARMUP)).toEqual({ seconds: 40, basis: "observed", observations: 1 });
+    // The hold timer pings just before the idle timeout, without waiting for a scan.
+    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000 - 1);
+    expect(run.pings).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(run.pings).toHaveLength(2);
+    held.answer(200);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run.named("warmup_held")).toMatchObject([{ holds: 1, secondsToDue: 10 }]);
+    // The job starts: the session is used, and no more pings go out.
+    run.state.active = job();
+    await run.watcher.scan();
+    expect(run.named("warmup_used")).toMatchObject([{ why: "message", ready: true, warmSeconds: 80, readyBeforeDueSeconds: 50 }]);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(run.pings).toHaveLength(2);
+    expect(run.sessions()).toMatchObject([{ readyAt: expected - LEAD + 40_000, endedAt: expected - 10_000, outcome: "used" }]);
+  });
+
+  it("a ready answer within seconds found a warm worker: nothing is learned", async () => {
+    const run = setup({ messages: [listed(SENT)], ping: async () => 200 });
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    expect(run.named("warmup_ready")).toMatchObject([{ readySeconds: 0, cold: false }]);
+    expect(run.store.lead(DEFAULT_WARMUP)).toMatchObject({ basis: "default" });
+  });
+
+  it("stops when the message no longer waits (delivered or covered), and logs the warm-up as wasted", async () => {
+    const run = setup({ messages: [listed(SENT)], ping: async () => 200 });
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    run.state.messages = [];
+    vi.setSystemTime(expected - LEAD + 20_000);
+    await run.watcher.scan();
+    expect(run.named("warmup_wasted")).toMatchObject([{ reason: "covered", ready: true, holds: 0, warmSeconds: 20 }]);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(run.pings).toHaveLength(1);
+    expect(run.sessions()).toMatchObject([{ outcome: "covered" }]);
+  });
+
+  it("keeps holding past the due time while the finality is late, and stops after the grace", async () => {
+    const run = setup({ messages: [listed(SENT)], ping: async () => 200 });
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    // Each hold re-arms the timer: pings every 40 s until the grace ends at expected + 90 s.
+    await vi.advanceTimersByTimeAsync(LEAD + DEFAULT_WARMUP.graceSeconds * 1000);
+    const holds = run.named("warmup_held").length;
+    expect(holds).toBe(4);
+    expect(run.pings.every((at, index) => index === 0 || at - (run.pings[index - 1] as number) === DEFAULT_WARMUP.holdIntervalSeconds * 1000)).toBe(true);
+    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    expect(run.named("warmup_wasted")).toMatchObject([{ reason: "grace", ready: true, holds: 4 }]);
+    expect(run.pings).toHaveLength(5);
+  });
+
+  it("never sends a second ping while one is outstanding, and a job that starts while the worker boots ends the session", async () => {
+    const held = heldPing();
+    const run = setup({ messages: [listed(SENT)], ping: held.ping });
+    vi.setSystemTime(expected - LEAD);
+    const scan = run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(0);
+    for (let step = 1; step <= 4; step += 1) {
+      vi.setSystemTime(expected - LEAD + step * DEFAULT_WARMUP.intervalSeconds * 1000);
+      await run.watcher.scan();
+    }
+    expect(held.outstanding()).toBe(1);
     expect(run.pings).toHaveLength(1);
     run.state.active = job();
-    vi.setSystemTime(expected + 30_000);
     await run.watcher.scan();
-    expect(run.pings).toHaveLength(1);
+    expect(run.named("warmup_used")).toMatchObject([{ ready: false, readyBeforeDueSeconds: null }]);
+    // The ping answers after the session ended: the time is still learned, from the session's start.
+    held.answer(200);
+    await scan;
+    expect(run.named("warmup_ready")).toMatchObject([{ readySeconds: 120, cold: true, sessionEnded: true }]);
+    expect(run.store.lead(DEFAULT_WARMUP)).toMatchObject({ seconds: 120 });
     run.state.active = null;
-    vi.setSystemTime(expected + DEFAULT_WARMUP.graceSeconds * 1000 + 1000);
-    await run.watcher.scan();
+    run.state.messages = [];
+    await vi.advanceTimersByTimeAsync(300_000);
     expect(run.pings).toHaveLength(1);
   });
 
-  it("keeps one ping outstanding at most; a 200 ends the session", async () => {
-    let answer!: (status: number) => void;
-    const run = setup({ messages: [listed(SENT)], ping: () => new Promise<number>((resolve) => (answer = resolve)) });
-    vi.setSystemTime(expected - DEFAULT_WARMUP.leadSeconds * 1000);
+  it("logs a timed-out ping, learns that the start took at least that long, and sends none for the minimum gap after it", async () => {
+    const held = heldPing();
+    const run = setup({ messages: [listed(SENT), listed(SENT + 32, "b")], ping: held.ping });
+    vi.setSystemTime(expected - LEAD);
     const scan = run.watcher.scan();
     await vi.advanceTimersByTimeAsync(0);
-    // The endpoint holds the first ping while a worker starts: later scans send nothing.
-    vi.setSystemTime(expected - DEFAULT_WARMUP.leadSeconds * 1000 + DEFAULT_WARMUP.intervalSeconds * 1000);
-    await run.watcher.scan();
-    vi.setSystemTime(expected);
-    await run.watcher.scan();
-    expect(run.pings).toHaveLength(1);
-    answer(200);
+    vi.setSystemTime(expected - LEAD + 300_000);
+    held.fail(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
     await scan;
-    expect(run.named("warmup_ping")).toMatchObject([{ why: "message", session: "new", status: 200 }]);
-    // Warm: the session is over, no repeat.
-    vi.setSystemTime(expected + DEFAULT_WARMUP.intervalSeconds * 1000);
-    await run.watcher.scan();
-    expect(run.pings).toHaveLength(1);
-  });
-
-  it("logs a timed-out ping at info and sends none for the minimum gap after it", async () => {
-    let fail!: (error: Error) => void;
-    const run = setup({ messages: [listed(SENT), listed(SENT + 32, "b")], ping: () => new Promise<number>((_, reject) => (fail = reject)) });
-    vi.setSystemTime(expected - DEFAULT_WARMUP.leadSeconds * 1000);
-    const scan = run.watcher.scan();
-    await vi.advanceTimersByTimeAsync(0);
-    vi.setSystemTime(expected + 120_000);
-    fail(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
-    await scan;
-    expect(run.named("warmup_ping_timeout")).toMatchObject([{ level: "info", direction: "first-to-second", why: "message" }]);
+    expect(run.named("warmup_ping_timeout")).toMatchObject([{ level: "info", direction: "first-to-second", why: "message", waitedSeconds: 300 }]);
     expect(run.named("warmup_ping_failed")).toEqual([]);
-    expect(run.named("warmup_ping")).toEqual([]);
+    expect(run.named("warmup_wasted")).toEqual([]);
+    expect(run.sessions()).toMatchObject([{ outcome: "timeout" }]);
+    expect(run.store.lead(DEFAULT_WARMUP)).toMatchObject({ seconds: 300, basis: "observed" });
     // The second message's finality is near, but the gap since the timeout has not passed.
     const second = expectedFinalityAt(SENT + 32, facts()) * 1000;
-    vi.setSystemTime(second - DEFAULT_WARMUP.leadSeconds * 1000);
-    expect(second - DEFAULT_WARMUP.leadSeconds * 1000 - (expected + 120_000)).toBeLessThan(DEFAULT_WARMUP.minGapSeconds * 1000);
+    vi.setSystemTime(second);
+    expect(second - (expected - LEAD + 300_000)).toBeLessThan(DEFAULT_WARMUP.minGapSeconds * 1000);
     await run.watcher.scan();
     expect(run.pings).toHaveLength(1);
     // An abort counts the same.
     run.state.messages = [listed(SENT + 640, "c")];
     const third = expectedFinalityAt(SENT + 640, facts()) * 1000;
-    vi.setSystemTime(third - DEFAULT_WARMUP.leadSeconds * 1000);
+    vi.setSystemTime(third - 300_000);
     const again = run.watcher.scan();
     await vi.advanceTimersByTimeAsync(0);
-    fail(new DOMException("aborted", "AbortError"));
+    held.fail(new DOMException("aborted", "AbortError"));
     await again;
     expect(run.pings).toHaveLength(2);
     expect(run.named("warmup_ping_timeout")).toHaveLength(2);
+  });
+
+  it("a timeout after the session ended is learned and ends nothing", async () => {
+    const held = heldPing();
+    const run = setup({ messages: [listed(SENT)], ping: held.ping });
+    vi.setSystemTime(expected - LEAD);
+    const scan = run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(0);
+    run.state.messages = [];
+    await run.watcher.scan();
+    vi.setSystemTime(expected - LEAD + 300_000);
+    held.fail(new DOMException("aborted", "AbortError"));
+    await scan;
+    expect(run.sessions()).toMatchObject([{ outcome: "covered" }]);
+    expect(run.named("warmup_ping_timeout")).toMatchObject([{ waitedSeconds: 300 }]);
+    // No gap: a new message can start a session at once.
+    run.state.messages = [listed(SENT + 32, "b")];
+    vi.setSystemTime(expectedFinalityAt(SENT + 32, facts()) * 1000 - 60_000);
+    const next = run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run.pings).toHaveLength(2);
+    held.answer(204);
+    await next;
+  });
+
+  it("a hold not answered ready, or failed, waits the interval before the next: no ping storm", async () => {
+    const answers: Array<number | Error> = [200, 204, new Error("endpoint down"), 200];
+    const run = setup({
+      messages: [listed(SENT)],
+      ping: async () => {
+        const next = answers.shift() as number | Error;
+        if (next instanceof Error) throw next;
+        return next;
+      },
+    });
+    const start = expected - LEAD;
+    vi.setSystemTime(start);
+    await run.watcher.scan();
+    // The hold at +40 s is answered 204: the worker may have left. The next hold waits the 30 s interval.
+    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    expect(run.named("warmup_ping")).toMatchObject([{ kind: "hold", status: 204 }]);
+    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.intervalSeconds * 1000 - 1);
+    expect(run.pings).toHaveLength(2);
+    // At +70 s the hold fails: a warning, and again the interval.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(run.named("warmup_ping_failed")).toMatchObject([{ level: "warn", kind: "hold", error: { message: "endpoint down" } }]);
+    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.intervalSeconds * 1000);
+    expect(run.named("warmup_held")).toMatchObject([{ holds: 1 }]);
+    expect(run.pings.map((at) => (at - start) / 1000)).toEqual([0, 40, 70, 100]);
+  });
+
+  it("answers that come after the session ended change nothing, and teach nothing from a hold", async () => {
+    const held = heldPing();
+    let first = true;
+    const run = setup({
+      messages: [listed(SENT)],
+      ping: () => {
+        if (first) {
+          first = false;
+          return Promise.resolve(200);
+        }
+        return held.ping();
+      },
+    });
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    // The hold at +40 s is still out when the message is covered; its late 200 is not a cold start.
+    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    expect(held.outstanding()).toBe(1);
+    run.state.messages = [];
+    await run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(30_000);
+    held.answer(200);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(run.named("warmup_held")).toEqual([]);
+    expect(run.store.lead(DEFAULT_WARMUP)).toMatchObject({ basis: "default" });
+    // A new message's first ping, out when that message is covered too, answered 204: only logged.
+    run.state.messages = [listed(SENT + 32, "b")];
+    vi.setSystemTime(expectedFinalityAt(SENT + 32, facts()) * 1000 - 60_000);
+    const scan = run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(0);
+    run.state.messages = [];
+    await run.watcher.scan();
+    held.answer(204);
+    await scan;
+    expect(run.named("warmup_ping").at(-1)).toMatchObject({ kind: "start", status: 204 });
+    // And one that fails after its session ended: only the warning.
+    run.state.messages = [listed(SENT + 64, "c")];
+    vi.setSystemTime(expectedFinalityAt(SENT + 64, facts()) * 1000 - 60_000);
+    const last = run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(0);
+    run.state.messages = [];
+    await run.watcher.scan();
+    held.fail(new Error("endpoint down"));
+    await last;
+    expect(run.named("warmup_ping_failed")).toMatchObject([{ kind: "start" }]);
+    expect(run.sessions()).toMatchObject([{ outcome: "covered" }, { outcome: "covered" }, { outcome: "covered" }]);
+  });
+
+  it("a failed first ping is logged and tried again after the interval", async () => {
+    let fail = true;
+    const run = setup({
+      messages: [listed(SENT)],
+      ping: async () => {
+        if (fail) throw new Error("endpoint down");
+        return 204;
+      },
+    });
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    expect(run.named("warmup_ping_failed")).toMatchObject([{ kind: "start", error: { message: "endpoint down" } }]);
+    fail = false;
+    vi.setSystemTime(expected - LEAD + DEFAULT_WARMUP.intervalSeconds * 1000 - 1);
+    await run.watcher.scan();
+    expect(run.pings).toHaveLength(1);
+    vi.setSystemTime(expected - LEAD + DEFAULT_WARMUP.intervalSeconds * 1000);
+    await run.watcher.scan();
+    expect(run.named("warmup_ping")).toMatchObject([{ kind: "repeat", status: 204 }]);
+  });
+
+  it("stops holding once the daily cap is spent, and starts no session while it is", async () => {
+    const run = setup({ messages: [listed(SENT)], ping: async () => 200, warmup: { dailyCapSeconds: 60 } });
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    expect(run.named("warmup_held")).toHaveLength(1);
+    // 80 s warm by the next hold: over the cap.
+    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    expect(run.named("warmup_wasted")).toMatchObject([{ reason: "cap", holds: 1, warmSeconds: 80 }]);
+    // Another message within its lead time: refused, logged once.
+    run.state.messages = [listed(SENT + 32, "b")];
+    const second = expectedFinalityAt(SENT + 32, facts()) * 1000;
+    vi.setSystemTime(second - 30_000);
+    await run.watcher.scan();
+    await run.watcher.scan();
+    expect(run.named("warmup_capped")).toMatchObject([{ level: "warn", why: "message", dueInSeconds: 30, dailyCapSeconds: 60 }]);
+    expect(run.pings).toHaveLength(2);
   });
 
   it("sends no warm-up for a keep-alive inside the period of finality (2026-10-31)", async () => {
@@ -433,15 +663,9 @@ describe("the direction watcher, warm-ups", () => {
     expect(run.pings).toEqual([]);
   });
 
-  it("logs a failed ping and a failed scan once", async () => {
+  it("logs a failed scan once", async () => {
     const run = setup({ messages: [listed(SENT)] });
     vi.setSystemTime(expected);
-    const failing = createDirectionWatcherWithPing(async () => {
-      throw new Error("endpoint down");
-    });
-    await failing.watcher.scan();
-    expect(failing.named("warmup_ping_failed")).toMatchObject([{ error: { message: "endpoint down" } }]);
-    expect(failing.named("warmup_ping")).toEqual([]);
     run.state.factsFail = true;
     await run.watcher.scan();
     await run.watcher.scan();
@@ -475,28 +699,14 @@ describe("the direction watcher, warm-ups", () => {
     expect(run.reads.facts).toBe(factsReads);
   });
 
-  function createDirectionWatcherWithPing(ping: () => Promise<number>) {
-    const log = memoryLogger();
-    const watcher = createDirectionWatcher({
-      pairName: "sepolia-pls943",
-      direction: "first-to-second",
-      sourceChainId: 11155111,
-      readFacts: async () => facts(),
-      readMessages: async () => [listed(SENT)],
-      readHistory: async () => ({ kind: "not-needed" }),
-      findActiveJob: () => null,
-      findLatestJob: () => null,
-      submit: async () => ({ refused: "nothing-to-prove" }),
-      ping,
-      policy: DEFAULT_POLICY,
-      minParticipants: MIN_PARTICIPANTS,
-      warmup: DEFAULT_WARMUP,
-      maxRetrySeconds: 600,
-      logger: log.logger,
-      now: Date.now,
-    });
-    return { watcher, named: (name: string) => log.lines.map((line) => JSON.parse(line) as Record<string, unknown>).filter((event) => event.event === name) };
-  }
+  it("stop cancels the hold timer", async () => {
+    const run = setup({ messages: [listed(SENT)], ping: async () => 200 });
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    await run.watcher.stop();
+    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    expect(run.pings).toHaveLength(1);
+  });
 });
 
 describe("pendingProofOf", () => {

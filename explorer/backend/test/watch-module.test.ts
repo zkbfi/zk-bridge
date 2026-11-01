@@ -4,7 +4,8 @@ import type { LightClientFacts } from "../src/keepalive/plan.ts";
 import { findActiveJob, getRequest } from "../src/requests/jobs.ts";
 import { start as startRequests } from "../src/requests/module.ts";
 import { createRequestService } from "../src/requests/service.ts";
-import { DEFAULT_WARMUP } from "../src/watch/decide.ts";
+import { DEFAULT_WARMUP } from "../src/watch/warmup.ts";
+import { createWarmupStore } from "../src/watch/warmup-store.ts";
 import { MESSAGE_LIMIT, startWatch, watchedDirections } from "../src/watch/module.ts";
 import { createProverPing } from "../src/watch/ping.ts";
 import { PAIR, SECRETS, fakeProofNeed, makeBackend, makeConfig } from "./support.ts";
@@ -53,17 +54,26 @@ describe("watchedDirections", () => {
     expect(parsed.watch).toEqual({ sse: true, scanSeconds: 15, warmup: { enabled: true, ...DEFAULT_WARMUP } });
     expect(() => makeConfig({ watch: { unknown: 1 } })).toThrow(BackendConfigError);
   });
+
+  it("checks the warm-up settings", () => {
+    expect(makeConfig({ watch: { warmup: { leadP: 0.5, dailyCapSeconds: 7200 } } }).watch.warmup).toMatchObject({ leadP: 0.5, dailyCapSeconds: 7200, holdIntervalSeconds: 40 });
+    expect(() => makeConfig({ watch: { warmup: { leadP: 0 } } })).toThrow(BackendConfigError);
+    expect(() => makeConfig({ watch: { warmup: { leadP: 1.5 } } })).toThrow(BackendConfigError);
+    expect(() => makeConfig({ watch: { warmup: { minLeadSeconds: 700 } } })).toThrow(/minLeadSeconds must not be above maxLeadSeconds/);
+    // The fixed lead time of before 2026-11-01 still loads, and does nothing.
+    expect(makeConfig({ watch: { warmup: { leadSeconds: 45 } } }).watch.warmup.leadSeconds).toBe(45);
+  });
 });
 
 describe("startWatch", () => {
-  function setup(options: { warmup?: boolean } = {}) {
+  function setup(options: { warmup?: boolean; leadSeconds?: number } = {}) {
     const beacon = fakeBeacon();
     beacon.set(FINALITY, finalityUpdate(HEAD, 500));
     beacon.set(FEED, { items: [] });
     const pings: number[] = [];
     const proofNeed = fakeProofNeed({ needed: true, why: "waiting-message" });
     const backend = makeBackend({
-      config: makeConfig({ indexerUrl: "http://indexer.test", watch: { directions: ["first-to-second"], warmup: { enabled: options.warmup ?? true } } }),
+      config: makeConfig({ indexerUrl: "http://indexer.test", watch: { directions: ["first-to-second"], warmup: { enabled: options.warmup ?? true, ...(options.leadSeconds === undefined ? {} : { leadSeconds: options.leadSeconds }) } } }),
       proofNeed,
     });
     const context = {
@@ -91,7 +101,9 @@ describe("startWatch", () => {
     const run = setup();
     const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient } });
     await flush();
-    expect(run.named("watch_started")).toMatchObject([{ directions: ["first-to-second"], sse: true, warmup: true }]);
+    expect(run.named("watch_started")).toMatchObject([{ directions: ["first-to-second"], sse: true, warmup: true, lead: { seconds: 90, basis: "default" } }]);
+    expect(run.named("config_ignored")).toEqual([]);
+    expect(run.named("warmup_sessions_closed")).toEqual([]);
     expect(findActiveJob(run.context.storage, "first-to-second")).toBeNull();
 
     // A message in the epoch of HEAD + 100, then the finality that covers it, signed by 500 of 512.
@@ -148,7 +160,19 @@ describe("startWatch", () => {
     await vi.advanceTimersByTimeAsync(15_000);
     await flush();
     expect(run.pings).toHaveLength(1);
-    expect(run.named("warmup_ping")).toMatchObject([{ why: "message", session: "new", status: 200 }]);
+    expect(run.named("warmup_scheduled")).toMatchObject([{ why: "message", leadSeconds: 90 }]);
+    expect(run.named("warmup_ready")).toMatchObject([{ why: "message", cold: false }]);
+    await stop();
+  });
+
+  it("ends the sessions a stopped backend left open, and says that a fixed lead time is ignored", async () => {
+    const run = setup({ leadSeconds: 45 });
+    createWarmupStore(run.context.storage).openSession({ direction: "first-to-second", why: "message", dueAt: 0, leadSeconds: 90, at: Date.now() - 10_000 });
+    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient } });
+    expect(run.named("warmup_sessions_closed")).toMatchObject([{ count: 1 }]);
+    expect(run.named("config_ignored")).toMatchObject([{ level: "warn", key: "watch.warmup.leadSeconds" }]);
+    // Ended at the start: it stops counting against the daily cap.
+    expect(createWarmupStore(run.context.storage).warmSecondsInWindow(Date.now() + 60_000)).toBe(10);
     await stop();
   });
 
