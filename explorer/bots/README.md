@@ -1,11 +1,13 @@
-# Bots: proof publisher and delivery runner
+# Bots: proof publisher, delivery runner and testnet traffic
 
-Two bots in TypeScript. They share `explorer/shared` (ABIs, pair registry, message decoding, setup file, secret store,
+Three bots in TypeScript. They share `explorer/shared` (ABIs, pair registry, message decoding, setup file, secret store,
 redactor) with the indexer and the terminal dashboard. Design: `docs/bots.md`.
 
 - The **publisher** makes light client update proofs on a remote graphics processor and posts them on msgboard. It holds no wallet.
 - The **runner** reads those proofs, posts `update` to the destination light client when it is behind, and delivers
   covered transfers and messages for the fee that each transfer offers. It holds a wallet on the destination chain.
+- The **traffic** bot (testnets) sends small test transfers back and forth on a schedule, so both chains see regular
+  traffic and the runner and the prover have work to measure. It holds a wallet on both chains. See "The traffic bot".
 
 ## Commands
 
@@ -19,6 +21,7 @@ pnpm --filter @zk-bridge/bots run typecheck
 
 pnpm --filter @zk-bridge/bots run start publisher --config bots.json
 pnpm --filter @zk-bridge/bots run start runner --config bots.json
+pnpm --filter @zk-bridge/bots run start traffic --config bots.json
 # add --once to run one pass and exit
 ```
 
@@ -208,6 +211,66 @@ line in `stateDirectory/outcomes-<pair>.jsonl`. Fields: `time`, `kind` (`deliver
 `prerequisiteCostWei`, `feeWei`, `feeExpectedWei`, `feeReceivedTokens`, `path` (`delivery-router` or `bridge`). Amounts are
 decimal strings. A skip is written once for each change of reason, not once for each pass. The state file
 `runner-<pair>-<direction>.json` holds the items that need no second look, and the layout spend and losses of the last 24 hours.
+
+## The traffic bot
+
+Owner: "we should start out with a minimum of 1 proof/hour. this will help with keeping things current on both chains
+and giving us a benchmark to check against. we need to mint tokens on both sides too to test the bridge's utility" and
+"and then setup bots to move said tokens back and forth".
+
+The test tokens are `tUSD` (6 decimals) and `tTKN` (18 decimals), deployed on each chain by
+`script/testnet/DeployTestTokens.s.sol` (docs/testnet-run.md, "Test tokens and traffic"). Their bridged copies carry the
+prefix `z` (`ztUSD`, `ztTKN`). The script writes the test token file that `traffic.tokensFile` names.
+
+Each direction sends once in each interval, at its offset plus a jitter that a hash of the direction and the interval
+fixes, so a restart keeps it. The default is one send an hour in each direction, the way back half an hour after the way
+out. With the backend proving at least once an hour, every hour has transfers to deliver. A send:
+
+1. Lists what can move from the source chain: the test tokens native there, and the copies there of the destination's
+   test tokens. Each draws an amount between `amount.minimum` and `amount.maximum` (in hundredths of a token; a copy
+   never more than its balance).
+2. Keeps balances in their band. A native token goes out only while its home balance stays at or above
+   `balance.minimum` after the send. A copy goes home first when its native token is below `balance.minimum` at home; a
+   native token goes out first when its home balance is above `balance.maximum`. Otherwise the pick is uniform.
+3. Approves the mediator once for the largest amount, when the allowance is short (test tokens only).
+4. Relays with `relayTokensAndCall` to the delivery router of the destination, with the dapp's default tip:
+   `defaultTip` of `@zk-bridge/shared` (the share mode, 0.1 percent of the amount, `tipPercent`), the traffic wallet as
+   recipient. When the copy does not exist on the destination yet, the delivery deploys it: the send asks for
+   `newCopyGasLimit` of the destination chain when one is set. Sepolia needs one: a copy took 6,971,380 gas there in an estimate on 2026-11-01, and the mediator's default is 2,750,000 with the callback. A delivery that runs out of gas is final.
+5. Simulates each transaction first and keeps `minimumNativeWei` of the chain: a send whose worst case (gas limit times
+   maximum fee) would take the native balance below it does not go.
+
+Every attempt is a log line: `traffic_sent` (direction, symbol, kind, token, amount, `transactionHash`, `messageId`,
+`messageGasLimit`, gas), `traffic_approved`, `traffic_skipped` with a reason, or `traffic_failed` (an error, for example
+an endpoint that does not answer; the next poll tries again). At start `traffic_tokens` lists each test token with the
+address of its copy on the other chain: the runner's `tokenValuationsWei` needs all of them, because the runner prices
+a tip only in a token it has a value for.
+
+| Reason | Meaning |
+|---|---|
+| `no-eligible-token` | No candidate can go; `candidates` says why for each (`home-balance-at-minimum`, `copy-balance-below-amount`). |
+| `native-below-reserve` | The worst case of the approval or the relay would take the native coin below `minimumNativeWei`. |
+| `gate-not-confirmed` | The source gate enforces and nobody confirmed the current epoch (`ForkNotConfirmed`). Sepolia's gate enforces. |
+| `deposits-not-open` | The source bridge is still locked. |
+| `no-delivery-router` | The deployment names no delivery router on the destination. |
+| `approval-simulation-reverted`, `relay-simulation-reverted` | The node refused the call; `error` names the error when an ABI knows it. |
+| `approval-reverted`, `relay-reverted` | The transaction was mined and reverted. |
+
+An attempt uses up its interval, sent or skipped. A slot is written to `stateDirectory/traffic-<pair>.json` before the
+first transaction leaves, so an attempt whose receipt never arrives is not sent twice. `--once` sends in each enabled
+direction at once, whatever the schedule.
+
+| Field of `traffic` | Meaning |
+|---|---|
+| `signer` | As `runner.signer`. On the app server `env:TRAFFIC_PRIVATE_KEY`. |
+| `tokensFile` | The test token file. |
+| `tokens` | By symbol: `amount` and `balance`, each `{ "minimum", "maximum" }` in whole tokens as text. |
+| `intervalSeconds`, `jitterSeconds`, `pollSeconds` | 3600, 300 and 60. |
+| `directions` | `first-to-second` and `second-to-first`, each `{ "enabled", "offsetSeconds" }`. Defaults: both on, offsets 0 and 1800. |
+| `tipPercent` | The tip as a percentage of the amount. Default `0.1`, the dapp's default. |
+| `newCopyGasLimit` | By destination chain id: the gas limit of a send that deploys a copy there, at most the bridge's `maxGasPerTx` (10,000,000). Set `"11155111": "9000000"` on the testnet. |
+| `minimumNativeWei` | Required, by chain id, for each chain of the pair. |
+| `priorityFeeWei`, `minimumPriorityFeeWei`, `receiptTimeoutSeconds` | As in the runner. Chains 943 and 369 never tip below 0.01 gwei. |
 
 ## msgboard size limit
 
