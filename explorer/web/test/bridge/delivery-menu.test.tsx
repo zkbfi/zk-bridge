@@ -11,16 +11,16 @@ beforeEach(() => {
   window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=0.01`);
 });
 
-const FACTS = { destination: "PulseChain", feeShareText: "0.39%", worstCaseText: "$0.60", fixedText: "0.50 USDC" };
+const FACTS = { destination: "PulseChain", feeShareText: "0.39%", worstCaseText: "$0.60", fixedText: "0.50 USDC", feeAmountText: "$0.39", worstCaseShareText: "0.6%" };
 
 describe("deliverySummary (owner, quote 88: \"just tell the user what is happening\")", () => {
   it("states the arrangement in plain words for each mode, never a label like Standard delivery", () => {
-    expect(deliverySummary({}, FACTS).text).toBe("A bot delivers it on PulseChain · fee 0.39%");
-    expect(deliverySummary({ tip: { mode: "percentage", percentText: "0.3" } }, FACTS).text).toBe("A bot delivers it on PulseChain · fee 0.39%");
-    expect(deliverySummary({ tip: { mode: "gas-multiplier" } }, FACTS).text).toBe("A bot delivers it · fee follows gas, up to $0.60");
-    expect(deliverySummary({ tip: { mode: "fixed" } }, FACTS).text).toBe("A bot delivers it for 0.50 USDC");
+    expect(deliverySummary({}, FACTS).text).toBe("Deliver for 0.39%, max $0.39");
+    expect(deliverySummary({ tip: { mode: "percentage", percentText: "0.3" } }, FACTS).text).toBe("Deliver for 0.39%, max $0.39");
+    expect(deliverySummary({ tip: { mode: "gas-multiplier" } }, FACTS).text).toBe("Deliver for ~0.39%, max $0.60 (0.6%)");
+    expect(deliverySummary({ tip: { mode: "fixed" } }, FACTS).text).toBe("Deliver for 0.50 USDC (0.39%)");
     expect(deliverySummary({ tip: { mode: "none" } }, FACTS).text).toBe("You deliver it yourself on PulseChain");
-    expect(deliverySummary({}, { ...FACTS, feeShareText: null }).text).toBe("A bot delivers it on PulseChain");
+    expect(deliverySummary({}, { ...FACTS, feeShareText: null, feeAmountText: null }).text).toBe("Deliver for a share of the amount");
     for (const mode of ["percentage", "fixed", "gas-multiplier", "none"] as const) expect(deliverySummary({ tip: { mode } }, FACTS).full).not.toMatch(/Standard|Fast/);
   });
 
@@ -28,8 +28,8 @@ describe("deliverySummary (owner, quote 88: \"just tell the user what is happeni
     const target = "0x1234567890abcdef1234567890abcdef123456ab";
     const router = "0xabcdef1234567890abcdef1234567890abcdef12";
     const summary = deliverySummary({ mode: "call", callTarget: target, gasLimit: "300000", tip: { routerText: router } }, FACTS);
-    expect(summary.text).toBe("A bot delivers it on PulseChain · fee 0.39%, then calls 0x12…ab · via router 0xab…12 · gas limit 300,000");
-    expect(summary.full).toBe(`A bot delivers it on PulseChain · fee 0.39%, then calls ${target} · via router ${router} · gas limit 300,000`);
+    expect(summary.text).toBe("Deliver for 0.39%, max $0.39, then calls 0x12…ab · via router 0xab…12 · gas limit 300,000");
+    expect(summary.full).toBe(`Deliver for 0.39%, max $0.39, then calls ${target} · via router ${router} · gas limit 300,000`);
   });
 });
 
@@ -61,8 +61,8 @@ describe("the delivery settings menu", () => {
     expect(within(menu).getByRole("slider", { name: "Gas limit" })).toBeInTheDocument();
     expect(within(menu).getByRole("textbox", { name: /Relay router/ })).toBeInTheDocument();
     expect(within(menu).getByRole("textbox", { name: /Call after delivery/ })).toBeInTheDocument();
-    expect(pillLabel()).toMatch(/^Delivery settings: A bot delivers it on .+ · fee [\d.]+%\. Fee /);
-    expect(document.querySelector('[data-fee="tip"]')?.textContent).toMatch(/^A bot delivers it · [\d.]+%$/);
+    expect(pillLabel()).toMatch(/^Delivery settings: Deliver for [\d.]+%, max .+\. Fee /);
+    expect(document.querySelector('[data-fee="tip"]')?.textContent).toMatch(/^Deliver for [\d.]+%, max .+$/);
   });
 
   it("drives the fee from the share typed in the menu, and the drawer's tip slider shows the same value", async () => {
@@ -94,7 +94,7 @@ describe("the delivery settings menu", () => {
     await typeExact(menu, "Fixed fee", "2.5");
     await waitFor(() => expect(window.location.hash).toMatch(/tip\.fixed=2\.5/));
     await waitFor(() => expect(feeText()).toMatch(/2\.5/));
-    expect(pillLabel()).toMatch(/A bot delivers it for 2\.5 /);
+    expect(pillLabel()).toMatch(/Deliver for 2\.5 /);
     await typeExact(menu, "Fixed fee", "1.1234567890123456789");
     expect(within(menu).getByRole("alert")).toHaveTextContent(/at most \d+ decimals/);
   });
@@ -109,8 +109,8 @@ describe("the delivery settings menu", () => {
     await typeExact(menu, "Fee on gas", "1.5");
     await waitFor(() => expect(window.location.hash).toMatch(/tip\.gas=1\.5/));
     await waitFor(() => expect(pillLabel()).not.toBe(once));
-    expect(feeText()).toBe("A bot delivers it · follows gas");
-    expect(pillLabel()).toMatch(/A bot delivers it · fee follows gas, up to \$/);
+    expect(feeText()).toMatch(/^Deliver for (~[\d.]+%|gas)/);
+    expect(pillLabel()).toMatch(/Deliver for (~[\d.]+%|the gas cost), max \$/);
   });
 
   it("says you deliver it yourself with no tip", async () => {

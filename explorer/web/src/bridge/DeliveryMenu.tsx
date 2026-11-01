@@ -24,6 +24,10 @@ export type DeliveryFacts = {
   readonly worstCaseText: string | null;
   /** A fixed fee in tokens, such as "0.50 USDC", or null. */
   readonly fixedText: string | null;
+  /** The fee itself, in dollars when the token has a price, else in the token ("$0.39", "0.0039 ETH"), or null. */
+  readonly feeAmountText?: string | null;
+  /** A gas-based fee's worst case as a share of the amount ("0.6%"), or null. */
+  readonly worstCaseShareText?: string | null;
 };
 
 /**
@@ -41,8 +45,8 @@ const gasLimitText = (text: string): string => {
 
 /**
  * What the delivery pill says (owner, quote 88): the arrangement in plain words, from the actual settings and numbers.
- * "A bot delivers it on PulseChain · fee 0.39%", "A bot delivers it · fee follows gas, up to $0.60", "A bot delivers it
- * for 0.50 USDC", "You deliver it yourself on PulseChain"; then a call, a router or a gas limit that is set.
+ * "Deliver for 0.39%, max $0.39", "Deliver for ~0.39%, max $0.60" (the fee follows gas), "Deliver for 0.50 USDC",
+ * "You deliver it yourself on PulseChain"; then a call, a router or a gas limit that is set.
  *
  * @param form The bridge form.
  * @param facts The destination and the fee's numbers.
@@ -50,14 +54,20 @@ const gasLimitText = (text: string): string => {
 export const deliverySummary = (form: BridgeQuery, facts: DeliveryFacts): DeliverySummary => {
   const tip = form.tip ?? {};
   const mode = tip.mode ?? "percentage";
+  // Owner: "we need to say something like: \"deliver for x%, max 0.01\"": the price of the delivery, not who does it.
+  // And "show cost details relative to what the user is bridging, per mode": every mode says its share of the amount.
+  const share = facts.feeShareText;
+  const amount = facts.feeAmountText ?? null;
+  const worst = facts.worstCaseText === null ? "" : `, max ${facts.worstCaseText}${facts.worstCaseShareText ? ` (${facts.worstCaseShareText})` : ""}`;
+  const fixed = `${facts.fixedText ?? "a fixed fee"}${facts.fixedText !== null && share !== null ? ` (${share})` : ""}`;
   const main =
     mode === "none"
       ? `You deliver it yourself on ${facts.destination}`
       : mode === "gas-multiplier"
-        ? `A bot delivers it · fee follows gas${facts.worstCaseText === null ? "" : `, up to ${facts.worstCaseText}`}`
+        ? `Deliver for ${share === null ? "the gas cost" : `~${share}`}${worst}`
         : mode === "fixed"
-          ? `A bot delivers it for ${facts.fixedText ?? "a fixed fee"}`
-          : `A bot delivers it on ${facts.destination}${facts.feeShareText === null ? "" : ` · fee ${facts.feeShareText}`}`;
+          ? `Deliver for ${fixed}`
+          : `Deliver for ${share ?? "a share of the amount"}${amount === null ? "" : `, max ${amount}`}`;
   const call = form.callTarget !== undefined && form.callTarget !== "" ? form.callTarget : null;
   const router = tip.routerText !== undefined && tip.routerText.trim() !== "" ? tip.routerText.trim() : null;
   const gasLimit = form.gasLimit !== undefined && form.gasLimit.trim() !== "" ? form.gasLimit : null;
@@ -71,10 +81,10 @@ export const deliverySummary = (form: BridgeQuery, facts: DeliveryFacts): Delive
     mode === "none"
       ? "You deliver it"
       : mode === "gas-multiplier"
-        ? "A bot delivers it · follows gas"
+        ? `Deliver for ${share === null ? "gas" : `~${share}`}${worst}`
         : mode === "fixed"
-          ? `A bot delivers it${facts.fixedText === null ? "" : ` · ${facts.fixedText}`}`
-          : `A bot delivers it${facts.feeShareText === null ? "" : ` · ${facts.feeShareText}`}`;
+          ? `Deliver for ${fixed}`
+          : `Deliver for ${share ?? "a share"}${amount === null ? "" : `, max ${amount}`}`;
   return { short, text: sentence(shortAddress), full: sentence((text) => text) };
 };
 

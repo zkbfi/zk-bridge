@@ -5,8 +5,8 @@ import { readFileSync } from "node:fs";
 import { FeeLine, type FeeLineProps } from "../../src/bridge/FeeLine";
 
 const props: FeeLineProps = {
-  summary: "A bot delivers it · 0.1%",
-  summaryFull: "A bot delivers it on PulseChain · fee 0.1%",
+  summary: "Deliver for 0.1%, max $0.01",
+  summaryFull: "Deliver for 0.1%, max $0.01",
   gasHelp: "Gas level.",
   gasLevel: 1,
   onGasLevel: vi.fn(),

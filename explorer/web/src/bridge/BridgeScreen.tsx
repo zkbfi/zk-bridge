@@ -635,6 +635,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     feeShareText: tipUnits === null || amount === null || amount === 0n ? null : `${Number((Number((tipUnits * 1_000_000n) / amount) / 10_000).toPrecision(2))}%`,
     worstCaseText: gasBased && delivery !== null ? (valueOf(delivery.maximumTip) === null ? `${amountText(delivery.maximumTip, token?.decimals ?? 18)} ${token?.symbol ?? ""}` : usd(delivery.maximumTip)) : null,
     fixedText: options.mode === "fixed" && tipUnits !== null && token !== null ? `${amountText(tipUnits, token.decimals)} ${token.symbol}` : null,
+    feeAmountText: tipUnits === null || token === null ? null : valueOf(tipUnits) === null ? `${amountText(tipUnits, token.decimals)} ${token.symbol}` : usd(tipUnits),
+    worstCaseShareText: gasBased && delivery !== null && amount !== null && amount > 0n ? `${Number((Number((delivery.maximumTip * 1_000_000n) / amount) / 10_000).toPrecision(2))}%` : null,
   });
 
   const destinationInput = useRef<HTMLInputElement>(null);

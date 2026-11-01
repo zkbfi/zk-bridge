@@ -13,8 +13,8 @@ const menuOf = (sliders: readonly FeeSlider[]) => (
 );
 
 const props = (overrides: Partial<FeeLineProps> = {}): FeeLineProps => ({
-  summary: "A bot delivers it · 0.39%",
-  summaryFull: "A bot delivers it on PulseChain · fee 0.39%",
+  summary: "Deliver for 0.39%, max $0.39",
+  summaryFull: "Deliver for 0.39%, max $0.39",
   gasHelp: "Gas level: Normal up to 2× today's base fee, High 3×, Highest 5×.",
   gasLevel: 2,
   time: "~15 min",
@@ -32,8 +32,8 @@ describe("the delivery control (owner, quote 98)", () => {
     const { container } = render(<FeeLine {...props()} />);
     const pill = container.querySelector(".zb-joined.zb-dctl")!;
     expect(pill.querySelectorAll(".zb-dseg")).toHaveLength(3);
-    expect(summary()).toHaveTextContent("A bot delivers it · 0.39%");
-    expect(summary()).toHaveAccessibleName("Delivery settings: A bot delivers it on PulseChain · fee 0.39%");
+    expect(summary()).toHaveTextContent("Deliver for 0.39%, max $0.39");
+    expect(summary()).toHaveAccessibleName("Delivery settings: Deliver for 0.39%, max $0.39");
     expect(summary().querySelector("svg.zb-icon-fill")).not.toBeNull();
     expect(screen.getByRole("img", { name: "Gas" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Time" })).toBeInTheDocument();
@@ -55,7 +55,7 @@ describe("the delivery control (owner, quote 98)", () => {
   it("says the whole arrangement in the summary's tooltip", async () => {
     render(<FeeLine {...props()} />);
     await userEvent.hover(summary());
-    expect(screen.getByRole("tooltip")).toHaveTextContent("A bot delivers it on PulseChain · fee 0.39%. Tap for the delivery settings.");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Deliver for 0.39%, max $0.39. Tap for the delivery settings.");
   });
 
   it("says who sets a value, with the way back", async () => {
