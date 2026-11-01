@@ -5,11 +5,20 @@
  */
 import type { Address, Hex } from "viem";
 import type { PairConfig, TokenInfo } from "@terminal/model/types";
+import {
+  ZKB_SITES,
+  crossLinks,
+  type LinkContext,
+  type SearchChain,
+  type SearchLink,
+  type SearchResult as CrossResult,
+  type SearchSites,
+} from "@zk-bridge/shared";
 import type { DocPage } from "../docs/docs-index";
 import type { Route } from "../app/route";
 
 /** What a result is. The order of this list is the order of the groups. */
-export const RESULT_KINDS = ["transfer", "address", "token", "pair", "view", "action", "doc"] as const;
+export const RESULT_KINDS = ["transfer", "transaction", "address", "token", "proof", "slot", "block", "release", "pair", "view", "action", "doc"] as const;
 
 /** One kind of result. */
 export type ResultKind = (typeof RESULT_KINDS)[number];
@@ -18,8 +27,13 @@ export type ResultKind = (typeof RESULT_KINDS)[number];
 export const GROUP_TITLES: Readonly<Record<ResultKind | "recent", string>> = {
   recent: "Recent",
   transfer: "Transfers and messages",
+  transaction: "Transactions",
   address: "Addresses",
   token: "Tokens",
+  proof: "Proofs",
+  slot: "Beacon slots",
+  block: "Blocks",
+  release: "Releases",
   pair: "Pairs",
   view: "Views",
   action: "Actions",
@@ -53,6 +67,8 @@ export type SearchResult = {
   /** Extra words that a query can match, for example an address. */
   readonly keywords: readonly string[];
   readonly jump: Jump;
+  /** The same thing on the other surfaces: the indexer, the status page, the backend, the block explorers. */
+  readonly links?: readonly SearchLink[];
 };
 
 /** A group of results under one title. */
@@ -87,7 +103,7 @@ export const pairResults = (pairs: readonly { readonly id: string; readonly labe
   }));
 
 /** The tokens of both chains, found by symbol or address. A token opens the pair view with the feed filtered to it. */
-export const tokenResults = (tokens: readonly TokenInfo[], pair: PairConfig): readonly SearchResult[] =>
+export const tokenResults = (tokens: readonly TokenInfo[], pair: PairConfig, context: LinkContext | null = null): readonly SearchResult[] =>
   tokens.map((token) => {
     const chain = token.side === "first" ? pair.first : pair.second;
     return {
@@ -97,6 +113,7 @@ export const tokenResults = (tokens: readonly TokenInfo[], pair: PairConfig): re
       subtitle: `${chain.name} · ${token.address}`,
       keywords: [token.address, chain.name],
       jump: { type: "route", route: { name: "pair", pairId: pair.id, token: token.address } },
+      ...(context === null ? {} : { links: crossLinks({ type: "token", side: token.side, chainId: chain.chainId, address: token.address.toLowerCase() }, context) }),
     };
   });
 
@@ -163,24 +180,62 @@ export const addressResult = (address: Address): SearchResult => ({
   jump: { type: "route", route: { name: "address", address } },
 });
 
-/** What a typed query looks like. */
-export type QueryShape =
-  | { readonly kind: "empty" }
-  | { readonly kind: "address"; readonly address: Address }
-  | { readonly kind: "hash"; readonly hash: Hex }
-  | { readonly kind: "text"; readonly text: string };
+/** The hosts that the links of a result lead to. The dapp's own links are relative, so they open in this page. */
+export const PALETTE_SITES: SearchSites = { ...ZKB_SITES, dapp: "" };
+
+/** The chains of the pair, as the search knows them. */
+export const searchChainsOf = (pair: PairConfig): readonly SearchChain[] =>
+  [pair.first, pair.second].map((chain) => ({
+    chainId: chain.chainId,
+    name: chain.name,
+    side: chain.side,
+    contracts: {
+      bridge: chain.contracts.messageBridge,
+      mediator: chain.contracts.tokenMediator,
+      lightClient: chain.contracts.lightClient,
+      wrappedNative: chain.contracts.wrappedNative,
+      gate: chain.contracts.gate,
+      deliveryRouter: chain.contracts.deliveryRouter,
+    },
+  }));
+
+/** What the links of a result need: the hosts and the chains of the pair. */
+export const linkContextOf = (pair: PairConfig): LinkContext => ({ sites: PALETTE_SITES, chains: searchChainsOf(pair) });
+
+const exploreRoute = (page: Extract<Route, { name: "explore" }>["page"]): Jump => ({ type: "route", route: { name: "explore", page } });
 
 /**
- * Tells whether the query is an address, a 32 byte hash (a message identifier or a transaction hash), or words.
+ * The palette line for a result of the shared search. The line opens the page of the dapp that the result names; its
+ * `links` carry the other surfaces.
  *
- * @param query The text in the search field.
+ * @param result A result of `resolve`.
  */
-export const classifyQuery = (query: string): QueryShape => {
-  const text = query.trim();
-  if (text === "") return { kind: "empty" };
-  if (/^0x[0-9a-fA-F]{40}$/.test(text)) return { kind: "address", address: text as Address };
-  if (/^0x[0-9a-fA-F]{64}$/.test(text)) return { kind: "hash", hash: text.toLowerCase() as Hex };
-  return { kind: "text", text };
+export const crossResult = (result: CrossResult): SearchResult => {
+  const { target } = result;
+  const common = { title: result.title, subtitle: result.subtitle, keywords: [result.id], links: result.links };
+  switch (target.type) {
+    case "message":
+      return { ...common, id: `transfer:${target.messageId}`, kind: "transfer", keywords: [target.messageId], jump: { type: "route", route: { name: "message", messageId: target.messageId as Hex } } };
+    case "transaction":
+      return { ...common, id: result.id, kind: "transaction", jump: exploreRoute({ kind: "tx", chainId: target.chainId, id: target.hash }) };
+    case "address":
+      return {
+        ...common,
+        id: result.id,
+        kind: "address",
+        jump: target.role !== null && target.role !== undefined && target.chainId !== null && target.chainId !== undefined ? exploreRoute({ kind: "contract", chainId: target.chainId, id: target.address }) : { type: "route", route: { name: "address", address: target.address as Address } },
+      };
+    case "token":
+      return { ...common, id: result.id, kind: "token", jump: exploreRoute({ kind: "token", id: `${target.side}:${target.address}` }) };
+    case "slot":
+      return { ...common, id: result.id, kind: "slot", jump: exploreRoute({ kind: "slot", id: target.slot }) };
+    case "block":
+      return { ...common, id: result.id, kind: "block", jump: exploreRoute({ kind: "block", chainId: target.chainId, id: target.number }) };
+    case "proof":
+      return { ...common, id: result.id, kind: "proof", jump: exploreRoute({ kind: "proof", chainId: target.chainId, id: target.index }) };
+    case "release":
+      return { ...common, id: result.id, kind: "release", jump: exploreRoute({ kind: "release", id: target.cid }) };
+  }
 };
 
 const words = (text: string): readonly string[] => text.toLowerCase().split(/[^a-z0-9_.]+/).filter((word) => word !== "");
@@ -220,8 +275,13 @@ export const rankResults = (query: string, results: readonly SearchResult[]): re
 const GROUP_LIMITS: Readonly<Record<ResultKind | "recent", number>> = {
   recent: 6,
   transfer: 5,
-  address: 3,
+  transaction: 4,
+  address: 6,
   token: 6,
+  proof: 4,
+  slot: 2,
+  block: 4,
+  release: 2,
   pair: 4,
   view: 10,
   action: 6,
