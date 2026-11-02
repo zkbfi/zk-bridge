@@ -159,10 +159,24 @@ hosts, fetch times and backend job ids. The public tree on IPFS is built separat
   another owner and links are reported and left alone.
 - **Root trusts nothing in the mirror.** The archive user can write it, so root never reads, chmods or chowns a path
   inside it: the archive user streams a tar when root needs a copy (import, `bundle`, the public tree), and root checks
-  that copy (a directory only root can write) for links, special files and hard links. Root records the sha256 of each
-  day's manifest in `/var/backups/zk-bridge/proofs/manifests.sha256` (root:root 0644, in the root-owned 0711 backup
-  directory, appended to only), right after the CLI wrote it. Import, verify and the Mac pull use only a manifest whose
-  hash is in that list.
+  that copy (a directory only root can write) for links, special files and hard links.
+- **The trust anchor covers what root itself saw.** `/var/backups/zk-bridge/proofs/manifests.sha256` (root:root 0644, in
+  the root-owned 0711 backup directory, appended to only) holds `<sha256>  <path>` lines, each from bytes root holds:
+  - `<stamp>.json`: the day's manifest. The CLI prints the manifest's bytes to root (`mirror-manifest --print`), root
+    keeps them in `/var/backups/zk-bridge/proofs/trusted-manifests/<stamp>.json` (root 0644, pruned with the window) and
+    hashes that copy; the mirror's copy must be the same bytes.
+  - `snapshots/<stamp>.sqlite`: the backend's user hands the snapshot's bytes to root, which writes them into its own
+    staging directory and hashes them there, before the archive and the mirror take that copy.
+  - `beacon-states/<chain>/<name>`: each service's user streams its states to root, which unpacks them into its own
+    staging directory (no links, plain modes) and hashes each one there, once per name and content.
+
+  Records (proofs, evidence) get no line: storage proofs are checked against block state roots, and light client proofs
+  are data that their consumers verify. Import installs only a snapshot and beacon states whose hashes are listed, and
+  import and verify accept only a manifest that equals root's copy and is listed. The Mac pull fetches
+  `trusted-manifests/` and the list, and prefers root's copy.
+- **One rule for manifest names.** The script and the CLI both take `YYYYMMDDTHHMMSSZ.json`; a `manifests/` directory
+  holding any other name is refused, and the script names the manifest it picked to the CLI (`mirror-check --manifest
+  <name>`), so both read the same file.
 - **What the services hold is copied, never moved.** The runner's proof cache and both services' beacon states are
   copied by their own users into a staging directory with `install -m 0644` or `cat` (never `cp`, which would keep the
   services' 0600 and leave the copies unreadable to the archive user). The SQLite snapshot is taken by the backend's user
@@ -206,7 +220,8 @@ The output ends with `mirror: <dir>` and `manifest: <file>`. Old nightly tarball
 `/var/backups/zk-bridge/proofs` are left alone and logged; nothing makes new ones. Delete them by hand once the mirror
 has been pulled.
 
-**Verify** checks that the newest manifest's sha256 is in `manifests.sha256`, then the mirror against that manifest
+**Verify** checks that the newest manifest equals root's copy and is in `manifests.sha256`, then the mirror against that
+manifest
 exactly (every listed file with its hash, no file unlisted,
 every record file's content equal to the hash in its name), warns when that manifest is not today's, then reads each
 storage proof's block header by its hash from `EXPLORER_RPC_URL_<chainId>` (headers stay on every node) and checks the
@@ -218,16 +233,18 @@ orphaned block).
 **Import** works into a fresh server:
 
 1. The input (a directory, by default this server's mirror read by the archive user, or an unpacked tar.gz) is copied
-   into a directory only root can write. A link, a special file or a hard link stops it. Its newest manifest must be in
-   `manifests.sha256`, or match `--manifest-sha256 <hex>` for a mirror from another server (its line in that server's
-   list, or in `~/zkb-backups/proofs/manifests.sha256` on the Mac). The other manifests leave the copy, and the copy
-   must match that manifest exactly: a missing, changed or unlisted file (a planted snapshot, say) stops the import
-   before anything is imported or installed.
+   into a directory only root can write. A link, a special file or a hard link stops it. Its newest manifest (by the
+   name rule above) must equal root's copy and be in `manifests.sha256`. For a mirror from another server pass
+   `--trust-list <file>` (that server's `manifests.sha256`; the Mac keeps one in `~/zkb-backups/proofs/`), or
+   `--manifest-sha256 <hex>` and `--snapshot-sha256 <hex>` by hand (beacon states are then left out, as nothing vouches
+   for them). The copy must match that manifest exactly: a missing, changed or unlisted file stops the import. The
+   snapshot to install must have a listed hash (or match `--snapshot-sha256`), else nothing is imported.
 2. It migrates the schema and upserts every record file. A light client record whose slots or hash do not match its proof
    is refused as invalid, and so is evidence whose hash does not match its body. Versions of one record merge by the fill
    rule; two different non-null values are a conflict.
 3. The newest snapshot is ingested, and installed as the backend's database only when the server has none.
-4. Each service gets the 16 newest beacon states of each chain (its own cache keeps 16), copied by its own user, only when
+4. Each service gets the 16 newest beacon states of each chain whose hashes root recorded (any other is named in a
+   WARNING and left out) (its own cache keeps 16), copied by its own user, only when
    missing. A file that exists with other content is reported and never overwritten.
 
 A tar.gz is unpacked first (its `.sha256` checked when it sits next to it): a mirror bundle (`proofs.sh bundle`) is
@@ -240,7 +257,7 @@ From the operator machine (venv of `docs/deploy-blue-green.md`):
 cd deploy/ansible
 ansible-playbook proofs.yml -e action=export      # export now, then pull the mirror to ~/zkb-backups/proofs/mirror
 ansible-playbook proofs.yml -e action=import      # restore the archive from the server's own mirror
-ansible-playbook proofs.yml -e action=import -e mirror=~/zkb-backups/proofs/mirror [-e manifest_sha256=<hex>]
+ansible-playbook proofs.yml -e action=import -e mirror=~/zkb-backups/proofs/mirror [-e trust_list=<that server's list>]
                                                   # copied up into <backup dir>/incoming-mirror (root's), then imported
 ansible-playbook proofs.yml -e action=import -e bundle=<local zk-bridge-proofs-*.tar.gz or zk-bridge-mirror-*.tar.gz>
 ansible-playbook proofs.yml -e action=verify
@@ -259,8 +276,10 @@ copies the mirror into `~/zkb-backups/proofs/mirror`:
   window; the deletions are counted in the log.
 - Each rsync holds a shared `flock` on the server's lock file, so it waits for a running export (and an export waits for
   it, up to an hour). rsync puts a file in place only when it is complete.
-- Then the newest manifest is checked: its own sha256 must be in the server's `manifests.sha256` (fetched to
-  `~/zkb-backups/proofs/manifests.sha256`), and every file it lists must be here with its sha256. A missing file (the pull met an export)
+- Then the newest manifest is checked: its name must follow the rule, it must equal the server's own copy (fetched from
+  `trusted-manifests/` to `~/zkb-backups/proofs/trusted-manifests/`, and the file list is read from that copy), its
+  sha256 must be in the server's `manifests.sha256` (fetched to `~/zkb-backups/proofs/manifests.sha256`), and every
+  file it lists must be here with its sha256. A missing file (the pull met an export)
   gets one more pull; a file that differs fails the run and is left for a person to look at.
 - The mirror directories are 0700. The log is `~/zkb-backups/proofs/pull.log`. `ZKB_PULL_HOOK` runs after a good pull
   with `<mirror dir> <newest manifest>`.

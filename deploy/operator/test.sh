@@ -99,6 +99,9 @@ write_manifest() {
   } >"$remote/manifests/$1.json"
   # The server's root records each manifest's hash outside the mirror.
   printf '%s  %s.json\n' "$(sha "$remote/manifests/$1.json")" "$1" >>"$root/var/backups/zk-bridge/proofs/manifests.sha256"
+  # ... and keeps its own copy of the manifest.
+  mkdir -p "$root/var/backups/zk-bridge/proofs/trusted-manifests"
+  cp "$remote/manifests/$1.json" "$root/var/backups/zk-bridge/proofs/trusted-manifests/$1.json"
 }
 put() { mkdir -p "$(dirname "$remote/$1")"; printf '%s\n' "$2" >"$remote/$1"; }
 record() { # record <dir/stem> <content>: a record file named by its content
@@ -200,11 +203,31 @@ mf=$remote/manifests/20261104T033000Z.json
 cp "$mf" "$T/mf.keep"
 sed 's/"formatVersion":2/"formatVersion":2,"note":"x"/' "$T/mf.keep" >"$mf"
 rm -f "$lm/manifests/20261104T033000Z.json"
+# (A server without a trusted copy of it: only the hash list can catch it.)
+tm=$root/var/backups/zk-bridge/proofs/trusted-manifests/20261104T033000Z.json
+mv "$tm" "$T/tm.keep"
 status=0
 pull || status=$?
 if [ "$status" -ne 0 ] && grep -q 'is not in the server.s manifests.sha256' "$local_dir/pull.log"; then pass "a manifest that is not in the server's manifests.sha256 fails the pull"; else fail "tampered manifest (status $status)"; fi
 cp "$T/mf.keep" "$mf"
+mv "$T/tm.keep" "$tm"
 rm -f "$lm/manifests/20261104T033000Z.json"
+pull || true
+# The trusted copy is preferred: a mirror manifest that differs from it fails, even when its own hash were listed.
+sed 's/"formatVersion":2/"formatVersion":2,"note":"y"/' "$T/mf.keep" >"$mf"
+printf '%s  20261104T033000Z.json\n' "$(sha "$mf")" >>"$root/var/backups/zk-bridge/proofs/manifests.sha256"
+rm -f "$lm/manifests/20261104T033000Z.json"
+status=0
+pull || status=$?
+if [ "$status" -ne 0 ] && [ -f "$local_dir/trusted-manifests/20261104T033000Z.json" ] && grep -q "differs from the server's trusted copy" "$local_dir/pull.log"; then pass "the pull fetches the server's trusted manifests and prefers them"; else fail "trusted copy (status $status)"; fi
+cp "$T/mf.keep" "$mf"
+rm -f "$lm/manifests/20261104T033000Z.json"
+# A name in manifests/ outside the server's rule fails the pull.
+printf '{}\n' >"$remote/manifests/zzz.json"
+status=0
+pull || status=$?
+if [ "$status" -ne 0 ] && grep -q 'manifests/ holds zzz.json' "$local_dir/pull.log"; then pass "a manifest name outside the rule fails the pull"; else fail "zzz.json pull (status $status)"; fi
+rm -f "$remote/manifests/zzz.json"
 pull || true
 
 # No manifest on the server: the run fails.

@@ -5,7 +5,7 @@ import { DEFAULT_PAIR_NAME, rpcVariableName } from "@zk-bridge/shared";
 import { withoutUrls } from "@zk-bridge/shared/prover";
 import { ingestBackendRows, readBackendSnapshot } from "./backend-rows";
 import { checkManifest, exportArchive, importArchive, ingestCache, recordsOf, verifyStorageProofs, writeManifest, type BlockRootReader } from "./bundle";
-import { addToMirror, checkMirror, importMirror, mirrorRecords, pruneMirror, stageNewestStates, writeMirrorManifest, writeMirrorRecords } from "./mirror";
+import { addToMirror, checkMirror, manifestText, importMirror, mirrorRecords, pruneMirror, stageNewestStates, writeMirrorManifest, writeMirrorRecords } from "./mirror";
 import { checkPublicTree, exportPublicTree } from "./public";
 import { poolExecutor, type ArchiveEnvironment } from "./runtime";
 import { createProofArchive, type ProofArchive } from "./store";
@@ -32,8 +32,10 @@ export const USAGE = `usage: zk-bridge-proof-archive <command> [options]
   mirror-write --dir <mirror>           write each archive row as a record file, once (other content there: exit 3)
   mirror-add --dir <mirror> --from <dir> --to beacon-states|snapshots   copy files in, once (other content: exit 3)
   mirror-prune --dir <mirror> --days <n> [--held <dir>[,<dir>]]   drop beacon states, snapshots, manifests older than n days
-  mirror-manifest --dir <mirror> --stamp <YYYYMMDDTHHMMSSZ> --commit <sha> --days <n> [--ipfs-log <file>]
-  mirror-check --dir <mirror> [--exact]  check against the newest manifest (bad: exit 1; --exact: unlisted files too)
+  mirror-manifest --dir <mirror> --stamp <YYYYMMDDTHHMMSSZ> --commit <sha> --days <n> [--ipfs-log <file>] [--print]
+                                        (--print: the manifest's bytes on standard output instead of a summary)
+  mirror-check --dir <mirror> [--exact] [--manifest <name>]   against the newest (or the named) manifest
+                                        (bad: exit 1; --exact: unlisted files too)
   mirror-import --dir <mirror>          upsert every record file (conflicts: exit 3)
   mirror-states --dir <mirror> --out <dir> [--newest <n>]   stage the newest n (16) beacon states of each chain
 Environment: DATABASE_URL (archive commands), EXPLORER_PAIR, EXPLORER_RPC_URL_<chain id> (verify-storage).`;
@@ -228,11 +230,13 @@ export async function main(argv: readonly string[], environment: ArchiveEnvironm
           ipfsLog: options["ipfs-log"],
           retentionDays: days(options, "days"),
         });
-        print({ manifest: `manifests/${stamp}.json`, files: Object.keys(manifest.files).length, counts: manifest.counts });
+        // --print: the manifest's own bytes, for root to keep a copy of what was written (print adds the final newline).
+        if (options.print === "true") dependencies.print(manifestText(manifest).slice(0, -1));
+        else print({ manifest: `manifests/${stamp}.json`, files: Object.keys(manifest.files).length, counts: manifest.counts });
         return 0;
       }
       case "mirror-check": {
-        const check = await checkMirror(required(options, "dir"));
+        const check = await checkMirror(required(options, "dir"), options.manifest);
         print(check);
         const bad = check.missing.length + check.changed.length + check.misnamed.length + (options.exact === "true" ? check.unlisted.length : 0);
         return bad > 0 ? 1 : 0;
