@@ -226,9 +226,9 @@ With `runner.openDeposits` on (the default), each direction of the runner checks
 start and after each pass, and also right after an update of its own is mined:
 
 1. When the state file says open, nothing happens, for good.
-2. It reads the head of the light client on D. When no attempt used a newer head, it waits: the proof needs a block that
-   a node still serves the state of, and an old head fails again with "distance to target block exceeds maximum proof
-   window".
+2. It reads the head of the light client on D. When no attempt used a newer head, it waits (unless the last failure was
+   an RPC failure, which has its own timer, see below): the proof needs a block that a node still serves the state of, and
+   a logic failure on an old head fails again.
 3. It reads `depositsOpen()` and logs `deposits_open_checked` (`bridge`, `headSlot`, `open`). Open: it writes
    `depositsOpen: true` to the state file and stops checking.
 4. It runs `zk-bridge-prover opening-proof --route <D>_to_<S>`. For the prover this bridge is the source bridge of the
@@ -240,10 +240,26 @@ start and after each pass, and also right after an update of its own is mined:
    logs `deposits_opened` (`transactionHash`, `gasUsed`).
 
 A failure logs `deposits_open_failed` (warning) with `reason` (`read-failed`, `proof-failed`, `wrong-target`,
-`simulation-reverted`, `send-failed`, `transaction-reverted`), `detail` and `retryAfterSeconds`. The next attempt waits for a
-newer head of the light client and a backoff of 60 seconds that doubles with each failure up to 30 minutes, so it never
-loops on a head that cannot work. Until the other light client has its first update the prover refuses with "it needs its
-first update"; that is the same wait.
+`simulation-reverted`, `send-failed`, `transaction-reverted`), `failureClass`, `detail` and `retryAfterSeconds`. What happens next
+depends on the class:
+
+- **`rpc`: the node could not answer now.** These are reads that fail, and a prover error whose text names a proof window
+  ("distance to target block exceeds maximum proof window"), a timeout, a connection error, HTTP 429 or 5xx, "header not
+  found" or a rate limit. The head is not at fault, and the block it stored becomes provable the moment the provider
+  widens its window, so the opener retries the **same head on its own timer**, independent of new heads: after 30 seconds,
+  doubling to 10 minutes, each delay shortened by up to 25 percent of random jitter. Each retry logs `deposits_open_retry`
+  (`reason`, `reasonClass`, `attempt`, `retryAfterSeconds`). It goes on until the bridge opens or a newer head arrives; a
+  newer head is used at once (the next check after it, without waiting for the timer) and starts the count over. A retry
+  starts like any attempt, with a read of `depositsOpen()` and the simulation, so the bridge is opened once.
+- **`logic`: the attempt itself was wrong or reverted.** These are `wrong-target`, `simulation-reverted`,
+  `transaction-reverted`, `send-failed` and a prover error that no RPC pattern matches. No timer: the next attempt waits for
+  a newer head of the light client and a backoff of 60 seconds that doubles with each failure up to 30 minutes. A failed
+  send is a logic failure on purpose: the transaction may be in the mempool, and a blind retry could send twice. Until the
+  other light client has its first update the prover refuses with "it needs its first update"; that is the same wait.
+
+Neither class loops: an attempt never repeats within its delay, the polls of the runner do not touch a head that waits for
+its timer, and a bridge that reports open (or the state file's `depositsOpen`) ends all retries for good. The timer does not
+keep the process alive, and the runner cancels it when it stops.
 
 **The raw header of the remote block.** Besides `eth_getProof`, the proof needs the exact header of that block of S, which
 the prover asks with `debug_getRawHeader` (a Gloas header on Sepolia has fields that the block JSON does not show, so a

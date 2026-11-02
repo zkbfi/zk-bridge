@@ -5,7 +5,14 @@ import type { Hex } from "viem";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProverCommandError, type LightClientReader, type OpeningPackage, type OpeningProver } from "@zk-bridge/shared/prover";
 import type { CallRequest, SendRequest, Simulation, TransactionPort } from "../../src/chain/transactions.ts";
-import { OPEN_RETRY_BASE_MILLISECONDS, OPEN_RETRY_MAXIMUM_MILLISECONDS, createDepositOpener, type DepositOpenerDependencies } from "../../src/runner/opener.ts";
+import {
+  OPEN_RETRY_BASE_MILLISECONDS,
+  OPEN_RETRY_MAXIMUM_MILLISECONDS,
+  RPC_RETRY_BASE_MILLISECONDS,
+  RPC_RETRY_MAXIMUM_MILLISECONDS,
+  createDepositOpener,
+  isRpcErrorText,
+  type DepositOpenerDependencies } from "../../src/runner/opener.ts";
 import { createSerialQueue } from "../../src/runner/serial-queue.ts";
 import { INITIAL_RUNNER_STATE, runnerStateSchema, type RunnerState } from "../../src/runner/state.ts";
 import { createStateFile, type StateStore } from "../../src/runtime/state-file.ts";
@@ -95,6 +102,30 @@ interface WorldOptions {
   readonly proofs?: Array<OpeningPackage | Error>;
   readonly state?: StateStore<RunnerState>;
   readonly enabled?: boolean;
+  readonly random?: (() => number) | null;
+  /** Leave the scheduler out of the dependencies, so the opener uses its own timer. */
+  readonly realTimer?: boolean;
+}
+
+/** A timer the test fires by hand: the fake clock of the retries. */
+function fakeTimers() {
+  const timers: Array<{ delay: number; callback: () => void; cancelled: boolean; fired: boolean }> = [];
+  return {
+    timers,
+    schedule(callback: () => void, delay: number) {
+      const timer = { delay, callback, cancelled: false, fired: false };
+      timers.push(timer);
+      return () => {
+        timer.cancelled = true;
+      };
+    },
+    live: () => timers.filter((timer) => !timer.cancelled && !timer.fired),
+  };
+}
+
+/** Lets the work that a fired timer started finish. */
+async function flush(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
 function world(options: WorldOptions = {}) {
@@ -111,6 +142,7 @@ function world(options: WorldOptions = {}) {
   const chain = fakePort();
   const state = options.state ?? memoryState();
   const { logger, events } = memoryLogger();
+  const timers = fakeTimers();
   const dependencies: DepositOpenerDependencies = {
     enabled: options.enabled ?? true,
     route: ROUTE,
@@ -124,6 +156,8 @@ function world(options: WorldOptions = {}) {
     state,
     now: () => clock,
     logger,
+    ...(options.realTimer === true ? {} : { schedule: timers.schedule }),
+    ...(options.random === null ? {} : { random: options.random ?? (() => 0) }),
   };
   const opener = createDepositOpener(dependencies);
   return {
@@ -134,6 +168,15 @@ function world(options: WorldOptions = {}) {
     chain,
     state,
     events,
+    timers,
+    /** Fires the pending retry timer, as the clock would, and waits for the attempt. */
+    async fire() {
+      const timer = timers.live().at(-1)!;
+      clock += timer.delay;
+      timer.fired = true;
+      timer.callback();
+      await flush();
+    },
     named: (event: string) => events().filter((entry) => entry.event === event),
     advance: (milliseconds: number) => {
       clock += milliseconds;
@@ -189,28 +232,225 @@ describe("the deposit opener", () => {
     expect((await run.state.load()).depositsOpen).toBe(true);
   });
 
-  it("logs a proof-window failure, waits for the next update and the backoff, then opens", async () => {
+  it("retries a proof-window failure of the same head on the timer and opens once the window widens", async () => {
     const windowError = new ProverCommandError("opening-proof", 1, "rpc error 4444/-32602: distance to target block exceeds maximum proof window");
-    const run = world({ proofs: [windowError, openingPackage({ proof: { remoteSlot: 704, storedSlot: 352 } } as Partial<OpeningPackage>)] });
-    expect(await run.opener.check()).toMatchObject({ kind: "failed", reason: "proof-failed" });
+    // The provider's window is too short for two tries, then it is raised.
+    const run = world({ proofs: [windowError, windowError, openingPackage()] });
+    expect(await run.opener.check()).toMatchObject({ kind: "failed", reason: "proof-failed", failureClass: "rpc" });
     const failed = run.named("deposits_open_failed")[0]!;
-    expect(failed).toMatchObject({ reason: "proof-failed", route: ROUTE, failures: 1, retryAfterSeconds: OPEN_RETRY_BASE_MILLISECONDS / 1000, headSlot: "640" });
+    expect(failed).toMatchObject({ reason: "proof-failed", failureClass: "rpc", route: ROUTE, failures: 1, retryAfterSeconds: RPC_RETRY_BASE_MILLISECONDS / 1000, headSlot: "640" });
     expect(String(failed.detail)).toContain("maximum proof window");
+    expect(run.named("deposits_open_retry")[0]).toMatchObject({ route: ROUTE, reason: "proof-failed", reasonClass: "rpc", attempt: 1, retryAfterSeconds: 30, headSlot: "640" });
+    expect(run.timers.live()).toHaveLength(1);
+
+    // Polls before the timer fires neither prove nor read the bridge again: the head did not move.
+    expect(await run.opener.check()).toEqual({ kind: "waiting", reason: "backing-off" });
+    expect(run.openingProof).toHaveBeenCalledTimes(1);
+
+    // The timer retries the same head with no new head, and fails again with a longer delay.
+    await run.fire();
+    expect(run.openingProof).toHaveBeenCalledTimes(2);
+    expect(run.named("deposits_open_retry")[1]).toMatchObject({ attempt: 2, retryAfterSeconds: 60, headSlot: "640" });
     expect(run.chain.sends).toHaveLength(0);
 
-    // The same head again: no new block was stored, so no second proof. It never loops.
+    // The window widens: the next timer opens the bridge, and nothing is scheduled any more.
+    await run.fire();
+    expect(run.chain.sends).toHaveLength(1);
+    expect((await run.state.load()).depositsOpen).toBe(true);
+    expect(run.named("deposits_opened")).toHaveLength(1);
+    expect(run.timers.live()).toHaveLength(0);
+    expect(await run.opener.check()).toEqual({ kind: "open" });
+    expect(run.chain.sends).toHaveLength(1);
+  });
+
+  it("doubles the RPC retry delay up to 10 minutes, jitters it below the cap, and starts over after a success", async () => {
+    const run = world({ proofs: [new Error("HTTP request failed: status 503")], random: () => 0.5 });
+    await run.opener.check();
+    for (let attempt = 0; attempt < 7; attempt += 1) await run.fire();
+    const delays = run.named("deposits_open_retry").map((entry) => entry.retryAfterSeconds);
+    // Base 30, 60, 120, 240, 480, then 600 (the cap), each less 12.5 percent at a jitter of one half.
+    expect(delays).toEqual([26.25, 52.5, 105, 210, 420, 525, 525, 525]);
+    expect(run.named("deposits_open_failed").every((entry) => entry.failureClass === "rpc")).toBe(true);
+    expect(RPC_RETRY_MAXIMUM_MILLISECONDS).toBe(600_000);
+  });
+
+  it("does not retry a logic failure on a timer: it waits for a newer head and the backoff", async () => {
+    const run = world({ proofs: [openingPackage({ to: `0x${"ab".repeat(20)}` })] });
+    expect(await run.opener.check()).toMatchObject({ kind: "failed", reason: "wrong-target", failureClass: "logic" });
+    expect(run.timers.timers).toHaveLength(0);
+    expect(run.named("deposits_open_retry")).toHaveLength(0);
+    expect(run.named("deposits_open_failed")[0]).toMatchObject({ failureClass: "logic", retryAfterSeconds: 60 });
+
     run.advance(OPEN_RETRY_BASE_MILLISECONDS);
     expect(await run.opener.check()).toEqual({ kind: "waiting", reason: "no-new-head" });
-    // A new head inside the backoff waits too.
     run.advance(-1);
     run.head.headSlot = 704n;
     expect(await run.opener.check()).toEqual({ kind: "waiting", reason: "backing-off" });
     expect(run.openingProof).toHaveBeenCalledTimes(1);
-    // A new head after the backoff: the next try, which opens.
     run.advance(1);
-    expect(await run.opener.check()).toEqual({ kind: "opened", transactionHash: word(0xee) });
+    await run.opener.check();
     expect(run.openingProof).toHaveBeenCalledTimes(2);
-    expect(run.named("deposits_opening")[0]).toMatchObject({ remoteSlot: 704, storedSlot: 352 });
+  });
+
+  it("never retries a simulation revert or a failed send on a timer, so no transaction goes out twice", async () => {
+    const reverted = world();
+    reverted.chain.simulation = { ok: false, reason: "timeout in the contract?" };
+    await reverted.opener.check();
+    expect(reverted.timers.timers).toHaveLength(0);
+
+    const lost = world();
+    lost.chain.sendFailure = new Error("request timed out");
+    expect(await lost.opener.check()).toMatchObject({ kind: "failed", reason: "send-failed", failureClass: "logic" });
+    expect(lost.timers.timers).toHaveLength(0);
+  });
+
+  it("switches to a newer head at once during an RPC backoff, and the timer is cancelled", async () => {
+    const windowError = new Error("distance to target block exceeds maximum proof window");
+    const run = world({ proofs: [windowError, openingPackage({ proof: { remoteSlot: 704, storedSlot: 352 } } as Partial<OpeningPackage>)] });
+    await run.opener.check();
+    const first = run.timers.live()[0]!;
+    run.head.headSlot = 704n;
+    expect(await run.opener.check()).toEqual({ kind: "opened", transactionHash: word(0xee) });
+    expect(first.cancelled).toBe(true);
+    expect(run.named("deposits_opening")[0]).toMatchObject({ remoteSlot: 704 });
+    expect(run.chain.sends).toHaveLength(1);
+    // The cancelled timer fires anyway (it was queued): it does nothing.
+    first.callback();
+    await flush();
+    expect(run.openingProof).toHaveBeenCalledTimes(2);
+    expect(run.chain.sends).toHaveLength(1);
+  });
+
+  it("starts the RPC backoff over on a newer head that fails again, and a logic failure ends the retries", async () => {
+    const windowError = new Error("distance to target block exceeds maximum proof window");
+    const run = world({ proofs: [windowError, windowError, windowError, openingPackage({ to: `0x${"ab".repeat(20)}` })] });
+    await run.opener.check();
+    await run.fire();
+    expect(run.named("deposits_open_retry")[1]).toMatchObject({ attempt: 2, retryAfterSeconds: 60 });
+    run.head.headSlot = 704n;
+    // The newer head fails the same way: the count starts over at one.
+    await run.opener.check();
+    expect(run.named("deposits_open_retry")[2]).toMatchObject({ attempt: 1, retryAfterSeconds: 30, headSlot: "704" });
+    // The next timer meets a logic failure: it stops retrying and waits for a newer head.
+    await run.fire();
+    expect(run.named("deposits_open_failed").at(-1)).toMatchObject({ failureClass: "logic", reason: "wrong-target" });
+    expect(run.timers.live()).toHaveLength(0);
+    expect(await run.opener.check()).toEqual({ kind: "waiting", reason: "backing-off" });
+    run.advance(OPEN_RETRY_BASE_MILLISECONDS);
+    expect(await run.opener.check()).toEqual({ kind: "waiting", reason: "no-new-head" });
+  });
+
+  it("retries a head that cannot be read on the timer, and polls do not touch it meanwhile", async () => {
+    const run = world();
+    run.head.failure = new Error("rpc down");
+    expect(await run.opener.check()).toMatchObject({ kind: "failed", reason: "read-failed", failureClass: "rpc" });
+    // No attempt used a head yet, so a poll waits for the timer, also when the head can be read again.
+    run.head.failure = null;
+    expect(await run.opener.check()).toEqual({ kind: "waiting", reason: "backing-off" });
+    // A poll that cannot read the head waits too, and counts as nothing.
+    run.head.failure = new Error("still down");
+    expect(await run.opener.check()).toEqual({ kind: "waiting", reason: "backing-off" });
+    expect(run.named("deposits_open_failed")).toHaveLength(1);
+    // The timer's own read fails: another retry with a longer delay.
+    await run.fire();
+    expect(run.named("deposits_open_retry")[1]).toMatchObject({ attempt: 2, retryAfterSeconds: 60, headSlot: null });
+    run.head.failure = null;
+    await run.fire();
+    expect(run.chain.sends).toHaveLength(1);
+  });
+
+  it("waits during an RPC backoff when the head cannot be read or has not moved", async () => {
+    const run = world({ proofs: [new Error("connection reset")] });
+    await run.opener.check();
+    run.head.failure = new Error("down");
+    expect(await run.opener.check()).toEqual({ kind: "waiting", reason: "backing-off" });
+    run.head.failure = null;
+    expect(await run.opener.check()).toEqual({ kind: "waiting", reason: "backing-off" });
+    expect(run.openingProof).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops retrying once the bridge reports open, and when stop is called", async () => {
+    const run = world({ open: [false, true], proofs: [new Error("HTTP 429 too many requests")] });
+    await run.opener.check();
+    expect(run.timers.live()).toHaveLength(1);
+    await run.fire();
+    expect(await run.opener.check()).toEqual({ kind: "open" });
+    expect(run.timers.live()).toHaveLength(0);
+
+    const stopped = world({ proofs: [new Error("timeout")] });
+    await stopped.opener.check();
+    stopped.opener.stop();
+    expect(stopped.timers.live()).toHaveLength(0);
+  });
+
+  it("does nothing on a timer that finds the state file marked open by another process", async () => {
+    const run = world({ proofs: [new Error("timeout")] });
+    await run.opener.check();
+    await run.state.update((state) => ({ ...state, depositsOpen: true }));
+    await run.fire();
+    expect(run.openingProof).toHaveBeenCalledTimes(1);
+    expect(run.timers.live()).toHaveLength(0);
+  });
+
+  it("logs a retry whose state file cannot be written instead of throwing from the timer", async () => {
+    const state = memoryState();
+    const run = world({ state, proofs: [new Error("timeout"), openingPackage()] });
+    await run.opener.check();
+    state.update = async () => {
+      throw new Error("disk full");
+    };
+    await run.fire();
+    expect(run.named("deposits_open_retry_crashed")[0]).toMatchObject({ route: ROUTE });
+  });
+
+  it("uses a real unreferenced timer by default", async () => {
+    vi.useFakeTimers();
+    try {
+      const run = world({ proofs: [new Error("timeout"), openingPackage()], realTimer: true });
+      await run.opener.check();
+      await vi.advanceTimersByTimeAsync(RPC_RETRY_BASE_MILLISECONDS);
+      expect(run.chain.sends).toHaveLength(1);
+
+      const cancelled = world({ proofs: [new Error("timeout")], realTimer: true });
+      await cancelled.opener.check();
+      cancelled.opener.stop();
+      await vi.advanceTimersByTimeAsync(RPC_RETRY_MAXIMUM_MILLISECONDS);
+      expect(cancelled.openingProof).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses Math.random for the jitter when none is given", async () => {
+    const spy = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      const run = world({ proofs: [new Error("timeout")], random: null });
+      await run.opener.check();
+      expect(spy).toHaveBeenCalled();
+      expect(run.timers.live()[0]!.delay).toBe(RPC_RETRY_BASE_MILLISECONDS);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("classifies RPC error text", () => {
+    for (const text of [
+      "rpc error -32602/4444: distance to target block exceeds maximum proof window",
+      "header not found",
+      "request timed out",
+      "connect ECONNREFUSED 127.0.0.1:8545",
+      "HTTP request failed. Status: 429",
+      "HTTP request failed. Status: 502",
+      "rate limit exceeded",
+      "getaddrinfo ENOTFOUND rpc.example",
+      "fetch failed",
+      "502 Bad Gateway",
+    ]) {
+      expect(isRpcErrorText(text), text).toBe(true);
+    }
+    for (const text of ["OpeningEntryEmpty(320)", "execution reverted", "it needs its first update", "the proof is for 0xab"]) {
+      expect(isRpcErrorText(text), text).toBe(false);
+    }
   });
 
   it("doubles the wait after each failure, up to the maximum, and starts over after a success", async () => {
@@ -256,8 +496,8 @@ describe("the deposit opener", () => {
     expect(await run.opener.check()).toMatchObject({ kind: "failed", reason: "read-failed", detail: "rpc down" });
     run.head.failure = null;
     run.readDepositsOpen.mockRejectedValueOnce("socket closed");
-    run.advance(OPEN_RETRY_MAXIMUM_MILLISECONDS);
-    expect(await run.opener.check()).toMatchObject({ kind: "failed", reason: "read-failed", detail: "socket closed" });
+    await run.fire();
+    expect(run.named("deposits_open_failed")[1]).toMatchObject({ reason: "read-failed", detail: "socket closed" });
     expect(run.openingProof).not.toHaveBeenCalled();
   });
 
