@@ -199,6 +199,18 @@ if grep -q 'ZKB_SERVICES' "$DIR/deploy.sh"; then pass "deploy.sh honours ZKB_SER
 # cross-links, and that zkb-search.js is built from the current sources.
 if command -v node >/dev/null; then
   if node --test "$DIR/indexer-home" >/dev/null 2>&1; then pass "indexer-home: live page, search and cross-links"; else fail "indexer-home: live page (node --test $DIR/indexer-home)"; fi
+# The blue/green comparison: order of list items and nullable fields must not fail it; a changed key or type must.
+if python3 -I - "$DIR/../ansible/files/compare_indexers.py" >/dev/null 2>&1 <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("compare", sys.argv[1]); c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c)
+ok = lambda a, b: c.compatible(c.shape(a), c.shape(b))
+assert ok({"t": [{"n": None, "s": "x"}, {"n": 1, "s": "y"}]}, {"t": [{"n": 2, "s": "y"}, {"n": None, "s": "x"}]})
+assert ok({"t": []}, {"t": [{"n": 1}]})
+assert not ok({"t": [{"n": 1}]}, {"t": [{"m": 1}]})
+assert not ok({"t": [{"n": 1}]}, {"t": [{"n": "1"}]})
+assert not ok({"a": 1}, {"a": 1, "b": 2})
+PY
+then pass "compare_indexers: list order and nullable fields pass, changed keys and types fail"; else fail "compare_indexers: shape comparison"; fi
 fi
 # Caddy serves the shared search script next to the page.
 if grep -q 'zkb-search.js' "$DIR/Caddyfile"; then pass "Caddyfile serves indexer-home/zkb-search.js"; else fail "Caddyfile does not serve indexer-home/zkb-search.js"; fi
