@@ -20,7 +20,7 @@
 
 use crate::beacon::http::HttpBeaconSource;
 use crate::beacon::{SourceBlock, StoredHead};
-use crate::chain::{ChainClient, RawLog};
+use crate::chain::{raw_header_from_sources, ChainClient, RawLog};
 use crate::contracts::{
     BlockHashEvidence, BlockRootsEvidence, BodyLayoutRow, HistoricalSummariesEvidence,
     MessageBridgeContract, StateLayoutRow,
@@ -33,6 +33,7 @@ use crate::light_client::{
     to_layout_header, verify_message_natively, AncestryPath, BeaconHeader, BridgeContext,
     SourceMessage, USER_REQUEST_TOPIC,
 };
+use crate::logging::redact_urls;
 use crate::rpc::parse_quantity;
 use crate::stored::{read_stored_header, read_stored_slots, read_stored_state};
 use alloy_primitives::{hex, Address, B256, U256};
@@ -175,6 +176,9 @@ pub struct EvidenceRequest<'a> {
     pub destination_bridge: Address,
     /// The light client on the destination chain.
     pub light_client: Address,
+    /// More nodes of the source chain, asked in order for the raw header of a Gloas source block when `source` does not give
+    /// it. Each is named `source.header_rpc_urls[i]`.
+    pub source_header_sources: &'a [ChainClient],
     /// The hash of the source transaction that sent the message.
     pub transaction: B256,
     /// The index of the `UserRequestForAffirmation` log inside the receipt of that transaction.
@@ -214,7 +218,7 @@ pub fn build_evidence(request: &EvidenceRequest<'_>) -> Result<MessageEvidence> 
     let execution = match request.beacon.is_gloas_source(timestamp)? {
         // A Gloas header has more items than the JSON rebuilder knows: read it raw.
         true => build_execution_evidence_from_raw_header(
-            request.source.raw_header(log.block_hash)?,
+            source_raw_header(request, log.block_hash)?,
             &receipts,
             &transactions,
             log.transaction_index,
@@ -292,6 +296,24 @@ pub fn build_evidence(request: &EvidenceRequest<'_>) -> Result<MessageEvidence> 
         prerequisites,
         created_at: utc_time_text(request.now_unix_seconds),
     })
+}
+
+/// The raw header of a Gloas source block: from the main source RPC, then from each `source.header_rpc_urls` entry in order
+/// ([`raw_header_from_sources`]). A Gloas header has fields that the JSON of the block does not show, so a rebuild from that
+/// JSON cannot stand in for it; a block before Gloas never comes here, it is rebuilt from its JSON.
+///
+/// # Errors
+/// `Error::Malformed` when no source gives a header with the block hash. The message names each source (`source.rpc_url`,
+/// `source.header_rpc_urls[i]`) with its cause, and no URL.
+fn source_raw_header(request: &EvidenceRequest<'_>, block_hash: B256) -> Result<Vec<u8>> {
+    raw_header_from_sources(request.source, request.source_header_sources, block_hash).map_err(
+        |failures| {
+            Error::Malformed(redact_urls(&format!(
+                "the source header: no source gave a header with the block hash {block_hash:#x} ({}); a Gloas header needs a node with debug_getRawHeader in source.rpc_url or source.header_rpc_urls",
+                failures.join("; ")
+            )))
+        },
+    )
 }
 
 /// A source header at or after the Gloas fork is proven through the bid, and the bridge applies that rule only from its
@@ -736,6 +758,7 @@ mod tests {
                 source_bridge: Address::ZERO,
                 destination_bridge: Address::repeat_byte(2),
                 light_client: Address::ZERO,
+                source_header_sources: &[],
                 transaction: B256::ZERO,
                 log_index: 0,
                 anchor_slot: None,
@@ -755,6 +778,109 @@ mod tests {
         assert!(
             matches!(&error, Error::Config(text) if text.contains("gloasForkSlot")),
             "{error}"
+        );
+    }
+
+    /// A header node: it answers `debug_getRawHeader` with a fixed answer, or with the error of a node without the method.
+    struct HeaderNode(std::result::Result<String, Error>);
+
+    impl JsonRpc for HeaderNode {
+        fn call(&self, method: &str, _params: Value) -> Result<Value> {
+            match method {
+                "eth_chainId" => Ok(json!("0x1")),
+                "debug_getRawHeader" => match &self.0 {
+                    Ok(text) => Ok(json!(text)),
+                    Err(Error::Http(text)) => Err(Error::Http(text.clone())),
+                    Err(_) => Err(Error::Rpc {
+                        code: -32601,
+                        message: "the method debug_getRawHeader does not exist/is not available"
+                            .into(),
+                        data: None,
+                    }),
+                },
+                other => panic!("unexpected method {other}"),
+            }
+        }
+    }
+
+    fn without_method() -> HeaderNode {
+        HeaderNode(Err(Error::Usage(String::new())))
+    }
+
+    /// Claim: the evidence builder reads the raw header of a Gloas source block from the main source RPC first, then from
+    /// each `source.header_rpc_urls` entry in order. A main RPC without `debug_getRawHeader` (-32601, as publicnode answers
+    /// for Sepolia) and a header source that answers a header of another hash are skipped; the first right header wins.
+    /// When no source gives it, the error names every source with its cause, and no URL path.
+    /// Why it matters: a Gloas header cannot be rebuilt from the block JSON, so without a header source a public source
+    /// RPC stops every delivery of the route.
+    #[test]
+    fn a_gloas_source_header_comes_from_the_header_sources() {
+        let header = vec![0xc3u8, 0x0a, 0x0b, 0x0c];
+        let hash = alloy_primitives::keccak256(&header);
+        let source = ChainClient::connect("source", 1, Box::new(without_method())).unwrap();
+        let destination = ChainClient::connect("destination", 943, Box::new(WordNode(0))).unwrap();
+        let beacon = HttpBeaconSource::new(ChainKind::Sepolia, Box::new(NoBeaconData));
+        let header_source = |index: usize, node: HeaderNode| {
+            ChainClient::header_only(
+                &format!("source.header_rpc_urls[{index}]"),
+                1,
+                Box::new(node),
+            )
+        };
+        let read = |sources: &[ChainClient]| {
+            let request = EvidenceRequest {
+                route: "test",
+                source: &source,
+                destination: &destination,
+                beacon: &beacon,
+                source_bridge: Address::ZERO,
+                destination_bridge: Address::repeat_byte(2),
+                light_client: Address::ZERO,
+                source_header_sources: sources,
+                transaction: B256::ZERO,
+                log_index: 0,
+                anchor_slot: None,
+                destination_start_block: 0,
+                log_block_range: 1,
+                now_unix_seconds: 0,
+            };
+            source_raw_header(&request, hash)
+        };
+
+        let good = [
+            header_source(0, HeaderNode(Ok("0xc0".into()))),
+            header_source(1, HeaderNode(Ok(hex::encode_prefixed(&header)))),
+        ];
+        assert_eq!(read(&good).unwrap(), header);
+
+        let bad = [
+            header_source(0, HeaderNode(Ok("0xc0".into()))),
+            header_source(
+                1,
+                HeaderNode(Err(Error::Http(
+                    "debug_getRawHeader: https://sepolia.example.org/v3/SECRETKEY timed out".into(),
+                ))),
+            ),
+        ];
+        let error = read(&bad).unwrap_err();
+        let text = error.to_string();
+        assert!(matches!(error, Error::Malformed(_)), "{text}");
+        for part in [
+            "source.rpc_url",
+            "-32601",
+            "source.header_rpc_urls[0]",
+            "does not hash to",
+            "source.header_rpc_urls[1]",
+        ] {
+            assert!(text.contains(part), "`{part}` in `{text}`");
+        }
+        assert!(!text.contains("SECRETKEY"), "{text}");
+
+        let error = read(&[]).unwrap_err().to_string();
+        assert!(error.contains("source.rpc_url"), "{error}");
+        assert!(
+            error.contains("source.header_rpc_urls"),
+            "the error points at the setting: {error}"
         );
     }
 

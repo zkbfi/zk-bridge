@@ -1,6 +1,7 @@
 //! A read-only client for one chain: blocks, receipts, logs and contract views. It holds no key and sends no transaction.
 
 use crate::error::{Error, Result};
+use crate::logging::redact_urls;
 use crate::rpc::{parse_quantity, quantity, JsonRpc};
 use alloy_primitives::{hex, keccak256, Address, Bytes, B256};
 use alloy_sol_types::SolCall;
@@ -289,6 +290,35 @@ impl ChainClient {
     }
 }
 
+/// The raw header with hash `hash` (`debug_getRawHeader`), from the first of the ordered sources that gives one: the main
+/// RPC of the chain, then each header endpoint in order. Every answer is checked against `hash` ([`checked_raw_header`]),
+/// so no source is trusted, and a source without the method, a source that fails, or a header with another hash moves on to
+/// the next source. Both commands that need a raw header read it here: `opening-proof` for the other chain, `evidence` for
+/// a Gloas source block.
+///
+/// # Errors
+/// When no source gives the header: one line per source, in order, that names the source (`<chain>.rpc_url` for the main
+/// RPC, the name of the header client such as `source.header_rpc_urls[0]`) with its cause. The lines carry no URL path or
+/// query, where a key sits.
+pub fn raw_header_from_sources(
+    main: &ChainClient,
+    header_sources: &[ChainClient],
+    hash: B256,
+) -> std::result::Result<Vec<u8>, Vec<String>> {
+    let mut failures = Vec::new();
+    match main.raw_header(hash) {
+        Ok(bytes) => return Ok(bytes),
+        Err(error) => failures.push(redact_urls(&format!("{}.rpc_url: {error}", main.name()))),
+    }
+    for source in header_sources {
+        match source.raw_header(hash) {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => failures.push(redact_urls(&format!("{}: {error}", source.name()))),
+        }
+    }
+    Err(failures)
+}
+
 /// The bytes of a `debug_getRawHeader` answer, checked against the hash that was asked for.
 ///
 /// Both paths that read a raw header use this one function, so a header that does not hash to the requested hash gives the
@@ -434,5 +464,97 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("eth_getRawTransactionByHash"), "{error}");
+    }
+
+    fn header_source(
+        name: &str,
+        handler: impl Fn(&str, &Value) -> Result<Value> + Send + Sync + 'static,
+    ) -> ChainClient {
+        let rpc = ScriptedRpc {
+            calls: Mutex::new(vec![]),
+            handler: Box::new(handler),
+        };
+        ChainClient::header_only(name, 369, Box::new(rpc))
+    }
+
+    fn missing_method() -> Error {
+        Error::Rpc {
+            code: -32601,
+            message: "the method debug_getRawHeader does not exist/is not available".into(),
+            data: None,
+        }
+    }
+
+    /// Claim: the raw header is read from the main RPC first, then from each header source in order. A source without the
+    /// method (-32601) or with a header of another hash moves on to the next one, and the first header that hashes to the
+    /// block hash wins.
+    /// Why it matters: a public RPC often lacks `debug_getRawHeader`, and a header source is never trusted.
+    #[test]
+    fn the_raw_header_comes_from_the_first_source_with_the_right_hash() {
+        let header = vec![0xc3u8, 0x01, 0x02, 0x03];
+        let hash = keccak256(&header);
+        let main = client(|method, _| match method {
+            "eth_chainId" => Ok(json!("0x171")),
+            _ => Err(missing_method()),
+        })
+        .unwrap();
+        let wrong = header_source("source.header_rpc_urls[0]", |_, _| Ok(json!("0xc0")));
+        let answer = hex::encode_prefixed(&header);
+        let right = header_source("source.header_rpc_urls[1]", move |method, params| {
+            assert_eq!(method, "debug_getRawHeader");
+            assert_eq!(params[0], json!(format!("{hash:#x}")));
+            Ok(json!(answer.clone()))
+        });
+        let never = header_source("source.header_rpc_urls[2]", |_, _| {
+            panic!("a source after the first right one is never asked")
+        });
+        let sources = [wrong, right, never];
+        assert_eq!(
+            raw_header_from_sources(&main, &sources, hash).unwrap(),
+            header
+        );
+
+        let honest_main = client(move |method, _| match method {
+            "eth_chainId" => Ok(json!("0x171")),
+            _ => Ok(json!(hex::encode_prefixed([0xc3u8, 0x01, 0x02, 0x03]))),
+        })
+        .unwrap();
+        let unasked = [header_source("source.header_rpc_urls[0]", |_, _| {
+            panic!("the main RPC answered")
+        })];
+        assert_eq!(
+            raw_header_from_sources(&honest_main, &unasked, hash).unwrap(),
+            header
+        );
+    }
+
+    /// Claim: when no source gives a header with the block hash, the failures name each source with its cause, in order,
+    /// and carry no URL path (where a key sits), even when a node puts its URL in the error.
+    /// Why it matters: a header URL can carry a key, and the failures reach logs.
+    #[test]
+    fn the_failures_name_every_source_and_no_url() {
+        let hash = keccak256([0xc0u8]);
+        let main = client(|method, _| match method {
+            "eth_chainId" => Ok(json!("0x171")),
+            _ => Err(missing_method()),
+        })
+        .unwrap();
+        let sources = [
+            header_source("source.header_rpc_urls[0]", |_, _| Ok(json!("0xc1"))),
+            header_source("source.header_rpc_urls[1]", |_, _| {
+                Err(Error::Http(
+                    "debug_getRawHeader: https://rpc.example.org/v2/SECRETKEY timed out".into(),
+                ))
+            }),
+        ];
+        let failures = raw_header_from_sources(&main, &sources, hash).unwrap_err();
+        assert_eq!(failures.len(), 3, "{failures:?}");
+        assert!(failures[0].starts_with("test.rpc_url: "), "{failures:?}");
+        assert!(failures[0].contains("-32601"), "{failures:?}");
+        assert!(failures[1].starts_with("source.header_rpc_urls[0]: "));
+        assert!(failures[1].contains("does not hash to"), "{failures:?}");
+        assert!(failures[2].starts_with("source.header_rpc_urls[1]: "));
+        let joined = failures.join("; ");
+        assert!(!joined.contains("SECRETKEY"), "{joined}");
     }
 }

@@ -12,7 +12,7 @@
 //! [`verify_opening`] is the native copy of that walk. The command runs it on the decoded calldata before it prints, so a
 //! proof that the contract would refuse never reaches the output.
 
-use crate::chain::ChainClient;
+use crate::chain::{raw_header_from_sources, ChainClient};
 use crate::contracts::{LightClientContract, MessageBridgeContract, OpeningProof};
 use crate::error::{Error, Result};
 use crate::light_client::rebuild_execution_header;
@@ -263,17 +263,10 @@ fn remote_header_rlp(
     block: &Value,
     block_hash: B256,
 ) -> Result<Vec<u8>> {
-    let mut failures = Vec::new();
-    match remote.raw_header(block_hash) {
+    let mut failures = match raw_header_from_sources(remote, header_sources, block_hash) {
         Ok(bytes) => return Ok(bytes),
-        Err(error) => failures.push(format!("{}.rpc_url: {error}", remote.name())),
-    }
-    for source in header_sources {
-        match source.raw_header(block_hash) {
-            Ok(bytes) => return Ok(bytes),
-            Err(error) => failures.push(format!("{}: {error}", source.name())),
-        }
-    }
+        Err(failures) => failures,
+    };
     match rebuild_execution_header(block) {
         Ok(rebuilt) => Ok(rebuilt.header_rlp.to_vec()),
         Err(error) => {

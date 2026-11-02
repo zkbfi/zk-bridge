@@ -280,10 +280,13 @@ or set `EXPLORER_HEADER_RPC_URL_<chainId>` in the environment of the bot:
 ```
 
 The prover file then gets `header_rpc_urls = [...]` in the destination section of each route whose destination is that
-chain. The prover asks the main RPC first, then each header RPC in order, only for `debug_getRawHeader`, then the rebuild
-from the JSON. Every header must hash to the block hash that the own light client stored, so a header RPC is never trusted:
+chain (the `opening-proof` command reads the remote header there), and in the source section of each route whose source
+is that chain (the `evidence` command reads the header of a Gloas source block there). The prover asks the main RPC
+first, then each header RPC in order, only for `debug_getRawHeader`; `opening-proof` then tries the rebuild from the JSON,
+which cannot give a Gloas header, so `evidence` has no such last step. Every header must hash to the block hash that the own light client stored, so a header RPC is never trusted:
 a wrong one is refused and the next is asked. When all fail, the error names each source (`destination.rpc_url`,
-`destination.header_rpc_urls[0]`, ..., the rebuild from JSON) with its cause and no URL. Header RPC URLs can carry a key;
+`destination.header_rpc_urls[0]`, ..., the rebuild from JSON; or `source.rpc_url`, `source.header_rpc_urls[0]`, ... for
+`evidence`) with its cause and no URL. Header RPC URLs can carry a key;
 each URL and its key-like parts are removed from every log line.
 
 **The proof cache.** Owner, 2026-11-01: "and if the proofs get harder to compute the further back one has to go simply
