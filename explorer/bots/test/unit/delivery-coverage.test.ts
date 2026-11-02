@@ -364,6 +364,26 @@ describe("the destination token of a first transfer", () => {
     expect(preparation.ready.item.transfer?.destinationToken?.decimals).toBe(6);
   });
 
+  it("prices the tip in a copy that is not deployed yet with the decimals of the token that it copies", async () => {
+    // The first transfer deploys the copy, so the copy cannot answer decimals() before the delivery. The factory gives it
+    // the decimals of its home token, so the runner takes those.
+    const listed = firstTransfer();
+    const w = setup({ item: { ...listed, transfer: { ...listed.transfer!, sourceToken: { ...listed.transfer!.sourceToken, decimals: 6 } } }, tokenFactory: FACTORY });
+    const copy = address(0x77);
+    w.chain.predictedCopy = copy;
+    w.chain.tokenDecimals = null;
+    const data = { [w.item.messageId]: feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n }, value: 1000n, token: SOURCE_TOKEN, handler: "bridged" }) };
+    w.dependencies = {
+      ...w.dependencies,
+      indexer: fakeIndexer([w.item], data),
+      prover: feedProver(w.prover, [w.item], data),
+      settings: { ...w.dependencies.settings, tokenValuationsWei: { [copy.toLowerCase()]: 10n ** 30n } },
+    };
+    const preparation = await prepareItem(w.dependencies, w.item, w.ledger);
+    if (preparation.kind !== "ready") throw new Error(`the item was expected to be ready for a batch: ${JSON.stringify(preparation)}`);
+    expect(preparation.ready.item.transfer?.destinationToken).toMatchObject({ address: copy, decimals: 6 });
+  });
+
   it("cannot price the tip when the deployment names no token factory", async () => {
     const w = setup({ item: firstTransfer() });
     expect(await outcomeOf(w.prepare)).toEqual({ status: "skipped", messageId: word(1), reason: "no-price-for-fee-token" });

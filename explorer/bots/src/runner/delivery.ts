@@ -193,7 +193,9 @@ export async function quoteFee(
   });
   const answer = await dependencies.chain.call({ to: dependencies.deliveryRouter as Address, data });
   const [feeTokens] = decodeFunctionResult({ abi: deliveryRouterAbi, functionName: "feeInfo", data: answer });
-  const decimals = await tokenDecimals(dependencies, token.address as Address);
+  // A send that locks a native token releases a copy, which the token factory deploys with the decimals of its home
+  // token. Before the first delivery the copy has no code and cannot answer, so those decimals stand in for it.
+  const decimals = (await tokenDecimals(dependencies, token.address as Address)) ?? (item.transfer?.sourceIsNative === true ? item.transfer.sourceToken.decimals : null);
   if (decimals === null) return { ok: false, reason: "no-price-for-fee-token" };
   const value = valueFeeInWei({
     fee: feeTokens,
