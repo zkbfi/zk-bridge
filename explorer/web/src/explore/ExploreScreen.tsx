@@ -140,10 +140,10 @@ const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
           ×
         </button>
         {menuOpen ? (
-          <div id={listId} role="listbox" aria-label="Shortcuts" className="zb-xmenu">
+          <div id={listId} role="listbox" aria-label="Shortcuts" className="zb-m-surface zb-xmenu">
             {menuGroups.map((group) => (
               <div key={group.title} role="group" aria-labelledby={`${listId}-g-${group.title.replaceAll(" ", "-")}`}>
-                <div id={`${listId}-g-${group.title.replaceAll(" ", "-")}`} className="zb-palette-group">
+                <div id={`${listId}-g-${group.title.replaceAll(" ", "-")}`} className="zb-m-head">
                   {group.title}
                 </div>
                 {group.items.map((item) => (
@@ -152,13 +152,13 @@ const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
                     id={optionId(item)}
                     role="option"
                     aria-selected={active !== null && active.id === item.id}
-                    className="zb-palette-row"
+                    className="zb-m-row zb-m-stack"
                     onMouseDown={(event) => event.preventDefault()}
                     onMouseMove={() => setHighlight(shortcuts.indexOf(item))}
                     onClick={() => go(item)}
                   >
-                    <span className="zb-palette-title">{item.title}</span>
-                    <span className="zb-palette-sub">{item.sub}</span>
+                    <span className="zb-m-title">{item.title}</span>
+                    <span className="zb-m-sub">{item.sub}</span>
                   </div>
                 ))}
               </div>

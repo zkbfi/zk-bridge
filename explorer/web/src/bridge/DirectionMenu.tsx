@@ -70,11 +70,11 @@ export const DirectionMenu = ({ current, onPick, onClose }: DirectionMenuProps) 
   const sorted = [...groups.filter((group) => !group.testnet), ...groups.filter((group) => group.testnet)];
 
   return (
-    <div ref={list} className="zb-pop zb-dir-menu" role="menu" aria-label="Route" onKeyDown={onKey}>
+    <div ref={list} className="zb-m-surface zb-dir-menu" role="menu" aria-label="Route" onKeyDown={onKey}>
       {sorted.map(({ pair, chains, testnet }, index) => (
         <div key={pair.id} role="group" aria-label={testnet ? `Testnet: ${chains[0].name} ⇄ ${chains[1].name}` : `${chains[0].name} ⇄ ${chains[1].name}`}>
-          {testnet && (index === 0 || !sorted[index - 1]!.testnet) ? <div className="zb-pop-group">Testnet</div> : null}
-          {!testnet ? <div className="zb-pop-group">{chains[0].name} ⇄ {chains[1].name}</div> : null}
+          {testnet && (index === 0 || !sorted[index - 1]!.testnet) ? <div className="zb-m-head">Testnet</div> : null}
+          {!testnet ? <div className="zb-m-head">{chains[0].name} ⇄ {chains[1].name}</div> : null}
           {(["first-to-second", "second-to-first"] as const).map((dir) => {
             const [from, to] = dir === "first-to-second" ? chains : [chains[1], chains[0]];
             const checked = pair.id === current.pairId && dir === current.dir;
@@ -85,6 +85,7 @@ export const DirectionMenu = ({ current, onPick, onClose }: DirectionMenuProps) 
                 key={dir}
                 type="button"
                 role="menuitemradio"
+                className="zb-m-row"
                 aria-checked={checked}
                 aria-disabled={disabled}
                 tabIndex={-1}
@@ -96,7 +97,7 @@ export const DirectionMenu = ({ current, onPick, onClose }: DirectionMenuProps) 
                 <span>
                   {from.name} → {to.name}
                 </span>
-                <span style={{ marginLeft: "auto", fontSize: "var(--zb-step--1)", color: "var(--zb-muted)" }}>{reason}</span>
+                <span className="zb-m-sub zb-m-aside">{reason}</span>
               </button>
             );
           })}

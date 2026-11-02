@@ -102,7 +102,7 @@ type Segment<T extends string> = { readonly value: T; readonly label: string };
 
 const Segments = <T extends string>({ label, value, options, onChange, stacked = false }: { readonly label: string; readonly value: T; readonly options: readonly Segment<T>[]; readonly onChange: (next: T) => void; readonly stacked?: boolean }) => (
   <div className={stacked ? "zb-menu-row zb-menu-stack" : "zb-menu-row"}>
-    <span>{label}</span>
+    <span className="zb-m-head">{label}</span>
     <span className="zb-seg" role="radiogroup" aria-label={label}>
       {options.map((option) => (
         <button key={option.value} type="button" role="radio" aria-checked={option.value === value} onClick={() => onChange(option.value)}>

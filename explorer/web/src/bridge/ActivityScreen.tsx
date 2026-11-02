@@ -166,7 +166,7 @@ export const ActivityScreen = () => {
         <div className="zb-col">
           {[...new Set(delivered.map((row) => dayOf(row.deliveredAt ?? row.sentAt, now)))].map((day) => (
             <div key={day}>
-              <div className="zb-pop-group" style={{ padding: "14px 0 4px" }}>{day}</div>
+              <div className="zb-m-head" style={{ padding: "14px 0 4px" }}>{day}</div>
               {delivered
                 .filter((row) => dayOf(row.deliveredAt ?? row.sentAt, now) === day)
                 .map((row) => {
