@@ -103,6 +103,25 @@ pull ZKB_PULL_KEEP=2 || true
 n=$(ls "$local_dir"/zk-bridge-proofs-*.tar.gz | wc -l | tr -d ' ')
 if [ "$n" -eq 2 ] && [ ! -e "$local_dir/zk-bridge-proofs-20260101T000000Z.tar.gz" ] && [ ! -e "$local_dir/zk-bridge-proofs-20260101T000000Z.tar.gz.sha256" ]; then pass "retention keeps the newest 2 (and drops the .sha256)"; else fail "retention (kept $n)"; fi
 
+# A real bundle lists hundreds of files with long paths. The check that every file is listed must not fail on a long list (a `grep -q` at
+# the end of a pipe ends early, and under pipefail the SIGPIPE of the writer turned a match into a failure).
+big=$T/w-big
+mkdir -p "$big/files"
+{
+  printf '{"formatVersion":1,"files":{'
+  for i in $(seq 1 3000); do
+    printf 'file %s\n' "$i" >"$big/files/f$i.json"
+    [ "$i" -eq 1 ] || printf ','
+    printf '"files/f%s.json":{"sha256":"%s","bytes":1}' "$i" "$(sha "$big/files/f$i.json")"
+  done
+  printf '}}\n'
+} >"$big/manifest.json"
+tar -czf "$remote/zk-bridge-proofs-20260103T120000Z.tar.gz" -C "$big" .
+printf '%s  zk-bridge-proofs-20260103T120000Z.tar.gz\n' "$(sha "$remote/zk-bridge-proofs-20260103T120000Z.tar.gz")" >"$remote/zk-bridge-proofs-20260103T120000Z.tar.gz.sha256"
+status=0
+pull ZKB_PULL_KEEP=5 || status=$?
+if [ "$status" -eq 0 ] && [ -f "$local_dir/zk-bridge-proofs-20260103T120000Z.tar.gz" ]; then pass "a bundle that lists 3000 files passes the manifest check"; else fail "large bundle (status $status): $(tail -1 "$local_dir/pull.log")"; fi
+
 make_bundle 20260104T000000Z tamper
 status=0
 pull ZKB_PULL_KEEP=5 || status=$?
