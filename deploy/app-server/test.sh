@@ -446,6 +446,8 @@ EOS
   printf 'bad\n' >"$PT/p-runner/beacon-states/369/$slot-$h1.ssz.bak"
   printf 'bad\n' >"$PT/p-runner/beacon-states/eth/$slot-$h1.ssz"
   ln -s /etc/hosts "$PT/p-runner/beacon-states/369/000000000200-$h1.ssz"
+  # As on the server: the services write their beacon states 0600.
+  chmod 600 "$PT/p-runner/beacon-states/369/$slot-$h1.ssz" "$PT/p-backend/beacon-states/369/$slot-$h1.ssz" "$PT/p-backend/beacon-states/369/$slot-$h2.summary"
   # The IPFS node: a repository with the API secret and address, and a fake curl in front of the RPC API. The fake
   # records its argv and the header it got on standard input; the tests check that the secret never reaches an argv.
   ipfs_token=tok3nNEVERinARGV9f
@@ -502,6 +504,8 @@ EOS
   beacon=$(cd "$tree" && find beacon-states -type f | sort | tr '\n' ' ')
   if [ "$beacon" = "beacon-states/369/$slot-$h1.ssz beacon-states/369/$slot-$h2.summary " ]; then pass "publish: only well-named beacon states, deduplicated, from numeric chain directories, no links"; else fail "beacon states in tree: $beacon"; fi
   if [ "$(grep -o '^[a-z-]*' "$PT/calls.log" | tr '\n' ' ')" = "public-export manifest-write public-check " ]; then pass "publish: public-export, manifest-write (--public), public-check in order"; else fail "publish CLI calls: $(tr '\n' '|' <"$PT/calls.log")"; fi
+  # The archive user writes the manifest of the tree, so it must read every beacon state copied from a 0600 source.
+  if [ -n "$(find "$tree/beacon-states" -type f 2>/dev/null)" ] && [ -z "$(find "$tree/beacon-states" -type f ! -perm -0044 2>/dev/null)" ]; then pass "publish: beacon states copied from 0600 files are readable in the tree"; else fail "publish: beacon state modes: $(find "$tree/beacon-states" -type f -exec ls -l {} + 2>&1 | head -3)"; fi
   if [ -z "$(find "$tree" -newermt 2000-01-03 -print -quit)" ] && [ ! -s "$PT/ipfs/calls" ] 2>/dev/null || [ ! -e "$PT/ipfs/calls" ]; then pass "publish --dry-run: fixed file times, nothing sent to ipfs"; else fail "dry run times or ipfs calls"; fi
   # A beacon state with the same name and other content stops the run before anything is added.
   printf 'ssz-OTHER\n' >"$PT/p-backend/beacon-states/369/$slot-$h1.ssz"

@@ -317,7 +317,8 @@ for chain in "$src"/*/; do
     name=$(basename "$f")
     if printf "%s\n" "$name" | grep -Eq "^[0-9]{12}-0x[0-9a-f]{64}\.(ssz|summary)$"; then
       mkdir -p "$dest/$c"
-      cp "$f" "$dest/$c/$name"
+      # install, not cp: cp keeps the 0600 of the service directory, and the archive user reads the copy.
+      install -m 0644 "$f" "$dest/$c/$name"
       n=$((n + 1))
     else
       skipped=$((skipped + 1))
@@ -380,7 +381,7 @@ cmd_publish() {
         continue
       fi
       mkdir -p "$(dirname "$dest")"
-      cp "$f" "$dest"
+      install -m 0644 "$f" "$dest"
       merged=$((merged + 1))
     done < <(find "$src/$who" -type f -print0)
   done
