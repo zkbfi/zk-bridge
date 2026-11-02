@@ -408,7 +408,7 @@ EOS
   done
   if [ -z "$missing" ] && [ ! -e "$m/beacon-states/11155111/junk.ssz" ] && [ -n "$(find "$m/storage-proofs" -name '100-0xdead.*.json')" ]; then pass "proofs.sh export: records, both services' beacon states (not junk) in the mirror's layout"; else fail "mirror layout, missing:$missing"; fi
   if [ "$(grep -o '^[a-z-]*' "$PT/calls.log" | tr '\n' ' ')" = "migrate ingest-cache ingest-backend mirror-write mirror-add mirror-add mirror-add mirror-prune mirror-manifest " ] \
-    && grep -q '^mirror-prune --dir .* --days 30 --held .*beacon-runner,.*beacon-backend$' "$PT/calls.log" && grep -q "^mirror-manifest --dir .* --stamp ${D}T000100Z --commit abc123def --days 30\$" "$PT/calls.log"; then
+    && grep -q '^mirror-prune --dir .* --days 30 --held .*root/beacon-runner,.*root/beacon-backend$' "$PT/calls.log" && grep -q '^ingest-backend --sqlite .*/root/snapshots/' "$PT/calls.log" && grep -q "^mirror-manifest --dir .* --stamp ${D}T000100Z --commit abc123def --days 30 --print\$" "$PT/calls.log"; then
     pass "proofs.sh export: CLI calls in order (migrate, ingest, mirror-write, mirror-add x3, mirror-prune 30 days with the held states, mirror-manifest)"
   else
     fail "export CLI calls: $(tr '\n' '|' <"$PT/calls.log")"
@@ -504,7 +504,7 @@ EOS
   # verify: the newest manifest must match exactly, then the storage proofs; an old manifest is a warning.
   : >"$PT/calls.log"
   run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" bash "$DIR/proofs.sh" verify
-  if [ "$PROOFS_STATUS" -eq 0 ] && grep -q "^mirror-check --dir $m --exact\$" "$PT/calls.log" && grep -q "^verify-storage --mirror $m\$" "$PT/calls.log" \
+  if [ "$PROOFS_STATUS" -eq 0 ] && grep -q "^mirror-check --dir $m --exact --manifest ${D}T000800Z.json\$" "$PT/calls.log" && grep -q "^verify-storage --mirror $m\$" "$PT/calls.log" \
     && out_has "newest manifest: ${D}T000800Z.json (today)"; then
     pass "proofs.sh verify: today's manifest matches the mirror, then the storage proofs verify"
   else
@@ -536,6 +536,14 @@ EOS
   else
     fail "trust list: $(cat "$out1/manifests.sha256" 2>&1 | tail -2)"
   fi
+  if cmp -s "$out1/trusted-manifests/${D}T000800Z.json" "$m/manifests/${D}T000800Z.json" && [ -z "$(modes_wrong "$out1/trusted-manifests/${D}T000800Z.json")" ] \
+    && grep -q "^$(sha256_file "$m/snapshots/${D}T000100Z.sqlite")  snapshots/${D}T000100Z.sqlite\$" "$out1/manifests.sha256" \
+    && grep -q "^$(sha256_file "$m/beacon-states/$state_a")  beacon-states/$state_a\$" "$out1/manifests.sha256" \
+    && [ "$(grep -c "  beacon-states/$state_a\$" "$out1/manifests.sha256")" -eq 1 ]; then
+    pass "proofs.sh export: root keeps its own copy of each manifest, and records the hashes of the snapshots and beacon states it saw (once each)"
+  else
+    fail "trust list: $(cat "$out1/manifests.sha256" 2>&1 | tail -2)"
+  fi
 
   # bundle: one tar.gz of the mirror with its .sha256, 0640.
   run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" ZKB_PROOFS_STAMP=${D}T000900Z bash "$DIR/proofs.sh" bundle
@@ -551,7 +559,7 @@ EOS
   # Import of the mirror bundle into an empty server.
   mkdir -p "$PT/dst-backend" "$PT/dst-runner"
   : >"$PT/calls.log"
-  run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --manifest-sha256 "$trusted"
+  run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --trust-list "$out1/manifests.sha256"
   if [ "$PROOFS_STATUS" -eq 0 ] && [ "$(sqlite3 "$PT/dst-backend/backend.sqlite" 'SELECT body FROM proofs' 2>/dev/null)" = p1 ] \
     && cmp -s "$PT/dst-runner/beacon-states/$state_a" "$m/beacon-states/$state_a" && cmp -s "$PT/dst-backend/beacon-states/$state_b" "$m/beacon-states/$state_b" \
     && [ -f "$PT/dst-backend/beacon-states/${state_b%.ssz}.summary" ]; then
@@ -559,29 +567,29 @@ EOS
   else
     fail "import mirror bundle (status $PROOFS_STATUS): $PROOFS_OUT"
   fi
-  if [ "$(grep -o '^[a-z-]*' "$PT/calls.log" | tr '\n' ' ')" = "mirror-check migrate mirror-import ingest-backend mirror-states " ] && grep -q "^ingest-backend --sqlite .*/snapshots/${D}T000800Z.sqlite\$" "$PT/calls.log" \
-    && grep -q '^mirror-states .* --newest 16$' "$PT/calls.log"; then
-    pass "proofs.sh import: mirror-check, migrate, mirror-import, the newest snapshot, the 16 newest states"
+  if [ "$(grep -o '^[a-z-]*' "$PT/calls.log" | tr '\n' ' ')" = "mirror-check migrate mirror-import ingest-backend " ] && grep -q "^ingest-backend --sqlite .*/snapshots/${D}T000800Z.sqlite\$" "$PT/calls.log" \
+    && grep -q "^mirror-check .* --exact --manifest ${D}T000800Z.json\$" "$PT/calls.log"; then
+    pass "proofs.sh import: mirror-check (the named manifest), migrate, mirror-import, the newest snapshot"
   else
     fail "import CLI calls: $(tr '\n' '|' <"$PT/calls.log")"
   fi
   if [ -z "$(ls -A "$PT/out2" | grep -E '^\.extract-')" ]; then pass "proofs.sh import: the temporary directories are gone"; else fail "extract dir left behind"; fi
   find "$PT/dst-runner" "$PT/dst-backend" -type f -exec cksum {} + | sort >"$PT/state-1"
-  run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --manifest-sha256 "$trusted"
+  run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --trust-list "$out1/manifests.sha256"
   find "$PT/dst-runner" "$PT/dst-backend" -type f -exec cksum {} + | sort >"$PT/state-2"
   if [ "$PROOFS_STATUS" -eq 0 ] && cmp -s "$PT/state-1" "$PT/state-2" && out_has 'conflicts: 0'; then pass "proofs.sh import: a second import is a no-op with zero conflicts"; else fail "second import (status $PROOFS_STATUS)"; fi
   printf 'different\n' >"$PT/dst-runner/beacon-states/$state_a"
   rm -f "$PT/dst-backend/beacon-states/$state_b"
-  run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --manifest-sha256 "$trusted"
+  run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --trust-list "$out1/manifests.sha256"
   if [ "$PROOFS_STATUS" -eq 3 ] && out_has "conflict: $state_a" && [ "$(cat "$PT/dst-runner/beacon-states/$state_a")" = different ] && [ -f "$PT/dst-backend/beacon-states/$state_b" ]; then
     pass "proofs.sh import: a changed file is reported (exit 3), not overwritten, and the rest is still restored"
   else
     fail "import with a changed file (status $PROOFS_STATUS): $PROOFS_OUT"
   fi
-  run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" STUB_EXIT_IMPORT=3 bash "$DIR/proofs.sh" import "$mb" --manifest-sha256 "$trusted"
+  run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" STUB_EXIT_IMPORT=3 bash "$DIR/proofs.sh" import "$mb" --trust-list "$out1/manifests.sha256"
   if [ "$PROOFS_STATUS" -eq 3 ]; then pass "proofs.sh import: archive conflicts give exit 3"; else fail "archive conflicts (status $PROOFS_STATUS)"; fi
   printf 'keep me\n' >"$PT/dst-backend/backend.sqlite"
-  run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --manifest-sha256 "$trusted"
+  run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --trust-list "$out1/manifests.sha256"
   if [ "$(cat "$PT/dst-backend/backend.sqlite")" = 'keep me' ]; then pass "proofs.sh import: an existing backend.sqlite is not replaced"; else fail "backend.sqlite overwritten"; fi
   # Import of this server's own mirror (no argument), and of a directory.
   run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" bash "$DIR/proofs.sh" import
@@ -591,10 +599,10 @@ EOS
   tar -xzf "$mb" -C "$PT/tamper-m"
   printf 'x' >>"$PT/tamper-m/beacon-states/$state_a"
   tar -czf "$PT/out3/zk-bridge-mirror-20260110T000000Z.tar.gz" -C "$PT/tamper-m" .
-  run_proofs proofs "$PT/out3" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$PT/out3/zk-bridge-mirror-20260110T000000Z.tar.gz" --manifest-sha256 "$trusted"
+  run_proofs proofs "$PT/out3" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$PT/out3/zk-bridge-mirror-20260110T000000Z.tar.gz" --trust-list "$out1/manifests.sha256"
   if [ "$PROOFS_STATUS" -eq 1 ] && out_has 'does not match its newest manifest'; then pass "proofs.sh import: a tampered mirror fails its manifest"; else fail "tampered mirror (status $PROOFS_STATUS)"; fi
   cp "$mb.sha256" "$PT/out3/zk-bridge-mirror-20260110T000000Z.tar.gz.sha256"
-  run_proofs proofs "$PT/out3" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$PT/out3/zk-bridge-mirror-20260110T000000Z.tar.gz" --manifest-sha256 "$trusted"
+  run_proofs proofs "$PT/out3" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$PT/out3/zk-bridge-mirror-20260110T000000Z.tar.gz" --trust-list "$out1/manifests.sha256"
   if [ "$PROOFS_STATUS" -eq 1 ] && out_has '.sha256'; then pass "proofs.sh import: a tampered bundle fails its .sha256"; else fail "tampered, with sha256 (status $PROOFS_STATUS)"; fi
 
   # --- The mirror is writable by the archive user; root trusts none of it. -------------------------------------------
@@ -604,10 +612,23 @@ EOS
   sed 's/"retentionDays": 30/"retentionDays": 31/' "$PT/manifest.keep" >"$newest_m"
   : >"$PT/calls.log"
   run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" bash "$DIR/proofs.sh" import
-  if [ "$PROOFS_STATUS" -eq 1 ] && out_has "is not in $out1/manifests.sha256: refusing it" && ! grep -q '^mirror-import' "$PT/calls.log"; then pass "proofs.sh import: a manifest changed after the export is refused before anything is imported"; else fail "tampered manifest import (status $PROOFS_STATUS): $PROOFS_OUT"; fi
+  if [ "$PROOFS_STATUS" -eq 1 ] && out_has "differs from root's copy" && out_has 'is not vouched for' && ! grep -q '^mirror-import' "$PT/calls.log"; then pass "proofs.sh import: a manifest changed after the export is refused before anything is imported"; else fail "tampered manifest import (status $PROOFS_STATUS): $PROOFS_OUT"; fi
   run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" bash "$DIR/proofs.sh" verify
   if [ "$PROOFS_STATUS" -eq 1 ] && out_has 'it was changed after the export'; then pass "proofs.sh verify: a manifest changed after the export is refused"; else fail "tampered manifest verify (status $PROOFS_STATUS)"; fi
   cp "$PT/manifest.keep" "$newest_m"
+  # verify picks the manifest by the CLI's own rule and names it: another name in manifests/, or a newer stamp-shaped
+  # one root never kept, fails it.
+  printf '{}\n' >"$m/manifests/zzz.json"
+  run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" bash "$DIR/proofs.sh" verify
+  if [ "$PROOFS_STATUS" -eq 1 ] && out_has 'manifests/ holds zzz.json, which is not a manifest name'; then pass "proofs.sh verify: a planted zzz.json in manifests/ fails it"; else fail "zzz.json (status $PROOFS_STATUS): $PROOFS_OUT"; fi
+  rm -f "$m/manifests/zzz.json"
+  cp "$PT/manifest.keep" "$m/manifests/29991231T235959Z.json"
+  run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" bash "$DIR/proofs.sh" verify
+  if [ "$PROOFS_STATUS" -eq 1 ] && out_has 'root holds no copy of the manifest 29991231T235959Z.json'; then pass "proofs.sh verify: a newer stamp-shaped manifest root never kept fails it"; else fail "planted stamp (status $PROOFS_STATUS): $PROOFS_OUT"; fi
+  rm -f "$m/manifests/29991231T235959Z.json"
+  : >"$PT/calls.log"
+  run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" bash "$DIR/proofs.sh" verify
+  if [ "$PROOFS_STATUS" -eq 0 ] && grep -q "^mirror-check --dir $m --exact --manifest ${D}T000800Z.json\$" "$PT/calls.log"; then pass "proofs.sh verify: the CLI checks the manifest the script picked, by name"; else fail "verify by name (status $PROOFS_STATUS): $(cat "$PT/calls.log")"; fi
   # A snapshot the trusted manifest does not list is never installed: the import stops.
   rm -f "$PT/dst2-backend/backend.sqlite"; mkdir -p "$PT/dst2-backend" "$PT/dst2-runner"
   printf 'planted\n' >"$m/snapshots/${D}T235959Z.sqlite"
@@ -619,17 +640,57 @@ EOS
   tar -xzf "$mb" -C "$PT/dirin"
   printf 'secret\n' >"$PT/outside-secret"
   ln -s "$PT/outside-secret" "$PT/dirin/snapshots/${D}T235959Z.sqlite"
-  run_proofs proofs "$PT/out2" "$PT/dst2-backend" "$PT/dst2-runner" bash "$DIR/proofs.sh" import "$PT/dirin" --manifest-sha256 "$trusted"
+  run_proofs proofs "$PT/out2" "$PT/dst2-backend" "$PT/dst2-runner" bash "$DIR/proofs.sh" import "$PT/dirin" --trust-list "$out1/manifests.sha256"
   if [ "$PROOFS_STATUS" -eq 1 ] && out_has 'holds links or special files' && [ ! -e "$PT/dst2-backend/backend.sqlite" ]; then pass "proofs.sh import: a directory input with a symbolic link is refused"; else fail "symlink input (status $PROOFS_STATUS): $PROOFS_OUT"; fi
   rm -f "$PT/dirin/snapshots/${D}T235959Z.sqlite"
   ln "$PT/outside-secret" "$PT/dirin/snapshots/${D}T235959Z.sqlite"
-  run_proofs proofs "$PT/out2" "$PT/dst2-backend" "$PT/dst2-runner" bash "$DIR/proofs.sh" import "$PT/dirin" --manifest-sha256 "$trusted"
+  run_proofs proofs "$PT/out2" "$PT/dst2-backend" "$PT/dst2-runner" bash "$DIR/proofs.sh" import "$PT/dirin" --trust-list "$out1/manifests.sha256"
   if [ "$PROOFS_STATUS" -eq 1 ] && out_has 'holds links or special files'; then pass "proofs.sh import: a directory input with a hard link is refused"; else fail "hardlink input (status $PROOFS_STATUS): $PROOFS_OUT"; fi
   rm -f "$PT/dirin/snapshots/${D}T235959Z.sqlite"
   run_proofs proofs "$PT/out2" "$PT/dst2-backend" "$PT/dst2-runner" bash "$DIR/proofs.sh" import "$PT/dirin"
-  if [ "$PROOFS_STATUS" -eq 1 ] && out_has 'pass --manifest-sha256'; then pass "proofs.sh import: a mirror from elsewhere needs --manifest-sha256"; else fail "foreign mirror without hash (status $PROOFS_STATUS)"; fi
-  run_proofs proofs "$PT/out2" "$PT/dst2-backend" "$PT/dst2-runner" bash "$DIR/proofs.sh" import "$PT/dirin" --manifest-sha256 "$trusted"
-  if [ "$PROOFS_STATUS" -eq 0 ] && [ -f "$PT/dst2-backend/backend.sqlite" ]; then pass "proofs.sh import: a clean directory with the right --manifest-sha256 imports"; else fail "directory import (status $PROOFS_STATUS): $PROOFS_OUT"; fi
+  if [ "$PROOFS_STATUS" -eq 1 ] && out_has 'pass --trust-list'; then pass "proofs.sh import: a mirror from elsewhere needs --trust-list or --manifest-sha256"; else fail "foreign mirror without hash (status $PROOFS_STATUS)"; fi
+  # With hashes given by hand (no trust list): the manifest and the snapshot pass, and the beacon states, whose hashes
+  # nobody vouched for, are left out.
+  dsnap=$(cd "$PT/dirin/snapshots" && ls | LC_ALL=C sort | tail -n 1)
+  : >"$PT/calls.log"
+  run_proofs proofs "$PT/out2" "$PT/dst2-backend" "$PT/dst2-runner" bash "$DIR/proofs.sh" import "$PT/dirin" --manifest-sha256 "$trusted" --snapshot-sha256 "$(sha256_file "$PT/dirin/snapshots/$dsnap")"
+  if [ "$PROOFS_STATUS" -eq 0 ] && [ -f "$PT/dst2-backend/backend.sqlite" ] && [ ! -e "$PT/dst2-runner/beacon-states/$state_a" ] && out_has 'not given to the services'; then
+    pass "proofs.sh import: --manifest-sha256 and --snapshot-sha256 import a mirror; states without recorded hashes are left out"
+  else
+    fail "directory import by hand (status $PROOFS_STATUS): $PROOFS_OUT"
+  fi
+  run_proofs proofs "$PT/out2" "$PT/dst3-backend" "$PT/dst3-runner" bash "$DIR/proofs.sh" import "$PT/dirin" --manifest-sha256 "$trusted" --snapshot-sha256 "$(printf '0%.0s' $(seq 1 64))"
+  if [ "$PROOFS_STATUS" -eq 1 ] && out_has 'does not match --snapshot-sha256' && [ ! -e "$PT/dst3-backend/backend.sqlite" ]; then pass "proofs.sh import: a snapshot that does not match --snapshot-sha256 is refused"; else fail "snapshot hash by hand (status $PROOFS_STATUS)"; fi
+
+  # The anchor covers what root saw, not what the archive user wrote. A mirror whose snapshot was replaced, with a new
+  # manifest to match (the archive user can write both), passes the manifest by hand, but its snapshot is not one root
+  # recorded: refused before anything is imported.
+  mkdir -p "$PT/forged" "$PT/dst3-backend" "$PT/dst3-runner"
+  tar -xzf "$mb" -C "$PT/forged"
+  cp "$PT/dirin/snapshots/$dsnap" "$PT/forged/snapshots/$dsnap"
+  sqlite3 "$PT/forged/snapshots/$dsnap" "INSERT INTO proofs (body) VALUES ('forged');"
+  rm -f "$PT/forged/manifests/"*.json
+  node "$REAL_CLI" mirror-manifest --dir "$PT/forged" --stamp "${D}T001000Z" --commit abc --days 30 >/dev/null
+  forged_sha=$(sha256_file "$PT/forged/manifests/${D}T001000Z.json")
+  : >"$PT/calls.log"
+  run_proofs proofs "$PT/out2" "$PT/dst3-backend" "$PT/dst3-runner" bash "$DIR/proofs.sh" import "$PT/forged" --manifest-sha256 "$forged_sha" --trust-list "$out1/manifests.sha256"
+  if [ "$PROOFS_STATUS" -eq 1 ] && out_has "snapshot $dsnap .* is not in the trust list" && [ ! -e "$PT/dst3-backend/backend.sqlite" ] && ! grep -q '^mirror-import' "$PT/calls.log"; then
+    pass "proofs.sh import: a snapshot whose hash root never recorded is refused, nothing imported"
+  else
+    fail "forged snapshot (status $PROOFS_STATUS): $PROOFS_OUT"
+  fi
+  # Likewise a beacon state: the forged one is not given to the services, the rest is imported.
+  cp "$PT/dirin/snapshots/$dsnap" "$PT/forged/snapshots/$dsnap"
+  printf 'forged' >>"$PT/forged/beacon-states/$state_a"
+  rm -f "$PT/forged/manifests/"*.json
+  node "$REAL_CLI" mirror-manifest --dir "$PT/forged" --stamp "${D}T001100Z" --commit abc --days 30 >/dev/null
+  forged_sha=$(sha256_file "$PT/forged/manifests/${D}T001100Z.json")
+  run_proofs proofs "$PT/out2" "$PT/dst3-backend" "$PT/dst3-runner" bash "$DIR/proofs.sh" import "$PT/forged" --manifest-sha256 "$forged_sha" --trust-list "$out1/manifests.sha256"
+  if [ "$PROOFS_STATUS" -eq 0 ] && out_has "beacon-states/$state_a has no hash in the trust list" && [ ! -e "$PT/dst3-runner/beacon-states/$state_a" ] && [ -f "$PT/dst3-backend/beacon-states/$state_b" ]; then
+    pass "proofs.sh import: a beacon state whose hash root never recorded is not given to the services; recorded ones are"
+  else
+    fail "forged state (status $PROOFS_STATUS): $PROOFS_OUT"
+  fi
   # A link planted in the mirror is never followed by a run: its target keeps its mode, and a mirror that is itself a
   # link is refused.
   chmod 600 "$PT/outside-secret"

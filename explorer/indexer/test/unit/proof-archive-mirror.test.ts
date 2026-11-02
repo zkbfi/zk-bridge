@@ -391,6 +391,24 @@ describe("the command line of the mirror", { timeout: 60_000 }, () => {
     expect((await run(["mirror-manifest", "--dir", mirror, "--stamp", "20261102T033000Z", "--commit", "abc", "--days", "30"])).out[0]).toMatchObject({ manifest: "manifests/20261102T033000Z.json", files: 6 });
     expect((await run(["mirror-manifest", "--dir", mirror, "--stamp", "20261102T040000Z", "--commit", "abc", "--days", "30", "--ipfs-log", join(directory, "none")])).code).toBe(0);
     expect((await run(["mirror-check", "--dir", mirror])).out[0]).toMatchObject({ checked: 6, missing: [] });
+    // The manifest root's script picked, by name; a name outside the rule is refused.
+    expect((await run(["mirror-check", "--dir", mirror, "--manifest", "20261102T033000Z.json"])).out[0]).toMatchObject({ manifest: "manifests/20261102T033000Z.json" });
+    const odd = await run(["mirror-check", "--dir", mirror, "--manifest", "zzz.json"]);
+    expect(odd.code).toBe(1);
+    expect(odd.log).toContain("zzz.json is not a manifest name");
+    // --print: exactly the bytes written.
+    const printed: string[] = [];
+    expect(
+      await main(["mirror-manifest", "--dir", mirror, "--stamp", "20261102T050000Z", "--commit", "abc", "--days", "30", "--print"], {}, {
+        openArchive: vi.fn(),
+        stateRoot: () => async () => null,
+        now: () => NOW,
+        print: (text) => printed.push(`${text}\n`),
+        log: () => {},
+      }),
+    ).toBe(0);
+    expect(printed.join("")).toBe(await readFile(join(mirror, "manifests", "20261102T050000Z.json"), "utf8"));
+    await rm(join(mirror, "manifests", "20261102T050000Z.json"));
     await put(mirror, `evidence/p/first-to-second/z.${sha("{}")}.json`, "{}");
     expect((await run(["mirror-check", "--dir", mirror])).code).toBe(0);
     expect((await run(["mirror-check", "--dir", mirror, "--exact"])).code).toBe(1);

@@ -29,6 +29,7 @@
 #   ZKB_PULL_HOST [zkbfi-app]   ZKB_PULL_REMOTE_DIR [/var/backups/zk-bridge/proofs/mirror]
 #   ZKB_PULL_REMOTE_LOCK [/var/backups/zk-bridge/proofs/.lock; empty: no lock]
 #   ZKB_PULL_REMOTE_TRUST [/var/backups/zk-bridge/proofs/manifests.sha256]
+#   ZKB_PULL_REMOTE_TRUSTED_MANIFESTS [/var/backups/zk-bridge/proofs/trusted-manifests]
 #   ZKB_PULL_LOCAL_DIR [~/zkb-backups/proofs] (the mirror goes to <local dir>/mirror)   ZKB_PULL_LOG [<local dir>/pull.log]
 #   ZKB_PULL_NODE [node on PATH]   ZKB_PULL_RSYNC [rsync on PATH]   ZKB_PULL_SSH [ssh]
 #   ZKB_PULL_HOOK   an executable called as `<hook> <mirror dir> <newest manifest>` after a pull that verified (a copy to
@@ -41,6 +42,8 @@ REMOTE_LOCK=${ZKB_PULL_REMOTE_LOCK-/var/backups/zk-bridge/proofs/.lock}
 # The server's list of the sha256 of each day's manifest: root writes it at export time, outside the mirror, so whoever
 # can write the mirror cannot change it.
 REMOTE_TRUST=${ZKB_PULL_REMOTE_TRUST:-/var/backups/zk-bridge/proofs/manifests.sha256}
+# Root's own copies of each day's manifest (written from what the archive CLI printed to root, outside the mirror).
+REMOTE_TRUSTED_MANIFESTS=${ZKB_PULL_REMOTE_TRUSTED_MANIFESTS:-/var/backups/zk-bridge/proofs/trusted-manifests}
 LOCAL_DIR=${ZKB_PULL_LOCAL_DIR:-$HOME/zkb-backups/proofs}
 MIRROR_DIR=$LOCAL_DIR/mirror
 LOG=${ZKB_PULL_LOG:-$LOCAL_DIR/pull.log}
@@ -134,25 +137,45 @@ sync_once() {
   done
   # Last, so that it lists every manifest just fetched.
   # shellcheck disable=SC2086
+  mkdir -p "$LOCAL_DIR/trusted-manifests"
+  # shellcheck disable=SC2086
+  $RSYNC -rt --ignore-existing --delete ${lock[@]+"${lock[@]}"} -e "$SSH $SSH_OPTS" "$HOST:$REMOTE_TRUSTED_MANIFESTS/" "$LOCAL_DIR/trusted-manifests/" \
+    || { log "rsync of trusted-manifests from $HOST failed"; return 1; }
+  # shellcheck disable=SC2086
   $RSYNC -t ${lock[@]+"${lock[@]}"} -e "$SSH $SSH_OPTS" "$HOST:$REMOTE_TRUST" "$LOCAL_DIR/manifests.sha256" || { log "rsync of manifests.sha256 from $HOST failed"; return 1; }
 }
 
-# verify: the newest manifest against the files here. Sets MISSING and CHANGED (counts) and NEWEST (its path).
+# verify: the newest manifest against the files here. Sets MISSING and CHANGED (counts), NEWEST (the mirror's copy)
+# and READ (the copy the file list is read from: the server's trusted copy when there is one).
 verify() {
   local name lines line sha rel list listed unlisted failed n
   MISSING=0
   CHANGED=0
   NEWEST=""
-  for name in "$MIRROR_DIR"/manifests/*.json; do [ -f "$name" ] && NEWEST=$name; done
+  # The server's rule for manifest names; any other name in manifests/ fails the run.
+  for name in "$MIRROR_DIR"/manifests/*; do
+    [ -e "$name" ] || continue
+    if ! [[ $(basename "$name") =~ ^[0-9]{8}T[0-9]{6}Z\.json$ ]]; then log "manifests/ holds $(basename "$name"), which is not a manifest name"; CHANGED=1; return 1; fi
+    NEWEST=$name
+  done
   [ -n "$NEWEST" ] || { log "the mirror has no manifest"; MISSING=1; return 1; }
+  READ=$NEWEST
+  # Root's copy of the manifest, when the server keeps one, must be the same bytes; the list of files is read from it.
+  local copy=$LOCAL_DIR/trusted-manifests/$(basename "$NEWEST")
+  if [ -f "$copy" ]; then
+    cmp -s "$NEWEST" "$copy" || { log "$(basename "$NEWEST") differs from the server's trusted copy: it was changed after the export"; CHANGED=1; return 1; }
+    READ=$copy
+  else
+    log "no trusted copy of $(basename "$NEWEST") from the server; its hash is checked against manifests.sha256 only"
+  fi
   # The manifest itself must be one the server's root recorded.
   sha=$(sha256_of "$NEWEST")
-  if ! grep -q "^$sha " "$LOCAL_DIR/manifests.sha256" 2>/dev/null; then
+  if ! grep -qxF -- "$sha  $(basename "$NEWEST")" "$LOCAL_DIR/manifests.sha256" 2>/dev/null; then
     log "$(basename "$NEWEST") (sha256 $sha) is not in the server's manifests.sha256: it was changed after the export"
     CHANGED=1
     return 1
   fi
-  lines=$(manifest_lines "$NEWEST") || { log "$(basename "$NEWEST") cannot be read"; CHANGED=1; return 1; }
+  lines=$(manifest_lines "$READ") || { log "$(basename "$NEWEST") cannot be read"; CHANGED=1; return 1; }
   list=$(mktemp "$LOCAL_DIR/.check-XXXXXX")
   listed=$(mktemp "$LOCAL_DIR/.listed-XXXXXX")
   TMP_FILES+=("$list" "$listed")
@@ -219,7 +242,7 @@ main() {
     verify || die "FAILED: the mirror here does not match its newest manifest ($MISSING missing, $CHANGED different)"
   fi
   local files
-  files=$(printf '%s\n' "$(manifest_lines "$NEWEST")" | grep -c . || true)
+  files=$(printf '%s\n' "$(manifest_lines "$READ")" | grep -c . || true)
   log "verified against $(basename "$NEWEST"): $files file(s)"
 
   local old=0 f

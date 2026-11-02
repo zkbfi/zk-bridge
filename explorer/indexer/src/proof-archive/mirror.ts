@@ -329,6 +329,12 @@ async function listedFiles(mirror: string): Promise<string[]> {
   return (await filesIfAny(mirror)).filter((name) => !name.startsWith("manifests/") && !name.split("/").some((part) => part.startsWith(".")));
 }
 
+/** The bytes of a manifest file, as {@link writeMirrorManifest} writes them (and `mirror-manifest --print` prints them). */
+export const manifestText = (manifest: MirrorManifest): string => `${JSON.stringify(manifest, null, 2)}\n`;
+
+/** The name rule of the manifests: a UTC stamp and `.json`. Root's script uses the same rule. */
+export const MANIFEST_NAME = /^\d{8}T\d{6}Z\.json$/;
+
 /** Writes `manifests/<stamp>.json`: the SHA-256 and size of every file present. */
 export async function writeMirrorManifest(
   mirror: string,
@@ -354,7 +360,7 @@ export async function writeMirrorManifest(
     files,
     ...(input.ipfsLog === undefined ? {} : { lastPublished: await lastPublishedLine(input.ipfsLog) }),
   };
-  const outcome = await writeOnce(mirror, `manifests/${input.stamp}.json`, `${JSON.stringify(manifest, null, 2)}\n`);
+  const outcome = await writeOnce(mirror, `manifests/${input.stamp}.json`, manifestText(manifest));
   if (outcome !== "written") throw new Error(`manifests/${input.stamp}.json exists already`);
   return manifest;
 }
@@ -363,13 +369,13 @@ export async function writeMirrorManifest(
 export type MirrorCheck = { readonly manifest: string; checked: number; readonly missing: string[]; readonly changed: string[]; readonly unlisted: string[]; readonly misnamed: string[] };
 
 /**
- * Checks the mirror against its newest manifest: every listed file must be there with its hash. Lists the files the
+ * Checks the mirror against its newest manifest (or the one named, as root's script picks it): every listed file must be there with its hash. Lists the files the
  * manifest does not (on the operator's machine, records the server no longer has), and record files whose content does
  * not match the hash in their name.
  */
-export async function checkMirror(mirror: string): Promise<MirrorCheck> {
-  const manifests = (await filesIfAny(join(mirror, "manifests"))).filter((name) => /^\d{8}T\d{6}Z\.json$/.test(name));
-  const newest = manifests.at(-1);
+export async function checkMirror(mirror: string, name?: string): Promise<MirrorCheck> {
+  if (name !== undefined && !MANIFEST_NAME.test(name)) throw new Error(`${name} is not a manifest name (YYYYMMDDTHHMMSSZ.json)`);
+  const newest = name ?? (await filesIfAny(join(mirror, "manifests"))).filter((file) => MANIFEST_NAME.test(file)).at(-1);
   if (newest === undefined) throw new Error("the mirror has no manifest");
   const manifest = JSON.parse(await readFile(join(mirror, "manifests", newest), "utf8")) as MirrorManifest;
   const present = new Set(await listedFiles(mirror));
