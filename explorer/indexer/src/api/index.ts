@@ -7,11 +7,14 @@ import { registerDeliveredRoute } from "./routes/delivered";
 import { registerDeliveryCostRoutes } from "./routes/delivery-cost";
 import { registerFeedRoutes } from "./routes/feed";
 import { registerHistoryRoute } from "./routes/history";
+import { registerProofRoutes } from "./routes/proofs";
 import { registerSearchRoute } from "./routes/search";
 import { registerStateRoutes } from "./routes/state";
 import { registerSummaryRoutes } from "./routes/summary";
 import { registerTransactionRoutes } from "./routes/transactions";
 import { registerUndeliveredRoute } from "./routes/undelivered";
+import { pair } from "../lib/pair";
+import { startArchiverFromEnvironment } from "../proof-archive/archiver";
 
 const app = new Hono();
 
@@ -37,10 +40,15 @@ registerDeliveredRoute(app);
 registerDeliveryCostRoutes(app);
 registerFeedRoutes(app);
 registerHistoryRoute(app);
+registerProofRoutes(app);
 registerSearchRoute(app);
 registerStateRoutes(app);
 registerSummaryRoutes(app);
 registerTransactionRoutes(app);
 registerUndeliveredRoute(app);
+
+// The proof archive (src/proof-archive): it fetches storage proofs at epoch boundaries and takes the backend's held
+// proofs, beside the indexing. Off without DATABASE_URL or with PROOF_ARCHIVE=off. It never stops the API.
+void startArchiverFromEnvironment(pair);
 
 export default app;

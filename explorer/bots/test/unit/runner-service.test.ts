@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getAddress, type Address, type PublicClient } from "viem";
+import { getAddress, type Address, type Hex, type PublicClient } from "viem";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { proofCategory } from "@zk-bridge/shared";
 import { describeRoute } from "@zk-bridge/shared/prover";
@@ -349,6 +349,50 @@ describe("startRunner opens the bridge of the destination chain", () => {
     expect(request).toHaveBeenCalledWith({ method: "eth_getProof", params: [started.created.context.pair.sides[0].contracts.lightClient, [expect.any(String)], "0x384"] });
     expect(started.created.events().find((event) => event.event === "proof_prefetched")).toMatchObject({ chainId: 1, blockNumber: "900", direction: "first-to-second" });
     expect(configs[0]).toContain(`proof_cache_dir = "${cacheDirectory}"`);
+  });
+
+  it("takes the opening proof entry from the indexer's proof archive once it verifies, and asks no node for it", async () => {
+    const started = await prepare();
+    const genesis = 1_606_824_023n;
+    const base = clientWith({ depositsOpen: false });
+    const request = vi.fn(async (_args: unknown) => ({}));
+    const emptyRoot = "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421";
+    const client = {
+      ...base,
+      getBlock: async ({ blockNumber, blockHash }: { blockNumber?: bigint; blockHash?: Hex }) =>
+        blockHash !== undefined ? { stateRoot: emptyRoot } : { number: blockNumber, hash: word(Number((blockNumber as bigint) % 200n)), timestamp: genesis + ((blockNumber as bigint) - 836n) * 12n },
+      request,
+    } as unknown as PublicClient;
+    const lightClient = started.created.context.pair.sides[0].contracts.lightClient.toLowerCase();
+    const key = `0x${"77".repeat(32)}`;
+    // An account that does not exist, proven against the empty state root: a real proof that needs no trie.
+    const entry = {
+      schemaVersion: 1, chainId: 1, blockNumber: 900, blockHash: word(900 % 200), address: lightClient, storedSlot: 100, storageKeys: [key], fetchedAt: "2026-11-01T00:00:00.000Z",
+      proof: { balance: "0x0", nonce: "0x0", codeHash: "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470", storageHash: emptyRoot, accountProof: [], storageProof: [{ key, value: "0x0", proof: [] }] },
+    };
+    started.indexer.storageProofs[`/api/proofs/storage/1/${lightClient}/900`] = [entry];
+    const { overrides } = standardOverrides({
+      publicClient: () => client,
+      executor: async () => ({ code: 1, stdout: "", stderr: "distance to target block exceeds maximum proof window" }),
+    });
+    await run(started, overrides);
+    const file = join(started.created.directory, "state", "proof-cache", "1", lightClient, `900-${word(900 % 200)}.json`);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ blockNumber: 900, storedSlot: 100 });
+    expect(request).not.toHaveBeenCalled();
+    expect(started.created.events().find((event) => event.event === "proof_archive_hit")).toMatchObject({ chainId: 1, blockNumber: "900" });
+    // Before the opening proof the opener asked the archive for the block of the stored head.
+    expect(started.indexer.requested.filter((path) => path.startsWith("/api/proofs/storage/1/")).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("asks the archive nothing before the opening proof while the stored head has no block", async () => {
+    const started = await prepare();
+    const base = clientWith({ depositsOpen: false });
+    const readContract = vi.fn(async (call: { functionName: string }) => (call.functionName === "executionBlockHashes" ? `0x${"00".repeat(32)}` : base.readContract(call as never)));
+    const client = { ...base, readContract, getBlock: async () => ({ number: 900n, hash: word(1), timestamp: 0n }), request: vi.fn(async () => ({})) } as unknown as PublicClient;
+    const { overrides } = standardOverrides({ publicClient: () => client, executor: async () => ({ code: 1, stdout: "", stderr: "proof window" }) });
+    await run(started, overrides);
+    expect(readContract.mock.calls.some(([call]) => call.functionName === "executionBlockHashes")).toBe(true);
+    expect(started.indexer.requested.some((path) => /^\/api\/proofs\/storage\/1\/0x[0-9a-f]+\/\d{6,}$/.test(path))).toBe(false);
   });
 
   it("does not prefetch once the state file records the bridge as open", async () => {

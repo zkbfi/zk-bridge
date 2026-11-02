@@ -11,6 +11,7 @@ zkb_op_cloudflare_account_ref: "op://zkb.fi/Cloudflare API token/account id"
 # Public names. Nothing here is a secret.
 zkb_cf_zone: zkb.fi
 zkb_dnslink_name: _dnslink.docs.zkb.fi
+zkb_proofs_dnslink_name: _dnslink.proofs.zkb.fi
 zkb_ipfs_gateway: https://ipfs.io
 zkb_sites:
   next:

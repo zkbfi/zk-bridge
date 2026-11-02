@@ -152,6 +152,14 @@ below the head is applied already.
 - A proof whose slots another job already brought is not stored a second time: the webhook keeps the first, fails the
   later job with `the same proof is held already`, and logs `proof_duplicate`.
 
+### Copies in the indexer's proof archive
+
+The backend deletes a held proof once its job ends, and deletes the evidence of a message once the message is delivered.
+So the explorer indexer keeps a copy of each. It reads `GET /archive/proofs` on the backend's loopback port every few
+minutes: the board proof (`proofs`), every `webhook_proofs` row (posted or held), and every `evidence` row. No Caddy
+host passes this route on. The nightly export (`deploy/app-server/proofs.sh`) also takes the proofs from a snapshot of
+the SQLite file. See docs/proof-archive.md.
+
 ## Proving on finality
 
 The requests module also starts proofs on its own, within seconds of the source chain finalizing what a proof needs.

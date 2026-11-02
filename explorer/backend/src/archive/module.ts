@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import type { BackendModuleContext } from "../module.ts";
 import type { ModuleHealth } from "../health.ts";
 import { createArchiveService, type ArchiveService } from "./build.ts";
+import { readProofRows } from "./proof-rows.ts";
 import { createReceiptIndexReader } from "./receipt.ts";
 import { createIndexerClient } from "./work-list.ts";
 
@@ -32,9 +33,14 @@ function serviceFor(context: BackendModuleContext): ArchiveService | null {
   return created;
 }
 
-/** Adds `GET /evidence/:messageId`. It answers the stored evidence unchanged, 400 for a bad id and 404 for no entry. */
+/**
+ * Adds `GET /evidence/:messageId`. It answers the stored evidence unchanged, 400 for a bad id and 404 for no entry.
+ * Adds `GET /archive/proofs`: every proof and piece of evidence the backend holds, for the proof archive of the indexer
+ * (`proof-rows.ts`). Caddy does not pass it on, so only the server itself reads it.
+ */
 export function register(app: Hono, context: BackendModuleContext): void {
   const service = serviceFor(context);
+  app.get("/archive/proofs", (request) => request.json(readProofRows(context.storage)));
   app.get("/evidence/:messageId", (request) => {
     const messageId = request.req.param("messageId");
     if (!MESSAGE_ID_PATTERN.test(messageId)) return request.json({ error: "the message id must be 32 bytes of 0x hex" }, 400);
