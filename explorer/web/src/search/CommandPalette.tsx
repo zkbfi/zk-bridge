@@ -87,7 +87,7 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
         <div id={listId} role="listbox" aria-label="Results" className="zb-palette-list">
           {search.groups.map((group) => (
             <div key={group.id} role="group" aria-labelledby={`${listId}-group-${group.id}`}>
-              <div id={`${listId}-group-${group.id}`} className="zb-palette-group">
+              <div id={`${listId}-group-${group.id}`} className="zb-m-head">
                 {group.title}
               </div>
               {group.results.map((result) => (
@@ -96,14 +96,14 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
                   id={optionId(result)}
                   role="option"
                   aria-selected={active !== null && active.id === result.id}
-                  className="zb-palette-row"
+                  className="zb-m-row zb-m-stack"
                   onMouseMove={() => setHighlight(search.flat.findIndex((candidate) => candidate.id === result.id))}
                   onClick={() => onSelect(result)}
                 >
-                  <span className="zb-palette-title">{result.title}</span>
-                  <span className="zb-palette-sub">{result.subtitle}</span>
+                  <span className="zb-m-title">{result.title}</span>
+                  <span className="zb-m-sub">{result.subtitle}</span>
                   {result.links === undefined || result.links.length === 0 ? null : (
-                    <span className="zb-palette-xlinks" aria-label="The same on other pages">
+                    <span className="zb-m-xlinks" aria-label="The same on other pages">
                       {result.links.map((link, index) => (
                         <span key={`${link.surface}:${link.url}`}>
                           {index === 0 ? null : " · "}
@@ -128,26 +128,26 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
             </div>
           ))}
           {search.groups.length === 0 && !search.loading ? (
-            <p className="zb-palette-note">{search.problem ?? "Nothing matches. Try a token symbol, an address, a transaction hash or a word from the docs."}</p>
+            <p className="zb-m-note">{search.problem ?? "Nothing matches. Try a token symbol, an address, a transaction hash or a word from the docs."}</p>
           ) : null}
           {search.loading ? (
-            <p className="zb-palette-note" role="status">
+            <p className="zb-m-note" role="status">
               Asking the indexer…
             </p>
           ) : null}
           {search.groups.length > 0 && search.problem !== null ? (
-            <p className="zb-palette-note" role="status">
+            <p className="zb-m-note" role="status">
               {search.problem}
             </p>
           ) : null}
         </div>
       </div>
-      <div className="zb-palette-foot">
-        <span className="zb-palette-keys" aria-hidden="true">
+      <div className="zb-m-foot">
+        <span className="zb-m-keys" aria-hidden="true">
           <kbd>↑</kbd>
           <kbd>↓</kbd> move <kbd>↵</kbd> open <kbd>esc</kbd> close
         </span>
-        <span className="zb-palette-links">
+        <span className="zb-m-links">
           {quickLinks.map((result) => (
             <button key={result.id} type="button" onClick={() => onSelect(result)}>
               {result.title}

@@ -147,7 +147,7 @@ export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () =>
             </button>
           ))}
         </div>
-        <ul id="zb-token-list" className="zb-token-list" role="listbox" aria-label="Tokens">
+        <ul id="zb-token-list" className="zb-m-list" role="listbox" aria-label="Tokens">
           {rows.map((token, index) => {
             const balance = balanceOf(token, snapshots);
             const subject = iconSubjectOf(token, pair);
@@ -158,6 +158,7 @@ export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () =>
               <li
                 key={key}
                 role="option"
+                className="zb-m-row zb-m-tall"
                 aria-selected={token === selected}
                 data-active={index === active || focused === key}
                 onClick={() => onPick(token)}

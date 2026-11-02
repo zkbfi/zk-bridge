@@ -28,8 +28,8 @@ describe("the command palette", () => {
 
   it("has a footer with the keys and quick links that open the same Settings and Docs as their result rows", async () => {
     const { onSelect } = open();
-    const footer = document.querySelector(".zb-palette-foot") as HTMLElement;
-    expect(footer.querySelector(".zb-palette-keys")?.getAttribute("aria-hidden")).toBe("true");
+    const footer = document.querySelector(".zb-m-foot") as HTMLElement;
+    expect(footer.querySelector(".zb-m-keys")?.getAttribute("aria-hidden")).toBe("true");
     expect([...footer.querySelectorAll("kbd")].map((key) => key.textContent)).toEqual(["↑", "↓", "↵", "esc"]);
     await userEvent.click(within(footer).getByRole("button", { name: "Settings" }));
     expect(onSelect).toHaveBeenLastCalledWith(expect.objectContaining({ id: "action:settings", jump: { type: "action", action: { name: "settings" } } }));
