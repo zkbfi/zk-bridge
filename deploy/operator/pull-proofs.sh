@@ -170,7 +170,9 @@ verify() {
   fi
   # The manifest itself must be one the server's root recorded.
   sha=$(sha256_of "$NEWEST")
-  if ! grep -qxF -- "$sha  $(basename "$NEWEST")" "$LOCAL_DIR/manifests.sha256" 2>/dev/null; then
+  # Whole-string checks first: a newline in either part would make grep -F match any listed line.
+  if ! [[ $sha =~ ^[0-9a-f]{64}$ && $(basename "$NEWEST") =~ ^[0-9]{8}T[0-9]{6}Z\.json$ ]] \
+    || ! grep -qxF -- "$sha  $(basename "$NEWEST")" "$LOCAL_DIR/manifests.sha256" 2>/dev/null; then
     log "$(basename "$NEWEST") (sha256 $sha) is not in the server's manifests.sha256: it was changed after the export"
     CHANGED=1
     return 1

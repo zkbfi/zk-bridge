@@ -516,10 +516,17 @@ sha256_stdin() {
 #   beacon-states/<chain>/<name>      a beacon state (or summary), hashed in root's staging copy of a service's states
 # Records (proofs, evidence) need no line: storage proofs are verified against state roots, light client proofs are data.
 
+# trust_line_ok <sha256> <path>: a line of the trust list has exactly this shape. The whole string must match (bash
+# regex anchors do not match at a newline), so a name holding a newline cannot become two patterns of a grep -F.
+trust_line_ok() {
+  [[ $1 =~ ^[0-9a-f]{64}$ ]] || return 1
+  [[ $2 =~ ^([0-9]{8}T[0-9]{6}Z\.json|snapshots/[0-9]{8}T[0-9]{6}Z\.sqlite|beacon-states/[0-9]+/[0-9]{12}-0x[0-9a-f]{64}\.(ssz|summary))$ ]]
+}
+
 # trust_add <sha256> <path>: one line, once.
 trust_add() {
   [ ! -L "$TRUST" ] || die "$TRUST is a symbolic link: refusing to write it"
-  case $1 in [0-9a-f]*) ;; *) die "no hash for $2" ;; esac
+  trust_line_ok "$1" "$2" || die "refusing a trust line of another shape (path or hash)"
   if [ ! -f "$TRUST" ] || ! grep -qxF -- "$1  $2" "$TRUST"; then printf '%s  %s\n' "$1" "$2" >>"$TRUST"; fi
   own root:root "$TRUST"
   chmod 0644 "$TRUST"
@@ -537,6 +544,7 @@ trust_tree() {
 TRUST_LIST=""
 trusted() {
   local list=${TRUST_LIST:-$TRUST}
+  trust_line_ok "$1" "$2" || return 1
   [ -f "$list" ] && [ ! -L "$list" ] && grep -qxF -- "$1  $2" "$list"
 }
 

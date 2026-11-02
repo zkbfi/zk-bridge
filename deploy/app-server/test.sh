@@ -212,6 +212,21 @@ else
   fail "proofs.sh untar modes: dst $(mode "$UT/dst") file $(mode "$UT/dst/d/f") dir $(mode "$UT/dst/d")"
 fi
 rm -rf "$UT"
+# A trust-list lookup takes whole lines only: a path with a newline must not match a line that is listed.
+TL=$(mktemp -d)
+eval "$(sed -n '/^trust_line_ok() {/,/^}/p;/^trusted() {/,/^}/p' "$DIR/proofs.sh")"
+good=$(printf 'a%.0s' $(seq 1 64))
+printf '%s  beacon-states/1/000000000001-0x%s.ssz\n' "$good" "$good" >"$TL/list"
+nl='
+'
+if TRUST_LIST=$TL/list trusted "$good" "beacon-states/1/000000000001-0x$good.ssz" \
+  && ! TRUST_LIST=$TL/list trusted "$good" "beacon-states/1x${nl}$good  beacon-states/1/000000000001-0x$good.ssz" \
+  && ! TRUST_LIST=$TL/list trusted "${good}${nl}x" "beacon-states/1/000000000001-0x$good.ssz"; then
+  pass "proofs.sh trusted: whole lines only, a newline in a name or hash never matches"
+else
+  fail "proofs.sh trusted: newline handling"
+fi
+rm -rf "$TL"
 # The blue/green comparison: order of list items and nullable fields must not fail it; a changed key or type must.
 if python3 -I - "$DIR/../ansible/files/compare_indexers.py" >/dev/null 2>&1 <<'PY'
 import importlib.util, sys
