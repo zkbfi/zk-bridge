@@ -381,6 +381,22 @@ describe("the gate of the source chain", () => {
     expect(built.first.port.sent).toHaveLength(0);
   });
 
+  it("asks again after a node error, such as a load-balanced node that lacks the block yet, and then sends", async () => {
+    const gate = gateAnswering(new Error("Requested resource not found. block not found: 0xb7d98a"), new Error("socket hang up"), { kind: "not-needed", epoch: 6n } as GateConfirmation);
+    const built = world({ gate });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ kind: "sent" });
+    expect(gate.ensure).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not ask again when the evidence itself is refused", async () => {
+    const gate = gateAnswering(new GateEvidenceError("simulation-reverted", "confirm would revert"), { kind: "not-needed", epoch: 6n } as GateConfirmation);
+    const built = world({ gate });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "gate-evidence-failed" });
+    expect(gate.ensure).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the native reserve before the confirmation", async () => {
     const built = world({ gate: gateAnswering(confirmation), reserve: 10n ** 18n });
     funded(built);

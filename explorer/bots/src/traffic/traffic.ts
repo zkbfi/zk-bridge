@@ -56,6 +56,15 @@ export interface TrafficInput {
  */
 export const GATE_WAITS = 3;
 
+/**
+ * How many times the gate is asked again after a node error (not a refusal of the evidence). A public RPC behind a load
+ * balancer may answer the latest block from one node and then lack it on the next ("block not found").
+ */
+export const GATE_NODE_RETRIES = 3;
+
+/** The pause before asking the gate again after a node error. */
+export const GATE_NODE_RETRY_MILLISECONDS = 3000;
+
 /** What one attempt did. */
 export type TrafficOutcome =
   | {
@@ -235,10 +244,17 @@ export function createTraffic(input: TrafficInput): Traffic {
   ): Promise<{ readonly kind: "ready"; readonly spentWei: bigint } | SkippedOutcome> {
     const gate = source.gate as TrafficGate;
     let confirmation: GateConfirmation;
-    for (let waited = 0; ; waited += 1) {
+    for (let waited = 0, retried = 0; ; waited += 1) {
       try {
         confirmation = await gate.ensure(wallet);
       } catch (error) {
+        // A refused evidence is final; a node error is asked again, and does not count as a wait.
+        if (!(error instanceof GateEvidenceError) && retried < GATE_NODE_RETRIES) {
+          retried += 1;
+          waited -= 1;
+          await sleep(GATE_NODE_RETRY_MILLISECONDS);
+          continue;
+        }
         const code = error instanceof GateEvidenceError ? error.code : null;
         return skip(direction, "gate-evidence-failed", { ...described, chain: source.name, code, detail: (error as Error).message });
       }
