@@ -148,6 +148,22 @@ export const lightClientDelay = (heads: readonly LightClientHead[], sourceSide: 
   return { seconds, text: `light client ${Math.round(seconds / 3600)} h behind` };
 };
 
+/**
+ * The step list with the light client's age as a row (owner: "just tell the user what is happening ... they do not need
+ * to know why ... clicking in helps them figure out why"). The collapsed time stays a plain number: the backend proves on
+ * demand when a transfer waits (watch/decide.ts: a waiting message makes a proof due), so the head's age adds no wait of
+ * its own; the proof step above already carries that time. The row says so in the drawer.
+ *
+ * @param steps The steps of {@link transferSteps}.
+ * @param delay The light client's lag from {@link lightClientDelay}, or null.
+ */
+export const withLightClientStep = (steps: readonly TransferStep[], delay: { readonly seconds: number } | null): readonly TransferStep[] => {
+  if (delay === null) return steps;
+  const row: TransferStep = { label: `Light client is ${Math.round(delay.seconds / 3600)} h behind`, estimate: "no added wait", seconds: 0 };
+  const at = steps.findIndex((step) => step.label.startsWith("Proof"));
+  return at < 0 ? [...steps, row] : [...steps.slice(0, at + 1), row, ...steps.slice(at + 1)];
+};
+
 export const transferEstimate =(source: ChainConfig, destination: ChainConfig): string =>
   minutes(transferSteps(source, destination).reduce((sum, step) => sum + step.seconds, 0));
 
