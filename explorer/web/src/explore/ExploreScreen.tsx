@@ -4,7 +4,7 @@
  * numbers, the light clients, the latest transfers and the services. Each kind has its own page (see ExplorePages).
  */
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState, type FocusEvent, type KeyboardEvent } from "react";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import type { FeedItem, PairConfig } from "@terminal/model/types";
 import { formatLocation, formatRoute, NO_OVERLAY, type ExplorePage, type Route } from "../app/route";
@@ -31,6 +31,8 @@ import type { ProofDirection } from "@zk-bridge/shared";
 import { orbitSample, SAMPLE_TICK } from "./orbit-sample";
 import { Marked, RouteIcons, XGroup, XRow } from "./parts";
 import { recognise, searchExplore } from "./search";
+import { exploreShortcuts, type Shortcut } from "./shortcuts";
+import { moveHighlight, type MoveKey } from "../search/search-model";
 import "./explore.css";
 
 /** Props of {@link ExploreScreen}. */
@@ -74,33 +76,106 @@ const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
     setText(value);
     onRoute(value.trim() === "" ? { name: "explore" } : { name: "explore", q: value.trim() }, "replace");
   };
+  // Owner: "yes, make the change and ship it to next. yes, you could even do some sort of shortcut menu when the user
+  // focuses into the input". The menu is the palette's combobox/listbox pattern: arrows move, Enter opens, Escape closes.
+  const listId = useId();
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const shortcuts = useMemo(() => exploreShortcuts(data), [data.pair, data.now, data.feed, data.proofs, data.tokens, data.heads]);
+  const menuOpen = open && text.trim() === "" && shortcuts.length > 0;
+  const active = shortcuts[highlight] ?? null;
+  const optionId = (item: Shortcut): string => `${listId}-${item.id}`;
+  const menuGroups = shortcuts.reduce<{ title: string; items: Shortcut[] }[]>((groups, item) => {
+    const last = groups.at(-1);
+    if (last !== undefined && last.title === item.group) last.items.push(item);
+    else groups.push({ title: item.group, items: [item] });
+    return groups;
+  }, []);
+  const go = (item: Shortcut): void => {
+    setOpen(false);
+    window.location.hash = item.href;
+  };
+  const leave = (event: FocusEvent<HTMLDivElement>): void => {
+    if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+  };
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (text.trim() !== "") return;
+    if (event.key === "Escape") {
+      setOpen(false);
+    } else if (!menuOpen) {
+      if (event.key === "ArrowDown") setOpen(true);
+    } else if (event.key === "Enter" && active !== null) {
+      event.preventDefault();
+      go(active);
+    } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      setHighlight((current) => moveHighlight(current, shortcuts.length, event.key as MoveKey));
+    }
+  };
   return (
     <div className="zb-explore">
-      <div className="zb-picker-search zb-xsearch" role="search">
+      <div className="zb-picker-search zb-xsearch" role="search" onBlur={leave}>
         <SearchIcon />
-        <input type="search" aria-label="Search Explore" placeholder="Tx, message, address, token, slot, block, proof…" spellCheck={false} autoComplete="off" value={text} onChange={(event) => set(event.target.value)} />
+        <input
+          type="search"
+          role="combobox"
+          aria-label="Search Explore"
+          aria-expanded={menuOpen}
+          aria-controls={menuOpen ? listId : undefined}
+          aria-autocomplete="list"
+          aria-activedescendant={menuOpen && active !== null ? optionId(active) : undefined}
+          placeholder="Tx, message, address, token, slot, block, proof…"
+          spellCheck={false}
+          autoComplete="off"
+          value={text}
+          onChange={(event) => {
+            setOpen(true);
+            set(event.target.value);
+          }}
+          onFocus={() => setOpen(true)}
+          onClick={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+        />
         <button type="button" className="zb-picker-close" aria-label="Clear the search" onClick={() => set("")}>
           ×
         </button>
+        {menuOpen ? (
+          <div id={listId} role="listbox" aria-label="Shortcuts" className="zb-xmenu">
+            {menuGroups.map((group) => (
+              <div key={group.title} role="group" aria-labelledby={`${listId}-g-${group.title.replaceAll(" ", "-")}`}>
+                <div id={`${listId}-g-${group.title.replaceAll(" ", "-")}`} className="zb-palette-group">
+                  {group.title}
+                </div>
+                {group.items.map((item) => (
+                  <div
+                    key={item.id}
+                    id={optionId(item)}
+                    role="option"
+                    aria-selected={active !== null && active.id === item.id}
+                    className="zb-palette-row"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onMouseMove={() => setHighlight(shortcuts.indexOf(item))}
+                    onClick={() => go(item)}
+                  >
+                    <span className="zb-palette-title">{item.title}</span>
+                    <span className="zb-palette-sub">{item.sub}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
-      <div className="zb-xkinds">
-        <div className="zb-col">
-          {recognised.kind === "empty" ? (
-            <>
-              <span className="zb-xkind">0x… 64 hex → tx or message</span>
-              <span className="zb-xkind">0x… 40 hex → address</span>
-              <span className="zb-xkind">numbers → slot, block, proof</span>
-              <span className="zb-xkind">symbols → token</span>
-              <span className="zb-xkind">bafy… → release</span>
-            </>
-          ) : (
+      {recognised.kind === "empty" ? null : (
+        <div className="zb-xkinds">
+          <div className="zb-col">
             <span className="zb-xkind" data-on="true">
               {recognised.label}
               {recognised.kind === "unknown" ? "" : ` · ${groups.reduce((sum, group) => sum + group.items.length, 0)} found`}
             </span>
-          )}
+          </div>
         </div>
-      </div>
+      )}
       {text.trim() !== "" ? (
         <div className="zb-col">
           {groups.length === 0 ? <p className="zb-small">Nothing on this pair matches. Paste a full hash, an address, a number or a token symbol.</p> : null}

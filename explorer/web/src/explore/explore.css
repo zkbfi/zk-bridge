@@ -179,3 +179,6 @@ a.zb-kv.zb-xkv { color: inherit; text-decoration: none; }
 .zb-orb-tip-tok { display: inline-flex; align-items: center; gap: 4px; }
 .zb-orb-stop { cursor: help; outline: none; }
 .zb-orb-stop:focus-visible { stroke: var(--zb-accent); stroke-width: 3; }
+/* The shortcut menu under the empty search box: the palette's rows, hung from the band, as wide as the band. On a phone it
+   is the band's width too and scrolls inside when the list is taller than the screen allows. */
+.zb-xmenu { position: absolute; top: 100%; left: 0; right: 0; z-index: 4; max-height: min(70vh, 460px); overflow-y: auto; padding-bottom: 6px; background: var(--zb-page); color: var(--zb-ink); border-bottom: 3px solid #121110; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18); }
