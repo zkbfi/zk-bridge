@@ -33,6 +33,33 @@ describe("deliverySummary (owner, quote 88: \"just tell the user what is happeni
   });
 });
 
+describe("deliverySummary's short text is hard numbers, never a placeholder or a reason", () => {
+  const level = { gasLevelName: "Normal", percentText: "1%" };
+  const short = (form: Parameters<typeof deliverySummary>[0], facts: Partial<Parameters<typeof deliverySummary>[1]>) => deliverySummary(form, { ...FACTS, ...facts }).short;
+  it("percentage mode shows the percent from the form before an amount is known, the max once it is", () => {
+    expect(short({}, { ...level, feeShareText: null, feeAmountText: null })).toBe("Deliver for 1%");
+    expect(short({}, level)).toBe("Deliver for 0.39%, max $0.39");
+  });
+  it("fixed mode shows the amount and symbol", () => {
+    expect(short({ tip: { mode: "fixed" } }, level)).toBe("Deliver for 0.50 USDC (0.39%)");
+    // Fixed mode does not use the gas level: with no amount yet, the text names the next action.
+    expect(short({ tip: { mode: "fixed" } }, { ...level, fixedText: null })).toBe("Set the fixed fee");
+  });
+  it("gas mode shows the numbers when known, else the gas level name", () => {
+    expect(short({ tip: { mode: "gas-multiplier" } }, level)).toBe("Deliver for ~0.39%, max $0.60 (0.6%)");
+    expect(short({}, { ...level, feeShareText: null, feeAmountText: null, percentText: null })).toBe("Set the share");
+    expect(short({ tip: { mode: "gas-multiplier" } }, { ...level, feeShareText: null, worstCaseText: null })).toBe("Deliver at Normal gas");
+    expect(short({ tip: { mode: "gas-multiplier" } }, { ...level, feeShareText: null })).toBe("Deliver at Normal gas, max $0.60 (0.6%)");
+  });
+  it("none mode is short", () => {
+    expect(short({ tip: { mode: "none" } }, level)).toBe("You deliver it");
+  });
+  it("never uses a placeholder phrase", () => {
+    for (const mode of ["percentage", "fixed", "gas-multiplier"] as const)
+      expect(short({ tip: { mode } }, { ...level, feeShareText: null, feeAmountText: null, fixedText: null, worstCaseText: null })).not.toMatch(/a share|a fixed fee|the gas cost|Deliver for gas/);
+  });
+});
+
 const menuOpen = async (query = "bridge.amount=500") => {
   window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
   renderWithWallet(<Shell />, { wallet: connectedWallet() });

@@ -15,7 +15,7 @@ import type { WebStep } from "../tx/bridge-steps";
 import { parseUnits } from "../ui/format";
 import { useWallet } from "../wallet/wallet-port";
 import { arrivesAsSymbol, isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
-import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps } from "./bridge-model";
+import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps, withLightClientStep } from "./bridge-model";
 import { DeliveryMenu, deliverySummary, type TipChoiceKey } from "./DeliveryMenu";
 import { nativeSymbolOf, ceilingCostUsd, ceilingWeiOf, DEFAULT_GAS_LEVEL, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
 import { formatUnits } from "viem";
@@ -636,6 +636,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     worstCaseText: gasBased && delivery !== null ? (valueOf(delivery.maximumTip) === null ? `${amountText(delivery.maximumTip, token?.decimals ?? 18)} ${token?.symbol ?? ""}` : usd(delivery.maximumTip)) : null,
     fixedText: options.mode === "fixed" && tipUnits !== null && token !== null ? `${amountText(tipUnits, token.decimals)} ${token.symbol}` : null,
     feeAmountText: tipUnits === null || token === null ? null : valueOf(tipUnits) === null ? `${amountText(tipUnits, token.decimals)} ${token.symbol}` : usd(tipUnits),
+    percentText: options.mode === "percentage" && Number(options.percentText) > 0 ? `${Number(Number(options.percentText).toPrecision(3))}%` : null,
+    gasLevelName: levelName(gasLevel),
     worstCaseShareText: gasBased && delivery !== null && amount !== null && amount > 0n ? `${Number((Number((delivery.maximumTip * 1_000_000n) / amount) / 10_000).toPrecision(2))}%` : null,
   });
 
@@ -754,11 +756,10 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
               gasHelp={gasHelp}
               gasLevel={gasLevel}
               onGasLevel={setGasLevel}
-              time={(() => {
-                const delay = lightClientDelay(heads ?? [], side);
-                return delay === null ? transferEstimate(source, destination) : `${transferEstimate(source, destination)} + ${delay.text}`;
-              })()}
-              steps={transferSteps(source, destination)}
+              // Owner: "just tell the user what is happening ... give them hard numbers. clicking in helps them figure out why":
+              // the time is the number alone; the light client's age is a row in the steps.
+              time={transferEstimate(source, destination)}
+              steps={withLightClientStep(transferSteps(source, destination), lightClientDelay(heads ?? [], side))}
               menu={
                 <DeliveryMenu
                   form={form}

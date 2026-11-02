@@ -28,6 +28,10 @@ export type DeliveryFacts = {
   readonly feeAmountText?: string | null;
   /** A gas-based fee's worst case as a share of the amount ("0.6%"), or null. */
   readonly worstCaseShareText?: string | null;
+  /** The share the form asks for in percentage mode ("1%"), known before an amount is typed, or null. */
+  readonly percentText?: string | null;
+  /** The gas level's name ("Normal"), the one numberless fact left when nothing else is known. */
+  readonly gasLevelName?: string;
 };
 
 /**
@@ -77,14 +81,20 @@ export const deliverySummary = (form: BridgeQuery, facts: DeliveryFacts): Delive
       ...(router === null ? [] : [`via router ${address(router)}`]),
       ...(gasLimit === null ? [] : [`gas limit ${gasLimitText(gasLimit)}`]),
     ].join(" · ");
+  // Owner: "this shit in the ui is still too wordy. just tell the user what is happening: \"Deliver for a share ~16 min + light
+  // client 14 h behind\" they do not need to know why. give them hard numbers. clicking in helps them figure out why".
+  // So the short text is numbers only: the percent from the form before an amount is known, the max once it is, the fixed
+  // amount, the gas level's name when nothing numeric is known; the reasons live in the menu and in `full`.
+  const atGas = `Deliver at ${facts.gasLevelName === undefined ? "the current" : facts.gasLevelName} gas`;
+  const percent = share ?? facts.percentText ?? null;
   const short =
     mode === "none"
       ? "You deliver it"
       : mode === "gas-multiplier"
-        ? `Deliver for ${share === null ? "gas" : `~${share}`}${worst}`
+        ? `${share === null ? atGas : `Deliver for ~${share}`}${worst}`
         : mode === "fixed"
-          ? `Deliver for ${fixed}`
-          : `Deliver for ${share ?? "a share"}${amount === null ? "" : `, max ${amount}`}`;
+          ? facts.fixedText === null ? "Set the fixed fee" : `Deliver for ${fixed}`
+          : percent === null ? "Set the share" : `Deliver for ${percent}${amount === null ? "" : `, max ${amount}`}`;
   return { short, text: sentence(shortAddress), full: sentence((text) => text) };
 };
 
