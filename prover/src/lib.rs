@@ -39,6 +39,7 @@ pub mod local_network;
 pub mod logging;
 pub mod opening;
 pub mod produce;
+pub mod proof_cache;
 pub mod prover;
 pub mod remote;
 pub mod rpc;

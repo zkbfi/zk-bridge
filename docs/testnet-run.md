@@ -396,6 +396,8 @@ A bridge opens only after its own light client stored a block that came after th
 
 The proof must be built soon after the light client stores the block. `eth_getProof` runs at that block on the other chain, and a node serves the state of a block only for a while: on 2026-11-01 a manual run hours after the last update failed for both routes with `rpc error 4444/-32602: distance to target block exceeds maximum proof window`. The runner builds the proof right after an update, with the default slots, which take the newest stored block.
 
+A stored head is a finalized checkpoint, already about two epochs old when it is stored, which is past the window of the public Sepolia node (about 64 blocks). So while a bridge is closed the runner also fetches the `eth_getProof` answer at each epoch boundary, within a few blocks of the tip, into `<stateDirectory>/proof-cache`, and the prover file of `opening-proof` names it as `proof_cache_dir`. The prover verifies a cached answer like a live one. Watch for `proof_prefetched` in the runner log and `proof_cache_hit` in the prover's standard error. By hand, add `proof_cache_dir = "<stateDirectory>/proof-cache"` to the destination section of the route in `prover.toml`.
+
 By hand, the steps are as follows. The call is `openDeposits(OpeningProof)` on the bridge of each chain. The proof holds a remote block, the state proof of the remote light client (from `eth_getProof`), and the storage proof of one stored head. See `docs/hardened-build-contract.md`, "Launch sequence", step 3. The prover builds the proof and checks it natively before it prints anything. It sends nothing.
 
 ```sh

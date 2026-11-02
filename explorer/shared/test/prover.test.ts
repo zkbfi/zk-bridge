@@ -92,6 +92,15 @@ describe("the prover configuration file", () => {
     expect(() => renderProverConfig(describeRoute(pair, "first-to-second"), null, undefined, { stateCacheDirectory: '/tmp/"x' })).toThrow(/cannot carry/);
   });
 
+  it("names the proof cache in the destination section when it is set, and nothing otherwise", () => {
+    const text = renderProverConfig(describeRoute(pair, "second-to-first"), null, undefined, { proofCacheDirectory: "/var/lib/bot/proof-cache" });
+    const destination = text.slice(text.indexOf("[routes.pulsechain_to_ethereum.destination]"));
+    expect(destination).toContain('proof_cache_dir = "/var/lib/bot/proof-cache"');
+    expect(text.slice(0, text.indexOf("[routes.pulsechain_to_ethereum.destination]"))).not.toContain("proof_cache_dir");
+    expect(renderProverConfig(describeRoute(pair, "second-to-first"), null)).not.toContain("proof_cache_dir");
+    expect(() => renderProverConfig(describeRoute(pair, "first-to-second"), null, undefined, { proofCacheDirectory: '/tmp/"x' })).toThrow(/proof cache directory/);
+  });
+
   it("leaves the backend out for the commands that need none", () => {
     expect(renderProverConfig(describeRoute(pair, "first-to-second"), null)).not.toContain("[prover]");
   });

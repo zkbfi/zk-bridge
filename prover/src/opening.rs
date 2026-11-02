@@ -189,6 +189,9 @@ pub struct OpeningRequest<'a> {
     pub remote_slot: Option<u64>,
     /// A slot of the remote light client to prove. Default: its head at the remote block.
     pub stored_slot: Option<u64>,
+    /// The proof cache of the remote chain (`destination.proof_cache_dir`), read before `eth_getProof`. See
+    /// [`crate::proof_cache`]. A cached answer is verified like a live one.
+    pub proof_cache_dir: Option<&'a std::path::Path>,
 }
 
 /// The proof with the facts that the command prints.
@@ -337,16 +340,144 @@ pub fn build_opening_proof(request: &OpeningRequest<'_>) -> Result<OpeningPackag
     )?;
     let block_number = crate::rpc::parse_quantity(&block["number"])?;
 
-    let stored_slot = match request.stored_slot {
-        Some(slot) => slot,
-        None => remote.view_at(
+    let header_rlp = Bytes::from(header_rlp);
+    let assemble = |stored_slot: u64, answer: &Value| {
+        assemble_opening(
+            remote_slot,
+            &header_rlp,
+            stored_slot,
+            answer,
             remote_light_client,
-            LightClientContract::headCall {},
-            Some(block_number),
-        )?,
+            remote_block_hash,
+            block_number,
+        )
     };
+    let cached = request.proof_cache_dir.and_then(|directory| {
+        cached_opening(
+            directory,
+            remote.chain_id(),
+            remote_light_client,
+            block_number,
+            remote_block_hash,
+            request.stored_slot,
+            &assemble,
+        )
+    });
+    let (sent, calldata, verified) = match cached {
+        Some(parts) => parts,
+        None => {
+            let stored_slot = match request.stored_slot {
+                Some(slot) => slot,
+                None => remote.view_at(
+                    remote_light_client,
+                    LightClientContract::headCall {},
+                    Some(block_number),
+                )?,
+            };
+            let storage_slot = execution_block_hashes_slot(stored_slot);
+            let answer =
+                remote.account_proof(remote_light_client, &[storage_slot], block_number)?;
+            assemble(stored_slot, &answer)?
+        }
+    };
+    Ok(OpeningPackage {
+        route: request.route.to_string(),
+        bridge: request.bridge,
+        chain_id: own.chain_id(),
+        remote_chain_id: remote.chain_id(),
+        own_light_client,
+        remote_light_client,
+        deposits_open,
+        remote_block_number: block_number,
+        remote_block_hash,
+        verified,
+        proof: sent,
+        calldata,
+    })
+}
+
+/// The parts of a verified opening: the proof as it will be sent, its calldata and what the native walk found.
+type Assembled = (OpeningProof, Bytes, VerifiedOpening);
+
+/// The cached answer for the remote block, assembled and verified, or `None` when there is none or it does not verify.
+/// A refused entry is logged without its content and the caller asks the node instead.
+fn cached_opening(
+    directory: &std::path::Path,
+    chain_id: u64,
+    remote_light_client: Address,
+    block_number: u64,
+    block_hash: B256,
+    stored_slot: Option<u64>,
+    assemble: &dyn Fn(u64, &Value) -> Result<Assembled>,
+) -> Option<Assembled> {
+    let logger = crate::logging::Logger::standard();
+    let block = block_number.to_string();
+    let entry = match crate::proof_cache::read_cached_proof(
+        directory,
+        chain_id,
+        remote_light_client,
+        block_number,
+        block_hash,
+        stored_slot,
+    ) {
+        Ok(Some(entry)) => entry,
+        Ok(None) => {
+            logger.info(
+                "proof_cache_miss",
+                &[("chain_id", chain_id.to_string()), ("block", block)],
+            );
+            return None;
+        }
+        Err(error) => {
+            logger.warn(
+                "proof_cache_refused",
+                &[
+                    ("chain_id", chain_id.to_string()),
+                    ("block", block),
+                    ("reason", error.to_string()),
+                ],
+            );
+            return None;
+        }
+    };
+    match assemble(entry.stored_slot, &entry.answer) {
+        Ok(parts) => {
+            logger.info(
+                "proof_cache_hit",
+                &[
+                    ("chain_id", chain_id.to_string()),
+                    ("block", block),
+                    ("stored_slot", entry.stored_slot.to_string()),
+                ],
+            );
+            Some(parts)
+        }
+        Err(error) => {
+            logger.warn(
+                "proof_cache_refused",
+                &[
+                    ("chain_id", chain_id.to_string()),
+                    ("block", block),
+                    ("reason", error.to_string()),
+                ],
+            );
+            None
+        }
+    }
+}
+
+/// Builds the proof from an `eth_getProof` answer, encodes the calldata, decodes it again and runs the native walk on the
+/// decoded proof. A live answer and a cached one take this same path.
+fn assemble_opening(
+    remote_slot: u64,
+    header_rlp: &Bytes,
+    stored_slot: u64,
+    answer: &Value,
+    remote_light_client: Address,
+    remote_block_hash: B256,
+    block_number: u64,
+) -> Result<Assembled> {
     let storage_slot = execution_block_hashes_slot(stored_slot);
-    let answer = remote.account_proof(remote_light_client, &[storage_slot], block_number)?;
     let storage_entry = answer["storageProof"]
         .as_array()
         .and_then(|entries| entries.first())
@@ -361,7 +492,7 @@ pub fn build_opening_proof(request: &OpeningRequest<'_>) -> Result<OpeningPackag
     }
     let proof = OpeningProof {
         remoteSlot: remote_slot,
-        remoteHeaderRlp: header_rlp.into(),
+        remoteHeaderRlp: header_rlp.clone(),
         accountProof: hex_list(&answer["accountProof"], "accountProof")?,
         storedSlot: stored_slot,
         storageProof: hex_list(&storage_entry["proof"], "storageProof")?,
@@ -377,20 +508,7 @@ pub fn build_opening_proof(request: &OpeningRequest<'_>) -> Result<OpeningPackag
             "the remote light client stores no block hash at slot {stored_slot} in block {block_number}; it needs its first update"
         )));
     }
-    Ok(OpeningPackage {
-        route: request.route.to_string(),
-        bridge: request.bridge,
-        chain_id: own.chain_id(),
-        remote_chain_id: remote.chain_id(),
-        own_light_client,
-        remote_light_client,
-        deposits_open,
-        remote_block_number: block_number,
-        remote_block_hash,
-        verified,
-        proof: sent,
-        calldata,
-    })
+    Ok((sent, calldata, verified))
 }
 
 impl OpeningPackage {

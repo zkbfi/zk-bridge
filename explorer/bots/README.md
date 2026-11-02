@@ -289,6 +289,34 @@ a wrong one is refused and the next is asked. When all fail, the error names eac
 `evidence`) with its cause and no URL. Header RPC URLs can carry a key;
 each URL and its key-like parts are removed from every log line.
 
+**The proof cache.** Owner, 2026-11-01: "and if the proofs get harder to compute the further back one has to go simply
+based on the rpc recomputing it, then we should also be caching the proofs right? as in, starting now". A node answers
+`eth_getProof` only inside its proof window (measured on 2026-11-01: about 64 blocks on the public Sepolia node, and flaky;
+about 128 on the public chain 943 node; 4096 or more on the official chain 943 RPC; valve refuses every historical depth).
+The head that the light client on D stores is a finalized checkpoint of S, about two epochs old when it is stored, so its
+block is often outside the window by the time the opener asks. So while the bridge on D is closed and
+`runner.openDeposits` is on, each direction also runs a **proof prefetcher** (`createProofPrefetcher` in
+`@zk-bridge/shared/prover`, one step per slot of S):
+
+1. It follows the head of S. At each epoch boundary it takes the checkpoint block: the block of the epoch's first slot, or,
+   when that slot is empty, the latest block before it (slot = (timestamp - genesis) / seconds per slot, with the genesis
+   time and the slot length read from the light client on D, which tracks exactly that grid). It looks at most 16 blocks
+   behind the tip.
+2. At that block it reads `head()` of the light client on S and runs the same `eth_getProof` that `opening-proof` runs: the
+   light client on S, one storage key, `keccak256(abi.encode(head, 3))`. It tries 3 times, 2 then 4 seconds apart, and logs
+   `proof_prefetch_retry`, then `proof_prefetched` (`chainId`, `blockNumber`, `blockHash`, `storedSlot`, `attempts`) or
+   `proof_prefetch_failed` (warning). No log line holds a URL: an error keeps only the host of each URL in it.
+3. It writes the node's raw answer to `<stateDirectory>/proof-cache/<chain id of S>/<light client>/<block>-<hash>.json`
+   and keeps the 256 newest entries of each chain (over a day of epochs) plus the entry of the head the light client on D
+   stores now (`proof_cache_pruned`).
+4. Once the state file says open it logs `proof_prefetch_stopped` and reads nothing more.
+
+The prover file of `opening-proof` names the cache as `proof_cache_dir` in its destination section. The prover reads the
+entry for the block of the stored head before it asks a node (`proof_cache_hit`, `proof_cache_miss`), and verifies the
+cached answer against the state root of the header exactly as it verifies a live one: the cache is not trusted. An entry
+that does not verify is logged as `proof_cache_refused` and the prover asks the node as before. A head whose block was
+never prefetched (the runner was down at that epoch) still depends on the node's window; a later head is prefetched.
+
 ## The traffic bot
 
 Owner: "we should start out with a minimum of 1 proof/hour. this will help with keeping things current on both chains

@@ -1,12 +1,13 @@
 import { join } from "node:path";
 import { createPublicClient, http, type Address, type PublicClient } from "viem";
-import { messageBridgeAbi, proofCategory, type ProofDirection } from "@zk-bridge/shared";
+import { messageBridgeAbi, proofCategory, secondsPerSlot, type ProofDirection } from "@zk-bridge/shared";
 import { BotConfigError, runnerMinimumPriorityFeeWei, type RunnerConfig } from "../config/bot-config.ts";
 import { createTransactionPort, type TransactionPort } from "../chain/transactions.ts";
 import { createIndexerClient } from "../indexer/client.ts";
 import { createBoardFeed, type BoardFeed } from "@zk-bridge/shared/msgboard";
 import { executeCommand, type CommandExecutor } from "@zk-bridge/shared/prover";
 import { createLightClientReader, createProverBinary, createVerifyGuard, describeRoute, type OpeningProver, type ProverBinary } from "@zk-bridge/shared/prover";
+import { createProofCacheStore, createProofPrefetcher, createViemPrefetchClient, lightClientClock, storedHeadBlockHashes } from "@zk-bridge/shared/prover";
 import { sidesOfDirection, type BotContext } from "../runtime/context.ts";
 import { acquireLock, type HeldLock } from "../runtime/lock-file.ts";
 import { runLoop } from "../runtime/loop.ts";
@@ -82,6 +83,11 @@ function valuations(settings: Readonly<Record<string, string>>): Readonly<Record
 /** The direction the other way round. */
 function oppositeOf(direction: ProofDirection): ProofDirection {
   return direction === "first-to-second" ? "second-to-first" : "first-to-second";
+}
+
+/** The proof cache of the runner: `eth_getProof` answers that the opening proof reads (`proof-prefetch.ts`). */
+function proofCacheDirectoryOf(context: BotContext): string {
+  return join(context.config.stateDirectory, "proof-cache");
 }
 
 function runnerStatePath(context: BotContext, direction: ProofDirection): string {
@@ -182,6 +188,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       baseEnvironment: { PATH: context.environment.PATH ?? "/usr/bin:/bin" },
       temporaryDirectory: join(context.config.stateDirectory, "tmp"),
       stateCacheDirectory: join(context.config.stateDirectory, "beacon-states"),
+      proofCacheDirectory: proofCacheDirectoryOf(context),
       logger: directionLogger,
     });
     const prover = overrides.prover?.(direction) ?? binary;
@@ -229,6 +236,31 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       logger: directionLogger,
     });
     openers.push(opener);
+    if (runnerConfig.openDeposits) {
+      // The opening proof of this bridge needs `eth_getProof` on the source chain at the block of a stored head, which a
+      // node serves only for a short while. Fetch it at each epoch boundary while it is new, until the bridge is open.
+      const prefetcher = createProofPrefetcher({
+        chainId: source.chainId,
+        address: source.contracts.lightClient,
+        client: createViemPrefetchClient(sourceClient),
+        store: createProofCacheStore(proofCacheDirectoryOf(context)),
+        // The light client on the destination chain tracks the beacon chain of the source: its stored heads are on its grid.
+        clock: lightClientClock(destinationPort.client, destination.contracts.lightClient),
+        isOpen: async () => (await state.load()).depositsOpen,
+        protectedBlockHashes: storedHeadBlockHashes(destinationPort.client, destination.contracts.lightClient),
+        logger: directionLogger,
+      });
+      jobs.push(
+        runLoop({
+          name: `proof prefetch ${direction}`,
+          intervalMilliseconds: secondsPerSlot(source.chainId) * 1000,
+          step: () => prefetcher.step(),
+          signal,
+          runOnce: input.runOnce,
+          logger: directionLogger,
+        }),
+      );
+    }
     const runner: Runner = createRunner({
       pairName: pair.name,
       direction,
