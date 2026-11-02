@@ -239,29 +239,44 @@
 .zb-header .zb-mark svg { width: 44px; height: 44px; }
 .zb-kbd { display: none; font: inherit; font-size: var(--zb-step--1); font-weight: 600; color: var(--zb-muted); }
 @media (min-width: 720px) and (hover: hover) { .zb-kbd { display: inline; } }
-/* Search: drawn like the token picker, results as plain rows with the selected one marked by the accent edge. */
-.zb-palette-list { margin: 0 -16px; }
-.zb-palette-group { padding: 14px 16px 6px; font-size: var(--zb-step--1); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--zb-muted); }
-.zb-palette-row { position: relative; display: flex; flex-direction: column; gap: 2px; padding: 10px 16px; cursor: pointer; }
-.zb-palette-row[aria-selected="true"] { background: var(--zb-raised); }
-.zb-palette-row[aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--zb-accent); }
-.zb-palette-title { font-weight: 600; overflow-wrap: anywhere; }
-.zb-palette-xlinks { font-size: var(--zb-step--1); color: var(--zb-muted); overflow-wrap: anywhere; }
-.zb .zb-palette-xlinks a { color: var(--zb-accent-text); text-decoration: none; font-weight: 600; }
-.zb .zb-palette-xlinks a:hover { text-decoration: underline; }
-.zb-palette-sub { font-size: var(--zb-step--1); color: var(--zb-muted); overflow-wrap: anywhere; }
+/*
+ * One menu language (owner: "i am not liking the styling that you are employing for the menus. they are too starkly
+ * different. we need to consolidate and make it match the design language"). Every menu, popover and sheet list is
+ * drawn from these five parts and nothing else: square surface on the To tone with the 3-unit accent stroke as its
+ * border (the sheet's own edge), no radius, no shadow; a row 44 px or more tall with 16 px sides; an uppercase group
+ * heading; the selected or active row on the raised tone with a 3-unit accent bar that never shifts content; a footer
+ * under a hairline. The sheets (search, token picker, settings) get the same surface from @zkb/react's .zb-sheet.
+ */
+.zb-m-surface { position: absolute; z-index: 30; min-width: 260px; background: var(--zb-to); color: var(--zb-to-ink); border: 3px solid var(--zb-accent); }
+.zb-m-list { list-style: none; margin: 0; padding: 0; }
+.zb-m-row { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; min-height: var(--zb-touch); padding: 10px 16px; text-align: left; cursor: pointer; }
+.zb-m-row.zb-m-stack { flex-direction: column; align-items: flex-start; gap: 2px; }
+.zb-m-row.zb-m-tall { gap: 14px; min-height: var(--zb-row-h); }
+.zb-m-row[aria-selected="true"], .zb-m-row[aria-checked="true"], .zb-m-row[data-active="true"] { background: var(--zb-raised); color: var(--zb-raised-ink); }
+.zb-m-row[aria-selected="true"]::before, .zb-m-row[aria-checked="true"]::before, .zb-m-row[data-active="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--zb-accent); }
+.zb-m-row[aria-disabled="true"] { color: var(--zb-muted); cursor: not-allowed; }
+.zb-m-head { padding: 14px 16px 6px; font-size: var(--zb-step--1); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--zb-muted); }
+.zb-m-title { font-weight: 600; overflow-wrap: anywhere; }
+.zb-m-sub, .zb-m-xlinks { font-size: var(--zb-step--1); color: var(--zb-muted); overflow-wrap: anywhere; }
+.zb-m-aside { margin-left: auto; }
+.zb .zb-m-xlinks a { color: var(--zb-accent-text); text-decoration: none; font-weight: 600; }
+.zb .zb-m-xlinks a:hover { text-decoration: underline; }
+.zb-m-note { margin: 12px 16px; font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-m-foot { flex: none; display: flex; align-items: center; gap: 6px; min-height: var(--zb-touch); padding: 0 8px 0 16px; border-top: 1px solid var(--zb-line); font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-m-keys { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.zb-m-keys kbd { display: inline-grid; place-items: center; min-width: 22px; height: 20px; padding: 0 5px; border: 1.5px solid var(--zb-pill-edge); border-radius: 5px; font: inherit; font-size: var(--zb-step-micro); font-weight: 600; color: var(--zb-ink); }
+.zb-m-keys kbd + kbd { margin-left: -2px; }
+@media (hover: none), (pointer: coarse) { .zb-m-keys { display: none; } }
+.zb-m-links { margin-left: auto; display: inline-flex; }
+.zb .zb-m-links button { min-height: var(--zb-touch); padding: 0 10px; font-weight: 600; color: var(--zb-ink); }
+.zb .zb-m-links button:hover { color: var(--zb-accent-text); }
+/* The direction menu hangs under the From pill, inside the column. */
+.zb-dir-menu { left: 16px; right: 16px; top: calc(100% - 4px); max-width: calc(var(--zb-col-width) - 32px); }
 /* The palette is a column: band, list, footer. On desktop it hangs from 12vh and is as tall as its list (up to 78vh), so
    no empty space sits under the rows; on phones it fills the screen and the footer sits on the bottom edge. */
 .zb-sheet-top .zb-palette { flex: 1; min-height: 0; overflow: auto; padding-bottom: 6px; }
-.zb-palette-foot { flex: none; display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 8px 0 16px; border-top: 1px solid var(--zb-line); font-size: var(--zb-step--1); color: var(--zb-muted); }
-.zb-palette-keys { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.zb-palette-keys kbd { display: inline-grid; place-items: center; min-width: 22px; height: 20px; padding: 0 5px; border: 1.5px solid var(--zb-pill-edge); border-radius: 5px; font: inherit; font-size: var(--zb-step-micro); font-weight: 600; color: var(--zb-ink); }
-.zb-palette-keys kbd + kbd { margin-left: -2px; }
-@media (hover: none), (pointer: coarse) { .zb-palette-keys { display: none; } }
-.zb-palette-links { margin-left: auto; display: inline-flex; }
-.zb .zb-palette-links button { min-height: 44px; padding: 0 10px; font-weight: 600; color: var(--zb-ink); }
-.zb .zb-palette-links button:hover { color: var(--zb-accent-text); }
-.zb-palette-note { margin: 12px 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-palette-list, .zb-picker .zb-m-list { margin: 0 -16px; }
+.zb-picker .zb-m-list { margin-top: 6px; }
 .zb-search { justify-self: end; }
 .zb-pages { display: flex; justify-content: center; gap: 4px; padding-bottom: 10px; }
 .zb-pages span { width: 14px; height: 4px; border-radius: 999px; background: var(--zb-line); }
@@ -313,7 +328,7 @@
 /* Seam: the flip button, sitting on the edge between the bands */
 .zb-seam { position: relative; height: 0; z-index: 2; }
 .zb-seam .zb-col { display: flex; align-items: center; gap: 10px; transform: translateY(-50%); }
-.zb-flip { width: var(--zb-touch); height: var(--zb-touch); border-radius: 50%; display: grid; place-items: center; background: var(--zb-pill); color: var(--zb-pill-ink); border: 1.5px solid var(--zb-pill-edge); flex: none; }
+.zb-flip { width: var(--zb-joined-h); height: var(--zb-joined-h); border-radius: 50%; display: grid; place-items: center; background: var(--zb-pill); color: var(--zb-pill-ink); border: 1.5px solid var(--zb-pill-edge); flex: none; }
 .zb-raise { display: flex; margin: 8px auto 0; }
 
 /* The fee and its drawer (the delivery control is below, with the menus) */
@@ -399,11 +414,6 @@
 .zb-zeros sub { font-size: 0.72em; vertical-align: -0.28em; margin: 0 1px; }
 
 /* Menus and sheets (never a native select) */
-.zb-pop { position: absolute; z-index: 30; min-width: 260px; background: var(--zb-page); color: var(--zb-ink); border: 2px solid var(--zb-ink); }
-.zb-pop [role="option"], .zb-pop [role="menuitemradio"] { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--zb-line); width: 100%; text-align: left; }
-.zb-pop [aria-checked="true"], .zb-pop [aria-selected="true"] { background: var(--zb-raised); font-weight: 600; }
-.zb-pop [data-active="true"] { outline: 2px solid var(--zb-accent); outline-offset: -2px; }
-.zb-pop-group { font-size: var(--zb-step-micro); letter-spacing: .08em; text-transform: uppercase; color: var(--zb-muted); padding: 8px 14px 4px; }
 .zb-search-field { display: flex; align-items: center; gap: 8px; border: 1.5px solid var(--zb-ink); border-radius: 999px; padding: 8px 14px; }
 .zb-search-field input { flex: 1; min-width: 0; background: none; border: 0; color: inherit; font: inherit; outline: none; }
 .zb-breakdown { list-style: none; margin: 0 0 10px; padding: 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
@@ -426,11 +436,6 @@
 .zb-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 
-/* The direction menu: the current route is lit with a left accent bar that never shifts content */
-.zb-dir-menu { left: 16px; right: 16px; top: calc(100% - 4px); max-width: calc(var(--zb-col-width) - 32px); }
-.zb-pop [role="menuitemradio"] { position: relative; }
-.zb-pop [aria-checked="true"]::before, .zb-token-list [aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--zb-accent); }
-.zb-pop [aria-disabled="true"] { color: var(--zb-muted); cursor: not-allowed; }
 
 /* The token picker (round 3): edge to edge on phones, one layer of padding, flat tabs, no title, no check mark */
 .zb-picker { padding: 14px 16px 18px; }
@@ -438,11 +443,7 @@
 .zb-tabs { display: flex; gap: 18px; margin-top: 12px; border-bottom: 1px solid var(--zb-line); }
 .zb-tabs [role="tab"] { display: inline-flex; align-items: center; gap: 6px; padding: 8px 0; font-weight: 600; font-size: var(--zb-step-0); color: var(--zb-muted); border-bottom: 3px solid transparent; margin-bottom: -1px; }
 .zb-tabs [aria-selected="true"] { color: var(--zb-ink); border-bottom-color: var(--zb-accent); }
-.zb-token-list { list-style: none; margin: 6px -16px 0; padding: 0; }
-.zb-token-list [role="option"] { position: relative; display: flex; align-items: center; gap: 14px; min-height: var(--zb-row-h); padding: 10px 16px; cursor: pointer; }
-.zb-token-list [aria-selected="true"], .zb-token-list [data-active="true"] { background: var(--zb-raised); }
 .zb-token-name { display: flex; flex-direction: column; line-height: 1.25; }
-.zb-token-name small { color: var(--zb-muted); font-size: var(--zb-step--1); }
 .zb-token-balance { margin-left: auto; font-variant-numeric: tabular-nums; }
 
 /* Token picker, rounds 4 to 7: the search is a 52 px orange band (no pill, no top border); the close square is the same
@@ -454,14 +455,15 @@
 .zb-tabs [role="tab"] svg, .zb-tabs [role="tab"] .zb-tok-icon { flex: none; }
 .zb-omni { position: relative; display: inline-flex; color: var(--zb-accent-text); cursor: pointer; }
 .zb .zb-link { display: inline-flex; align-items: center; gap: 4px; color: var(--zb-accent-text); font-weight: 600; text-decoration: underline; }
-.zb-token-name small { font-variant-numeric: tabular-nums; }
+.zb-token-name small { color: var(--zb-muted); font-size: var(--zb-step--1); font-variant-numeric: tabular-nums; }
 
 /* The delivery control (owner, quote 98): one joined pill of three segments, the summary, the gas bars and the time;
    the one delivery menu opens in the drawer under it, in the column (no popover, one layer). */
 .zb-dctl { margin-bottom: 6px; position: relative; overflow: visible; font-size: var(--zb-step-fee); }
 .zb-dctl > .zb-dseg { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; min-height: var(--zb-touch); background: none; border: 0; color: inherit; font: inherit; white-space: nowrap; cursor: pointer; }
 .zb-dctl > .zb-dseg + .zb-dseg { border-left: 1.5px solid var(--zb-pill-edge); }
-.zb-joined.zb-dctl > :first-child { border-right: 0; padding-left: 12px; }
+/* The flip button and the money icon share one centre line: the flip is as wide as the pill is tall, so its centre is half a pill from the column edge, and the icon is padded onto that centre. */
+.zb-joined.zb-dctl > :first-child { border-right: 0; padding-left: calc(var(--zb-joined-h) / 2 - 1.5px - 11px); }
 .zb-joined.zb-dctl > :last-child, .zb-joined.zb-dctl > .zb-tooltip { margin-left: 0; }
 .zb-dctl > .zb-dsummary { flex: 1; min-width: 0; border-radius: 999px 0 0 999px; }
 .zb-dctl > .zb-dtime { border-radius: 0 999px 999px 0; padding-right: 16px; }
@@ -471,7 +473,7 @@
 /* On a phone the summary needs the room: tighter segments, no chevron (the open segment is lit instead). */
 @media (max-width: 479px) {
   .zb-dctl > .zb-dseg { padding-inline: 7px; gap: 5px; }
-  .zb-joined.zb-dctl > :first-child { padding-left: 9px; }
+  .zb-joined.zb-dctl > :first-child { padding-left: calc(var(--zb-joined-h) / 2 - 1.5px - 10px); }
   .zb-dctl > .zb-dtime { padding-right: 11px; }
   .zb-dsummary .zb-icon { width: 20px; height: 20px; }
   .zb-dsummary .zb-chev { display: none; }
