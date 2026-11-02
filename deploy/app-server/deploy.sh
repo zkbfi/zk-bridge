@@ -71,6 +71,18 @@ service_user() {
   esac
 }
 
+# The releases that running services use: the release directory of each service's main process (its working directory
+# or, for a unit without one, its executable), one name per line.
+releases_in_use() {
+  local name pid dir
+  for name in "${SERVICES[@]}" indexer-pre; do
+    pid=$(systemctl show -p MainPID --value "zk-bridge-$name.service" 2>/dev/null || true)
+    [ -n "$pid" ] && [ "$pid" != 0 ] || continue
+    dir=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
+    case $dir in "$RELEASES"/*) dir=${dir#"$RELEASES"/}; printf '%s\n' "${dir%%/*}" ;; esac
+  done
+}
+
 # Everything runs inside main: when the script comes in on standard input (bash -s), bash has read all of it before
 # the first command runs, so no command can swallow the rest of the script.
 main() {
@@ -217,10 +229,17 @@ main() {
   fi
 
   # --- 8. Old releases ------------------------------------------------------------------------------------------
-  local old
+  # A release that a running service still runs from is kept, however old: a deploy that restarts one service at a time
+  # leaves the others on their release, and deleting it under them breaks every process they start (process.cwd fails).
+  local old in_use
+  in_use=$(releases_in_use)
   find "$RELEASES" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | tail -n +$((KEEP_RELEASES + 1)) \
     | cut -d' ' -f2- | while read -r old; do
-      [ "$old" = "$release" ] || { log "remove old release $(basename "$old")"; rm -rf "$old"; }
+      [ "$old" != "$release" ] || continue
+      # A here-string, not a pipe: under pipefail a grep -q that exits early can fail its writer and read as no match.
+      if grep -qxF -- "$(basename "$old")" <<<"$in_use"; then log "keep old release $(basename "$old"): a service runs from it"; continue; fi
+      log "remove old release $(basename "$old")"
+      rm -rf "$old"
     done
 
   if [ ${#failed[@]} -gt 0 ]; then
