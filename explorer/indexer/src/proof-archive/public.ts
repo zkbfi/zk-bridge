@@ -2,6 +2,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { evidenceRecordSchema, lightClientProofRecordSchema, storageProofRecordSchema, type EvidenceRecord, type LightClientProofRecord, type StorageProofRecord } from "./records";
 import { listFiles, recordsOf } from "./bundle";
+import { mergedMirrorRecords, mirrorRecords } from "./mirror";
 import type { ProofArchive } from "./store";
 
 /**
@@ -16,14 +17,25 @@ import type { ProofArchive } from "./store";
  * bytes and the same CIDs. {@link checkPublicTree} refuses a tree with anything else in it.
  */
 
-/** Where the records come from: the archive database, or the archive files of a backup bundle. */
-export type PublicSource = { readonly kind: "archive"; readonly archive: ProofArchive } | { readonly kind: "bundle"; readonly bundle: string };
+/** Where the records come from: the archive database, the archive files of a backup bundle, or the private mirror. */
+export type PublicSource =
+  | { readonly kind: "archive"; readonly archive: ProofArchive }
+  | { readonly kind: "bundle"; readonly bundle: string }
+  | { readonly kind: "mirror"; readonly mirror: string };
+
+const MIRROR_DIRECTORY = { storage_proofs: "storage-proofs", light_client_proofs: "light-client-proofs", message_evidence: "evidence" } as const;
 
 async function* rowsOf(source: PublicSource, table: "storage_proofs" | "light_client_proofs" | "message_evidence"): AsyncGenerator<unknown> {
   if (source.kind === "archive") {
     for await (const page of source.archive.pages(table)) yield* page;
-  } else {
+  } else if (source.kind === "bundle") {
     yield* recordsOf(join(source.bundle, "archive", `${table}.ndjson`));
+  } else if (table === "storage_proofs") {
+    // Storage proofs never change once archived; a copy of the same answer is dropped when the file is written.
+    yield* mirrorRecords(source.mirror, MIRROR_DIRECTORY[table]);
+  } else {
+    // A light client proof or evidence can have versions (filled in later): one public file holds them merged.
+    yield* mergedMirrorRecords(source.mirror, MIRROR_DIRECTORY[table]);
   }
 }
 
@@ -107,7 +119,7 @@ export async function exportPublicTree(source: PublicSource, out: string): Promi
   await put(out, "README.txt", PUBLIC_README);
 
   // The records come in key order, so the answers of one block are next to each other.
-  const open: { group: { path: string; entries: unknown[] } | null } = { group: null };
+  const open: { group: { path: string; entries: unknown[]; seen: Set<string> } | null } = { group: null };
   const flush = async () => {
     if (open.group === null) return;
     await put(out, open.group.path, canonicalJson(open.group.entries));
@@ -119,10 +131,13 @@ export async function exportPublicTree(source: PublicSource, out: string): Promi
     const record = parsed.data;
     const path = `storage-proofs/${record.chainId}/${record.address.toLowerCase()}/${record.blockNumber}-${record.blockHash.toLowerCase()}.json`;
     const entry = publicStorageProof(record);
-    if (open.group?.path === path) open.group.entries.push(entry);
-    else {
+    const text = canonicalJson(entry);
+    if (open.group?.path === path) {
+      if (!open.group.seen.has(text)) open.group.entries.push(entry);
+      open.group.seen.add(text);
+    } else {
       await flush();
-      open.group = { path, entries: [entry] };
+      open.group = { path, entries: [entry], seen: new Set([text]) };
     }
   }
   await flush();

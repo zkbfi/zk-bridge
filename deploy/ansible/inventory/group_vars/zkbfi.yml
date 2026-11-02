@@ -17,8 +17,11 @@ zkb_backups_kept: 3
 
 # --- Proof archive (deploy/app-server/proofs.sh) ----------------------------------------------------------------------
 zkb_proofs_dir: /var/backups/zk-bridge/proofs
-# Where proofs.yml puts the bundles on the machine that runs ansible (override with -e zkb_proofs_local_dir=...).
-zkb_proofs_local_dir: ~/zkb-backups
+# The private mirror on the server (proofs.sh export keeps it).
+zkb_proofs_mirror: "{{ zkb_proofs_dir }}/mirror"
+# Where proofs.yml pulls the mirror on the machine that runs ansible: <dir>/mirror, the same copy as the daily pull of
+# deploy/operator/pull-proofs.sh (override with -e zkb_proofs_local_dir=...).
+zkb_proofs_local_dir: ~/zkb-backups/proofs
 
 # --- Caddy ----------------------------------------------------------------------------------------------------------
 zkb_caddyfile: /etc/caddy/Caddyfile

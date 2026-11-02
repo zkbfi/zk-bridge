@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Pulls the newest proof archive bundle from the app server once a day (install-proofs-pull.sh fills in the @...@
+<!-- Pulls the private proof mirror of the app server once a day (install-proofs-pull.sh fills in the @...@
      values and loads this). launchd uses the local time zone; a run missed while the Mac sleeps happens at wake. -->
 <plist version="1.0">
 <dict>
@@ -19,6 +19,8 @@
 		<string>@HOME@</string>
 		<key>ZKB_PULL_NODE</key>
 		<string>@NODE@</string>
+		<key>ZKB_PULL_RSYNC</key>
+		<string>@RSYNC@</string>
 		<key>ZKB_PULL_LOCAL_DIR</key>
 		<string>@LOCAL_DIR@</string>
 	</dict>
