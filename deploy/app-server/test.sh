@@ -199,6 +199,19 @@ if grep -q 'ZKB_SERVICES' "$DIR/deploy.sh"; then pass "deploy.sh honours ZKB_SER
 # cross-links, and that zkb-search.js is built from the current sources.
 if command -v node >/dev/null; then
   if node --test "$DIR/indexer-home" >/dev/null 2>&1; then pass "indexer-home: live page, search and cross-links"; else fail "indexer-home: live page (node --test $DIR/indexer-home)"; fi
+# Root unpacks tars that service users stream: the archive's setuid, setgid and sticky bits must never survive, and the
+# destination stays 0700 until it is checked.
+UT=$(mktemp -d)
+mkdir -p "$UT/src/d" "$UT/dst" && printf x >"$UT/src/d/f" && chmod 4755 "$UT/src/d/f" && chmod 2775 "$UT/src/d"
+eval "$(sed -n '/^plain_modes() {/,/^}/p;/^untar() {/,/^}/p' "$DIR/proofs.sh")"
+mode() { stat -c %a "$1" 2>/dev/null || stat -f %Lp "$1"; }
+if tar -cf - -C "$UT/src" . | untar "$UT/dst" && [ "$(mode "$UT/dst")" = 700 ] && [ -z "$(find "$UT/dst" -perm -4000 -o -perm -2000)" ] \
+  && plain_modes "$UT/dst" && [ "$(mode "$UT/dst/d/f")" = 644 ] && [ "$(mode "$UT/dst/d")" = 755 ]; then
+  pass "proofs.sh untar: no setuid/setgid from the archive, 0700 until checked, then 0644/0755"
+else
+  fail "proofs.sh untar modes: dst $(mode "$UT/dst") file $(mode "$UT/dst/d/f") dir $(mode "$UT/dst/d")"
+fi
+rm -rf "$UT"
 # The blue/green comparison: order of list items and nullable fields must not fail it; a changed key or type must.
 if python3 -I - "$DIR/../ansible/files/compare_indexers.py" >/dev/null 2>&1 <<'PY'
 import importlib.util, sys

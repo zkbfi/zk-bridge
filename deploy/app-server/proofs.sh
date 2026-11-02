@@ -663,14 +663,15 @@ extract_bundle() {
   fi
   EXTRACTED=$(mktemp -d "$OUT_DIR/.extract-XXXXXX")
   TMP_DIRS+=("$EXTRACTED")
-  chmod 0755 "$EXTRACTED"
-  tar --no-same-owner -xzf "$bundle" -C "$EXTRACTED" || die "cannot unpack $bundle"
+  # Unreachable (0700) until the checks below pass, and unpacked without the archive's modes: a bundle could carry a
+  # setuid file, and root would own it.
+  chmod 0700 "$EXTRACTED"
+  untar "$EXTRACTED" -z <"$bundle" || die "cannot unpack $bundle"
   # Only plain files and directories, none shared by a hard link: nothing a service user copies can point elsewhere.
   if [ -n "$(find "$EXTRACTED" ! -type f ! -type d -print -quit)" ] || [ -n "$(find "$EXTRACTED" -type f -links +1 -print -quit)" ]; then
     die "$bundle holds links or special files"
   fi
-  find "$EXTRACTED" -type d -exec chmod 0755 {} +
-  find "$EXTRACTED" -type f -exec chmod 0644 {} +
+  plain_modes "$EXTRACTED"
   if [ -f "$EXTRACTED/manifest.json" ]; then
     run_cli manifest-check --dir "$EXTRACTED"
     [ "$CLI_RC" -eq 0 ] || die "$bundle fails its manifest (exit $CLI_RC)"
@@ -685,8 +686,24 @@ check_plain() {
   if [ -n "$(find -P "$1" ! -type f ! -type d -print -quit)" ] || [ -n "$(find -P "$1" -type f -links +1 -print -quit)" ]; then
     die "$2 holds links or special files: refusing it"
   fi
+  plain_modes "$1"
+}
+
+# plain_modes <directory>: setuid, setgid and sticky bits cleared first (a numeric chmod keeps setgid on a directory),
+# then 0755 directories and 0644 files.
+plain_modes() {
+  find -P "$1" -perm /7000 \( -type f -o -type d \) -exec chmod u-s,g-s,o-t {} +
   find -P "$1" -type d -exec chmod 0755 {} +
   find -P "$1" -type f -exec chmod 0644 {} +
+}
+
+# untar <destination> [-z]: root unpacks standard input into a destination it keeps at 0700, never applying the
+# archive's owners or modes (a tar from a service user could carry a setuid file).
+untar() {
+  local dest=$1
+  shift
+  chmod 0700 "$dest"
+  ( umask 077; exec tar --no-same-owner --no-same-permissions "$@" -xf - -C "$dest" )
 }
 
 # snapshot_tree <reader> <source> <destination>: copies a directory into a root-owned one. The reader (the archive user
@@ -698,9 +715,9 @@ snapshot_tree() {
   if [ "$reader" = root ]; then found=$(sh -c "$probe" _ "$src"); else found=$(as_user "$reader" sh -c "$probe" _ "$src"); fi
   [ -z "$found" ] || die "$src holds links or special files: refusing it"
   if [ "$reader" = root ]; then
-    tar -cf - -C "$src" . | tar --no-same-owner -xf - -C "$dest" || die "copying $src failed"
+    tar -cf - -C "$src" . | untar "$dest" || die "copying $src failed"
   else
-    as_user "$reader" tar -cf - -C "$src" . | tar --no-same-owner -xf - -C "$dest" || die "copying $src as $reader failed"
+    as_user "$reader" tar -cf - -C "$src" . | untar "$dest" || die "copying $src as $reader failed"
   fi
   check_plain "$dest" "$src"
 }
