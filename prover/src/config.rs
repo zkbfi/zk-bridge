@@ -300,6 +300,14 @@ pub struct DestinationConfig {
     /// keep too little proof history. Every header is still checked against the block hash, so none is trusted.
     #[serde(default)]
     pub header_rpc_urls: Vec<String>,
+    /// A directory of `eth_getProof` answers of this chain that a runner fetched near the tip, while the node still served
+    /// them (`<dir>/<chain id>/<address>/<block number>-<block hash>.json`). A node answers `eth_getProof` only for recent
+    /// blocks, and the block of a stored light-client head is older than that window by the time an opening is attempted.
+    /// The `opening-proof` command reads an entry for its block before it asks `rpc_url`. The cache is not trusted: the
+    /// command verifies a cached answer against the state root of the header exactly as it verifies a live one, and asks
+    /// `rpc_url` when the entry is missing or does not verify.
+    #[serde(default)]
+    pub proof_cache_dir: Option<String>,
 }
 
 fn default_log_range() -> u64 {
@@ -1023,5 +1031,28 @@ light_client = \"0x2222222222222222222222222222222222222222\"
         ] {
             assert!(!is_loopback_url(url), "{url}");
         }
+    }
+
+    /// Claim: a destination may name a proof cache directory; it is unset by default.
+    /// Why it matters: an old configuration file still loads, and a runner can point the opening proof at its cache.
+    #[test]
+    fn a_destination_may_name_a_proof_cache() {
+        let plain = Config::load(SAMPLE, &no_environment).unwrap();
+        assert_eq!(
+            plain.route(None).unwrap().1.destination.proof_cache_dir,
+            None
+        );
+        let with = format!("{SAMPLE}proof_cache_dir = \"/var/lib/proofs\"\n");
+        let loaded = Config::load(&with, &no_environment).unwrap();
+        assert_eq!(
+            loaded
+                .route(None)
+                .unwrap()
+                .1
+                .destination
+                .proof_cache_dir
+                .as_deref(),
+            Some("/var/lib/proofs")
+        );
     }
 }

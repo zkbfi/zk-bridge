@@ -159,6 +159,8 @@ enum Tamper {
     Nothing,
     AccountNode,
     StorageNode,
+    /// The node keeps too little history: `eth_getProof` and `eth_call` at the remote block fail as a proof window does.
+    OutOfWindow,
 }
 
 fn flipped(nodes: &[Bytes]) -> Vec<Bytes> {
@@ -235,12 +237,22 @@ fn method_missing() -> Value {
     json!({ "code": -32601, "message": "the method debug_getRawHeader does not exist/is not available" })
 }
 
+/// The JSON-RPC error of a node asked for a block older than its proof window, as publicnode answers.
+fn out_of_window() -> Value {
+    json!({ "code": -32000, "message": "distance to target block exceeds maximum proof window" })
+}
+
 /// The remote chain. `serves_raw_header: false` makes it answer `debug_getRawHeader` with the error of a missing method.
 fn remote_chain_url_with(tamper: Tamper, mode: HeaderMode, serves_raw_header: bool) -> String {
     serve_rpc_replies(move |call| {
         let world = remote_in(mode);
         if call["method"] == "debug_getRawHeader" && !serves_raw_header {
             return Err(method_missing());
+        }
+        if tamper == Tamper::OutOfWindow
+            && (call["method"] == "eth_getProof" || call["method"] == "eth_call")
+        {
+            return Err(out_of_window());
         }
         Ok(match call["method"].as_str().unwrap() {
             "eth_chainId" => json!(format!("{REMOTE_CHAIN_ID:#x}")),
@@ -345,12 +357,22 @@ fn run_with_remote(
     header_urls: &[String],
     extra: &[&str],
 ) -> (Result<i32>, Vec<u8>) {
-    let own = own_chain_url(mode);
     let header_rpc_urls = if header_urls.is_empty() {
         String::new()
     } else {
         format!("header_rpc_urls = {header_urls:?}\n")
     };
+    run_with_destination_lines(mode, remote, &header_rpc_urls, extra)
+}
+
+/// Runs the command with a remote chain at `remote` and `destination_lines` added to the destination section.
+fn run_with_destination_lines(
+    mode: HeaderMode,
+    remote: String,
+    header_rpc_urls: &str,
+    extra: &[&str],
+) -> (Result<i32>, Vec<u8>) {
+    let own = own_chain_url(mode);
     let scratch = Scratch(std::env::temp_dir().join(format!(
         "opening-proof-{}-{}",
         std::process::id(),
@@ -659,4 +681,175 @@ fn the_constants_equal_the_solidity_constants() {
         "keccak256(abi.encode(uint256(storedSlot), EXECUTION_BLOCK_HASHES_MAPPING_SLOT))"
     ));
     assert!(source.contains("keccak256(abi.encode(_executionBlockHashesSlot(proof.storedSlot)))"));
+}
+
+/// The `eth_getProof` answer of the world for `stored_slot`, as a runner stores it, with `tamper` applied to a node.
+fn cache_entry(tamper: Tamper, stored_slot: u64) -> Value {
+    let world = remote();
+    let key = execution_block_hashes_slot(stored_slot);
+    let account = if tamper == Tamper::AccountNode {
+        flipped(&world.account_proof)
+    } else {
+        world.account_proof.clone()
+    };
+    let storage = if tamper == Tamper::StorageNode {
+        flipped(&world.storage_proof)
+    } else {
+        world.storage_proof.clone()
+    };
+    json!({
+        "schemaVersion": 1,
+        "chainId": REMOTE_CHAIN_ID,
+        "blockNumber": REMOTE_BLOCK_NUMBER,
+        "blockHash": format!("{:#x}", world.block_hash),
+        "address": format!("{REMOTE_LIGHT_CLIENT:#x}"),
+        "storedSlot": stored_slot,
+        "storageKeys": [format!("{key:#x}")],
+        "fetchedAt": "2026-11-01T00:00:00.000Z",
+        "proof": {
+            "accountProof": hex_nodes(&account),
+            "storageProof": [{
+                "key": format!("{key:#x}"),
+                "value": format!("{:#x}", U256::from_be_bytes(stored_hash().0)),
+                "proof": hex_nodes(&storage),
+            }],
+        },
+    })
+}
+
+/// A fresh proof cache directory, removed when the value drops.
+fn proof_cache(name: &str) -> Scratch {
+    let directory =
+        std::env::temp_dir().join(format!("opening-proof-cache-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).unwrap();
+    Scratch(directory)
+}
+
+/// Writes `entry` where the runner writes it: `<dir>/<chain id>/<address>/<block number>-<block hash>.json`.
+fn write_cache_entry(cache: &Scratch, block_hash: B256, entry: &Value) {
+    let directory = cache
+        .0
+        .join(REMOTE_CHAIN_ID.to_string())
+        .join(format!("{REMOTE_LIGHT_CLIENT:#x}"));
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join(format!("{REMOTE_BLOCK_NUMBER}-{block_hash:#x}.json")),
+        entry.to_string(),
+    )
+    .unwrap();
+}
+
+fn run_with_cache(tamper: Tamper, cache: &Scratch, extra: &[&str]) -> (Result<i32>, Vec<u8>) {
+    let mode = HeaderMode::Plain;
+    let line = format!("proof_cache_dir = {:?}\n", cache.0.display().to_string());
+    run_with_destination_lines(mode, remote_chain_url(tamper, mode), &line, extra)
+}
+
+fn assert_the_proof_of_the_world(out: &[u8]) {
+    let printed: Value = serde_json::from_slice(out).unwrap();
+    let world = remote();
+    assert_eq!(printed["proof"]["storedSlot"], STORED_SLOT);
+    assert_eq!(
+        printed["proof"]["accountProof"],
+        json!(hex_nodes(&world.account_proof))
+    );
+    assert_eq!(
+        printed["proof"]["storageProof"],
+        json!(hex_nodes(&world.storage_proof))
+    );
+    assert_eq!(printed["storedBlockHash"], format!("{:#x}", stored_hash()));
+    assert_eq!(printed["verifiedNatively"], true);
+}
+
+/// Claim: with a cached answer for the block of the stored head, the command builds and verifies the proof from the cache,
+/// even when the node refuses `eth_getProof` and `eth_call` at that block. The stored slot comes from the entry.
+/// Why it matters: the node's proof window is shorter than the age of a stored head, so without the cache the bridge of
+/// PulseChain testnet v4 could not open.
+#[test]
+fn a_cached_answer_is_used_when_the_node_is_out_of_its_proof_window() {
+    let cache = proof_cache("hit");
+    write_cache_entry(
+        &cache,
+        remote().block_hash,
+        &cache_entry(Tamper::Nothing, STORED_SLOT),
+    );
+    let (outcome, out) = run_with_cache(Tamper::OutOfWindow, &cache, &[]);
+    assert_eq!(outcome.unwrap(), 0);
+    assert_the_proof_of_the_world(&out);
+}
+
+/// Claim: without a cache, the same node out of its window stops the command with the node's error. Why it matters: it
+/// shows that the previous test passed because of the cache.
+#[test]
+fn without_the_cache_the_node_out_of_window_stops_the_command() {
+    let cache = proof_cache("empty-out-of-window");
+    let (outcome, out) = run_with_cache(Tamper::OutOfWindow, &cache, &[]);
+    let error = outcome.expect_err("no answer");
+    assert!(error.to_string().contains("proof window"), "{error}");
+    assert!(out.is_empty());
+}
+
+/// Claim: a cached answer with a flipped node in the account proof or the storage proof is refused, and the command asks
+/// the node, whose answer verifies. With a node out of its window, the tampered entry still never passes.
+/// Why it matters: the cache is a file on disk and is not trusted; only a proof that verifies against the state root of
+/// the header (which hashes to the hash the light client stored) is sent.
+#[test]
+fn a_tampered_cache_entry_is_refused_and_the_node_is_asked() {
+    for (tamper, part) in [
+        (Tamper::AccountNode, "account"),
+        (Tamper::StorageNode, "storage"),
+    ] {
+        let cache = proof_cache(&format!("tampered-{part}"));
+        write_cache_entry(
+            &cache,
+            remote().block_hash,
+            &cache_entry(tamper, STORED_SLOT),
+        );
+        let (outcome, out) = run_with_cache(Tamper::Nothing, &cache, &[]);
+        assert_eq!(outcome.unwrap(), 0, "{part}");
+        assert_the_proof_of_the_world(&out);
+
+        let (outcome, out) = run_with_cache(Tamper::OutOfWindow, &cache, &[]);
+        assert!(outcome.is_err(), "{part}: a tampered entry must not pass");
+        assert!(out.is_empty(), "{part}");
+    }
+}
+
+/// Claim: a cache entry that is not for the request is a miss and the node is asked: an empty directory, an entry with
+/// another block hash in its body, an entry for another stored slot than `--stored-slot` names, an entry whose storage
+/// key is not the key of its stored slot, and a file that is not an entry.
+/// Why it matters: the entry names what it proves; only the entry for this chain, block, address and key is read.
+#[test]
+fn a_cache_miss_falls_back_to_the_node() {
+    let block_hash = remote().block_hash;
+    let mut other_hash = cache_entry(Tamper::Nothing, STORED_SLOT);
+    other_hash["blockHash"] = json!(format!("{:#x}", B256::repeat_byte(0x77)));
+    let mut other_key = cache_entry(Tamper::Nothing, STORED_SLOT);
+    other_key["storageKeys"] = json!([format!("{:#x}", B256::repeat_byte(0x01))]);
+    let cases: Vec<(&str, Option<Value>, Vec<&str>)> = vec![
+        ("empty", None, vec![]),
+        ("other-hash", Some(other_hash), vec![]),
+        ("other-key", Some(other_key), vec![]),
+        (
+            "other-slot",
+            Some(cache_entry(Tamper::Nothing, STORED_SLOT + 1)),
+            vec!["--stored-slot", "9000"],
+        ),
+        ("not-an-entry", Some(json!("not an entry")), vec![]),
+    ];
+    for (name, entry, extra) in cases {
+        let cache = proof_cache(&format!("miss-{name}"));
+        if let Some(entry) = entry {
+            write_cache_entry(&cache, block_hash, &entry);
+        }
+        let (outcome, out) = run_with_cache(Tamper::Nothing, &cache, &extra);
+        assert_eq!(outcome.unwrap(), 0, "{name}");
+        assert_the_proof_of_the_world(&out);
+        let (outcome, _) = run_with_cache(Tamper::OutOfWindow, &cache, &extra);
+        assert!(
+            outcome.is_err(),
+            "{name}: the node was asked, so the miss fails out of window"
+        );
+    }
 }

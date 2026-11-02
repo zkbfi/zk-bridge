@@ -322,6 +322,45 @@ describe("startRunner opens the bridge of the destination chain", () => {
     expect(existsSync(join(started.created.directory, "state", "runner-eth-pls-first-to-second.json"))).toBe(false);
   });
 
+  it("prefetches the opening proof of the source chain into the proof cache while the bridge is closed, and names the cache in the opening-proof config", async () => {
+    const started = await prepare();
+    const genesis = 1_606_824_023n;
+    // Block 899 is at slot 63 and block 900 at slot 64, the first slot of an epoch: block 900 is a checkpoint.
+    const base = clientWith({ depositsOpen: false });
+    const request = vi.fn(async (_args: unknown) => ({ accountProof: ["0x01"], storageProof: [] }));
+    const client = {
+      ...base,
+      getBlock: async ({ blockNumber }: { blockNumber: bigint }) => ({ number: blockNumber, hash: word(Number(blockNumber % 200n)), timestamp: genesis + (blockNumber - 836n) * 12n }),
+      request,
+    } as unknown as PublicClient;
+    const configs: string[] = [];
+    const { overrides } = standardOverrides({
+      publicClient: () => client,
+      executor: async (spec) => {
+        configs.push(readFileSync(spec.args[1] as string, "utf8"));
+        return { code: 1, stdout: "", stderr: "distance to target block exceeds maximum proof window" };
+      },
+    });
+    await run(started, overrides);
+    const cacheDirectory = join(started.created.directory, "state", "proof-cache");
+    const lightClient = started.created.context.pair.sides[0].contracts.lightClient.toLowerCase();
+    const file = join(cacheDirectory, "1", lightClient, `900-${word(900 % 200)}.json`);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ chainId: 1, blockNumber: 900, address: lightClient, storedSlot: 100, proof: { accountProof: ["0x01"] } });
+    expect(request).toHaveBeenCalledWith({ method: "eth_getProof", params: [started.created.context.pair.sides[0].contracts.lightClient, [expect.any(String)], "0x384"] });
+    expect(started.created.events().find((event) => event.event === "proof_prefetched")).toMatchObject({ chainId: 1, blockNumber: "900", direction: "first-to-second" });
+    expect(configs[0]).toContain(`proof_cache_dir = "${cacheDirectory}"`);
+  });
+
+  it("does not prefetch once the state file records the bridge as open", async () => {
+    const started = await prepare();
+    await mkdir(join(started.created.directory, "state"), { recursive: true });
+    await writeFile(join(started.created.directory, "state", "runner-eth-pls-first-to-second.json"), JSON.stringify({ schemaVersion: 1, finished: {}, depositsOpen: true }));
+    const { overrides } = standardOverrides();
+    await run(started, overrides);
+    expect(started.created.events().find((event) => event.event === "proof_prefetch_stopped")).toMatchObject({ chainId: 1, reason: "deposits-open" });
+    expect(started.created.events().some((event) => event.event === "proof_prefetched")).toBe(false);
+  });
+
   it("uses the opening prover that the overrides give, with the direction of the opposite route", async () => {
     const started = await prepare();
     const openingProver = vi.fn((_direction: string) => ({

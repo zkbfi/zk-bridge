@@ -766,6 +766,11 @@ fn run_opening_proof(
         remote_light_client: route.destination.light_client_address()?,
         remote_slot: arguments.remote_slot,
         stored_slot: arguments.stored_slot,
+        proof_cache_dir: route
+            .destination
+            .proof_cache_dir
+            .as_deref()
+            .map(std::path::Path::new),
     })?;
     write_json(out, &package.to_json())?;
     Ok(0)

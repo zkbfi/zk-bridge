@@ -111,6 +111,8 @@ export interface ProverBinaryInput {
   readonly temporaryDirectory?: string;
   /** A directory where the prover keeps the beacon states it verified, so a later run never needs an old state from a node. */
   readonly stateCacheDirectory?: string;
+  /** The proof cache of the runner (`proof-cache.ts`), which the `opening-proof` command reads before it asks a node. */
+  readonly proofCacheDirectory?: string;
   readonly logger: LogSink;
 }
 
@@ -149,7 +151,10 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary & Ope
     const directory = await mkdtemp(join(parent, "zk-bridge-bot-"));
     try {
       const path = join(directory, "prover.toml");
-      const options = input.stateCacheDirectory === undefined ? {} : { stateCacheDirectory: input.stateCacheDirectory };
+      const options = {
+        ...(input.stateCacheDirectory === undefined ? {} : { stateCacheDirectory: input.stateCacheDirectory }),
+        ...(input.proofCacheDirectory === undefined ? {} : { proofCacheDirectory: input.proofCacheDirectory }),
+      };
       await writeFile(path, renderProverConfig(route, backend, input.handoff, options), { mode: 0o600 });
       return await use(path, route.name);
     } finally {

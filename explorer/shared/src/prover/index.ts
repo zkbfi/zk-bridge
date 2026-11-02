@@ -4,6 +4,8 @@ export * from "./light-client.js";
 export * from "./opening-package.js";
 export * from "./packages.js";
 export * from "./proof-intake.js";
+export * from "./proof-cache.js";
+export * from "./proof-prefetch.js";
 export * from "./prove-timing.js";
 export * from "./verify-guard.js";
 export * from "./prover-binary.js";

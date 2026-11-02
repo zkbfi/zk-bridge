@@ -49,6 +49,12 @@ export interface HandoffSection {
 export interface RouteOptions {
   /** A directory where the prover keeps the beacon states it fetched and verified (`source.state_cache_dir`). */
   readonly stateCacheDirectory?: string;
+  /**
+   * A directory of `eth_getProof` answers that the runner fetched near the tip of the destination chain
+   * (`destination.proof_cache_dir`). The `opening-proof` command reads it before it asks the node, and verifies what it
+   * reads. See `proof-cache.ts`.
+   */
+  readonly proofCacheDirectory?: string;
 }
 
 /** One direction of a pair, as the prover configuration file describes a route. */
@@ -141,6 +147,11 @@ function headerLines(headerRpcUrls: readonly string[]): readonly string[] {
   return [`header_rpc_urls = [${headerRpcUrls.map((url) => quoted(url, "destination header rpc endpoint")).join(", ")}]`];
 }
 
+/** `proof_cache_dir` of the destination: the proof cache that the `opening-proof` command reads first. */
+function proofCacheLines(directory: string | undefined): readonly string[] {
+  return directory === undefined ? [] : [`proof_cache_dir = ${quoted(directory, "proof cache directory")}`];
+}
+
 function handoffLines(handoff: HandoffSection | undefined): readonly string[] {
   if (handoff === undefined) return ['targets = ["stdout"]'];
   return [
@@ -158,7 +169,7 @@ function handoffLines(handoff: HandoffSection | undefined): readonly string[] {
  * @param route The route and its two sides.
  * @param backend The backend for a `prove` run, or null for the commands that need none.
  * @param handoff Also send each package to a webhook. Used only with a backend.
- * @param options The state cache directory of the route, when the caller keeps one.
+ * @param options The state cache directory and the proof cache directory of the route, when the caller keeps them.
  * @throws Error when a value holds a quote, a backslash or a line break.
  */
 export function renderProverConfig(
@@ -191,6 +202,7 @@ export function renderProverConfig(
     `bridge = ${quoted(destination.contracts.bridge, "destination bridge")}`,
     `start_block = ${destination.startBlock}`,
     ...headerLines(destination.headerRpcUrls ?? []),
+    ...proofCacheLines(options.proofCacheDirectory),
     "",
   );
   return lines.join("\n");
