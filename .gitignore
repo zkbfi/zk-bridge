@@ -7,3 +7,4 @@ script/hardened/e2e.config.json
 .deploy/
 e2e/state/
 .superpowers/
+__pycache__/

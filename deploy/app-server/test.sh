@@ -304,6 +304,9 @@ EOS
   printf 'state-a\n' >"$PT/src-backend/beacon-states/pulsechain/a.ssz"
   printf '{"proof":1}\n' >"$PT/src-runner/proof-cache/369/0xabc/100-0xdead.json"
   printf 'state-e\n' >"$PT/src-runner/beacon-states/eth/s.ssz"
+  # As on the server: the runner writes its cache 0600, and the backend's database runs in WAL mode.
+  chmod 600 "$PT/src-runner/proof-cache/369/0xabc/100-0xdead.json"
+  sqlite3 "$PT/src-backend/backend.sqlite" "PRAGMA journal_mode=WAL;" >/dev/null
 
   # proofs <out dir> <backend state> <runner state> <env...> -- <args...>
   PROOFS_OUT=""
@@ -344,6 +347,10 @@ EOS
   # A snapshot, not the live file: it opens as a database.
   tar -xzf "$bundle" -C "$PT" ./backend/backend.sqlite 2>/dev/null || true
   if [ "$(sqlite3 "$PT/backend/backend.sqlite" 'SELECT body FROM proofs' 2>/dev/null)" = p1 ]; then pass "proofs.sh export: the SQLite snapshot is readable"; else fail "SQLite snapshot"; fi
+  # The archive user opens the snapshot read only, so it must not be in WAL mode (that needs a writable -shm).
+  if [ "$(sqlite3 "$PT/backend/backend.sqlite" 'PRAGMA journal_mode;' 2>/dev/null)" = delete ]; then pass "proofs.sh export: the snapshot uses a rollback journal, not WAL"; else fail "snapshot journal mode: $(sqlite3 "$PT/backend/backend.sqlite" 'PRAGMA journal_mode;' 2>&1)"; fi
+  # The archive user must read the copies of files that the services keep 0600.
+  if tar -tvzf "$bundle" 2>/dev/null | grep '100-0xdead.json$' | grep -q '^-rw-r--r--'; then pass "proofs.sh export: copies of 0600 service files are readable (0644)"; else fail "copied file mode: $(tar -tvzf "$bundle" | grep '100-0xdead.json$')"; fi
   rm -rf "$PT/backend"
 
   # Retention.

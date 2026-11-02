@@ -154,7 +154,9 @@ while IFS= read -r -d "" f; do
     continue
   fi
   mkdir -p "$(dirname "$d")"
-  if cp "$f" "$d.part.$$" && mv "$d.part.$$" "$d"; then :; else rm -f "$d.part.$$"; exit 1; fi
+  # A new file through a redirect takes 0666 minus the umask. cp would keep the source mode (0600 in a service state
+  # directory), and the archive user could not read the copy.
+  if cat "$f" > "$d.part.$$" && mv "$d.part.$$" "$d"; then :; else rm -f "$d.part.$$"; exit 1; fi
   copied=$((copied + 1))
 done < <(find "$src" -type f -print0)
 echo "copied=$copied identical=$identical conflicts=$conflicts"
@@ -449,7 +451,9 @@ cmd_export() {
   # The SQLite file: a consistent snapshot (the online backup API), taken by the backend's user.
   if [ -f "$BACKEND_STATE/backend.sqlite" ]; then
     log "snapshot of backend.sqlite"
-    as_user zkb_backend sh -c 'umask 022; exec sqlite3 -cmd ".timeout 5000" "$1" ".backup \"$2\""' _ \
+    # The copy keeps the WAL mode of the source, and a read-only open of a WAL file must write its -shm next to it, which
+    # the archive user cannot. A rollback-journal copy opens read only with no writes.
+    as_user zkb_backend sh -c 'umask 022; sqlite3 -cmd ".timeout 5000" "$1" ".backup \"$2\"" && exec sqlite3 "$2" "PRAGMA journal_mode=DELETE;" >/dev/null' _ \
       "$BACKEND_STATE/backend.sqlite" "$stage/backend/backend.sqlite" || die "the SQLite snapshot failed"
     snapshot=1
   else
