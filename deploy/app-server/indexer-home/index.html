@@ -158,27 +158,43 @@
     PAIR = pair;
     try { CTX.chains = Z && pair && pair.sides ? Z.searchChainsFromPair(pair) : []; } catch (error) { CTX.chains = []; }
   }
-  const linksOf = (target) => (Z ? Z.crossLinks(target, CTX) : []);
-  const linkHtml = (list) => list.map((l) => `<a href="${esc(l.url)}"${l.surface === "dapp" || l.surface === "indexer" ? "" : ' target="_blank" rel="noreferrer"'}>${esc(l.label)}</a>`).join(" · ");
+  // This page is the "indexer" surface, so it never links to itself.
+  const notSelf = (list) => list.filter((l) => l.surface !== "indexer");
+  const linksOf = (target) => (Z ? notSelf(Z.crossLinks(target, CTX)) : []);
+  const linkHtml = (list) => notSelf(list).map((l) => `<a href="${esc(l.url)}"${l.surface === "dapp" || l.surface === "indexer" ? "" : ' target="_blank" rel="noreferrer"'}>${esc(l.label)}</a>`).join(" · ");
   const xlinks = (target, label) => { const list = linksOf(target); return list.length ? `<span class="sub x">${label ? `${esc(label)}: ` : ""}${linkHtml(list)}</span>` : ""; };
   const contractOf = (chainId, role) => { const side = PAIR && PAIR.sides && PAIR.sides.find((x) => x.chainId === chainId); return side && side.contracts ? side.contracts[role] || null : null; };
   const contractLinks = (chainId, role, label) => { const address = contractOf(chainId, role); return address ? xlinks({ type: "address", address: address.toLowerCase(), chainId, role }, label) : ""; };
   const directionFrom = (chainId) => { const c = CTX.chains.find((x) => x.chainId === chainId); return c ? (c.side === "first" ? "first-to-second" : "second-to-first") : null; };
-  const tx = (chainId, hash) => { const first = linksOf({ type: "transaction", chainId, hash })[0]; const text = `${esc(hash.slice(0, 10))}…`; return first ? `<a class="mono" href="${esc(first.url)}">${text}</a>` : `<span class="mono">${text}</span>`; };
+  const tx = (chainId, hash, length = 10) => { const first = linksOf({ type: "transaction", chainId, hash })[0]; const text = `${esc(hash.slice(0, length))}…`; return first ? `<a class="mono" href="${esc(first.url)}">${text}</a>` : `<span class="mono">${text}</span>`; };
   // One light client: its head is the newest update, or the checkpoint it was deployed with. "Not started" only when
-  // it holds no head at all. The lag is orange past an hour, and "unknown" when the indexer cannot measure it.
-  function headRow(h, u, now) {
+  // it holds no head at all. "waiting" is how many transfers wait for an update in the direction that this light client
+  // serves (the batch of the proving service), or null when the proving service cannot be asked: then the row says when
+  // the last update was and claims nothing about waiting. Orange only when transfers wait.
+  function headRow(h, u, now, waiting = null) {
     const holds = h.initialized ?? (h.storedHeadSlot !== null && h.storedHeadSlot !== undefined);
     const lc = contractLinks(h.chainId, "lightClient");
     if (!holds) return row(`${esc(name(h.chainId))} does not trust ${esc(name(h.trackedChainId))} yet`, `This light client has not been started, so nothing can be proven in this direction.${lc}`, `<span class="warn">not started</span>`);
-    const behind = h.lagSeconds === null || h.lagSeconds === undefined ? `<span class="warn">lag unknown</span>`
-      : `<span class="${h.lagSeconds > 3600 ? "warn" : "ok"}">${ago(h.lagSeconds)} behind</span>`;
+    const lastText = u ? `last update ${ago(now - u.timestamp)} ago`
+      : !h.updateCount ? "no update since deployment"
+      : h.lagSeconds === null || h.lagSeconds === undefined ? null : `last update ${ago(h.lagSeconds)} ago`;
+    const status = typeof waiting === "number" && waiting > 0 ? `<span class="warn">${num(waiting)} transfer${waiting === 1 ? "" : "s"} waiting for an update</span>`
+      : typeof waiting === "number" ? `<span class="ok">${lastText ? `nothing waiting · ${lastText}` : "nothing waiting"}</span>`
+      : lastText ? `<span class="ok">${lastText}</span>` : `<span class="warn">lag unknown</span>`;
     if (!h.updateCount) return row(`${esc(name(h.chainId))} trusts ${esc(name(h.trackedChainId))} from slot ${num(h.storedHeadSlot)} (set at deployment)`,
-      `no updates since, so nothing sent after that slot can be proven yet${lc}`, behind);
+      `no updates since, so nothing sent after that slot can be proven yet${lc}`, status);
     const started = h.initializedAtSlot ? ` · started at slot ${num(h.initializedAtSlot)}` : "";
     return row(`${esc(name(h.chainId))} trusts ${esc(name(h.trackedChainId))} up to block ${num(h.storedHeadExecutionBlock)}`,
-      `slot ${num(h.storedHeadSlot)} · ${num(h.updateCount)} update${h.updateCount === 1 ? "" : "s"}${started}${u ? ` · last ${ago(now - u.timestamp)} ago in ${tx(h.chainId, u.transactionHash)}` : ""}${lc}`,
-      behind);
+      `slot ${num(h.storedHeadSlot)} · ${num(h.updateCount)} update${h.updateCount === 1 ? "" : "s"}${started}${u ? ` · last update ${ago(now - u.timestamp)} ago (tx ${tx(h.chainId, u.transactionHash, 6)})` : ""}${lc}`,
+      status);
+  }
+  // The text of a bridge's fork check: what it does, and how often it has been confirmed.
+  function gateText(g, now) {
+    const n = Number(g.confirmations) || 0;
+    if (!g.enforcing) return "fork check in detection mode: deposits pass until this chain gains beacon roots or a newer opcode, then the check turns on for good";
+    const times = n === 0 ? "not confirmed yet" : n === 1 ? "confirmed once" : `confirmed ${n} times`;
+    const last = n > 0 && g.lastConfirmedTimestamp ? `, last ${ago(now - g.lastConfirmedTimestamp)} ago` : "";
+    return `fork check on · ${times}${last}`;
   }
   // The proving service (the backend) answers on the prove host of this deployment: indexer.example → prove.example.
   // Only the page's own host decides it, so no link can point this page at another server.
@@ -278,6 +294,17 @@
   function getPair() {
     if (!pairRequest) pairRequest = fetch("/api/pair").then((r) => r.json()).then((pair) => { usePair(pair); return pair; });
     return pairRequest.catch((error) => { pairRequest = null; throw error; });
+  }
+  // How many transfers wait for a light client update in a direction (the batch of the proving service); null when the
+  // direction is unknown or the proving service does not answer.
+  async function waitingFor(direction) {
+    if (!PROVE || !direction) return null;
+    try {
+      const r = await proveGet(`/directions/${direction}/pipeline`);
+      if (!r.ok) return null;
+      const p = await r.json();
+      return p && p.batch ? Number(p.batch.count) || 0 : p && "batch" in p ? 0 : null;
+    } catch (error) { return null; }
   }
   async function loadPipeline() {
     const box = document.getElementById("pipeline"), table = document.getElementById("timings"), summary = document.getElementById("pipeline-summary");
@@ -480,10 +507,11 @@
       await getPair().catch(() => null); // the links need the contracts; the page still shows its data without them
       document.getElementById("pair").textContent = summary.heads.map((h) => name(h.trackedChainId)).join(" ↔ ");
       const updates = Object.fromEntries((summary.lastHeadUpdates || []).map((u) => [u.chainId, u.update]));
-      document.getElementById("heads").innerHTML = summary.heads.map((h) => headRow(h, updates[h.chainId], summary.now)).join("");
+      const counts = await Promise.all(summary.heads.map((h) => waitingFor(directionFrom(h.trackedChainId))));
+      document.getElementById("heads").innerHTML = summary.heads.map((h, i) => headRow(h, updates[h.chainId], summary.now, counts[i])).join("");
       document.getElementById("gates").innerHTML = (summary.gates || []).map((g) => row(`${esc(name(g.chainId))} bridge`,
-        `gate ${g.enforcing ? "enforcing" : "not enforcing"} · ${num(g.confirmations)} confirmation${g.confirmations === 1 ? "" : "s"}${g.lastConfirmedTimestamp ? ` · last ${ago(summary.now - g.lastConfirmedTimestamp)} ago` : ""}${contractLinks(g.chainId, "bridge", "Bridge")}${contractLinks(g.chainId, "gate", "Gate")}`,
-        g.depositsOpen ? `<span class="ok">deposits open</span>` : `<span class="warn">deposits closed</span>`)).join("");
+        `${gateText(g, summary.now)}${contractLinks(g.chainId, "bridge", "Bridge")}${contractLinks(g.chainId, "gate", "Gate")}`,
+        g.depositsOpen ? `<span class="ok">deposits open</span>` : `<span class="warn">deposits closed: waiting for the opening proof</span>`)).join("");
       const f = summary.inFlight || { total: 0, byStatus: {} };
       document.getElementById("flight").innerHTML = row("In flight", Object.entries(f.byStatus || {}).map(([k, v]) => `${esc(k.replace(/_/g, " "))} ${num(v)}`).join(" · "), num(f.total));
       const items = feed.items || [];
