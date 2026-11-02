@@ -203,8 +203,20 @@ function scanJson(value: unknown, problems: string[]): void {
  * The manifest lists files by path with their SHA-256 in plain hex, which the general rule would take for keys. Its
  * `files` must name allowed paths with 64 hex digits and a size; everything else in it is scanned as usual.
  */
+/** A git commit hash, or "unknown" when the release names none. */
+const COMMIT = /^(?:[0-9a-f]{40}|unknown)$/;
+
+/** "<ISO time> <CIDv1 in base32> <count> <commit>", as proofs.sh appends it to the publication log. */
+const LAST_PUBLISHED = /^\d{4}-\d{2}-\d{2}T[0-9:.]+Z b[a-z2-7]{20,} \d+ (?:[0-9a-f]{40}|unknown)$/;
+
 function scanManifest(manifest: Record<string, unknown>, problems: string[]): void {
-  const { files, ...rest } = manifest;
+  // The commit of the release is a git hash in plain hex, which the general rule would take for a key: it must be exactly
+  // 40 hex digits (or "unknown"), and is not scanned otherwise.
+  const { files, commit, lastPublished, ...rest } = manifest;
+  if (commit !== undefined && !(typeof commit === "string" && COMMIT.test(commit))) problems.push("has a commit that is not a git hash");
+  // The line of the previous publication: its time, its CID (letters and digits, like a key), its count and its commit.
+  if (lastPublished !== undefined && lastPublished !== null && !(typeof lastPublished === "string" && LAST_PUBLISHED.test(lastPublished)))
+    problems.push("has a lastPublished line of another shape");
   scanJson(rest, problems);
   for (const [path, entry] of Object.entries((files ?? {}) as Record<string, unknown>)) {
     const { sha256, bytes, ...other } = (entry ?? {}) as Record<string, unknown>;
