@@ -123,7 +123,9 @@ export interface AccountProofCheck {
   readonly answer: unknown;
 }
 
-const asNumber = (value: Hex): bigint => (value === "0x" ? 0n : hexToBigInt(value));
+/** A quantity of an `eth_getProof` answer as a number. "0x" is zero. */
+export const hexQuantity = (value: Hex): bigint => (value === "0x" ? 0n : hexToBigInt(value));
+const asNumber = hexQuantity;
 const sameHash = (left: Hex, right: Hex): boolean => left.toLowerCase() === right.toLowerCase();
 
 /**

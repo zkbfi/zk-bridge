@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getAddress, type Address, type Hex, type PublicClient } from "viem";
+import { getAddress, keccak256, toRlp, type Address, type Hex, type PublicClient } from "viem";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { proofCategory } from "@zk-bridge/shared";
 import { describeRoute } from "@zk-bridge/shared/prover";
@@ -13,6 +13,7 @@ import { deliverySettingsOf, startRunner, type RunnerOverrides } from "../../src
 import { PROGRAM_KEY, fakeProver, proofPayload, word } from "../support/builders.ts";
 import { startFakeBoard, type FakeBoard } from "../../../shared/test/support/fake-board.ts";
 import { startFakeIndexer, type FakeIndexer } from "../support/fake-indexer.ts";
+import { openingStorageKey } from "@zk-bridge/shared/prover";
 import { createServiceWorld, type ServiceWorld, type ServiceWorldOptions } from "../support/service-world.ts";
 
 // The first two public development keys of Anvil. Neither holds funds on a live chain.
@@ -351,26 +352,34 @@ describe("startRunner opens the bridge of the destination chain", () => {
     expect(configs[0]).toContain(`proof_cache_dir = "${cacheDirectory}"`);
   });
 
-  it("takes the opening proof entry from the indexer's proof archive once it verifies, and asks no node for it", async () => {
+  it("takes the opening proof entry from the indexer's proof archive once it proves the stored head's key, and asks no node for it", async () => {
     const started = await prepare();
     const genesis = 1_606_824_023n;
     const base = clientWith({ depositsOpen: false });
     const request = vi.fn(async (_args: unknown) => ({}));
-    const emptyRoot = "0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421";
+    const lightClient = started.created.context.pair.sides[0].contracts.lightClient.toLowerCase() as Address;
+    // A real state of one account with one slot: executionBlockHashes[100] (the head the fake light client holds).
+    const slotKey = openingStorageKey(100n);
+    const stored = word(7);
+    const storageLeaf = toRlp([`0x20${keccak256(slotKey).slice(2)}`, toRlp(stored)]);
+    const storageRoot = keccak256(storageLeaf);
+    const codeHash = keccak256("0x6080");
+    const accountLeaf = toRlp([`0x20${keccak256(lightClient).slice(2)}`, toRlp(["0x01", "0x", storageRoot, codeHash])]);
+    const stateRoot = keccak256(accountLeaf);
     const client = {
       ...base,
       getBlock: async ({ blockNumber, blockHash }: { blockNumber?: bigint; blockHash?: Hex }) =>
-        blockHash !== undefined ? { stateRoot: emptyRoot } : { number: blockNumber, hash: word(Number((blockNumber as bigint) % 200n)), timestamp: genesis + ((blockNumber as bigint) - 836n) * 12n },
+        blockHash !== undefined
+          ? { number: 900n, stateRoot }
+          : { number: blockNumber, hash: word(Number((blockNumber as bigint) % 200n)), timestamp: genesis + ((blockNumber as bigint) - 836n) * 12n },
       request,
     } as unknown as PublicClient;
-    const lightClient = started.created.context.pair.sides[0].contracts.lightClient.toLowerCase();
-    const key = `0x${"77".repeat(32)}`;
-    // An account that does not exist, proven against the empty state root: a real proof that needs no trie.
-    const entry = {
-      schemaVersion: 1, chainId: 1, blockNumber: 900, blockHash: word(900 % 200), address: lightClient, storedSlot: 100, storageKeys: [key], fetchedAt: "2026-11-01T00:00:00.000Z",
-      proof: { balance: "0x0", nonce: "0x0", codeHash: "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470", storageHash: emptyRoot, accountProof: [], storageProof: [{ key, value: "0x0", proof: [] }] },
-    };
-    started.indexer.storageProofs[`/api/proofs/storage/1/${lightClient}/900`] = [entry];
+    const entry = (storedSlot: number, keys: Hex[]) => ({
+      schemaVersion: 1, chainId: 1, blockNumber: 900, blockHash: word(900 % 200), address: lightClient, storedSlot, storageKeys: keys, fetchedAt: "2026-11-01T00:00:00.000Z",
+      proof: { balance: "0x0", nonce: "0x1", codeHash, storageHash: storageRoot, accountProof: [accountLeaf], storageProof: [{ key: slotKey, value: stored, proof: [storageLeaf] }] },
+    });
+    // A poisoned entry first: it claims another stored slot. The good one follows.
+    started.indexer.storageProofs[`/api/proofs/storage/1/${lightClient}/900`] = [entry(99, [openingStorageKey(99n)]), entry(100, [slotKey])];
     const { overrides } = standardOverrides({
       publicClient: () => client,
       executor: async () => ({ code: 1, stdout: "", stderr: "distance to target block exceeds maximum proof window" }),
@@ -379,9 +388,34 @@ describe("startRunner opens the bridge of the destination chain", () => {
     const file = join(started.created.directory, "state", "proof-cache", "1", lightClient, `900-${word(900 % 200)}.json`);
     expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ blockNumber: 900, storedSlot: 100 });
     expect(request).not.toHaveBeenCalled();
+    expect(started.created.events().find((event) => event.event === "proof_archive_entry_refused")).toMatchObject({ reason: "another stored slot" });
     expect(started.created.events().find((event) => event.event === "proof_archive_hit")).toMatchObject({ chainId: 1, blockNumber: "900" });
     // Before the opening proof the opener asked the archive for the block of the stored head.
     expect(started.indexer.requested.filter((path) => path.startsWith("/api/proofs/storage/1/")).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("checks an archived entry against the entry's own slot when the node can no longer read the head at that block", async () => {
+    const started = await prepare();
+    const genesis = 1_606_824_023n;
+    const base = clientWith({ depositsOpen: false });
+    const readContract = vi.fn(async (call: { functionName: string; blockNumber?: bigint }) => {
+      if (call.functionName === "head" && call.blockNumber !== undefined) throw new Error("missing trie node");
+      return base.readContract(call as never);
+    });
+    const client = {
+      ...base,
+      readContract,
+      getBlock: async ({ blockNumber, blockHash }: { blockNumber?: bigint; blockHash?: Hex }) =>
+        blockHash !== undefined ? { number: 900n, stateRoot: word(1) } : { number: blockNumber, hash: word(Number((blockNumber as bigint) % 200n)), timestamp: genesis + ((blockNumber as bigint) - 836n) * 12n },
+      request: vi.fn(async () => ({})),
+    } as unknown as PublicClient;
+    const lightClient = started.created.context.pair.sides[0].contracts.lightClient.toLowerCase();
+    started.indexer.storageProofs[`/api/proofs/storage/1/${lightClient}/900`] = [
+      { schemaVersion: 1, chainId: 1, blockNumber: 900, blockHash: word(900 % 200), address: lightClient, storedSlot: 99, storageKeys: [openingStorageKey(98n)], fetchedAt: "x", proof: {} },
+    ];
+    const { overrides } = standardOverrides({ publicClient: () => client, executor: async () => ({ code: 1, stdout: "", stderr: "proof window" }) });
+    await run(started, overrides);
+    expect(started.created.events().find((event) => event.event === "proof_archive_entry_refused")).toMatchObject({ reason: "no proof of the stored slot's key" });
   });
 
   it("asks the archive nothing before the opening proof while the stored head has no block", async () => {

@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import { PROOF_DIRECTIONS } from "@zk-bridge/shared";
 import { proofArchive } from "../../proof-archive/runtime";
+import { publicEvidence, publicLightClientProof, publicStorageProof } from "../../proof-archive/public";
 import type { ProofArchive } from "../../proof-archive/store";
 
 /**
@@ -8,7 +9,7 @@ import type { ProofArchive } from "../../proof-archive/store";
  * trusted: a reader verifies each answer against a header it trusts (the runner does, `proof-archive-client.ts`).
  *
  * - `GET /api/proofs/storage/:chainId/:address/:block`: the archived `eth_getProof` answers of one account in one block,
- *   as proof cache entries (`{ entries: [...] }`, each with `sourceHost`). 404 when there is none.
+ *   as proof cache entries without the fetch time (`{ entries: [...] }`). 404 when there is none.
  * - `GET /api/proofs/light-client/:direction?startSlot=&limit=`: light client update proofs, newest start first.
  * - `GET /api/proofs/evidence/:messageId`: the delivery evidence archived for a message.
  * - `GET /api/proofs/summary`: row counts.
@@ -30,8 +31,8 @@ export const registerProofRoutes = (app: Hono, archive: () => Promise<ProofArchi
     const target = await archive();
     if (target === null) return c.json(unavailable, 503);
     const entries = await target.storageProofsAt({ chainId: Number(chainId), address, blockNumber: BigInt(block) });
-    if (entries.length === 0) return c.json({ error: "no archived proof for this block", entries }, 404);
-    return c.json({ entries });
+    if (entries.length === 0) return c.json({ error: "no archived proof for this block", entries: [] }, 404);
+    return c.json({ entries: entries.map(publicStorageProof) });
   });
 
   app.get("/api/proofs/light-client/:direction", async (c) => {
@@ -45,7 +46,7 @@ export const registerProofRoutes = (app: Hono, archive: () => Promise<ProofArchi
     const target = await archive();
     if (target === null) return c.json(unavailable, 503);
     const proofs = await target.lightClientProofs({ direction, startSlot: startSlot === undefined ? undefined : BigInt(startSlot), limit: Number(limitText) });
-    return c.json({ proofs });
+    return c.json({ proofs: proofs.map(publicLightClientProof) });
   });
 
   app.get("/api/proofs/evidence/:messageId", async (c) => {
@@ -54,8 +55,8 @@ export const registerProofRoutes = (app: Hono, archive: () => Promise<ProofArchi
     const target = await archive();
     if (target === null) return c.json(unavailable, 503);
     const evidence = await target.evidence(messageId);
-    if (evidence.length === 0) return c.json({ error: "no archived evidence for this message", evidence }, 404);
-    return c.json({ evidence });
+    if (evidence.length === 0) return c.json({ error: "no archived evidence for this message", evidence: [] }, 404);
+    return c.json({ evidence: evidence.map(publicEvidence) });
   });
 
   app.get("/api/proofs/summary", async (c) => {

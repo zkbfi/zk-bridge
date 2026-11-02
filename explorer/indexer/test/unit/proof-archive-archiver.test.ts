@@ -6,6 +6,7 @@ import { archiveStore, createArchiver, hostOf, startArchiverFromEnvironment } fr
 import { setProofArchive } from "../../src/proof-archive/runtime";
 import { registerProofRoutes } from "../../src/api/routes/proofs";
 import { lightClientRecord } from "../../src/proof-archive/records";
+import { publicStorageProof } from "../../src/proof-archive/public";
 import { freshArchive, proofBytes, proofMessage, publicValuesFor, sepoliaRecord } from "./support/proof-archive-fixtures";
 
 const EPOCH_SECONDS = 32n * 12n;
@@ -153,6 +154,30 @@ describe("the proof routes", () => {
     expect((await routes.request(`/api/proofs/evidence/0x${"0f".repeat(32)}`)).status).toBe(404);
     expect((await routes.request("/api/proofs/evidence/0x01")).status).toBe(400);
     expect(await (await routes.request("/api/proofs/summary")).json()).toEqual({ storageProofs: 1, lightClientProofs: 1, evidence: 1, conflicts: 0 });
+  });
+
+  it("serve only the public fields, the same as the IPFS tree: no source host, fetch time, job id, source or backend time", async () => {
+    const { archive } = await freshArchive();
+    const record = sepoliaRecord();
+    await archive.putStorageProof({ ...record, sourceHost: "secret-node.example:8545" });
+    await archive.putLightClientProof(lightClientRecord({ pair: pair.name, direction: "first-to-second", proof: proofBytes(), publicValues: publicValuesFor(64n, 96n), source: "backend-held", extras: { backendJobId: "job-hidden-1" } }));
+    const messageId = `0x${"0e".repeat(32)}`;
+    await archive.putEvidence({ messageId, bodyHash: `0x${"00".repeat(32)}`, pair: pair.name, direction: "first-to-second", body: "{}", storedAt: 1_700_000_000_000, source: "backend" });
+    const routes = app(async () => archive);
+    const texts = await Promise.all(
+      [`/api/proofs/storage/${record.chainId}/${record.address}/${record.blockNumber}`, "/api/proofs/light-client/first-to-second", `/api/proofs/evidence/${messageId}`].map(async (path) => {
+        const answer = await routes.request(path);
+        expect(answer.status, path).toBe(200);
+        return answer.text();
+      }),
+    );
+    for (const text of texts) {
+      for (const hidden of ["sourceHost", "secret-node", "fetchedAt", "backendJobId", "job-hidden-1", '"source"', "storedAt", "1700000000000"]) expect(text).not.toContain(hidden);
+    }
+    const [storage, light, evidence] = texts.map((text) => JSON.parse(text) as Record<string, Array<Record<string, unknown>>>);
+    expect(storage?.entries?.[0]).toEqual(publicStorageProof(sepoliaRecord()));
+    expect(Object.keys(light?.proofs?.[0] ?? {})).toContain("postedTransactionHash");
+    expect(evidence?.evidence?.[0]).toEqual({ messageId, bodyHash: `0x${"00".repeat(32)}`, pair: pair.name, direction: "first-to-second", body: "{}" });
   });
 
   it("answer 503 when the archive is off, which is the default without a database", async () => {

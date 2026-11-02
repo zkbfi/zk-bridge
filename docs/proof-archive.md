@@ -89,8 +89,8 @@ drops it.
 
 ### Read routes (indexer, public under `/api/*`)
 
-- `GET /api/proofs/storage/:chainId/:address/:block` returns `{ entries: [...] }`, as proof cache entries with
-  `sourceHost`. It answers 404 when there are none.
+- `GET /api/proofs/storage/:chainId/:address/:block` returns `{ entries: [...] }`, as proof cache entries without the
+  fetch time. It answers 404 when there are none.
 - `GET /api/proofs/light-client/:direction?startSlot=&limit=` returns the newest start slot first, at most 500.
 - `GET /api/proofs/evidence/:messageId`
 - `GET /api/proofs/summary` returns row counts.
@@ -98,11 +98,23 @@ drops it.
 Every route answers 503 when the archive is off: no `DATABASE_URL`, `PROOF_ARCHIVE=off`, or the database cannot be
 reached.
 
+The routes show the same fields as the public IPFS tree, through the same projections in `public.ts`. No source host,
+fetch time, backend job id, source or backend time leaves the indexer.
+
 ### The runner reads the archive first
 
 - The runner's prefetcher and opener use `createArchivedProofCacheStore`, which reads in this order:
-  1. The indexer archive (`runner.indexerUrl`). An entry is used only after it verifies against the state root read
-     from the source chain. A good entry is copied into the local cache, which is where the prover reads.
+  1. The indexer archive (`runner.indexerUrl`). An entry is checked against what the runner asked for, never against
+     what it says about itself (`archivedEntryRefusal`):
+     - It must be for the requested chain, account, block number and block hash. The header is read by hash from the
+       source chain and must carry that number.
+     - It must name the head that the light client held in that block. The runner reads that head at the block while a
+       node still can; otherwise it uses the entry's own slot.
+     - It must prove the key of `executionBlockHashes[storedSlot]` (the rule of opening.rs) against the header's state
+       root, and that key must hold a block hash that is not zero.
+
+     A good entry is copied into the local cache, which is where the prover reads. A refused one is logged as
+     `proof_archive_entry_refused` with the reason.
   2. The local cache.
   3. A node: the prefetcher fetches on a miss, and the prover asks when the file is missing.
 - Before each opening proof, the opener fetches the entry for the block of the stored head
@@ -152,7 +164,8 @@ ansible-playbook proofs.yml -e action=publish -e dry_run=true
 
 **Verify** reads each block's header by its hash from `EXPLORER_RPC_URL_<chainId>`. Headers stay on every node. It
 checks the account proof against `stateRoot` and each storage proof against the account's `storageHash` (EIP-1186
-Merkle Patricia proofs). Each proof ends up as verified, invalid (exit 3), or unchecked (no endpoint, or the node does
+Merkle Patricia proofs). A record must also prove the key of the head it names (`executionBlockHashes[storedSlot]`). Each proof ends up as
+verified, invalid (exit 3), or unchecked (no endpoint, or the node does
 not have the block, which is the case for an orphaned block).
 
 **Nightly:** `zk-bridge-proofs-export.timer` runs daily around 03:30 UTC, keeps the newest 14 bundles

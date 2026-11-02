@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { evidenceRecordSchema, lightClientProofRecordSchema, storageProofRecordSchema } from "./records";
+import { evidenceRecordSchema, lightClientProofRecordSchema, storageProofRecordSchema, type EvidenceRecord, type LightClientProofRecord, type StorageProofRecord } from "./records";
 import { listFiles, recordsOf } from "./bundle";
 import type { ProofArchive } from "./store";
 
@@ -72,6 +72,34 @@ beacon-states/<chain id>/<slot>-<state root>.ssz (and .summary)
   Beacon states that a prover verified and kept, as SSZ. Check: hash_tree_root of the state equals the root in the name.
 `;
 
+/**
+ * The public fields of a storage proof: what it proves and the answer, as a proof cache entry without the fetch time.
+ * The read routes of the indexer and the public tree both use these projections, so both show the same fields.
+ */
+export function publicStorageProof(record: StorageProofRecord) {
+  return {
+    schemaVersion: record.schemaVersion,
+    chainId: record.chainId,
+    blockNumber: record.blockNumber,
+    blockHash: record.blockHash,
+    address: record.address,
+    storedSlot: record.storedSlot,
+    storageKeys: record.storageKeys,
+    proof: record.proof,
+  };
+}
+
+/** The public fields of a light client proof: everything but where the archive got it and the backend's job id. */
+export function publicLightClientProof(record: LightClientProofRecord) {
+  const { source: _source, backendJobId: _job, ...rest } = record;
+  return rest;
+}
+
+/** The public fields of a piece of evidence: the body and what names it, not the backend's time or the source. */
+export function publicEvidence(record: EvidenceRecord) {
+  return { messageId: record.messageId, bodyHash: record.bodyHash, pair: record.pair, direction: record.direction, body: record.body };
+}
+
 /** Writes the public tree of the records into `out` (which should be empty). Returns the files per kind. */
 export async function exportPublicTree(source: PublicSource, out: string): Promise<Record<"storageProofs" | "lightClientProofs" | "evidence", number>> {
   const counts = { storageProofs: 0, lightClientProofs: 0, evidence: 0 };
@@ -90,7 +118,7 @@ export async function exportPublicTree(source: PublicSource, out: string): Promi
     if (!parsed.success) throw new Error("a storage proof record does not parse");
     const record = parsed.data;
     const path = `storage-proofs/${record.chainId}/${record.address.toLowerCase()}/${record.blockNumber}-${record.blockHash.toLowerCase()}.json`;
-    const entry = { chainId: record.chainId, blockNumber: record.blockNumber, blockHash: record.blockHash, address: record.address, storedSlot: record.storedSlot, storageKeys: record.storageKeys, proof: record.proof };
+    const entry = publicStorageProof(record);
     if (open.group?.path === path) open.group.entries.push(entry);
     else {
       await flush();
@@ -102,7 +130,7 @@ export async function exportPublicTree(source: PublicSource, out: string): Promi
   for await (const raw of rowsOf(source, "light_client_proofs")) {
     const parsed = lightClientProofRecordSchema.safeParse(raw);
     if (!parsed.success) throw new Error("a light client proof record does not parse");
-    const { source: _source, backendJobId: _job, ...record } = parsed.data;
+    const record = publicLightClientProof(parsed.data);
     await put(out, `light-client-proofs/${record.pair}/${record.direction}/${record.startSlot}-${record.newSlot}-${record.proofHash.toLowerCase()}.json`, canonicalJson(record));
     counts.lightClientProofs += 1;
   }
@@ -110,7 +138,7 @@ export async function exportPublicTree(source: PublicSource, out: string): Promi
   for await (const raw of rowsOf(source, "message_evidence")) {
     const parsed = evidenceRecordSchema.safeParse(raw);
     if (!parsed.success) throw new Error("an evidence record does not parse");
-    const record = parsed.data;
+    const record = publicEvidence(parsed.data);
     await put(out, `evidence/${record.pair}/${record.direction}/${record.messageId.toLowerCase()}-${record.bodyHash.slice(2).toLowerCase()}.json`, record.body);
     counts.evidence += 1;
   }

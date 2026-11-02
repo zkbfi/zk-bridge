@@ -5,7 +5,7 @@ import { hostname } from "node:os";
 import { join, relative, sep } from "node:path";
 import { createInterface } from "node:readline";
 import type { Hex } from "viem";
-import { proofCacheEntrySchema, verifyAccountProof } from "@zk-bridge/shared/prover";
+import { openingStorageKey, proofCacheEntrySchema, verifyAccountProof } from "@zk-bridge/shared/prover";
 import { evidenceRecordSchema, lightClientProofRecordSchema, lightClientRecordConsistent, storageProofRecordSchema, type StorageProofRecord } from "./records";
 import { emptyTally, type ProofArchive } from "./store";
 import type { IngestTally } from "./backend-rows";
@@ -225,7 +225,13 @@ export async function verifyStorageProofs(bundle: string, stateRoot: BlockRootRe
       result.unchecked.push({ ...where, reason: "the node does not have the block" });
       continue;
     }
-    const verdict = verifyAccountProof({ stateRoot: root, address: record.address as Hex, storageKeys: record.storageKeys as Hex[], answer: record.proof });
+    // The record must prove the key of the head it names (executionBlockHashes[storedSlot], opening.rs), not just any key.
+    const requiredKey = openingStorageKey(BigInt(record.storedSlot));
+    if (!record.storageKeys.some((key) => key.toLowerCase() === requiredKey)) {
+      result.invalid.push({ ...where, reason: "no proof of the stored slot's key" });
+      continue;
+    }
+    const verdict = verifyAccountProof({ stateRoot: root, address: record.address as Hex, storageKeys: [requiredKey, ...(record.storageKeys as Hex[])], answer: record.proof });
     if (verdict.ok) result.verified += 1;
     else result.invalid.push({ ...where, reason: verdict.reason });
   }

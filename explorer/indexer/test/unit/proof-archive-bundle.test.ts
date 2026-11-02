@@ -110,7 +110,7 @@ describe("verifyStorageProofs", () => {
   it("verifies against the state root of each block, and tells a bad proof from one it could not check", async () => {
     await mkdir(join(directory, "archive"));
     const good = sepoliaRecord();
-    const lines = [good, { ...good, blockHash: `0x${"aa".repeat(32)}` }, { ...good, blockHash: `0x${"bb".repeat(32)}` }, { ...good, blockHash: `0x${"cc".repeat(32)}` }, { bad: true }];
+    const lines = [good, { ...good, blockHash: `0x${"aa".repeat(32)}` }, { ...good, blockHash: `0x${"bb".repeat(32)}` }, { ...good, blockHash: `0x${"cc".repeat(32)}` }, { bad: true }, { ...good, storageKeys: [sepolia.storageKeys[1]] }];
     await writeFile(join(directory, "archive", "storage_proofs.ndjson"), lines.map((line) => JSON.stringify(line)).join("\n"));
     const root = vi.fn(async (_chainId: number, hash: Hex): Promise<Hex | null> => {
       if (hash === `0x${"aa".repeat(32)}`) return null;
@@ -121,7 +121,7 @@ describe("verifyStorageProofs", () => {
     const result = await verifyStorageProofs(directory, root);
     expect(result.verified).toBe(1);
     expect(result.unchecked.map((item) => item.reason)).toEqual(["the node does not have the block", "no EXPLORER_RPC_URL_11155111"]);
-    expect(result.invalid.map((item) => item.reason)).toEqual(["node 0 does not match its hash", "the record does not parse"]);
+    expect(result.invalid.map((item) => item.reason)).toEqual(["node 0 does not match its hash", "the record does not parse", "no proof of the stored slot's key"]);
   });
 
   it("reads state roots by block hash from the endpoint of each chain", async () => {

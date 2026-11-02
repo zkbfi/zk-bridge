@@ -1,8 +1,9 @@
 import { zeroHash, type Address, type Hex, type PublicClient } from "viem";
+import { z } from "zod";
 import { beaconLightClientAbi } from "../abis/index.js";
 import { proofCacheEntrySchema, type ProofCacheEntry, type ProofCacheKey, type ProofCacheStore } from "./proof-cache.js";
-import { withoutUrls, type ProofPrefetchLog } from "./proof-prefetch.js";
-import { verifyAccountProof } from "./storage-proof-verify.js";
+import { openingStorageKey, withoutUrls, type ProofPrefetchLog } from "./proof-prefetch.js";
+import { hexQuantity, verifyAccountProof } from "./storage-proof-verify.js";
 
 /**
  * The read side of the proof archive of the explorer indexer (explorer/indexer, `GET /api/proofs/storage/...`), and a
@@ -11,8 +12,14 @@ import { verifyAccountProof } from "./storage-proof-verify.js";
  * Owner, 2026-11-01: "seems like proofs is another thing that the indexer should be caching for us." The indexer keeps
  * every `eth_getProof` answer it fetched at an epoch boundary in a Postgres schema that outlives its releases. A runner
  * that needs an answer for an old block asks the archive first, its own proof cache second, and an RPC node last. The
- * archive is not trusted: an entry is used only after it verifies against the state root of its block.
+ * archive is not trusted: an entry is used only when it proves exactly what was asked (`archivedEntryRefusal`).
  */
+
+/**
+ * An entry as the archive serves it: a proof cache entry whose fetch time the archive does not publish. The prover does
+ * not read that time, so the local copy names its origin there instead.
+ */
+const archivedEntrySchema = proofCacheEntrySchema.extend({ fetchedAt: z.string().default("from the proof archive") });
 
 /** The archive as the runner reads it. */
 export interface ProofArchiveReader {
@@ -46,24 +53,49 @@ export function createProofArchiveClient(input: ProofArchiveClientInput): ProofA
       const body = (await response.json()) as { entries?: unknown };
       const entries = Array.isArray(body.entries) ? body.entries : [];
       return entries.flatMap((entry) => {
-        const parsed = proofCacheEntrySchema.safeParse(entry);
+        const parsed = archivedEntrySchema.safeParse(entry);
         return parsed.success ? [parsed.data] : [];
       });
     },
   };
 }
 
-/** Reads the state root of a block by its hash, from a node the caller trusts for headers. */
-export type StateRootReader = (blockHash: Hex) => Promise<Hex>;
+/** The header fields of a block that the check needs, read by its hash from a node the caller trusts for headers. */
+export type BlockHeaderReader = (blockHash: Hex) => Promise<{ readonly number: bigint; readonly stateRoot: Hex }>;
+
+/** What an archived entry must prove: the request, and the stored head of the light client when the caller knows it. */
+export interface ExpectedOpeningEntry extends ProofCacheKey {
+  /** `head()` of the light client at `address` in that block. Null when the caller cannot read it (a pruned node). */
+  readonly storedSlot: bigint | null;
+}
+
+const lower = (value: string): string => value.toLowerCase();
 
 /**
- * Checks an archived entry against the state root of its block: the account proof, and the storage keys it names.
+ * Checks an archived entry against what the caller asked for, never against what the entry says about itself: the
+ * chain, the account, the block number and hash of the request; the stored slot of the light client when it is known;
+ * the storage key of `executionBlockHashes[storedSlot]` (the rule of opening.rs and `openingStorageKey`), which must
+ * hold a non-zero block hash; and the proof against the state root of the requested block, whose header must carry the
+ * requested number.
  *
- * @returns Whether the entry holds a good answer for its block.
+ * @returns null when the entry is good, else why it is refused.
  */
-export async function archivedEntryVerifies(entry: ProofCacheEntry, stateRoot: StateRootReader): Promise<boolean> {
-  const root = await stateRoot(entry.blockHash as Hex);
-  return verifyAccountProof({ stateRoot: root, address: entry.address as Address, storageKeys: entry.storageKeys as Hex[], answer: entry.proof }).ok;
+export async function archivedEntryRefusal(entry: ProofCacheEntry, expected: ExpectedOpeningEntry, readHeader: BlockHeaderReader): Promise<string | null> {
+  if (entry.chainId !== expected.chainId) return "another chain";
+  if (lower(entry.address) !== lower(expected.address)) return "another account";
+  if (BigInt(entry.blockNumber) !== expected.blockNumber || lower(entry.blockHash) !== lower(expected.blockHash)) return "another block";
+  if (expected.storedSlot !== null && BigInt(entry.storedSlot) !== expected.storedSlot) return "another stored slot";
+  const storedSlot = expected.storedSlot ?? BigInt(entry.storedSlot);
+  const requiredKey = openingStorageKey(storedSlot);
+  if (!entry.storageKeys.some((key) => lower(key) === lower(requiredKey))) return "no proof of the stored slot's key";
+  const header = await readHeader(expected.blockHash as Hex);
+  if (header.number !== expected.blockNumber) return "the header of the block hash has another number";
+  const verdict = verifyAccountProof({ stateRoot: header.stateRoot, address: expected.address as Address, storageKeys: [requiredKey], answer: entry.proof });
+  if (!verdict.ok) return verdict.reason;
+  // The answer parsed and proved the key above, so its entry for the key is there.
+  const proven = (entry.proof as { storageProof: Array<{ key: Hex; value: Hex }> }).storageProof.find((item) => hexQuantity(item.key) === hexQuantity(requiredKey)) as { value: Hex };
+  if (hexQuantity(proven.value) === 0n) return "the stored slot holds no block hash";
+  return null;
 }
 
 /** Input of {@link createArchivedProofCacheStore}. */
@@ -71,8 +103,10 @@ export interface ArchivedProofCacheInput {
   readonly archive: ProofArchiveReader;
   /** The local proof cache, which the prover reads (`destination.proof_cache_dir`). */
   readonly local: ProofCacheStore;
-  /** The state root of a block, for the check of an archived entry. */
-  readonly stateRoot: StateRootReader;
+  /** The header of a block by hash, for the check of an archived entry. */
+  readonly readHeader: BlockHeaderReader;
+  /** `head()` of the light client at the key's address in the key's block, or null when it cannot be read. */
+  readonly storedSlot: (key: ProofCacheKey) => Promise<bigint | null>;
   readonly logger: ProofPrefetchLog;
 }
 
@@ -89,10 +123,12 @@ export function createArchivedProofCacheStore(input: ArchivedProofCacheInput): P
   async function fromArchive(key: ProofCacheKey): Promise<ProofCacheEntry | null> {
     try {
       const entries = await archive.storageProofs(key);
+      if (entries.length === 0) return null;
+      const expected: ExpectedOpeningEntry = { ...key, storedSlot: await input.storedSlot(key) };
       for (const entry of entries) {
-        if (entry.blockHash.toLowerCase() !== key.blockHash.toLowerCase() || entry.address.toLowerCase() !== key.address.toLowerCase()) continue;
-        if (!(await archivedEntryVerifies(entry, input.stateRoot))) {
-          logger.warn("proof_archive_entry_refused", { chainId: key.chainId, blockNumber: key.blockNumber });
+        const refusal = await archivedEntryRefusal(entry, expected, input.readHeader);
+        if (refusal !== null) {
+          logger.warn("proof_archive_entry_refused", { chainId: key.chainId, blockNumber: key.blockNumber, reason: refusal });
           continue;
         }
         if (!(await local.has(key))) await local.write(entry);

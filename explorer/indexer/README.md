@@ -308,13 +308,14 @@ publication.
 - **Light client proofs:** the `HeadUpdated` handler takes the `update` calldata, direct or inside Multicall3. Held
   proofs and evidence come from the backend.
 - **Read routes:**
-  - `GET /api/proofs/storage/:chainId/:address/:block` returns `{ entries }` (proof cache entries plus `sourceHost`), or
-    404.
+  - `GET /api/proofs/storage/:chainId/:address/:block` returns `{ entries }` (proof cache entries without the fetch
+    time), or 404.
   - `GET /api/proofs/light-client/:direction?startSlot=&limit=`
   - `GET /api/proofs/evidence/:messageId`
   - `GET /api/proofs/summary`
 
-  They answer 503 while the archive is off. Nothing they serve is trusted: verify before use.
+  They show the same public fields as the IPFS tree (no source host, fetch time, job id or source) and answer 503 while
+  the archive is off. Nothing they serve is trusted: verify before use.
 - **Command line:** `bin/zk-bridge-proof-archive.mjs` (migrate, export, import, ingest-backend, ingest-cache,
   manifest-write, manifest-check, verify-storage, public-export, public-check), run by `deploy/app-server/proofs.sh`.
 

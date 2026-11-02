@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { createPublicClient, http, type Address, type PublicClient } from "viem";
-import { messageBridgeAbi, proofCategory, secondsPerSlot, type ProofDirection } from "@zk-bridge/shared";
+import { beaconLightClientAbi, messageBridgeAbi, proofCategory, secondsPerSlot, type ProofDirection } from "@zk-bridge/shared";
 import { BotConfigError, runnerMinimumPriorityFeeWei, type RunnerConfig } from "../config/bot-config.ts";
 import { createTransactionPort, type TransactionPort } from "../chain/transactions.ts";
 import { createIndexerClient } from "../indexer/client.ts";
@@ -231,12 +231,23 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
     // the source bridge of the opposite route (see `DepositOpenerDependencies`).
     const openingDirection = oppositeOf(direction);
     // The proof cache of the opening proof, archive first: the indexer's proof archive, then the local cache, then (in
-    // the prefetcher and the prover) a node. An archived entry is used only once it verifies against the state root of
-    // its block, read from the source chain.
+    // the prefetcher and the prover) a node. An archived entry is used only when it proves what was asked: the account of
+    // the source light client in the requested block (its header read by hash from the source chain), and the key of the
+    // head that light client held there (read at that block when the node still can; else the key of the entry's slot).
     const proofCache = createArchivedProofCacheStore({
       archive: createProofArchiveClient({ baseUrl: runnerConfig.indexerUrl }),
       local: createProofCacheStore(proofCacheDirectoryOf(context)),
-      stateRoot: async (blockHash) => (await sourceClient.getBlock({ blockHash })).stateRoot,
+      readHeader: async (blockHash) => {
+        const block = await sourceClient.getBlock({ blockHash });
+        return { number: block.number as bigint, stateRoot: block.stateRoot };
+      },
+      storedSlot: async (key) => {
+        try {
+          return BigInt(await sourceClient.readContract({ address: key.address as Address, abi: beaconLightClientAbi, functionName: "head", blockNumber: key.blockNumber }));
+        } catch {
+          return null;
+        }
+      },
       logger: directionLogger,
     });
     const openingCacheKey = storedHeadCacheKey(destinationPort.client, destination.contracts.lightClient, { chainId: source.chainId, lightClient: source.contracts.lightClient });
