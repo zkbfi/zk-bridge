@@ -326,7 +326,8 @@ describe("startRunner opens the bridge of the destination chain", () => {
   it("prefetches the opening proof of the source chain into the proof cache while the bridge is closed, and names the cache in the opening-proof config", async () => {
     const started = await prepare();
     const genesis = 1_606_824_023n;
-    // Block 899 is at slot 63 and block 900 at slot 64, the first slot of an epoch: block 900 is a checkpoint.
+    // Block 899 is at slot 63 and block 900 at slot 64, the first slot of an epoch: both are checkpoints (from the Gloas
+    // fork on the light client stores the block before the epoch start).
     const base = clientWith({ depositsOpen: false });
     const request = vi.fn(async (_args: unknown) => ({ accountProof: ["0x01"], storageProof: [] }));
     const client = {
@@ -348,7 +349,8 @@ describe("startRunner opens the bridge of the destination chain", () => {
     const file = join(cacheDirectory, "1", lightClient, `900-${word(900 % 200)}.json`);
     expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ chainId: 1, blockNumber: 900, address: lightClient, storedSlot: 100, proof: { accountProof: ["0x01"] } });
     expect(request).toHaveBeenCalledWith({ method: "eth_getProof", params: [started.created.context.pair.sides[0].contracts.lightClient, [expect.any(String)], "0x384"] });
-    expect(started.created.events().find((event) => event.event === "proof_prefetched")).toMatchObject({ chainId: 1, blockNumber: "900", direction: "first-to-second" });
+    expect(started.created.events().filter((event) => event.event === "proof_prefetched").map((event) => event.blockNumber)).toEqual(["899", "900"]);
+    expect(started.created.events().find((event) => event.event === "proof_prefetched" && event.blockNumber === "900")).toMatchObject({ chainId: 1, blockNumber: "900", direction: "first-to-second" });
     expect(configs[0]).toContain(`proof_cache_dir = "${cacheDirectory}"`);
   });
 
@@ -387,7 +389,8 @@ describe("startRunner opens the bridge of the destination chain", () => {
     await run(started, overrides);
     const file = join(started.created.directory, "state", "proof-cache", "1", lightClient, `900-${word(900 % 200)}.json`);
     expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ blockNumber: 900, storedSlot: 100 });
-    expect(request).not.toHaveBeenCalled();
+    // Only the block before the epoch start, which the archive does not hold, is asked of the node.
+    expect(request.mock.calls.map(([call]) => (call as { params: unknown[] }).params[2])).toEqual(["0x383"]);
     expect(started.created.events().find((event) => event.event === "proof_archive_entry_refused")).toMatchObject({ reason: "another stored slot" });
     expect(started.created.events().find((event) => event.event === "proof_archive_hit")).toMatchObject({ chainId: 1, blockNumber: "900" });
     // Before the opening proof the opener asked the archive for the block of the stored head.

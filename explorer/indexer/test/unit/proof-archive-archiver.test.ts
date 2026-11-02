@@ -39,11 +39,13 @@ describe("the archiver", () => {
     const archiver = createArchiver({ pair, archive, clientOf: () => client as never, backendUrl: null });
     const steps = await Promise.all(archiver.prefetchers.map((prefetcher) => prefetcher.step()));
     expect(steps).toEqual([
-      { kind: "followed", tip: 100n, checkpoints: 1, stored: 1, failed: 0 },
-      { kind: "followed", tip: 100n, checkpoints: 1, stored: 1, failed: 0 },
+      { kind: "followed", tip: 100n, checkpoints: 2, stored: 2, failed: 0 },
+      { kind: "followed", tip: 100n, checkpoints: 2, stored: 2, failed: 0 },
     ]);
     const [stored] = await archive.storageProofsAt({ chainId: pair.sides[0].chainId, address: pair.sides[0].contracts.lightClient, blockNumber: 100n });
     expect(stored).toMatchObject({ blockHash: hashOf(100n), storedSlot: 7, sourceHost: "127.0.0.1:1" });
+    // The block before the epoch start is archived too: from the Gloas fork on it is the stored head of that checkpoint.
+    expect(await archive.storageProofsAt({ chainId: pair.sides[0].chainId, address: pair.sides[0].contracts.lightClient, blockNumber: 99n })).toHaveLength(1);
     // Another archiver finds the block archived and asks no node for it.
     const again = createArchiver({ pair, archive, clientOf: () => fakeClient() as never, backendUrl: null });
     expect(await again.prefetchers[0]?.step()).toMatchObject({ stored: 0 });
