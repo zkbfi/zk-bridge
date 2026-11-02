@@ -1,4 +1,5 @@
-import { DatabaseSync } from "node:sqlite";
+import { createRequire } from "node:module";
+import type { DatabaseSync } from "node:sqlite";
 import type { Hex } from "viem";
 import { z } from "zod";
 import { PROOF_DIRECTIONS, tryDecodeProofMessage } from "@zk-bridge/shared";
@@ -68,7 +69,10 @@ const tableExists = (database: DatabaseSync, name: string): boolean =>
  * not parse (a board row whose body is not the stored JSON) are left out and counted in `skipped`.
  */
 export function readBackendSnapshot(path: string): { rows: BackendRows; skipped: number } {
-  const database = new DatabaseSync(path, { readOnly: true });
+  // Loaded when used: Ponder runs every file under src/ through Vite 5, which cannot resolve `node:sqlite`, and the live
+  // archiver imports this module for its schema and ingest only.
+  const { DatabaseSync: Database } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+  const database = new Database(path, { readOnly: true });
   try {
     let skipped = 0;
     type Board = { direction: string; body: string; stored_at: number };
