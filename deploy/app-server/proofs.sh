@@ -33,25 +33,33 @@
 # it. A state the services hold and the mirror lacks afterwards is a WARNING. Then the off-site hook and, when switched
 # on, the publication.
 #
-# import: with a directory (or no argument: this server's mirror), checks it against its newest manifest (a file the
-# manifest does not list is taken too; a record file whose content does not match its name is refused), upserts every
+# Trust: the mirror is writable by zkb_indexer, so root never reads, chmods or chowns a path inside it (the archive
+# user does that work, and streams a tar when root needs a copy), and root records the sha256 of each day's manifest in
+# /var/backups/zk-bridge/proofs/manifests.sha256 (root's, 0644, outside the mirror, appended to only).
+#
+# import: copies the input (a directory, by default this server's mirror read by zkb_indexer, or an unpacked tar.gz)
+# into a directory only root can write, refusing links, special files and hard links; its newest manifest must be in
+# manifests.sha256 (or match --manifest-sha256 <hex>, for a mirror from another server), the copy must match that
+# manifest exactly, and then it upserts every
 # record file into the archive (it never overwrites a different value: it records the conflict), ingests the newest
 # snapshot and installs it when the server has no backend database, and gives each service the 16 newest beacon states
 # of each chain (copied only when missing; a file that exists with other content is reported and left alone). With a
 # tar.gz: a mirror bundle (proofs.sh bundle) is unpacked and imported the same way; an old nightly bundle
 # (zk-bridge-proofs-<stamp>.tar.gz, archive/*.ndjson) is still imported as before. Exit 3 when there were conflicts.
 #
-# verify: the newest manifest must match the mirror exactly (a WARNING when it is not today's), then every storage proof
+# verify: the newest manifest must be in manifests.sha256 and match the mirror exactly (a WARNING when it is not
+# today's), then every storage proof
 # is verified again against the state root of its block (an RPC, from /etc/zk-bridge/indexer/indexer.env). Exit 3 when
 # a proof is invalid, 1 when the mirror does not match.
 #
 # bundle: zk-bridge-mirror-<stamp>.tar.gz and its .sha256 in /var/backups/zk-bridge/proofs, for a one-off copy. Delete
 # it when it has been copied; the nightly run does not make or keep any.
 #
-# publish: a separate PUBLIC tree, never the mirror. The archive CLI writes the allowlisted tree (storage-proofs,
-# light-client-proofs, evidence, README.txt); this script adds the beacon states of the mirror (the whole window; only
-# files named <12-digit slot>-0x<64 hex>.ssz or .summary under a numeric chain directory), the CLI's sanitizer
-# (public-check) must pass, and manifest.json is written. --dry-run stops there, leaves the tree and prints its path for
+# publish: a separate PUBLIC tree, never the mirror. The archive user builds it: the CLI writes the allowlisted tree
+# (storage-proofs, light-client-proofs, evidence, README.txt), the beacon states of the mirror are copied in (the whole
+# window; only plain files named <12-digit slot>-0x<64 hex>.ssz or .summary under a numeric chain directory, never a
+# link), and manifest.json is written. Root takes it as a tar stream into a directory only root can write (links,
+# special files and hard links stop the run), and the CLI's sanitizer (public-check) must pass on that copy. --dry-run stops there, leaves the tree and prints its path for
 # review. Without it the tree is added to the local IPFS node through its HTTP RPC API (POST
 # /api/v0/add?cid-version=1&pin=true&pin-name=..., one multipart part per file and directory, as kubo's own client
 # sends a tree; see ipfs_rpc), a line
@@ -103,6 +111,9 @@ IPFS_REPO=${ZKB_IPFS_PATH:-/var/lib/zk-bridge-ipfs/repo}
 IPFS_KEEP=${ZKB_PROOFS_IPFS_KEEP:-2}
 GATEWAY_HOST=${ZKB_PROOFS_GATEWAY_HOST:-gateway.zkb.fi}
 CID_LOG=$OUT_DIR/ipfs-cids.log
+# The sha256 of each day's manifest, appended by root at export time: root-owned (0644) outside the mirror, so the
+# archive user cannot change what an import or a pull trusts.
+TRUST=$OUT_DIR/manifests.sha256
 OFFSITE_DIR=${ZKB_PROOFS_OFFSITE_DIR:-/etc/zk-bridge/proofs/offsite.d}
 DATABASE_URL_VALUE='postgresql:///zkb_indexer?host=/var/run/postgresql'
 CLI_SCRIPT=$RELEASE_DIR/explorer/indexer/bin/zk-bridge-proof-archive.mjs
@@ -239,7 +250,8 @@ take_lock() {
 # (S3-compatible) uploader plugs in later: drop an executable into /etc/zk-bridge/proofs/offsite.d/ (run in name order),
 # or point ZKB_PROOFS_OFFSITE_HOOK at one. Each is called as `<hook> <mirror dir> <manifest of the day>` as root, with
 # this script's environment; the manifest lists every file and its sha256, and files are never rewritten, so a hook
-# uploads what the remote side lacks. With no hook it does nothing. Returns non-zero when a hook failed; the caller
+# uploads what the remote side lacks. The mirror is writable by zkb_indexer: a hook reads it as that user
+# (runuser -u zkb_indexer -- ...), never as root, and checks the manifest's sha256 against manifests.sha256 next to it. With no hook it does nothing. Returns non-zero when a hook failed; the caller
 # decides what that means.
 offsite_upload() {
   local mirror=$1 manifest=$2 hook failed=0 ran=0
@@ -378,39 +390,34 @@ cmd_publish() {
   case $IPFS_KEEP in '' | *[!0-9]* | 0) die "ZKB_PROOFS_IPFS_KEEP must be a positive number, not '$IPFS_KEEP'" ;; esac
   umask 022
   local stamp=${ZKB_PROOFS_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}
-  local work=$OUT_DIR/.publish-$stamp tree
+  # Root never reads inside the mirror: the archive user builds the tree in <work>/build (records from the archive,
+  # beacon states from the mirror, the manifest), streams it out as a tar, and root unpacks that into <work>/tree, which
+  # only root can write. Links, special files and hard links there stop the run; the sanitizer and the IPFS add read
+  # only that copy.
+  local work=$OUT_DIR/.publish-$stamp tree build out
   tree=$work/tree
+  build=$work/build
   rm -rf "$OUT_DIR"/.publish-*
-  mkdir "$work"
-  chmod 0755 "$work"
-  mkdir -p "$tree"
-  chmod 0755 "$tree"
-  own zkb_indexer:zkb_indexer "$tree"
+  mkdir "$work" "$tree" "$build"
+  chmod 0755 "$work" "$tree" "$build"
+  own zkb_indexer:zkb_indexer "$build"
 
-  must_cli public-export --out "$tree"
+  must_cli public-export --out "$build"
 
-  # The beacon states of the mirror: the whole window, which the nightly export has just pruned. Only plain files with
-  # the exact names; the mirror took each one once, so there is nothing to merge.
-  local f rel merged=0
-  if [ -d "$MIRROR/beacon-states" ]; then
-    while IFS= read -r -d '' f; do
-      rel=${f#"$MIRROR/beacon-states"/}
-      [[ $rel =~ ^[0-9]+/[0-9]{12}-0x[0-9a-f]{64}\.(ssz|summary)$ ]] || continue
-      mkdir -p "$tree/beacon-states/${rel%/*}"
-      install -m 0644 "$f" "$tree/beacon-states/$rel"
-      merged=$((merged + 1))
-    done < <(find "$MIRROR/beacon-states" -type f -print0)
-  else
-    log "no $MIRROR/beacon-states: the tree has no beacon states"
-  fi
-  log "beacon states in the tree: $merged"
+  # The beacon states of the mirror: the whole window, which the nightly export has just pruned. Copied by the archive
+  # user, plain files with the exact names only (COPY_BEACON skips links).
+  out=$(as_user zkb_indexer bash -c "$COPY_BEACON" _ "$MIRROR/beacon-states" "$build/beacon-states") || die "copying the mirror's beacon states failed"
+  log "beacon states in the tree: $out"
 
-  # The public manifest leaves out the host name. The sanitizer runs last, so it checks the manifest too.
+  # The public manifest leaves out the host name.
   local -a mlog=()
   if [ -f "$CID_LOG" ]; then mlog=(--ipfs-log "$CID_LOG"); fi
-  must_cli manifest-write --dir "$tree" --commit "$(release_commit)" --public ${mlog[@]+"${mlog[@]}"}
-  must_cli public-check --dir "$tree"
+  must_cli manifest-write --dir "$build" --commit "$(release_commit)" --public ${mlog[@]+"${mlog[@]}"}
+  snapshot_tree zkb_indexer "$build" "$tree"
+  rm -rf "$build"
   normalize_tree "$tree"
+  # The sanitizer runs on the copy that is added, so it checks the manifest too.
+  must_cli public-check --dir "$tree"
   local files
   files=$(find "$tree" -type f | wc -l | tr -d ' ')
 
@@ -461,22 +468,66 @@ check_days() {
 }
 
 # The mirror's directories, all owned by the archive user (it writes and prunes there): the top 0750 (root and the
-# archive user only), the directories in it 0755 and the files 0644. Files copied in by hand (an rsync onto a fresh
-# server) are brought into line too.
+# archive user only), the directories in it 0755 and the files 0644. Root only creates and hands over the top directory
+# (in its own 0711 parent, so nobody can swap it); everything inside is set by the archive user, on what it owns, never
+# through a link. Root never chmods, chowns or reads a path inside the mirror.
+NORMALIZE_MIRROR='
+m=$1
+shift
+for d in "$@"; do
+  if [ -L "$m/$d" ]; then echo "refusing: $d in the mirror is a link" >&2; exit 1; fi
+  mkdir -p "$m/$d"
+done
+me=$(id -u)
+find -P "$m" -mindepth 1 -type d -user "$me" ! -perm 0755 -exec chmod 0755 {} +
+find -P "$m" -type f -user "$me" ! -perm 0644 -exec chmod 0644 {} +
+echo "foreign=$(find -P "$m" -mindepth 1 ! -user "$me" | wc -l | tr -d " ") links=$(find -P "$m" -mindepth 1 -type l | wc -l | tr -d " ")"
+'
 prepare_mirror() {
-  local d
+  local out
+  if [ -L "$MIRROR" ]; then die "$MIRROR is a symbolic link: refusing to use it"; fi
+  if [ -e "$MIRROR" ] && [ ! -d "$MIRROR" ]; then die "$MIRROR is not a directory"; fi
   mkdir -p "$MIRROR"
-  for d in $MIRROR_DIRS; do mkdir -p "$MIRROR/$d"; done
-  own -R zkb_indexer:zkb_indexer "$MIRROR"
+  own zkb_indexer:zkb_indexer "$MIRROR"
   chmod 0750 "$MIRROR"
-  find "$MIRROR" -mindepth 1 -type d ! -perm 0755 -exec chmod 0755 {} +
-  find "$MIRROR" -type f ! -perm 0644 -exec chmod 0644 {} +
+  # shellcheck disable=SC2086
+  out=$(as_user zkb_indexer bash -c "$NORMALIZE_MIRROR" _ "$MIRROR" $MIRROR_DIRS) || die "preparing the mirror as zkb_indexer failed"
+  case $out in
+    "foreign=0 links=0") ;;
+    *) log "WARNING: the mirror holds entries of another owner or links ($out); they are left alone and never read by root" ;;
+  esac
+}
+
+# sha256_stdin: the sha256 of standard input.
+sha256_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'; else shasum -a 256 | awk '{print $1}'; fi
+}
+
+# record_trust <stamp>: appends the sha256 of that day's manifest to the trust list. The manifest is read by the archive
+# user (root reads nothing inside the mirror) right after the CLI wrote it.
+record_trust() {
+  local sha
+  sha=$(as_user zkb_indexer cat -- "$MIRROR/manifests/$1.json" | sha256_stdin) || die "reading the manifest $1 failed"
+  case $sha in [0-9a-f]*) ;; *) die "no hash for the manifest $1" ;; esac
+  [ ! -L "$TRUST" ] || die "$TRUST is a symbolic link: refusing to write it"
+  printf '%s  %s.json\n' "$sha" "$1" >>"$TRUST"
+  own root:root "$TRUST"
+  chmod 0644 "$TRUST"
+}
+
+# manifest_trusted <sha256>: vouched for by --manifest-sha256, or else by the trust list of this server.
+manifest_trusted() {
+  if [ -n "$MANIFEST_SHA" ]; then
+    [ "$1" = "$MANIFEST_SHA" ]
+  else
+    [ -f "$TRUST" ] && [ ! -L "$TRUST" ] && grep -q "^$1 " "$TRUST"
+  fi
 }
 
 # copy_beacon <user> <state directory> <destination>: the beacon states of one service, copied by their owner.
 copy_beacon() {
   local user=$1 src=$2 dest=$3 out
-  if [ -d "$src" ]; then
+  if as_user "$user" test -d "$src"; then
     out=$(as_user "$user" bash -c "$COPY_BEACON" _ "$src" "$dest") || die "reading the beacon states of $user failed"
     log "$user beacon states: $out"
   else
@@ -506,8 +557,8 @@ cmd_export() {
   local warnings=0 snapshot=0 cache=0 out missing
   check_days
   case $stamp in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;; *) die "the stamp must look like 20261102T033000Z, not '$stamp'" ;; esac
-  [ ! -e "$MIRROR/manifests/$stamp.json" ] || die "the manifest $stamp exists already"
   prepare_mirror
+  if as_user zkb_indexer test -e "$MIRROR/manifests/$stamp.json"; then die "the manifest $stamp exists already"; fi
 
   rm -rf "$OUT_DIR"/.staging-* "$OUT_DIR"/.extract-*
   mkdir "$stage"
@@ -519,7 +570,8 @@ cmd_export() {
   own zkb_runner:zkb_runner "$stage/proof-cache" "$stage/beacon-runner"
 
   # The SQLite file: a consistent snapshot (the online backup API), taken by the backend's user.
-  if [ -f "$BACKEND_STATE/backend.sqlite" ]; then
+  # Even the tests for what a service holds run as that service's user: root does nothing inside a state directory.
+  if as_user zkb_backend test -f "$BACKEND_STATE/backend.sqlite"; then
     log "snapshot of backend.sqlite"
     # The copy keeps the WAL mode of the source, and a read-only open of a WAL file must write its -shm next to it, which
     # the archive user cannot. A rollback-journal copy opens read only with no writes.
@@ -531,7 +583,7 @@ cmd_export() {
   fi
 
   # The files the services hold, as plain files the archive user can read.
-  if [ -d "$RUNNER_STATE/proof-cache" ]; then
+  if as_user zkb_runner test -d "$RUNNER_STATE/proof-cache"; then
     log "copying the runner's proof cache"
     copy_tree zkb_runner "$RUNNER_STATE/proof-cache" "$stage/proof-cache" 022
     cache=1
@@ -567,6 +619,7 @@ cmd_export() {
   local -a mlog=()
   if [ -f "$CID_LOG" ]; then mlog=(--ipfs-log "$CID_LOG"); fi
   must_cli mirror-manifest --dir "$MIRROR" --stamp "$stamp" --commit "$(release_commit)" --days "$RETENTION_DAYS" ${mlog[@]+"${mlog[@]}"}
+  record_trust "$stamp"
   rm -rf "$stage"
   local manifest=$MIRROR/manifests/$stamp.json
 
@@ -626,13 +679,64 @@ extract_bundle() {
   fi
 }
 
-# resolve_input [<mirror dir> | <bundle.tar.gz>]: sets INPUT (a directory) and INPUT_KIND (mirror or legacy).
+# check_plain <directory> <what>: only plain files and directories, none shared by a hard link, in a copy only root can
+# write; then the usual modes.
+check_plain() {
+  if [ -n "$(find -P "$1" ! -type f ! -type d -print -quit)" ] || [ -n "$(find -P "$1" -type f -links +1 -print -quit)" ]; then
+    die "$2 holds links or special files: refusing it"
+  fi
+  find -P "$1" -type d -exec chmod 0755 {} +
+  find -P "$1" -type f -exec chmod 0644 {} +
+}
+
+# snapshot_tree <reader> <source> <destination>: copies a directory into a root-owned one. The reader (the archive user
+# for its own trees, root for a directory only root can write) streams a tar; root unpacks it. A source that holds a
+# link, a special file or a hard link is refused, and so is a copy that does.
+snapshot_tree() {
+  local reader=$1 src=$2 dest=$3 found
+  local probe='find -P "$1" -mindepth 1 \( ! -type f ! -type d \) -print -quit; find -P "$1" -type f -links +1 -print -quit'
+  if [ "$reader" = root ]; then found=$(sh -c "$probe" _ "$src"); else found=$(as_user "$reader" sh -c "$probe" _ "$src"); fi
+  [ -z "$found" ] || die "$src holds links or special files: refusing it"
+  if [ "$reader" = root ]; then
+    tar -cf - -C "$src" . | tar --no-same-owner -xf - -C "$dest" || die "copying $src failed"
+  else
+    as_user "$reader" tar -cf - -C "$src" . | tar --no-same-owner -xf - -C "$dest" || die "copying $src as $reader failed"
+  fi
+  check_plain "$dest" "$src"
+}
+
+# parse_input_args [<mirror dir> | <bundle.tar.gz>] [--manifest-sha256 <hex>]: sets INPUT_ARG and MANIFEST_SHA.
+MANIFEST_SHA=""
+parse_input_args() {
+  INPUT_ARG=""
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --manifest-sha256) [ $# -ge 2 ] || usage; MANIFEST_SHA=$2; shift ;;
+      --*) usage ;;
+      *) [ -z "$INPUT_ARG" ] || usage; INPUT_ARG=$1 ;;
+    esac
+    shift
+  done
+  case $MANIFEST_SHA in "" | [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;; *) die "--manifest-sha256 must be 64 hex digits" ;; esac
+  if [ -n "$MANIFEST_SHA" ] && [ ${#MANIFEST_SHA} -ne 64 ]; then die "--manifest-sha256 must be 64 hex digits"; fi
+}
+
+# resolve_input [<mirror dir> | <bundle.tar.gz>]: copies the input into a root-owned directory (INPUT) and sets
+# INPUT_KIND (mirror or legacy). Default: this server's mirror, read by the archive user that owns it.
 resolve_input() {
   local arg=${1:-$MIRROR}
-  if [ -d "$arg" ]; then
-    INPUT=$arg
+  if [ -d "$arg" ] || [ "$arg" = "$MIRROR" ]; then
+    INPUT=$(mktemp -d "$OUT_DIR/.extract-XXXXXX")
+    TMP_DIRS+=("$INPUT")
+    chmod 0755 "$INPUT"
+    if [ "$arg" = "$MIRROR" ]; then
+      prepare_mirror
+      snapshot_tree zkb_indexer "$MIRROR" "$INPUT"
+    else
+      [ ! -L "$arg" ] || die "$arg is a symbolic link: refusing it"
+      snapshot_tree root "$arg" "$INPUT"
+    fi
     INPUT_KIND=mirror
-    if [ "$arg" = "$MIRROR" ]; then prepare_mirror; fi
     return
   fi
   [ -f "$arg" ] || die "no mirror or bundle at $arg"
@@ -648,9 +752,27 @@ newest() {
   printf '%s' "$last"
 }
 
+# trusted_mirror <root-owned copy>: its newest manifest must be vouched for (trust list or --manifest-sha256); the
+# other manifests leave the copy, and the copy must match that manifest exactly. Sets MANIFEST.
+trusted_mirror() {
+  local dir=$1 sha f
+  MANIFEST=$(newest "$dir/manifests" .json)
+  [ -n "$MANIFEST" ] || die "the mirror has no manifest"
+  sha=$(sha256_of "$dir/manifests/$MANIFEST")
+  if manifest_trusted "$sha"; then
+    log "manifest $MANIFEST: sha256 $sha is trusted"
+  else
+    die "manifest $MANIFEST (sha256 $sha) is not in $TRUST: refusing it (for a mirror from another server, pass --manifest-sha256 <its line in that server's manifests.sha256>)"
+  fi
+  for f in "$dir"/manifests/*.json; do [ "$(basename "$f")" = "$MANIFEST" ] || rm -f "$f"; done
+  run_cli mirror-check --dir "$dir" --exact
+  [ "$CLI_RC" -eq 0 ] || die "the mirror does not match its newest manifest $MANIFEST exactly (exit $CLI_RC)"
+}
+
 # --- import -------------------------------------------------------------------------------------------------------
 cmd_import() {
-  resolve_input "${1:-}"
+  parse_input_args "$@"
+  resolve_input "$INPUT_ARG"
   if [ "$INPUT_KIND" = legacy ]; then import_legacy "$INPUT"; else import_mirror "$INPUT"; fi
 }
 
@@ -681,8 +803,8 @@ install_snapshot() {
 IMPORT_CONFLICTS=0
 import_mirror() {
   local dir=$1 snapshot stage entry user dest
-  run_cli mirror-check --dir "$dir"
-  [ "$CLI_RC" -eq 0 ] || die "$dir does not match its newest manifest (exit $CLI_RC)"
+  # Everything below reads the root-owned copy, and only what its trusted manifest lists.
+  trusted_mirror "$dir"
   must_cli migrate
   run_cli mirror-import --dir "$dir"
   case $CLI_RC in 0) ;; 3) IMPORT_CONFLICTS=$((IMPORT_CONFLICTS + 1)); log "the archive recorded conflicts" ;; *) die "mirror-import failed (exit $CLI_RC)" ;; esac
@@ -742,22 +864,35 @@ import_legacy() {
 
 # --- verify -------------------------------------------------------------------------------------------------------
 cmd_verify() {
-  resolve_input "${1:-}"
-  if [ "$INPUT_KIND" = legacy ]; then
-    run_cli verify-storage --in "$INPUT"
+  parse_input_args "$@"
+  local dir sha
+  if [ -z "$INPUT_ARG" ] || [ "$INPUT_ARG" = "$MIRROR" ]; then
+    # This server's mirror, in place (no copy of several GB): the archive user reads it, root only its trust list.
+    prepare_mirror
+    dir=$MIRROR
+    MANIFEST=$(as_user zkb_indexer sh -c 'l=""; for f in "$1"/*.json; do [ -f "$f" ] && l=${f##*/}; done; printf %s "$l"' _ "$MIRROR/manifests")
+    [ -n "$MANIFEST" ] || die "$MIRROR has no manifest"
+    sha=$(as_user zkb_indexer cat -- "$MIRROR/manifests/$MANIFEST" | sha256_stdin)
+    manifest_trusted "$sha" || die "manifest $MANIFEST (sha256 $sha) is not in $TRUST: it was changed after the export"
+    run_cli mirror-check --dir "$dir" --exact
+    [ "$CLI_RC" -eq 0 ] || die "the mirror does not match $MANIFEST (exit $CLI_RC)"
   else
-    local manifest
-    manifest=$(newest "$INPUT/manifests" .json)
-    [ -n "$manifest" ] || die "$INPUT has no manifest"
-    case $manifest in
-      "$(date -u +%Y%m%d)"T*) log "newest manifest: $manifest (today)" ;;
-      *) log "WARNING: the newest manifest is $manifest, not today's: did tonight's export run?" ;;
-    esac
-    run_cli mirror-check --dir "$INPUT" --exact
-    [ "$CLI_RC" -eq 0 ] || die "the mirror does not match $manifest (exit $CLI_RC)"
-    log "the mirror matches $manifest"
-    run_cli verify-storage --mirror "$INPUT"
+    resolve_input "$INPUT_ARG"
+    dir=$INPUT
+    if [ "$INPUT_KIND" = legacy ]; then
+      run_cli verify-storage --in "$dir"
+      if [ "$CLI_RC" -ne 0 ]; then log "verify-storage exit $CLI_RC: at least one proof did not verify"; exit "$CLI_RC"; fi
+      log "all storage proofs verify"
+      return
+    fi
+    trusted_mirror "$dir"
   fi
+  case $MANIFEST in
+    "$(date -u +%Y%m%d)"T*) log "newest manifest: $MANIFEST (today)" ;;
+    *) log "WARNING: the newest manifest is $MANIFEST, not today's: did tonight's export run?" ;;
+  esac
+  log "the mirror matches $MANIFEST"
+  run_cli verify-storage --mirror "$dir"
   if [ "$CLI_RC" -ne 0 ]; then
     log "verify-storage exit $CLI_RC: at least one proof did not verify"
     exit "$CLI_RC"
@@ -770,22 +905,24 @@ cmd_verify() {
 cmd_bundle() {
   local stamp=${ZKB_PROOFS_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}
   local bundle=$OUT_DIR/zk-bridge-mirror-$stamp.tar.gz
-  [ -d "$MIRROR/manifests" ] || die "no mirror at $MIRROR: run proofs.sh export first"
+  [ -f "$TRUST" ] || die "no export has run yet: run proofs.sh export first"
   [ ! -e "$bundle" ] || die "$bundle exists already"
+  prepare_mirror
   umask 027
-  tar -czf "$bundle.part" -C "$MIRROR" .
+  # The archive user reads its tree and streams it; root only writes the bundle, outside the mirror.
+  as_user zkb_indexer tar -czf - -C "$MIRROR" . >"$bundle.part" || die "packing the mirror failed"
   mv "$bundle.part" "$bundle"
   own root:root "$bundle"
   chmod 0640 "$bundle"
   printf '%s  %s\n' "$(sha256_of "$bundle")" "$(basename "$bundle")" >"$bundle.sha256"
   own root:root "$bundle.sha256"
   chmod 0640 "$bundle.sha256"
-  log "bundled the mirror; copy it, then delete it"
+  log "bundled the mirror; copy it, then delete it. Another server imports it with --manifest-sha256 $(tail -n 1 "$TRUST" | awk '{print $1}') (the newest line of $TRUST)"
   printf 'bundle: %s\n' "$bundle"
 }
 
 usage() {
-  log "usage: proofs.sh export | import [<mirror dir> | <bundle.tar.gz>] | verify [<mirror dir>] | publish [--dry-run] | bundle"
+  log "usage: proofs.sh export | import [<mirror dir> | <bundle.tar.gz>] [--manifest-sha256 <hex>] | verify [<mirror dir> | <bundle.tar.gz>] [--manifest-sha256 <hex>] | publish [--dry-run] | bundle"
   exit 2
 }
 

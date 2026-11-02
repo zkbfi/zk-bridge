@@ -97,6 +97,8 @@ write_manifest() {
     done < <(sha_list)
     printf '}}\n'
   } >"$remote/manifests/$1.json"
+  # The server's root records each manifest's hash outside the mirror.
+  printf '%s  %s.json\n' "$(sha "$remote/manifests/$1.json")" "$1" >>"$root/var/backups/zk-bridge/proofs/manifests.sha256"
 }
 put() { mkdir -p "$(dirname "$remote/$1")"; printf '%s\n' "$2" >"$remote/$1"; }
 record() { # record <dir/stem> <content>: a record file named by its content
@@ -190,6 +192,20 @@ printf '#!/bin/sh\necho "$1 $2" >"%s/hook.out"\n' "$T" >"$T/hook"
 chmod +x "$T/hook"
 pull ZKB_PULL_HOOK="$T/hook" || true
 if [ "$(cat "$T/hook.out" 2>/dev/null)" = "$lm $lm/manifests/20261104T033000Z.json" ]; then pass "the hook gets the mirror and the newest manifest"; else fail "hook: $(cat "$T/hook.out" 2>/dev/null)"; fi
+
+# A manifest changed on the server after the export (by whoever can write the mirror) is refused: its hash is not in
+# the list root keeps outside the mirror.
+if [ -f "$local_dir/manifests.sha256" ]; then pass "the pull fetches the server's manifests.sha256"; else fail "no local manifests.sha256"; fi
+mf=$remote/manifests/20261104T033000Z.json
+cp "$mf" "$T/mf.keep"
+sed 's/"formatVersion":2/"formatVersion":2,"note":"x"/' "$T/mf.keep" >"$mf"
+rm -f "$lm/manifests/20261104T033000Z.json"
+status=0
+pull || status=$?
+if [ "$status" -ne 0 ] && grep -q 'is not in the server.s manifests.sha256' "$local_dir/pull.log"; then pass "a manifest that is not in the server's manifests.sha256 fails the pull"; else fail "tampered manifest (status $status)"; fi
+cp "$T/mf.keep" "$mf"
+rm -f "$lm/manifests/20261104T033000Z.json"
+pull || true
 
 # No manifest on the server: the run fails.
 rm -f "$remote"/manifests/*.json
