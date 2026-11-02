@@ -88,10 +88,10 @@ describe("manifests", () => {
     // A link is no file of the bundle.
     await symlink(join(directory, "files", "a.ssz"), join(directory, "files", "link.ssz"));
     const log = join(directory, "..", `ipfs-${Date.now()}.log`);
-    await writeFile(log, "2026-11-01T00:00:00Z bafyold 3 abc\n2026-11-02T00:00:00Z bafynew 4 abc\n\n");
-    const manifest = await writeManifest(directory, { commit: "abc", now: () => new Date(0), ipfsLog: log });
+    await writeFile(log, "2026-11-01T00:00:00Z bafybeigdyrztktx5b5m7zj2r4p4tlwhz3xz3k3c3yq7bqv3hbv5v6t2gxa 3 a8c9ffd6b362acfdb444c62d039e9870bacfc690\n2026-11-02T00:00:00Z bafybeihkoviema7g3gxyt6la7vd5ho32ictqbilu3wnlo3rs7ewhnp7lly 4 a8c9ffd6b362acfdb444c62d039e9870bacfc690\n\n");
+    const manifest = await writeManifest(directory, { commit: "a8c9ffd6b362acfdb444c62d039e9870bacfc690", now: () => new Date(0), ipfsLog: log });
     await rm(log);
-    expect(manifest).toMatchObject({ formatVersion: 1, createdAt: "1970-01-01T00:00:00.000Z", commit: "abc", lastPublished: "2026-11-02T00:00:00Z bafynew 4 abc" });
+    expect(manifest).toMatchObject({ formatVersion: 1, createdAt: "1970-01-01T00:00:00.000Z", commit: "a8c9ffd6b362acfdb444c62d039e9870bacfc690", lastPublished: "2026-11-02T00:00:00Z bafybeihkoviema7g3gxyt6la7vd5ho32ictqbilu3wnlo3rs7ewhnp7lly 4 a8c9ffd6b362acfdb444c62d039e9870bacfc690" });
     expect(manifest.host).toEqual(expect.any(String));
     expect(manifest.counts).toMatchObject({ archive: 4, files: 1, "archive/storage_proofs.ndjson": 2 });
     expect(await checkManifest(directory)).toEqual({ missing: [], changed: [], unlisted: [], checked: 5 });
@@ -99,7 +99,7 @@ describe("manifests", () => {
     await rm(join(directory, "archive", "conflicts.ndjson"));
     await writeFile(join(directory, "extra.txt"), "x");
     expect(await checkManifest(directory)).toEqual({ missing: ["archive/conflicts.ndjson"], changed: ["files/a.ssz"], unlisted: ["extra.txt"], checked: 4 });
-    const publicManifest = await writeManifest(directory, { commit: "abc", now: () => new Date(0), ipfsLog: join(directory, "missing.log"), public: true });
+    const publicManifest = await writeManifest(directory, { commit: "a8c9ffd6b362acfdb444c62d039e9870bacfc690", now: () => new Date(0), ipfsLog: join(directory, "missing.log"), public: true });
     expect(publicManifest.host).toBeUndefined();
     expect(publicManifest.lastPublished).toBeNull();
     expect(await listFiles(directory)).toContain("manifest.json");
@@ -169,7 +169,7 @@ describe("the public tree", { timeout: 60_000 }, () => {
     await mkdir(join(fromArchive, "beacon-states", "943"), { recursive: true });
     await writeFile(join(fromArchive, "beacon-states", "943", `000000000064-0x${"ab".repeat(32)}.ssz`), Buffer.from([0xff, 0xfe, 0x00]));
     await writeFile(join(fromArchive, "beacon-states", "943", `000000000064-0x${"ab".repeat(32)}.summary`), "0x01\n0x02\n");
-    await writeManifest(fromArchive, { commit: "abc", now: () => new Date("2026-11-01T03:30:00Z"), public: true });
+    await writeManifest(fromArchive, { commit: "a8c9ffd6b362acfdb444c62d039e9870bacfc690", now: () => new Date("2026-11-01T03:30:00Z"), public: true });
     expect(await checkPublicTree(fromArchive), JSON.stringify(await checkPublicTree(fromArchive))).toEqual([]);
   });
 
@@ -215,12 +215,20 @@ describe("the public tree", { timeout: 60_000 }, () => {
     expect(suspiciousReason("2026-11-01T03:30:00.000Z")).toBeNull();
     const manifests = join(directory, "manifests");
     await mkdir(manifests);
-    await writeFile(join(manifests, "manifest.json"), JSON.stringify({ commit: "abc", files: { "notes.txt": { sha256: "00".repeat(32), bytes: 1 }, "README.txt": { sha256: "zz", bytes: 1 }, [`beacon-states/1/000000000001-${hash}.ssz`]: null } }));
+    await writeFile(join(manifests, "manifest.json"), JSON.stringify({ commit: "a8c9ffd6b362acfdb444c62d039e9870bacfc690", files: { "notes.txt": { sha256: "00".repeat(32), bytes: 1 }, "README.txt": { sha256: "zz", bytes: 1 }, [`beacon-states/1/000000000001-${hash}.ssz`]: null } }));
     expect(await checkPublicTree(manifests)).toEqual([{ file: "manifest.json", reason: "lists a file it should not" }]);
     await writeFile(join(manifests, "manifest.json"), "{");
     expect(await checkPublicTree(manifests)).toEqual([{ file: "manifest.json", reason: "is not JSON" }]);
-    await writeFile(join(manifests, "manifest.json"), JSON.stringify({ commit: "abc" }));
+    await writeFile(join(manifests, "manifest.json"), JSON.stringify({ commit: "a8c9ffd6b362acfdb444c62d039e9870bacfc690" }));
     expect(await checkPublicTree(manifests)).toEqual([]);
+    // The commit and the previous publication are checked by shape (plain hex and a CID would look like keys).
+    await writeFile(join(manifests, "manifest.json"), JSON.stringify({ commit: "a8c9ffd6b362acfdb444c62d039e9870bacfc690", lastPublished: "2026-11-02T00:00:00Z bafybeihkoviema7g3gxyt6la7vd5ho32ictqbilu3wnlo3rs7ewhnp7lly 4 a8c9ffd6b362acfdb444c62d039e9870bacfc690" }));
+    expect(await checkPublicTree(manifests)).toEqual([]);
+    await writeFile(join(manifests, "manifest.json"), JSON.stringify({ commit: "sk_live_abcdef1234567890ab", lastPublished: "token=abc123def456ghi789jkl" }));
+    expect(await checkPublicTree(manifests)).toEqual([
+      { file: "manifest.json", reason: "has a commit that is not a git hash" },
+      { file: "manifest.json", reason: "has a lastPublished line of another shape" },
+    ]);
     expect(suspiciousReason("sk-abcdefghijk")).toBe("looks like a key or token");
   });
 });
@@ -299,7 +307,7 @@ describe("the command line", { timeout: 60_000 }, () => {
     const source = await filledArchive();
     const bundle = join(directory, "bundle");
     await run(["export", "--out", bundle], { archive: source });
-    expect((await run(["manifest-write", "--dir", bundle, "--commit", "abc"])).out[0]).toMatchObject({ files: 4 });
+    expect((await run(["manifest-write", "--dir", bundle, "--commit", "a8c9ffd6b362acfdb444c62d039e9870bacfc690"])).out[0]).toMatchObject({ files: 4 });
     expect((await run(["manifest-check", "--dir", bundle])).code).toBe(0);
     await appendFile(join(bundle, "archive", "conflicts.ndjson"), "x");
     expect((await run(["manifest-check", "--dir", bundle])).code).toBe(1);
@@ -315,7 +323,7 @@ describe("the command line", { timeout: 60_000 }, () => {
     expect(fromArchive.close).toHaveBeenCalled();
     await writeFile(join(tree, "stray.txt"), "x");
     expect((await run(["public-check", "--dir", tree])).code).toBe(3);
-    expect((await run(["manifest-write", "--dir", tree, "--commit", "abc", "--public", "--ipfs-log", join(directory, "none.log")])).code).toBe(0);
+    expect((await run(["manifest-write", "--dir", tree, "--commit", "a8c9ffd6b362acfdb444c62d039e9870bacfc690", "--public", "--ipfs-log", join(directory, "none.log")])).code).toBe(0);
   });
 
   it("opens a pool archive only with a database URL, migrated, and closes the pool", async () => {
