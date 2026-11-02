@@ -1,44 +1,57 @@
 #!/usr/bin/env bash
-# Pulls the newest proof archive bundle from the zkb.fi app server to this machine, unattended (launchd runs it daily;
+# Pulls the private proof mirror of the zkb.fi app server to this machine, unattended (launchd runs it daily;
 # install-proofs-pull.sh sets that up). Run it by hand the same way:
 #
 #   deploy/operator/pull-proofs.sh
 #
-# It asks the server (over the "zkbfi-app" alias of ~/.ssh/config, BatchMode: it never prompts) for the newest
-# zk-bridge-proofs-*.tar.gz in /var/backups/zk-bridge/proofs, fetches it and its .sha256 with rsync into
-# ~/zkb-backups/proofs/, and keeps it only when
-#   - the .sha256 matches the bundle, and
-#   - every file that manifest.json inside the bundle lists has the listed sha256, and no file is unlisted.
-# A bundle that fails is deleted and the run fails (exit 1). A bundle that is already here is not fetched again.
-# The newest ZKB_PULL_KEEP (30) bundles stay. The log is ~/zkb-backups/proofs/pull.log (bounded to about 1 MB, one
-# rotated copy). It names the host alias only. No secret is read or written.
+# Owner, 2026-11-02: "ok, so lets plan to do 30 days of everything". The server keeps a mirror
+# (/var/backups/zk-bridge/proofs/mirror, docs/proof-archive.md): one file per record, named by its content and never
+# rewritten, plus beacon states, SQLite snapshots and daily manifests for a window of 30 days. This script copies it over
+# the "zkbfi-app" alias of ~/.ssh/config (BatchMode: it never prompts) into ~/zkb-backups/proofs/mirror:
+#   - storage-proofs/, light-client-proofs/, evidence/, conflicts/: rsync --ignore-existing. A file that is here already
+#     is never fetched again, and nothing here is ever deleted, even when the server no longer has it (that is logged).
+#   - beacon-states/, snapshots/, manifests/: rsync --ignore-existing --delete. What the server pruned is deleted here
+#     too, and the count is logged.
+# Each rsync waits for a running export on the server (a shared flock on its lock file), and rsync puts each file in
+# place only when it is complete. Then the newest manifest is checked: every file it lists must be here with its
+# sha256. A file that is missing (the pull met an export half way) gets one more pull; a file whose content differs is a
+# failure (exit 1) and is left as it is for a person to look at. The log is ~/zkb-backups/proofs/pull.log (bounded to
+# about 1 MB, one rotated copy). It names the host alias only. No secret is read or written.
+#
+# The nightly bundles of the old format (~/zkb-backups/proofs/zk-bridge-proofs-*.tar.gz) are left as they are; nothing
+# makes new ones.
 #
 # The manifest is read with node, else with python3; with neither the run fails and says so. (launchd has a short PATH:
-# install-proofs-pull.sh records the node it finds in ZKB_PULL_NODE.)
+# install-proofs-pull.sh records the node and the rsync it finds in ZKB_PULL_NODE and ZKB_PULL_RSYNC.)
 #
 # Settings (environment; defaults in brackets):
-#   ZKB_PULL_HOST [zkbfi-app]   ZKB_PULL_REMOTE_DIR [/var/backups/zk-bridge/proofs]
-#   ZKB_PULL_LOCAL_DIR [~/zkb-backups/proofs]   ZKB_PULL_KEEP [30]   ZKB_PULL_LOG [<local dir>/pull.log]
-#   ZKB_PULL_NODE [node on PATH]   ZKB_PULL_SSH [ssh]   ZKB_PULL_RSYNC [rsync]   (the last three: tests)
-#   ZKB_PULL_HOOK   an executable called as `<hook> <bundle>` after a bundle was pulled and verified (a copy to
+#   ZKB_PULL_HOST [zkbfi-app]   ZKB_PULL_REMOTE_DIR [/var/backups/zk-bridge/proofs/mirror]
+#   ZKB_PULL_REMOTE_LOCK [/var/backups/zk-bridge/proofs/.lock; empty: no lock]
+#   ZKB_PULL_LOCAL_DIR [~/zkb-backups/proofs] (the mirror goes to <local dir>/mirror)   ZKB_PULL_LOG [<local dir>/pull.log]
+#   ZKB_PULL_NODE [node on PATH]   ZKB_PULL_RSYNC [rsync on PATH]   ZKB_PULL_SSH [ssh]
+#   ZKB_PULL_HOOK   an executable called as `<hook> <mirror dir> <newest manifest>` after a pull that verified (a copy to
 #                   somewhere else on this machine, say). A failing hook is logged and fails the run.
 set -euo pipefail
 
 HOST=${ZKB_PULL_HOST:-zkbfi-app}
-REMOTE_DIR=${ZKB_PULL_REMOTE_DIR:-/var/backups/zk-bridge/proofs}
+REMOTE_DIR=${ZKB_PULL_REMOTE_DIR:-/var/backups/zk-bridge/proofs/mirror}
+REMOTE_LOCK=${ZKB_PULL_REMOTE_LOCK-/var/backups/zk-bridge/proofs/.lock}
 LOCAL_DIR=${ZKB_PULL_LOCAL_DIR:-$HOME/zkb-backups/proofs}
-KEEP=${ZKB_PULL_KEEP:-30}
+MIRROR_DIR=$LOCAL_DIR/mirror
 LOG=${ZKB_PULL_LOG:-$LOCAL_DIR/pull.log}
 SSH=${ZKB_PULL_SSH:-ssh}
 RSYNC=${ZKB_PULL_RSYNC:-rsync}
 LOG_MAX=1000000
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+# Records: never deleted here. The rest: the server's window.
+RECORD_DIRS="storage-proofs light-client-proofs evidence conflicts"
+PRUNED_DIRS="beacon-states snapshots manifests"
 
-TMP_DIRS=("")
+TMP_FILES=("")
 cleanup() {
-  local d
-  for d in ${TMP_DIRS[@]+"${TMP_DIRS[@]}"}; do
-    if [ -n "$d" ]; then rm -rf "$d"; fi
+  local f
+  for f in ${TMP_FILES[@]+"${TMP_FILES[@]}"}; do
+    if [ -n "$f" ]; then rm -rf "$f"; fi
   done
 }
 
@@ -49,10 +62,6 @@ log() {
   printf '%s\n' "$line" >>"$LOG" 2>/dev/null || true
 }
 die() { log "$*"; exit 1; }
-
-sha256_of() {
-  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
-}
 
 # manifest_lines <manifest.json>: prints "<sha256> <path>" for each listed file, with whatever JSON reader exists.
 manifest_lines() {
@@ -73,52 +82,101 @@ for p, v in json.load(open(sys.argv[1]))["files"].items():
     print(v["sha256"] + " " + p)' "$1"
     return
   fi
-  die "neither node nor python3 is available to read manifest.json (set ZKB_PULL_NODE)"
+  die "neither node nor python3 is available to read the manifest (set ZKB_PULL_NODE)"
 }
 
-# verify_bundle <bundle>: sha256 file, then the manifest inside. Returns non-zero with a log line on any mismatch.
-verify_bundle() {
-  local bundle=$1 want got work lines line sha rel
-  [ -f "$bundle.sha256" ] || { log "no .sha256 for $(basename "$bundle")"; return 1; }
-  want=$(awk '{print $1; exit}' "$bundle.sha256")
-  got=$(sha256_of "$bundle")
-  [ "$want" = "$got" ] || { log "$(basename "$bundle") does not match its .sha256"; return 1; }
+# sha256_check <list>: checks "<sha256>  <path>" lines from the mirror directory; prints the paths that fail.
+sha256_check() {
+  local out status=0
+  if command -v shasum >/dev/null 2>&1; then
+    out=$(cd "$MIRROR_DIR" && shasum -a 256 -c --quiet "$1" 2>/dev/null) || status=$?
+  else
+    out=$(cd "$MIRROR_DIR" && sha256sum -c --quiet "$1" 2>/dev/null) || status=$?
+  fi
+  [ "$status" -eq 0 ] || printf '%s\n' "$out" | sed -n 's/: FAILED.*$//p'
+}
 
-  work=$(mktemp -d "$LOCAL_DIR/.verify-XXXXXX")
-  TMP_DIRS+=("$work")
-  tar --no-same-owner -xzf "$bundle" -C "$work" 2>/dev/null || { log "$(basename "$bundle") cannot be unpacked"; return 1; }
-  if [ -n "$(find "$work" ! -type f ! -type d -print -quit)" ]; then log "$(basename "$bundle") holds links or special files"; return 1; fi
-  [ -f "$work/manifest.json" ] || { log "$(basename "$bundle") has no manifest.json"; return 1; }
-  lines=$(manifest_lines "$work/manifest.json") || { log "manifest.json cannot be read"; return 1; }
+# files_of <directory>: the files under it, relative, sorted.
+files_of() {
+  if [ -d "$1" ]; then (cd "$1" && find . -type f ! -name '.*' | sed 's|^\./||' | LC_ALL=C sort); fi
+}
+
+# sync_once: one rsync per directory of the mirror. Returns non-zero when an rsync failed.
+sync_once() {
+  local d before after gone
+  local -a lock=()
+  if [ -n "$REMOTE_LOCK" ]; then lock=("--rsync-path=flock -s -w 3600 $REMOTE_LOCK rsync"); fi
+  for d in $RECORD_DIRS $PRUNED_DIRS; do
+    mkdir -p "$MIRROR_DIR/$d"
+    case " $PRUNED_DIRS " in
+      *" $d "*)
+        before=$(files_of "$MIRROR_DIR/$d")
+        # shellcheck disable=SC2086
+        $RSYNC -rt --ignore-existing --delete ${lock[@]+"${lock[@]}"} -e "$SSH $SSH_OPTS" "$HOST:$REMOTE_DIR/$d/" "$MIRROR_DIR/$d/" || { log "rsync of $d from $HOST failed"; return 1; }
+        after=$(files_of "$MIRROR_DIR/$d")
+        gone=$(comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | grep -c . || true)
+        [ "$gone" -eq 0 ] || log "$d: $gone file(s) deleted here, as the server pruned them"
+        ;;
+      *)
+        # shellcheck disable=SC2086
+        $RSYNC -rt --ignore-existing ${lock[@]+"${lock[@]}"} -e "$SSH $SSH_OPTS" "$HOST:$REMOTE_DIR/$d/" "$MIRROR_DIR/$d/" || { log "rsync of $d from $HOST failed"; return 1; }
+        ;;
+    esac
+  done
+}
+
+# verify: the newest manifest against the files here. Sets MISSING and CHANGED (counts) and NEWEST (its path).
+verify() {
+  local name lines line sha rel list listed unlisted failed n
+  MISSING=0
+  CHANGED=0
+  NEWEST=""
+  for name in "$MIRROR_DIR"/manifests/*.json; do [ -f "$name" ] && NEWEST=$name; done
+  [ -n "$NEWEST" ] || { log "the mirror has no manifest"; MISSING=1; return 1; }
+  lines=$(manifest_lines "$NEWEST") || { log "$(basename "$NEWEST") cannot be read"; CHANGED=1; return 1; }
+  list=$(mktemp "$LOCAL_DIR/.check-XXXXXX")
+  listed=$(mktemp "$LOCAL_DIR/.listed-XXXXXX")
+  TMP_FILES+=("$list" "$listed")
+  : >"$list"
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     sha=${line%% *}
     rel=${line#* }
-    case $rel in /* | *..*) log "manifest lists a path outside the bundle: $rel"; return 1 ;; esac
-    [ -f "$work/$rel" ] || { log "manifest lists $rel, which is missing"; return 1; }
-    [ "$(sha256_of "$work/$rel")" = "$sha" ] || { log "$rel does not match the manifest"; return 1; }
+    case $rel in /* | *..*) log "the manifest lists a path outside the mirror: $rel"; CHANGED=$((CHANGED + 1)); continue ;; esac
+    printf '%s\n' "$rel" >>"$listed"
+    if [ -f "$MIRROR_DIR/$rel" ]; then
+      printf '%s  %s\n' "$sha" "$rel" >>"$list"
+    else
+      MISSING=$((MISSING + 1))
+      [ "$MISSING" -gt 10 ] || log "missing here: $rel"
+    fi
   done <<EOF_LINES
 $lines
 EOF_LINES
-  # No file may be missing from the manifest. The listed paths go to a file first: `grep -q` at the end of a pipe exits
-  # at the first match, the writer before it then dies of SIGPIPE, and pipefail turns the match into a failure.
-  local listed=$work.listed
-  printf '%s\n' "$lines" | sed 's/^[^ ]* //' >"$listed"
-  while IFS= read -r rel; do
-    rel=${rel#./}
-    [ "$rel" = manifest.json ] && continue
-    grep -qxF -- "$rel" "$listed" || { rm -f "$listed"; log "$rel is in the bundle but not in the manifest"; return 1; }
-  done < <(cd "$work" && find . -type f)
-  rm -f "$listed"
-  rm -rf "$work"
-  return 0
+  failed=$(sha256_check "$list")
+  if [ -n "$failed" ]; then
+    CHANGED=$((CHANGED + $(printf '%s\n' "$failed" | grep -c .)))
+    printf '%s\n' "$failed" | sed -n '1,10p' | while IFS= read -r rel; do log "differs from the manifest: $rel"; done
+  fi
+  # Records here that the server's manifest does not list: kept (they are never deleted here), and named. The listed
+  # paths are read from a file: a `grep -q` at the end of a pipe could fail the writer under pipefail.
+  LC_ALL=C sort -o "$listed" "$listed"
+  unlisted=$(for d in $RECORD_DIRS; do files_of "$MIRROR_DIR/$d" | sed "s|^|$d/|"; done | LC_ALL=C sort | comm -23 - "$listed")
+  n=$(printf '%s\n' "$unlisted" | grep -c . || true)
+  if [ "$n" -gt 0 ]; then
+    log "$n record file(s) are kept here that the server's newest manifest does not list (the server lost them?):"
+    printf '%s\n' "$unlisted" | sed -n '1,10p' | while IFS= read -r rel; do log "  kept: $rel"; done
+  fi
+  [ "$MISSING" -eq 0 ] && [ "$CHANGED" -eq 0 ]
 }
 
 main() {
   exec </dev/null
   umask 077
-  case $KEEP in '' | *[!0-9]* | 0) echo "pull-proofs: ZKB_PULL_KEEP must be a positive number" >&2; exit 1 ;; esac
-  mkdir -p "$LOCAL_DIR"
+  # Private: the mirror keeps source hosts and job ids. The directories are 0700 whatever modes rsync gives the files
+  # (the system's openrsync keeps the server's 0644).
+  mkdir -p "$LOCAL_DIR" "$MIRROR_DIR"
+  chmod 0700 "$LOCAL_DIR" "$MIRROR_DIR"
   if [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt "$LOG_MAX" ]; then mv -f "$LOG" "$LOG.1"; fi
   trap cleanup EXIT
 
@@ -130,57 +188,27 @@ main() {
     mkdir "$lock" || die "cannot take the lock"
   fi
   echo $$ >"$lock/pid"
-  TMP_DIRS+=("$lock")
-  rm -rf "$LOCAL_DIR"/.verify-* "$LOCAL_DIR"/.incoming
+  TMP_FILES+=("$lock")
+  rm -f "$LOCAL_DIR"/.check-* "$LOCAL_DIR"/.listed-*
 
-  # The newest bundle on the server (names carry a UTC stamp, so the last in sort order is the newest).
-  local name
-  # shellcheck disable=SC2086
-  name=$($SSH $SSH_OPTS "$HOST" "ls -1 '$REMOTE_DIR'" | grep -E '^zk-bridge-proofs-[0-9TZ]+\.tar\.gz$' | sort | tail -n 1) \
-    || die "cannot list the bundles on $HOST"
-  [ -n "$name" ] || die "$HOST has no bundle in $REMOTE_DIR"
-
-  local pulled=0
-  if [ -f "$LOCAL_DIR/$name" ] && [ -f "$LOCAL_DIR/$name.sha256" ]; then
-    log "$name is here already"
-  else
-    log "fetching $name from $HOST"
-    mkdir "$LOCAL_DIR/.incoming"
-    TMP_DIRS+=("$LOCAL_DIR/.incoming")
-    # shellcheck disable=SC2086
-    $RSYNC -t --partial -e "ssh $SSH_OPTS" "$HOST:$REMOTE_DIR/$name" "$HOST:$REMOTE_DIR/$name.sha256" "$LOCAL_DIR/.incoming/" \
-      || die "rsync from $HOST failed"
-    if verify_bundle "$LOCAL_DIR/.incoming/$name"; then
-      mv "$LOCAL_DIR/.incoming/$name" "$LOCAL_DIR/$name"
-      mv "$LOCAL_DIR/.incoming/$name.sha256" "$LOCAL_DIR/$name.sha256"
-      pulled=1
-      log "$name verified (sha256 and manifest) and kept"
-    else
-      rm -rf "$LOCAL_DIR/.incoming"
-      die "$name FAILED verification and was deleted"
-    fi
+  log "pulling the mirror from $HOST"
+  sync_once || die "the pull from $HOST failed"
+  if ! verify; then
+    [ "$CHANGED" -eq 0 ] || die "FAILED: $CHANGED file(s) here differ from the newest manifest; they are left as they are"
+    log "$MISSING file(s) of the newest manifest are not here (the pull met an export?); pulling again"
+    sync_once || die "the second pull from $HOST failed"
+    verify || die "FAILED: the mirror here does not match its newest manifest ($MISSING missing, $CHANGED different)"
   fi
+  local files
+  files=$(printf '%s\n' "$(manifest_lines "$NEWEST")" | grep -c . || true)
+  log "verified against $(basename "$NEWEST"): $files file(s)"
 
-  # Retention: the newest KEEP bundles stay.
-  local -a all
-  local f total=0 i=0 pruned=0
-  for f in "$LOCAL_DIR"/zk-bridge-proofs-*.tar.gz; do
-    [ -e "$f" ] || continue
-    all[total]=$f
-    total=$((total + 1))
-  done
-  for f in ${all[@]+"${all[@]}"}; do
-    if [ $((total - i)) -gt "$KEEP" ]; then
-      rm -f "$f" "$f.sha256"
-      pruned=$((pruned + 1))
-      log "pruned $(basename "$f")"
-    fi
-    i=$((i + 1))
-  done
-  log "done: $((total - pruned)) bundle(s) here, $pruned pruned"
+  local old=0 f
+  for f in "$LOCAL_DIR"/zk-bridge-proofs-*.tar.gz; do [ -e "$f" ] && old=$((old + 1)); done
+  [ "$old" -eq 0 ] || log "$old bundle(s) of the old format stay in $LOCAL_DIR; nothing deletes them or makes new ones"
 
-  if [ "$pulled" -eq 1 ] && [ -n "${ZKB_PULL_HOOK:-}" ]; then
-    if [ -x "$ZKB_PULL_HOOK" ] && "$ZKB_PULL_HOOK" "$LOCAL_DIR/$name"; then log "hook ok"; else die "the hook failed"; fi
+  if [ -n "${ZKB_PULL_HOOK:-}" ]; then
+    if [ -x "$ZKB_PULL_HOOK" ] && "$ZKB_PULL_HOOK" "$MIRROR_DIR" "$NEWEST"; then log "hook ok"; else die "the hook failed"; fi
   fi
 }
 

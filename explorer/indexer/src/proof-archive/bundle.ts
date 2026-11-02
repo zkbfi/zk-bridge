@@ -57,30 +57,42 @@ export async function* recordsOf(path: string): AsyncGenerator<unknown> {
   }
 }
 
+/** The records to import, one stream per table (lines of a bundle file, or the record files of the mirror). */
+export type RecordSources = { readonly storage: AsyncIterable<unknown>; readonly lightClient: AsyncIterable<unknown>; readonly evidence: AsyncIterable<unknown> };
+
 /**
- * Upserts the archive files of a bundle. A record that does not parse, or a light client record whose slots and hash do
- * not match its proof, is counted as invalid and skipped. The conflicts file of the bundle is a report and is not read.
+ * Upserts records. A record that does not parse, or a light client record whose slots and hash do not match its proof,
+ * or evidence whose hash does not match its body, is counted as invalid and skipped.
  */
-export async function importArchive(archive: ProofArchive, bundle: string): Promise<Record<"storage_proofs" | "light_client_proofs" | "message_evidence", IngestTally>> {
-  const directory = join(bundle, "archive");
+export async function importRecords(archive: ProofArchive, sources: RecordSources): Promise<Record<"storage_proofs" | "light_client_proofs" | "message_evidence", IngestTally>> {
   const fresh = (): IngestTally => ({ ...emptyTally(), invalid: 0 });
   const result = { storage_proofs: fresh(), light_client_proofs: fresh(), message_evidence: fresh() };
-  for await (const raw of recordsOf(join(directory, "storage_proofs.ndjson"))) {
+  for await (const raw of sources.storage) {
     const parsed = storageProofRecordSchema.safeParse(raw);
     if (!parsed.success) result.storage_proofs.invalid += 1;
     else result.storage_proofs[await archive.putStorageProof(parsed.data)] += 1;
   }
-  for await (const raw of recordsOf(join(directory, "light_client_proofs.ndjson"))) {
+  for await (const raw of sources.lightClient) {
     const parsed = lightClientProofRecordSchema.safeParse(raw);
     if (!parsed.success || !lightClientRecordConsistent(parsed.data)) result.light_client_proofs.invalid += 1;
     else result.light_client_proofs[await archive.putLightClientProof(parsed.data)] += 1;
   }
-  for await (const raw of recordsOf(join(directory, "message_evidence.ndjson"))) {
+  for await (const raw of sources.evidence) {
     const parsed = evidenceRecordSchema.safeParse(raw);
     if (!parsed.success || `0x${createHash("sha256").update(parsed.data.body).digest("hex")}` !== parsed.data.bodyHash.toLowerCase()) result.message_evidence.invalid += 1;
     else result.message_evidence[await archive.putEvidence(parsed.data)] += 1;
   }
   return result;
+}
+
+/** Upserts the archive files of a bundle (see {@link importRecords}). The conflicts file is a report and is not read. */
+export function importArchive(archive: ProofArchive, bundle: string): Promise<Record<"storage_proofs" | "light_client_proofs" | "message_evidence", IngestTally>> {
+  const directory = join(bundle, "archive");
+  return importRecords(archive, {
+    storage: recordsOf(join(directory, "storage_proofs.ndjson")),
+    lightClient: recordsOf(join(directory, "light_client_proofs.ndjson")),
+    evidence: recordsOf(join(directory, "message_evidence.ndjson")),
+  });
 }
 
 /** Every file under a directory, as paths relative to it with `/`, sorted. */
@@ -114,7 +126,7 @@ export async function ingestCache(archive: ProofArchive, directory: string): Pro
   return tally;
 }
 
-const sha256OfFile = async (path: string): Promise<string> => {
+export const sha256OfFile = async (path: string): Promise<string> => {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
   return hash.digest("hex");
@@ -134,6 +146,12 @@ export interface Manifest {
   readonly lastPublished?: string | null;
 }
 
+/** The newest line of the IPFS publication log, or null when there is none. */
+export async function lastPublishedLine(ipfsLog: string): Promise<string | null> {
+  const text = await readFile(ipfsLog, "utf8").catch(() => "");
+  return text.split("\n").filter((line) => line.trim() !== "").at(-1) ?? null;
+}
+
 /** Writes `<bundle>/manifest.json` over every other file of the bundle. */
 export async function writeManifest(bundle: string, input: { readonly commit: string; readonly now: () => Date; readonly ipfsLog?: string; readonly public?: boolean }): Promise<Manifest> {
   const files: Record<string, { sha256: string; bytes: number }> = {};
@@ -150,11 +168,7 @@ export async function writeManifest(bundle: string, input: { readonly commit: st
       counts[name] = lines;
     }
   }
-  let lastPublished: string | null | undefined;
-  if (input.ipfsLog !== undefined) {
-    const text = await readFile(input.ipfsLog, "utf8").catch(() => "");
-    lastPublished = text.split("\n").filter((line) => line.trim() !== "").at(-1) ?? null;
-  }
+  const lastPublished = input.ipfsLog === undefined ? undefined : await lastPublishedLine(input.ipfsLog);
   const manifest: Manifest = {
     formatVersion: 1,
     createdAt: input.now().toISOString(),
@@ -201,12 +215,12 @@ export type StorageVerification = {
 };
 
 /**
- * Re-verifies every storage proof of a bundle against the state root of its block, read from a node by block hash.
- * Headers stay available on every node, so this works long after the proof window closed.
+ * Re-verifies storage proof records (of a bundle or of the mirror) against the state root of each block, read from a
+ * node by block hash. Headers stay available on every node, so this works long after the proof window closed.
  */
-export async function verifyStorageProofs(bundle: string, stateRoot: BlockRootReader): Promise<StorageVerification> {
+export async function verifyStorageProofs(records: AsyncIterable<unknown>, stateRoot: BlockRootReader): Promise<StorageVerification> {
   const result: StorageVerification = { verified: 0, invalid: [], unchecked: [] };
-  for await (const raw of recordsOf(join(bundle, "archive", "storage_proofs.ndjson"))) {
+  for await (const raw of records) {
     const parsed = storageProofRecordSchema.safeParse(raw);
     if (!parsed.success) {
       result.invalid.push({ chainId: 0, blockNumber: 0, blockHash: "", reason: "the record does not parse" });

@@ -45,93 +45,158 @@ check "uninstall removes the plist and the script" test ! -e "$plist" -a ! -e "$
 
 # --- The pull ---------------------------------------------------------------------------------------------------------
 if ! command -v node >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
-  printf 'SKIP  pull tests: neither node nor python3 to read manifest.json\n'
+  printf 'SKIP  pull tests: neither node nor python3 to read the manifest\n'
   printf '%d failure(s)\n' "$FAILURES"
   [ "$FAILURES" -eq 0 ]
   exit
 fi
 
-remote=$T/remote
-mkdir -p "$remote"
-# make_bundle <stamp> [tamper]: a bundle with a manifest, in the fake remote directory.
-make_bundle() {
-  local stamp=$1 w=$T/w-$1
-  mkdir -p "$w/archive" "$w/files"
-  printf 'proof %s\n' "$stamp" >"$w/archive/storage_proofs.ndjson"
-  printf 'cache %s\n' "$stamp" >"$w/files/a.json"
-  printf '{"formatVersion":1,"files":{"archive/storage_proofs.ndjson":{"sha256":"%s","bytes":1},"files/a.json":{"sha256":"%s","bytes":1}}}\n' \
-    "$(sha "$w/archive/storage_proofs.ndjson")" "$(sha "$w/files/a.json")" >"$w/manifest.json"
-  if [ "${2:-}" = tamper ]; then printf 'x\n' >>"$w/files/a.json"; fi
-  tar -czf "$remote/zk-bridge-proofs-$stamp.tar.gz" -C "$w" .
-  # The .sha256 is of the real bundle, so only the manifest check can catch a tampered file.
-  printf '%s  zk-bridge-proofs-%s.tar.gz\n' "$(sha "$remote/zk-bridge-proofs-$stamp.tar.gz")" "$stamp" >"$remote/zk-bridge-proofs-$stamp.tar.gz.sha256"
-}
-
-# The fake ssh answers the listing; the fake rsync copies "host:path" sources from the fake remote directory.
-cat >"$T/ssh" <<'EOS'
-#!/bin/sh
-ls -1 "$FAKE_REMOTE"
-EOS
+# The server's mirror, in a fake root: the fake rsync maps "host:/path" to "$FAKE_ROOT/path", drops the ssh and
+# rsync-path options (after logging them), and hands the rest to the real rsync of this machine.
+REAL_RSYNC=$(command -v rsync || true)
+if [ -z "$REAL_RSYNC" ]; then
+  printf 'SKIP  pull tests: no rsync\n'
+  printf '%d failure(s)\n' "$FAILURES"
+  [ "$FAILURES" -eq 0 ]
+  exit
+fi
+root=$T/server
+remote=$root/var/backups/zk-bridge/proofs/mirror
 cat >"$T/rsync" <<'EOS'
-#!/bin/sh
-for a in "$@"; do last=$a; done
-for a in "$@"; do
-  case $a in
-    *:/*) cp "$FAKE_REMOTE/$(basename "${a#*:}")" "$last" || exit 23 ;;
+#!/bin/bash
+printf '%s\n' "$*" >>"$FAKE_LOG"
+args=()
+while [ $# -gt 0 ]; do
+  case $1 in
+    -e) shift ;;
+    --rsync-path=*) ;;
+    *:/*) src=${1#*:}; dir=${src%/}; dir=${dir##*/}
+      # FAKE_SKIP_ONCE=<dir>: the first pull of that directory brings nothing (as if an export ran meanwhile).
+      if [ -n "${FAKE_SKIP_ONCE:-}" ] && [ "$dir" = "$FAKE_SKIP_ONCE" ] && [ ! -e "$FAKE_LOG.skipped" ]; then : >"$FAKE_LOG.skipped"; exit 0; fi
+      args+=("$FAKE_ROOT$src") ;;
+    *) args+=("$1") ;;
   esac
+  shift
 done
+exec "$REAL_RSYNC" "${args[@]}"
 EOS
-chmod +x "$T/ssh" "$T/rsync"
+chmod +x "$T/rsync"
+
+sha_list() { (cd "$remote" && find . -type f ! -path './manifests/*' | sed 's|^\./||' | LC_ALL=C sort); }
+# write_manifest <stamp>: the server's manifest of the day, over every file but the manifests.
+write_manifest() {
+  local first=1 f
+  mkdir -p "$remote/manifests"
+  {
+    printf '{"formatVersion":2,"kind":"mirror","files":{'
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      [ "$first" -eq 1 ] || printf ','
+      first=0
+      printf '"%s":{"sha256":"%s","bytes":1}' "$f" "$(sha "$remote/$f")"
+    done < <(sha_list)
+    printf '}}\n'
+  } >"$remote/manifests/$1.json"
+}
+put() { mkdir -p "$(dirname "$remote/$1")"; printf '%s\n' "$2" >"$remote/$1"; }
+record() { # record <dir/stem> <content>: a record file named by its content
+  local tmp=$T/record.tmp
+  printf '%s\n' "$2" >"$tmp"
+  mkdir -p "$(dirname "$remote/$1")"
+  mv "$tmp" "$remote/$1.$(sha "$tmp").json"
+}
+for d in storage-proofs light-client-proofs evidence conflicts beacon-states snapshots manifests; do mkdir -p "$remote/$d"; done
+record storage-proofs/369/0xabc/100-0xdead '{"proof":1}'
+record evidence/p/first-to-second/0x0e-aa '{"e":1}'
+state1=11155111/000000000100-0x$(printf 'a%.0s' $(seq 1 64)).ssz
+state2=11155111/000000000200-0x$(printf 'b%.0s' $(seq 1 64)).ssz
+put "beacon-states/$state1" state-1
+put "beacon-states/$state2" state-2
+put snapshots/20261101T033000Z.sqlite db-1
+write_manifest 20261101T033000Z
 
 local_dir=$T/pulled
+lm=$local_dir/mirror
+: >"$T/rsync.log"
 pull() {
-  env FAKE_REMOTE=$remote ZKB_PULL_SSH=$T/ssh ZKB_PULL_RSYNC=$T/rsync ZKB_PULL_LOCAL_DIR=$local_dir ZKB_PULL_HOST=fakehost "$@" \
+  env FAKE_ROOT=$root FAKE_LOG=$T/rsync.log REAL_RSYNC=$REAL_RSYNC ZKB_PULL_RSYNC=$T/rsync ZKB_PULL_SSH=false ZKB_PULL_LOCAL_DIR=$local_dir ZKB_PULL_HOST=fakehost "$@" \
     bash "$DIR/pull-proofs.sh" >/dev/null 2>&1
 }
+mkdir -p "$local_dir"
+printf 'old bundle\n' >"$local_dir/zk-bridge-proofs-20261030T033000Z.tar.gz"
 
-make_bundle 20260101T000000Z
 status=0
-pull ZKB_PULL_KEEP=2 || status=$?
-if [ "$status" -eq 0 ] && [ -f "$local_dir/zk-bridge-proofs-20260101T000000Z.tar.gz" ] && [ -f "$local_dir/zk-bridge-proofs-20260101T000000Z.tar.gz.sha256" ]; then pass "pulls the newest bundle and its .sha256"; else fail "pull (status $status)"; fi
-status=0
-pull ZKB_PULL_KEEP=2 || status=$?
-if [ "$status" -eq 0 ] && grep -q 'here already' "$local_dir/pull.log"; then pass "skips a bundle that is already here"; else fail "skip (status $status)"; fi
-make_bundle 20260102T000000Z
-pull ZKB_PULL_KEEP=2 || true
-make_bundle 20260103T000000Z
-pull ZKB_PULL_KEEP=2 || true
-n=$(ls "$local_dir"/zk-bridge-proofs-*.tar.gz | wc -l | tr -d ' ')
-if [ "$n" -eq 2 ] && [ ! -e "$local_dir/zk-bridge-proofs-20260101T000000Z.tar.gz" ] && [ ! -e "$local_dir/zk-bridge-proofs-20260101T000000Z.tar.gz.sha256" ]; then pass "retention keeps the newest 2 (and drops the .sha256)"; else fail "retention (kept $n)"; fi
+pull || status=$?
+if [ "$status" -eq 0 ] && diff -r "$remote" "$lm" >/dev/null && grep -q 'verified against 20261101T033000Z.json' "$local_dir/pull.log"; then pass "the first pull copies the whole mirror and verifies the newest manifest"; else fail "first pull (status $status): $(tail -3 "$local_dir/pull.log")"; fi
+if grep -q -- '--ignore-existing.*storage-proofs/' "$T/rsync.log" && ! grep -qE -- '--delete.*:/var/backups/zk-bridge/proofs/mirror/(storage-proofs|light-client-proofs|evidence|conflicts)/' "$T/rsync.log" \
+  && grep -q -- '--ignore-existing --delete.*mirror/beacon-states/' "$T/rsync.log" && grep -q -- '--ignore-existing --delete.*mirror/snapshots/' "$T/rsync.log" && grep -q -- '--ignore-existing --delete.*mirror/manifests/' "$T/rsync.log"; then
+  pass "records: --ignore-existing, never --delete; beacon states, snapshots, manifests: --ignore-existing --delete"
+else
+  fail "rsync options: $(tr '\n' '|' <"$T/rsync.log")"
+fi
+if grep -q -- '--rsync-path=flock -s -w 3600 /var/backups/zk-bridge/proofs/.lock rsync' "$T/rsync.log"; then pass "each rsync waits for a running export (shared flock on the server's lock)"; else fail "no remote lock"; fi
+if [ -f "$local_dir/zk-bridge-proofs-20261030T033000Z.tar.gz" ] && grep -q '1 bundle(s) of the old format stay' "$local_dir/pull.log"; then pass "the old tar.gz bundles are left alone"; else fail "old bundles"; fi
+if [ -n "$(find "$local_dir" "$lm" -maxdepth 0 -perm 0700 | sed -n 2p)" ]; then pass "the local mirror is private to this user (0700 directories)"; else fail "local mirror modes: $(ls -ld "$local_dir" "$lm")"; fi
 
-# A real bundle lists hundreds of files with long paths. The check that every file is listed must not fail on a long list (a `grep -q` at
+# The next day: the server pruned a state, a snapshot and its first manifest, lost a record, and added new files.
+ls -li "$lm/beacon-states/$state2" | awk '{print $1}' >"$T/inode-1"
+rm "$remote/beacon-states/$state1" "$remote/snapshots/20261101T033000Z.sqlite" "$remote/manifests/20261101T033000Z.json"
+lost=$(cd "$remote" && ls evidence/p/first-to-second/)
+rm "$remote/evidence/p/first-to-second/$lost"
+state3=11155111/000000000300-0x$(printf 'c%.0s' $(seq 1 64)).ssz
+put "beacon-states/$state3" state-3
+put snapshots/20261102T033000Z.sqlite db-2
+record light-client-proofs/p/first-to-second/1-2-0xff '{"lc":1}'
+write_manifest 20261102T033000Z
+status=0
+pull || status=$?
+ls -li "$lm/beacon-states/$state2" | awk '{print $1}' >"$T/inode-2"
+if [ "$status" -eq 0 ] && [ ! -e "$lm/beacon-states/$state1" ] && [ ! -e "$lm/snapshots/20261101T033000Z.sqlite" ] && [ ! -e "$lm/manifests/20261101T033000Z.json" ] \
+  && [ -f "$lm/beacon-states/$state3" ] && [ -f "$lm/snapshots/20261102T033000Z.sqlite" ] && [ -n "$(ls "$lm/light-client-proofs/p/first-to-second/")" ]; then
+  pass "a pull deletes what the server pruned and fetches what is new"
+else
+  fail "second pull (status $status): $(tail -3 "$local_dir/pull.log")"
+fi
+if [ -f "$lm/evidence/p/first-to-second/$lost" ] && grep -q "kept: evidence/p/first-to-second/$lost" "$local_dir/pull.log"; then pass "a record the server no longer has is kept here, and logged"; else fail "lost record: $(tail -5 "$local_dir/pull.log")"; fi
+if grep -q 'beacon-states: 1 file(s) deleted here' "$local_dir/pull.log"; then pass "the deletions are logged"; else fail "deletions not logged"; fi
+if cmp -s "$T/inode-1" "$T/inode-2"; then pass "a file that is here already is not fetched again"; else fail "existing file replaced"; fi
+
+# A pull that meets an export half way: a file of the newest manifest is not here; one more pull fixes it.
+state4=11155111/000000000400-0x$(printf 'd%.0s' $(seq 1 64)).ssz
+put "beacon-states/$state4" state-4
+write_manifest 20261103T033000Z
+status=0
+pull FAKE_SKIP_ONCE=beacon-states || status=$?
+if [ "$status" -eq 0 ] && [ -f "$lm/beacon-states/$state4" ] && grep -q 'pulling again' "$local_dir/pull.log"; then pass "a file of the manifest that is missing after a pull gets one more pull"; else fail "retry (status $status): $(tail -3 "$local_dir/pull.log")"; fi
+
+# A file here whose content differs from the manifest fails the run and is left as it is (--ignore-existing never
+# replaces it; a person looks).
+printf 'corrupt\n' >"$lm/beacon-states/$state2"
+status=0
+pull || status=$?
+if [ "$status" -ne 0 ] && [ "$(cat "$lm/beacon-states/$state2")" = corrupt ] && grep -q "differs from the manifest: beacon-states/$state2" "$local_dir/pull.log"; then pass "a file that differs from the manifest fails the run and is left alone"; else fail "corrupt file (status $status)"; fi
+cp "$remote/beacon-states/$state2" "$lm/beacon-states/$state2"
+
+# A real manifest lists thousands of files with long paths. The check must not fail on a long list (a `grep -q` at
 # the end of a pipe ends early, and under pipefail the SIGPIPE of the writer turned a match into a failure).
-big=$T/w-big
-mkdir -p "$big/files"
-{
-  printf '{"formatVersion":1,"files":{'
-  for i in $(seq 1 3000); do
-    printf 'file %s\n' "$i" >"$big/files/f$i.json"
-    [ "$i" -eq 1 ] || printf ','
-    printf '"files/f%s.json":{"sha256":"%s","bytes":1}' "$i" "$(sha "$big/files/f$i.json")"
-  done
-  printf '}}\n'
-} >"$big/manifest.json"
-tar -czf "$remote/zk-bridge-proofs-20260103T120000Z.tar.gz" -C "$big" .
-printf '%s  zk-bridge-proofs-20260103T120000Z.tar.gz\n' "$(sha "$remote/zk-bridge-proofs-20260103T120000Z.tar.gz")" >"$remote/zk-bridge-proofs-20260103T120000Z.tar.gz.sha256"
+for i in $(seq 1 3000); do printf 'file %s\n' "$i" >"$remote/storage-proofs/369/0xabc/$i-0x$(printf 'e%.0s' $(seq 1 64)).json"; done
+write_manifest 20261104T033000Z
 status=0
-pull ZKB_PULL_KEEP=5 || status=$?
-if [ "$status" -eq 0 ] && [ -f "$local_dir/zk-bridge-proofs-20260103T120000Z.tar.gz" ]; then pass "a bundle that lists 3000 files passes the manifest check"; else fail "large bundle (status $status): $(tail -1 "$local_dir/pull.log")"; fi
+pull || status=$?
+if [ "$status" -eq 0 ] && grep -q 'verified against 20261104T033000Z.json: 3006 file(s)' "$local_dir/pull.log"; then pass "a manifest that lists 3000 files passes the check"; else fail "large manifest (status $status): $(tail -1 "$local_dir/pull.log")"; fi
 
-make_bundle 20260104T000000Z tamper
+# The hook gets the mirror and the newest manifest.
+printf '#!/bin/sh\necho "$1 $2" >"%s/hook.out"\n' "$T" >"$T/hook"
+chmod +x "$T/hook"
+pull ZKB_PULL_HOOK="$T/hook" || true
+if [ "$(cat "$T/hook.out" 2>/dev/null)" = "$lm $lm/manifests/20261104T033000Z.json" ]; then pass "the hook gets the mirror and the newest manifest"; else fail "hook: $(cat "$T/hook.out" 2>/dev/null)"; fi
+
+# No manifest on the server: the run fails.
+rm -f "$remote"/manifests/*.json
 status=0
-pull ZKB_PULL_KEEP=5 || status=$?
-if [ "$status" -ne 0 ] && [ ! -e "$local_dir/zk-bridge-proofs-20260104T000000Z.tar.gz" ] && [ -z "$(ls -A "$local_dir/.incoming" 2>/dev/null)" ]; then pass "a bundle whose file differs from its manifest is rejected and deleted"; else fail "tampered bundle (status $status)"; fi
-make_bundle 20260105T000000Z
-printf 'corrupt\n' >>"$remote/zk-bridge-proofs-20260105T000000Z.tar.gz"
-status=0
-pull ZKB_PULL_KEEP=5 || status=$?
-if [ "$status" -ne 0 ] && [ ! -e "$local_dir/zk-bridge-proofs-20260105T000000Z.tar.gz" ]; then pass "a bundle that fails its .sha256 is rejected and deleted"; else fail "bad sha256 (status $status)"; fi
-if ls "$local_dir"/pull.log >/dev/null 2>&1 && ! grep -q 'fakehost.*://' "$local_dir/pull.log"; then pass "log written, hosts only"; else fail "log"; fi
+pull || status=$?
+if [ "$status" -ne 0 ] && grep -q 'the mirror has no manifest' "$local_dir/pull.log"; then pass "a mirror without a manifest fails the run"; else fail "no manifest (status $status)"; fi
+if ! grep -q '://' "$local_dir/pull.log" && grep -q 'from fakehost' "$local_dir/pull.log"; then pass "log written, host alias only"; else fail "log"; fi
 
 printf '%d failure(s)\n' "$FAILURES"
 [ "$FAILURES" -eq 0 ]

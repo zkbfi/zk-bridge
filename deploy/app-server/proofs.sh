@@ -1,64 +1,90 @@
 #!/usr/bin/env bash
-# Exports and imports the durable proof archive of the zkb.fi app server. Run it as root on the server.
+# Keeps the durable proof archive of the zkb.fi app server in a private mirror, and restores it. Run it as root on the
+# server.
 #
-#   proofs.sh export                    # a nightly bundle (zk-bridge-proofs-export.timer runs this)
-#   proofs.sh import <bundle.tar.gz>    # restore a bundle into this server (a fresh one, or a running one)
-#   proofs.sh verify [<bundle.tar.gz>]  # re-check a bundle (default: the newest) against the chain
-#   proofs.sh publish [--dry-run]       # build the PUBLIC proof tree and add it to IPFS (see "publish" below)
+#   proofs.sh export                       # update the mirror (zk-bridge-proofs-export.timer runs this every night)
+#   proofs.sh import [<mirror dir> | <bundle.tar.gz>]   # restore into this server (default: this server's mirror)
+#   proofs.sh verify [<mirror dir>]        # the newest manifest, then every storage proof against the chain
+#   proofs.sh publish [--dry-run]          # build the PUBLIC proof tree and add it to IPFS (see "publish" below)
+#   proofs.sh bundle                       # one tar.gz of the whole mirror, for a one-off copy
 #
-# A bundle is one tar.gz with a .sha256 file next to it, in /var/backups/zk-bridge/proofs:
-#   manifest.json                        sha256 and size of every file below, the commit, the host
-#   archive/*.ndjson                     the proof_archive schema of Postgres (storage proofs, light client proofs,
-#                                        message evidence, conflicts), written by zk-bridge-proof-archive.mjs
-#   backend/backend.sqlite               a consistent snapshot of the backend's database
-#   files/runner/proof-cache/            the runner's opening proof cache
-#   files/runner/beacon-states/          the beacon states of the runner and of the backend (plain files)
-#   files/backend/beacon-states/
+# Owner, 2026-11-02: "ok, so lets plan to do 30 days of everything".
 #
-# export: copies the held files, snapshots the SQLite file, takes the cache and the backend's proofs into the archive
-# (so every night's bundle holds everything the server has seen), exports the archive, writes the manifest, packs, and
-# keeps the newest ZKB_PROOFS_KEEP (14) bundles. A conflict that the archive records (a different value for a key it
-# already holds) is a warning here, not a failure.
+# The mirror is /var/backups/zk-bridge/proofs/mirror (ZKB_PROOFS_MIRROR). It is PRIVATE: it keeps the whole records,
+# with source hosts and backend job ids. One file per record, named by its content, written once and never again:
+#   storage-proofs/<chain>/<account>/<block>-<block hash>.<sha256>.json        never deleted
+#   light-client-proofs/<pair>/<direction>/<start>-<new>-<proof hash>.<sha256>.json   never deleted
+#   evidence/<pair>/<direction>/<message id>-<body sha256>.<sha256>.json       never deleted
+#   conflicts/conflict.<sha256>.json         the archive's conflict reports    never deleted
+#   beacon-states/<chain>/<slot>-<root>.ssz|.summary   from the runner and the backend; kept ZKB_PROOFS_RETENTION_DAYS
+#   snapshots/<stamp>.sqlite                 the backend's database, one a night; kept ZKB_PROOFS_RETENTION_DAYS
+#   manifests/<stamp>.json                   sha256 and size of every other file, one a night; kept the same
+# <sha256> is the hash of the file itself, so a record that a later source filled in (a posting transaction) is a new
+# file beside the old one. A file whose name exists with other content is never overwritten: the run reports it as
+# ERROR and fails at its end, after everything else is done. The window (30 days) counts from each beacon state's slot
+# time (the genesis time in the state, the chain's slot length), not from the file time; snapshots and manifests count
+# from the stamp in their names.
 #
-# import: checks the .sha256 and the manifest, then loads the archive (it never overwrites a different value: it
-# records the conflict). Each file is copied only when it is missing; an identical file is skipped, and a file that
-# exists with other content is REPORTED and left alone. The backend's SQLite file is installed only when the server has
-# none; otherwise its proofs are taken into the archive instead. A second import of the same bundle changes nothing.
-# Exit 3 when there were conflicts, after everything else was done.
+# export: snapshots the backend's SQLite file (rollback journal, so the archive user opens it read only), copies the
+# runner's proof cache and both services' beacon states into a staging directory (their copies 0644: the services keep
+# 0600 files, and the archive user reads the copies), takes the cache and the backend's proofs into the archive, writes
+# every archive row as a record file, adds the beacon states and the snapshot, prunes the window, and writes the
+# manifest of the day. The services keep 3 days of states, so the nightly run copies each state long before they prune
+# it. A state the services hold and the mirror lacks afterwards is a WARNING. Then the off-site hook and, when switched
+# on, the publication.
 #
-# verify: checks the .sha256 and the manifest, then re-verifies every storage proof against the state root of its block
-# (an RPC, from /etc/zk-bridge/indexer/indexer.env). Exit 3 when a proof is invalid.
+# import: with a directory (or no argument: this server's mirror), checks it against its newest manifest (a file the
+# manifest does not list is taken too; a record file whose content does not match its name is refused), upserts every
+# record file into the archive (it never overwrites a different value: it records the conflict), ingests the newest
+# snapshot and installs it when the server has no backend database, and gives each service the 16 newest beacon states
+# of each chain (copied only when missing; a file that exists with other content is reported and left alone). With a
+# tar.gz: a mirror bundle (proofs.sh bundle) is unpacked and imported the same way; an old nightly bundle
+# (zk-bridge-proofs-<stamp>.tar.gz, archive/*.ndjson) is still imported as before. Exit 3 when there were conflicts.
 #
-# publish: a separate PUBLIC tree, never the backup bundle. The archive CLI writes the allowlisted tree (storage-proofs,
-# light-client-proofs, evidence, README.txt); this script adds the beacon states of the runner and the backend (only
-# files named <12-digit slot>-0x<64 hex>.ssz or .summary under a numeric chain directory; the two sources are merged,
-# identical files once, a same-name file with other content stops the run), the CLI's sanitizer (public-check) must pass,
-# and manifest.json is written. --dry-run stops there, leaves the tree and prints its path for review. Without it the
-# tree is added to the local IPFS node through its HTTP RPC API (POST /api/v0/add?cid-version=1&pin=true&pin-name=...,
-# one multipart part per file and directory, as kubo's own client sends a tree; see ipfs_rpc), a line
+# verify: the newest manifest must match the mirror exactly (a WARNING when it is not today's), then every storage proof
+# is verified again against the state root of its block (an RPC, from /etc/zk-bridge/indexer/indexer.env). Exit 3 when
+# a proof is invalid, 1 when the mirror does not match.
+#
+# bundle: zk-bridge-mirror-<stamp>.tar.gz and its .sha256 in /var/backups/zk-bridge/proofs, for a one-off copy. Delete
+# it when it has been copied; the nightly run does not make or keep any.
+#
+# publish: a separate PUBLIC tree, never the mirror. The archive CLI writes the allowlisted tree (storage-proofs,
+# light-client-proofs, evidence, README.txt); this script adds the beacon states of the mirror (the whole window; only
+# files named <12-digit slot>-0x<64 hex>.ssz or .summary under a numeric chain directory), the CLI's sanitizer
+# (public-check) must pass, and manifest.json is written. --dry-run stops there, leaves the tree and prints its path for
+# review. Without it the tree is added to the local IPFS node through its HTTP RPC API (POST
+# /api/v0/add?cid-version=1&pin=true&pin-name=..., one multipart part per file and directory, as kubo's own client
+# sends a tree; see ipfs_rpc), a line
 #   <UTC time> <cid> <file count> <commit>
-# is appended to ipfs-cids.log (append-only, in the backup directory), the newest ZKB_PROOFS_IPFS_KEEP (7) publications
-# stay pinned and older CIDs from that log are unpinned (a CID that is not in the log is never touched), and the gateway
-# form of the address is printed. export runs publish after its own work only when ZKB_PROOFS_PUBLISH=1 (the unit reads
-# /etc/zk-bridge/proofs/proofs.env; off by default). The first publication is run by hand, after review of a dry run.
+# is appended to ipfs-cids.log (append-only, in the backup directory), the newest ZKB_PROOFS_IPFS_KEEP (2) publications
+# stay pinned (each holds the whole window) and older CIDs from that log are unpinned (a CID that is not in the log is
+# never touched), a garbage collection of the node frees what was unpinned, and the gateway form of the address is
+# printed. export runs publish after its own work only when
+# ZKB_PROOFS_PUBLISH=1 (the unit reads /etc/zk-bridge/proofs/proofs.env; off by default). The first publication is run
+# by hand, after review of a dry run.
 #
 # Exit codes: 0 ok, 1 failure, 2 usage, 3 finished with conflicts (import) or invalid proofs (verify).
 #
 # The archive CLI runs as zkb_indexer in a transient unit (systemd-run) with the indexer's environment files: the
-# files are read by systemd, and this script never prints or copies them. The service users' files are read and written
-# as those users (runuser); root creates and deletes nothing inside a service's state directory.
-# /var/backups/zk-bridge/proofs is 0711: the CLI user and the service users must reach the staging and extraction
-# directories inside it, and cannot list it. The bundles are 0640 root:root.
+# files are read by systemd, and this script never prints or copies them. The mirror belongs to zkb_indexer (the CLI
+# writes and prunes in it): its top directory is 0750, the directories in it 0755 and the files 0644, and each run sets
+# that again. The service users' files are read and written as those users (runuser); root creates and deletes nothing
+# inside a service's state directory. /var/backups/zk-bridge/proofs is 0711: the CLI user and the service users must
+# reach the staging directories inside it, and cannot list it.
 #
-# Overrides, for tests (defaults in brackets):
+# Settings (environment; /etc/zk-bridge/proofs/proofs.env for the nightly unit; defaults in brackets):
+#   ZKB_PROOFS_MIRROR [<ZKB_PROOFS_DIR>/mirror]   another place needs ReadWritePaths in the unit (a drop-in)
+#   ZKB_PROOFS_RETENTION_DAYS [30]   ZKB_PROOFS_PUBLISH [0]   ZKB_PROOFS_IPFS_KEEP [2]
+#   ZKB_PROOFS_IPFS_GC [1]   after an unpin, a garbage collection of the node (it keeps pinned content only)
+#   ZKB_PROOFS_GATEWAY_HOST [gateway.zkb.fi]
+#   ZKB_PROOFS_OFFSITE_HOOK  one executable for the off-site copy (default: those in ZKB_PROOFS_OFFSITE_DIR
+#                             [/etc/zk-bridge/proofs/offsite.d]), called as `<hook> <mirror dir> <manifest of the day>`
+# Overrides, for tests:
 #   ZKB_PROOFS_DIR [/var/backups/zk-bridge/proofs]  ZKB_BACKEND_STATE [/var/lib/zk-bridge-backend]
 #   ZKB_RUNNER_STATE [/var/lib/zk-bridge-runner]    ZKB_RELEASE_DIR [/opt/zk-bridge/current]
-#   ZKB_INDEXER_ENV [/etc/zk-bridge/indexer/indexer.env]   ZKB_PROOFS_KEEP [14]   ZKB_PROOFS_STAMP [UTC now]
+#   ZKB_INDEXER_ENV [/etc/zk-bridge/indexer/indexer.env]   ZKB_PROOFS_STAMP [UTC now]
 #   ZKB_PROOFS_CLI        a command prefix that replaces the systemd-run call (the command and its options follow)
 #   ZKB_PROOFS_AS         an executable called as `$ZKB_PROOFS_AS <user> <command...>` instead of `runuser -u <user> --`
-#   ZKB_PROOFS_OFFSITE_HOOK  one executable for the off-site copy (default: those in ZKB_PROOFS_OFFSITE_DIR
-#                             [/etc/zk-bridge/proofs/offsite.d]), called as `<hook> <bundle> <sha256 file>`
-#   ZKB_PROOFS_PUBLISH [0]  ZKB_PROOFS_IPFS_KEEP [7]  ZKB_PROOFS_GATEWAY_HOST [gateway.zkb.fi]
 #   ZKB_IPFS_PATH [/var/lib/zk-bridge-ipfs/repo]   the node's repository: its config (API secret) and api file (address)
 #   ZKB_PROOFS_UNPRIVILEGED=1   no root check, no chown
 set -euo pipefail
@@ -69,16 +95,21 @@ die() { log "$*"; exit 1; }
 BACKEND_STATE=${ZKB_BACKEND_STATE:-/var/lib/zk-bridge-backend}
 RUNNER_STATE=${ZKB_RUNNER_STATE:-/var/lib/zk-bridge-runner}
 OUT_DIR=${ZKB_PROOFS_DIR:-/var/backups/zk-bridge/proofs}
+MIRROR=${ZKB_PROOFS_MIRROR:-$OUT_DIR/mirror}
+RETENTION_DAYS=${ZKB_PROOFS_RETENTION_DAYS:-30}
 RELEASE_DIR=${ZKB_RELEASE_DIR:-/opt/zk-bridge/current}
 INDEXER_ENV=${ZKB_INDEXER_ENV:-/etc/zk-bridge/indexer/indexer.env}
-KEEP=${ZKB_PROOFS_KEEP:-14}
 IPFS_REPO=${ZKB_IPFS_PATH:-/var/lib/zk-bridge-ipfs/repo}
-IPFS_KEEP=${ZKB_PROOFS_IPFS_KEEP:-7}
+IPFS_KEEP=${ZKB_PROOFS_IPFS_KEEP:-2}
 GATEWAY_HOST=${ZKB_PROOFS_GATEWAY_HOST:-gateway.zkb.fi}
 CID_LOG=$OUT_DIR/ipfs-cids.log
 OFFSITE_DIR=${ZKB_PROOFS_OFFSITE_DIR:-/etc/zk-bridge/proofs/offsite.d}
 DATABASE_URL_VALUE='postgresql:///zkb_indexer?host=/var/run/postgresql'
 CLI_SCRIPT=$RELEASE_DIR/explorer/indexer/bin/zk-bridge-proof-archive.mjs
+# The directories of the mirror: records (never pruned), then those that keep the window.
+MIRROR_DIRS="storage-proofs light-client-proofs evidence conflicts beacon-states snapshots manifests"
+# How many beacon states of each chain an import gives each service (the services' own cache keeps 16).
+STATES_PER_CHAIN=16
 
 TMP_DIRS=("")
 CLI_RC=0
@@ -114,7 +145,7 @@ cli() {
       -p "Environment=DATABASE_URL=$DATABASE_URL_VALUE" \
       -p "WorkingDirectory=$RELEASE_DIR/explorer/indexer" \
       -p NoNewPrivileges=yes -p PrivateTmp=yes -p ProtectHome=yes -p ProtectSystem=strict \
-      -p "ReadWritePaths=$OUT_DIR" \
+      -p "ReadWritePaths=$OUT_DIR -$MIRROR" \
       -- /usr/bin/node "$CLI_SCRIPT" "$@"
   fi
 }
@@ -191,11 +222,12 @@ prepare_out_dir() {
   [ -d "$OUT_DIR" ] || { mkdir -p "$OUT_DIR"; chmod 0711 "$OUT_DIR"; }
 }
 
-# Two runs never overlap.
+# Two runs never overlap. A pull of the mirror (deploy/operator/pull-proofs.sh) holds a shared lock on the same file
+# while it copies, so a run waits for it (up to an hour) instead of failing.
 take_lock() {
   if command -v flock >/dev/null 2>&1; then
     exec 9>"$OUT_DIR/.lock"
-    flock -n 9 || die "another run holds the lock"
+    flock -w 3600 9 || die "another run (or a pull) has held the lock for an hour"
   else
     # No flock (macOS, tests): a directory is the lock.
     mkdir "$OUT_DIR/.lock.d" 2>/dev/null || die "another run holds the lock ($OUT_DIR/.lock.d)"
@@ -203,12 +235,14 @@ take_lock() {
   fi
 }
 
-# offsite_upload <bundle> <sha256 file>: ships a finished bundle off the server. This is the place where a Cloudflare R2
+# offsite_upload <mirror> <manifest>: ships the mirror off the server. This is the place where a Cloudflare R2
 # (S3-compatible) uploader plugs in later: drop an executable into /etc/zk-bridge/proofs/offsite.d/ (run in name order),
-# or point ZKB_PROOFS_OFFSITE_HOOK at one. Each is called as `<hook> <bundle> <sha256 file>` as root, with this script's
-# environment. With no hook it does nothing. Returns non-zero when a hook failed; the caller decides what that means.
+# or point ZKB_PROOFS_OFFSITE_HOOK at one. Each is called as `<hook> <mirror dir> <manifest of the day>` as root, with
+# this script's environment; the manifest lists every file and its sha256, and files are never rewritten, so a hook
+# uploads what the remote side lacks. With no hook it does nothing. Returns non-zero when a hook failed; the caller
+# decides what that means.
 offsite_upload() {
-  local bundle=$1 sum=$2 hook failed=0 ran=0
+  local mirror=$1 manifest=$2 hook failed=0 ran=0
   local hooks=""
   if [ -n "${ZKB_PROOFS_OFFSITE_HOOK:-}" ]; then
     hooks=$ZKB_PROOFS_OFFSITE_HOOK
@@ -221,7 +255,7 @@ offsite_upload() {
   while IFS= read -r hook; do
     [ -n "$hook" ] || continue
     ran=$((ran + 1))
-    if [ -x "$hook" ] && "$hook" "$bundle" "$sum"; then
+    if [ -x "$hook" ] && "$hook" "$mirror" "$manifest"; then
       log "off-site hook $(basename "$hook"): ok"
     else
       log "ERROR: off-site hook $(basename "$hook") failed"
@@ -230,7 +264,7 @@ offsite_upload() {
   done <<EOF_HOOKS
 $hooks
 EOF_HOOKS
-  [ "$ran" -gt 0 ] || log "no off-site hook: the bundle stays on this server"
+  [ "$ran" -gt 0 ] || log "no off-site hook: the mirror stays on this server (and on the machines that pull it)"
   return "$failed"
 }
 
@@ -304,6 +338,7 @@ ipfs_add_tree() {
 }
 
 # Copies the beacon state files of one service into $2/<chainId>/ by their owner. Only plain files with the exact names.
+# The name test is bash, not a pipe into `grep -q` (under pipefail an early exit of grep can fail the writer).
 COPY_BEACON='
 umask 022
 src=$1 dest=$2
@@ -315,7 +350,7 @@ for chain in "$src"/*/; do
   for f in "$chain"*; do
     [ -f "$f" ] && [ ! -L "$f" ] || continue
     name=$(basename "$f")
-    if printf "%s\n" "$name" | grep -Eq "^[0-9]{12}-0x[0-9a-f]{64}\.(ssz|summary)$"; then
+    if [[ $name =~ ^[0-9]{12}-0x[0-9a-f]{64}\.(ssz|summary)$ ]]; then
       mkdir -p "$dest/$c"
       # install, not cp: cp keeps the 0600 of the service directory, and the archive user reads the copy.
       install -m 0644 "$f" "$dest/$c/$name"
@@ -343,50 +378,32 @@ cmd_publish() {
   case $IPFS_KEEP in '' | *[!0-9]* | 0) die "ZKB_PROOFS_IPFS_KEEP must be a positive number, not '$IPFS_KEEP'" ;; esac
   umask 022
   local stamp=${ZKB_PROOFS_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}
-  local work=$OUT_DIR/.publish-$stamp tree src
+  local work=$OUT_DIR/.publish-$stamp tree
   tree=$work/tree
-  src=$work/src
   rm -rf "$OUT_DIR"/.publish-*
   mkdir "$work"
   chmod 0755 "$work"
-  mkdir -p "$tree" "$src/runner" "$src/backend"
-  chmod 0755 "$tree" "$src" "$src/runner" "$src/backend"
-  own zkb_runner:zkb_runner "$src/runner"
-  own zkb_backend:zkb_backend "$src/backend"
+  mkdir -p "$tree"
+  chmod 0755 "$tree"
   own zkb_indexer:zkb_indexer "$tree"
 
   must_cli public-export --out "$tree"
 
-  # The beacon states, from both services; each by its owner.
-  local out
-  if [ -d "$RUNNER_STATE/beacon-states" ]; then
-    out=$(as_user zkb_runner bash -c "$COPY_BEACON" _ "$RUNNER_STATE/beacon-states" "$src/runner") || die "reading the runner's beacon states failed"
-    log "runner beacon states: $out"
-  else
-    log "no $RUNNER_STATE/beacon-states: skipped"
-  fi
-  if [ -d "$BACKEND_STATE/beacon-states" ]; then
-    out=$(as_user zkb_backend bash -c "$COPY_BEACON" _ "$BACKEND_STATE/beacon-states" "$src/backend") || die "reading the backend's beacon states failed"
-    log "backend beacon states: $out"
-  else
-    log "no $BACKEND_STATE/beacon-states: skipped"
-  fi
-  local who f rel dest merged=0
-  for who in runner backend; do
+  # The beacon states of the mirror: the whole window, which the nightly export has just pruned. Only plain files with
+  # the exact names; the mirror took each one once, so there is nothing to merge.
+  local f rel merged=0
+  if [ -d "$MIRROR/beacon-states" ]; then
     while IFS= read -r -d '' f; do
-      rel=${f#"$src/$who"/}
-      dest=$tree/beacon-states/$rel
-      if [ -e "$dest" ]; then
-        cmp -s "$f" "$dest" || die "beacon state $rel exists in both services with different content: not publishing"
-        continue
-      fi
-      mkdir -p "$(dirname "$dest")"
-      install -m 0644 "$f" "$dest"
+      rel=${f#"$MIRROR/beacon-states"/}
+      [[ $rel =~ ^[0-9]+/[0-9]{12}-0x[0-9a-f]{64}\.(ssz|summary)$ ]] || continue
+      mkdir -p "$tree/beacon-states/${rel%/*}"
+      install -m 0644 "$f" "$tree/beacon-states/$rel"
       merged=$((merged + 1))
-    done < <(find "$src/$who" -type f -print0)
-  done
+    done < <(find "$MIRROR/beacon-states" -type f -print0)
+  else
+    log "no $MIRROR/beacon-states: the tree has no beacon states"
+  fi
   log "beacon states in the tree: $merged"
-  rm -rf "$src"
 
   # The public manifest leaves out the host name. The sanitizer runs last, so it checks the manifest too.
   local -a mlog=()
@@ -409,7 +426,8 @@ cmd_publish() {
   printf '%s %s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$cid" "$files" "$(release_commit)" >>"$CID_LOG"
   chmod 0644 "$CID_LOG"
 
-  # Retention: the newest IPFS_KEEP distinct CIDs of the log stay pinned. Only CIDs from the log are ever unpinned.
+  # Retention: the newest IPFS_KEEP distinct CIDs of the log stay pinned. Each holds the whole window, and the node
+  # stores a block once, so two cost about one window plus a day. Only CIDs from the log are ever unpinned.
   local old total=0 i=0 unpinned=0 c
   old=$(awk '$2 ~ /^[A-Za-z0-9]+$/ {last[$2] = NR} END {for (c in last) print last[c], c}' "$CID_LOG" | sort -n | awk '{print $2}')
   total=$(printf '%s\n' "$old" | grep -c . || true)
@@ -424,6 +442,12 @@ cmd_publish() {
   done <<EOF_OLD
 $old
 EOF_OLD
+  # The node keeps unpinned blocks until a garbage collection (the daemon runs without --enable-gc), so the beacon
+  # states that left the window would stay on disk. Only pinned content survives it: the release archives and the
+  # publications kept above.
+  if [ "$unpinned" -gt 0 ] && [ "${ZKB_PROOFS_IPFS_GC:-1}" = 1 ]; then
+    if ipfs_rpc "/api/v0/repo/gc?quiet=true" >/dev/null; then log "ipfs repo gc: done"; else log "WARNING: ipfs repo gc failed"; fi
+  fi
   log "published $files files; $((total - unpinned)) publication(s) of the log pinned, $unpinned unpinned"
   printf 'cid: %s\n' "$cid"
   printf 'files: %s\n' "$files"
@@ -431,23 +455,68 @@ EOF_OLD
   rm -rf "$work"
 }
 
+# --- the mirror -------------------------------------------------------------------------------------------------------
+check_days() {
+  case $RETENTION_DAYS in '' | *[!0-9]* | 0) die "ZKB_PROOFS_RETENTION_DAYS must be a positive number, not '$RETENTION_DAYS'" ;; esac
+}
+
+# The mirror's directories, all owned by the archive user (it writes and prunes there): the top 0750 (root and the
+# archive user only), the directories in it 0755 and the files 0644. Files copied in by hand (an rsync onto a fresh
+# server) are brought into line too.
+prepare_mirror() {
+  local d
+  mkdir -p "$MIRROR"
+  for d in $MIRROR_DIRS; do mkdir -p "$MIRROR/$d"; done
+  own -R zkb_indexer:zkb_indexer "$MIRROR"
+  chmod 0750 "$MIRROR"
+  find "$MIRROR" -mindepth 1 -type d ! -perm 0755 -exec chmod 0755 {} +
+  find "$MIRROR" -type f ! -perm 0644 -exec chmod 0644 {} +
+}
+
+# copy_beacon <user> <state directory> <destination>: the beacon states of one service, copied by their owner.
+copy_beacon() {
+  local user=$1 src=$2 dest=$3 out
+  if [ -d "$src" ]; then
+    out=$(as_user "$user" bash -c "$COPY_BEACON" _ "$src" "$dest") || die "reading the beacon states of $user failed"
+    log "$user beacon states: $out"
+  else
+    log "no $src: skipped"
+  fi
+}
+
+# mirror_step <command> [options]: one mirror command of the CLI. Exit 3 (a name that exists with other content; the
+# file was left alone) is counted in MIRROR_CONFLICTS and the run goes on; any other failure stops it.
+MIRROR_CONFLICTS=0
+mirror_step() {
+  run_cli "$@"
+  case $CLI_RC in
+    0) ;;
+    3)
+      MIRROR_CONFLICTS=$((MIRROR_CONFLICTS + 1))
+      log "ERROR: $1 found a file that exists with other content (named above); it was not overwritten"
+      ;;
+    *) die "$1 failed (exit $CLI_RC)" ;;
+  esac
+}
+
 # --- export -------------------------------------------------------------------------------------------------------
 cmd_export() {
   local stamp=${ZKB_PROOFS_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}
   local stage=$OUT_DIR/.staging-$stamp
-  local bundle=$OUT_DIR/zk-bridge-proofs-$stamp.tar.gz
-  local warnings=0 snapshot=0 cache=0
-  case $KEEP in '' | *[!0-9]* | 0) die "ZKB_PROOFS_KEEP must be a positive number, not '$KEEP'" ;; esac
-  [ ! -e "$bundle" ] || die "$bundle exists already"
+  local warnings=0 snapshot=0 cache=0 out missing
+  check_days
+  case $stamp in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;; *) die "the stamp must look like 20261102T033000Z, not '$stamp'" ;; esac
+  [ ! -e "$MIRROR/manifests/$stamp.json" ] || die "the manifest $stamp exists already"
+  prepare_mirror
 
   rm -rf "$OUT_DIR"/.staging-* "$OUT_DIR"/.extract-*
   mkdir "$stage"
   TMP_DIRS+=("$stage")
   chmod 0755 "$stage"
-  mkdir -p "$stage/backend" "$stage/files/runner" "$stage/files/backend"
-  chmod 0755 "$stage/backend" "$stage/files" "$stage/files/runner" "$stage/files/backend"
-  own zkb_backend:zkb_backend "$stage/backend" "$stage/files/backend"
-  own zkb_runner:zkb_runner "$stage/files/runner"
+  mkdir "$stage/snapshots" "$stage/proof-cache" "$stage/beacon-runner" "$stage/beacon-backend"
+  chmod 0755 "$stage/snapshots" "$stage/proof-cache" "$stage/beacon-runner" "$stage/beacon-backend"
+  own zkb_backend:zkb_backend "$stage/snapshots" "$stage/beacon-backend"
+  own zkb_runner:zkb_runner "$stage/proof-cache" "$stage/beacon-runner"
 
   # The SQLite file: a consistent snapshot (the online backup API), taken by the backend's user.
   if [ -f "$BACKEND_STATE/backend.sqlite" ]; then
@@ -455,80 +524,60 @@ cmd_export() {
     # The copy keeps the WAL mode of the source, and a read-only open of a WAL file must write its -shm next to it, which
     # the archive user cannot. A rollback-journal copy opens read only with no writes.
     as_user zkb_backend sh -c 'umask 022; sqlite3 -cmd ".timeout 5000" "$1" ".backup \"$2\"" && exec sqlite3 "$2" "PRAGMA journal_mode=DELETE;" >/dev/null' _ \
-      "$BACKEND_STATE/backend.sqlite" "$stage/backend/backend.sqlite" || die "the SQLite snapshot failed"
+      "$BACKEND_STATE/backend.sqlite" "$stage/snapshots/$stamp.sqlite" || die "the SQLite snapshot failed"
     snapshot=1
   else
-    log "no $BACKEND_STATE/backend.sqlite: no SQLite snapshot in this bundle"
+    log "no $BACKEND_STATE/backend.sqlite: no snapshot tonight"
   fi
 
-  # The files the services hold, as plain trees the archive user can read.
+  # The files the services hold, as plain files the archive user can read.
   if [ -d "$RUNNER_STATE/proof-cache" ]; then
     log "copying the runner's proof cache"
-    copy_tree zkb_runner "$RUNNER_STATE/proof-cache" "$stage/files/runner/proof-cache" 022
+    copy_tree zkb_runner "$RUNNER_STATE/proof-cache" "$stage/proof-cache" 022
     cache=1
   else
     log "no $RUNNER_STATE/proof-cache: skipped"
   fi
-  if [ -d "$RUNNER_STATE/beacon-states" ]; then
-    log "copying the runner's beacon states"
-    copy_tree zkb_runner "$RUNNER_STATE/beacon-states" "$stage/files/runner/beacon-states" 022
-  else
-    log "no $RUNNER_STATE/beacon-states: skipped"
-  fi
-  if [ -d "$BACKEND_STATE/beacon-states" ]; then
-    log "copying the backend's beacon states"
-    copy_tree zkb_backend "$BACKEND_STATE/beacon-states" "$stage/files/backend/beacon-states" 022
-  else
-    log "no $BACKEND_STATE/beacon-states: skipped"
-  fi
+  copy_beacon zkb_runner "$RUNNER_STATE/beacon-states" "$stage/beacon-runner"
+  copy_beacon zkb_backend "$BACKEND_STATE/beacon-states" "$stage/beacon-backend"
 
-  # The archive user writes <stage>/archive and manifest.json.
-  own zkb_indexer:zkb_indexer "$stage"
+  # Everything the server holds goes into the archive first; the record files come from the archive.
   must_cli migrate
   if [ "$cache" -eq 1 ]; then
-    run_cli ingest-cache --dir "$stage/files/runner/proof-cache"
+    run_cli ingest-cache --dir "$stage/proof-cache"
     case $CLI_RC in 0) ;; 3) warnings=$((warnings + 1)); log "WARNING: ingest-cache found conflicts (recorded in the archive)" ;; *) die "ingest-cache failed (exit $CLI_RC)" ;; esac
   fi
   if [ "$snapshot" -eq 1 ]; then
-    run_cli ingest-backend --sqlite "$stage/backend/backend.sqlite"
+    run_cli ingest-backend --sqlite "$stage/snapshots/$stamp.sqlite"
     case $CLI_RC in 0) ;; 3) warnings=$((warnings + 1)); log "WARNING: ingest-backend found conflicts (recorded in the archive)" ;; *) die "ingest-backend failed (exit $CLI_RC)" ;; esac
   fi
-  must_cli export --out "$stage"
-  # The backup manifest records the newest publication of the public tree, when there is one.
+
+  # The mirror: records, beacon states, the snapshot; then the window; then the manifest of the day.
+  mirror_step mirror-write --dir "$MIRROR"
+  mirror_step mirror-add --dir "$MIRROR" --from "$stage/beacon-runner" --to beacon-states
+  mirror_step mirror-add --dir "$MIRROR" --from "$stage/beacon-backend" --to beacon-states
+  if [ "$snapshot" -eq 1 ]; then mirror_step mirror-add --dir "$MIRROR" --from "$stage/snapshots" --to snapshots; fi
+  out=$(cli mirror-prune --dir "$MIRROR" --days "$RETENTION_DAYS" --held "$stage/beacon-runner,$stage/beacon-backend") || die "mirror-prune failed"
+  printf '%s\n' "$out"
+  missing=$(printf '%s\n' "$out" | sed -n 's/.*"heldMissing":\([0-9][0-9]*\).*/\1/p' | tail -n 1)
+  if [ "${missing:-0}" -gt 0 ]; then
+    warnings=$((warnings + 1))
+    log "WARNING: $missing beacon state(s) that the services hold are not in the mirror (named above)"
+  fi
   local -a mlog=()
   if [ -f "$CID_LOG" ]; then mlog=(--ipfs-log "$CID_LOG"); fi
-  must_cli manifest-write --dir "$stage" --commit "$(release_commit)" ${mlog[@]+"${mlog[@]}"}
-
-  # Pack. The bundle appears under its name only when complete.
-  umask 027
-  tar -czf "$bundle.part" -C "$stage" .
-  mv "$bundle.part" "$bundle"
-  own root:root "$bundle"
-  chmod 0640 "$bundle"
-  printf '%s  %s\n' "$(sha256_of "$bundle")" "$(basename "$bundle")" >"$bundle.sha256"
-  own root:root "$bundle.sha256"
-  chmod 0640 "$bundle.sha256"
+  must_cli mirror-manifest --dir "$MIRROR" --stamp "$stamp" --commit "$(release_commit)" --days "$RETENTION_DAYS" ${mlog[@]+"${mlog[@]}"}
   rm -rf "$stage"
+  local manifest=$MIRROR/manifests/$stamp.json
 
-  # Retention: the newest KEEP bundles stay.
-  local -a all
-  local f total=0 i=0 pruned=0
-  for f in "$OUT_DIR"/zk-bridge-proofs-*.tar.gz; do
-    [ -e "$f" ] || continue
-    all[total]=$f
-    total=$((total + 1))
-  done
-  for f in ${all[@]+"${all[@]}"}; do
-    if [ $((total - i)) -gt "$KEEP" ]; then
-      rm -f "$f" "$f.sha256"
-      pruned=$((pruned + 1))
-    fi
-    i=$((i + 1))
-  done
+  # The nightly bundles of the old format are left as they are; the mirror replaces them.
+  local old=0 f
+  for f in "$OUT_DIR"/zk-bridge-proofs-*.tar.gz; do [ -e "$f" ] && old=$((old + 1)); done
+  [ "$old" -eq 0 ] || log "$old nightly bundle(s) of the old format are still in $OUT_DIR; nothing makes new ones (delete them once the mirror is pulled)"
 
-  # Off-site copy, after the local bundle and the retention are done: a failing hook fails the run, not the bundle.
+  # Off-site copy, after the mirror is complete: a failing hook fails the run, not the mirror.
   local offsite=0
-  offsite_upload "$bundle" "$bundle.sha256" || offsite=1
+  offsite_upload "$MIRROR" "$manifest" || offsite=1
 
   # The public tree, only when switched on (ZKB_PROOFS_PUBLISH=1 in /etc/zk-bridge/proofs/proofs.env). A failure here
   # fails the run after everything above is done. A subshell, so that its die does not skip the lines below.
@@ -537,14 +586,17 @@ cmd_export() {
     ( cmd_publish ) || published=1
   fi
 
-  log "done: $((total - pruned)) bundle(s) kept, $pruned pruned, $warnings warning(s)"
-  printf 'bundle: %s\n' "$bundle"
-  [ "$offsite" -eq 0 ] || die "the off-site upload failed; the bundle is complete on this server"
-  [ "$published" -eq 0 ] || die "the publication failed; the bundle is complete on this server"
+  log "done: $warnings warning(s), $MIRROR_CONFLICTS step(s) that met a file with other content"
+  printf 'mirror: %s\n' "$MIRROR"
+  printf 'manifest: %s\n' "$manifest"
+  [ "$MIRROR_CONFLICTS" -eq 0 ] || die "the mirror holds a file whose name came again with other content (ERROR lines above); nothing was overwritten"
+  [ "$offsite" -eq 0 ] || die "the off-site upload failed; the mirror is complete on this server"
+  [ "$published" -eq 0 ] || die "the publication failed; the mirror is complete on this server"
 }
 
 # --- shared by import and verify ------------------------------------------------------------------------------------
-# extract_bundle <bundle>: checks the .sha256, unpacks into a fresh directory (EXTRACTED) and checks the manifest.
+# extract_bundle <bundle>: checks the .sha256, unpacks into a fresh directory (EXTRACTED). A nightly bundle of the old
+# format (manifest.json) is checked against its manifest here; a mirror bundle is checked by its caller.
 extract_bundle() {
   local bundle=$1 want got
   [ -f "$bundle" ] || die "no such bundle: $bundle"
@@ -566,39 +618,113 @@ extract_bundle() {
   fi
   find "$EXTRACTED" -type d -exec chmod 0755 {} +
   find "$EXTRACTED" -type f -exec chmod 0644 {} +
-  run_cli manifest-check --dir "$EXTRACTED"
-  [ "$CLI_RC" -eq 0 ] || die "$bundle fails its manifest (exit $CLI_RC)"
+  if [ -f "$EXTRACTED/manifest.json" ]; then
+    run_cli manifest-check --dir "$EXTRACTED"
+    [ "$CLI_RC" -eq 0 ] || die "$bundle fails its manifest (exit $CLI_RC)"
+  elif [ ! -d "$EXTRACTED/manifests" ]; then
+    die "$bundle is neither a mirror bundle nor a nightly bundle"
+  fi
+}
+
+# resolve_input [<mirror dir> | <bundle.tar.gz>]: sets INPUT (a directory) and INPUT_KIND (mirror or legacy).
+resolve_input() {
+  local arg=${1:-$MIRROR}
+  if [ -d "$arg" ]; then
+    INPUT=$arg
+    INPUT_KIND=mirror
+    if [ "$arg" = "$MIRROR" ]; then prepare_mirror; fi
+    return
+  fi
+  [ -f "$arg" ] || die "no mirror or bundle at $arg"
+  extract_bundle "$arg"
+  INPUT=$EXTRACTED
+  if [ -f "$INPUT/manifest.json" ]; then INPUT_KIND=legacy; else INPUT_KIND=mirror; fi
+}
+
+# newest <directory> <glob suffix>: the last file name of the directory in name order (the stamps sort by time).
+newest() {
+  local f last=""
+  for f in "$1"/*"$2"; do [ -f "$f" ] && last=$(basename "$f"); done
+  printf '%s' "$last"
 }
 
 # --- import -------------------------------------------------------------------------------------------------------
 cmd_import() {
-  local bundle=${1:-} conflicts=0 state
-  [ -n "$bundle" ] || usage
-  extract_bundle "$bundle"
-  local dir=$EXTRACTED
+  resolve_input "${1:-}"
+  if [ "$INPUT_KIND" = legacy ]; then import_legacy "$INPUT"; else import_mirror "$INPUT"; fi
+}
 
+# finish_import <conflicts>
+finish_import() {
+  log "done: $1 conflict(s)"
+  printf 'conflicts: %s\n' "$1"
+  if [ "$1" -gt 0 ]; then
+    log "files and archive entries that differ were NOT overwritten; see the lines above"
+    exit 3
+  fi
+}
+
+# install_snapshot <sqlite file>: its proofs go into the archive; it becomes the backend's database only when the
+# server has none. Adds to IMPORT_CONFLICTS.
+install_snapshot() {
+  local state
+  run_cli ingest-backend --sqlite "$1"
+  case $CLI_RC in 0) ;; 3) IMPORT_CONFLICTS=$((IMPORT_CONFLICTS + 1)); log "ingest-backend recorded conflicts" ;; *) die "ingest-backend failed (exit $CLI_RC)" ;; esac
+  state=$(as_user zkb_backend bash -c "$INSTALL_IF_MISSING" _ "$1" "$BACKEND_STATE/backend.sqlite") || die "installing backend.sqlite failed"
+  if [ "$state" = installed ]; then
+    log "backend.sqlite: this server had none, the snapshot is installed"
+  else
+    log "backend.sqlite: left as it is; its proofs went into the archive instead"
+  fi
+}
+
+IMPORT_CONFLICTS=0
+import_mirror() {
+  local dir=$1 snapshot stage entry user dest
+  run_cli mirror-check --dir "$dir"
+  [ "$CLI_RC" -eq 0 ] || die "$dir does not match its newest manifest (exit $CLI_RC)"
+  must_cli migrate
+  run_cli mirror-import --dir "$dir"
+  case $CLI_RC in 0) ;; 3) IMPORT_CONFLICTS=$((IMPORT_CONFLICTS + 1)); log "the archive recorded conflicts" ;; *) die "mirror-import failed (exit $CLI_RC)" ;; esac
+
+  snapshot=$(newest "$dir/snapshots" .sqlite)
+  if [ -n "$snapshot" ]; then
+    log "newest snapshot: $snapshot"
+    install_snapshot "$dir/snapshots/$snapshot"
+  else
+    log "the mirror has no snapshot"
+  fi
+
+  # The newest beacon states of each chain, staged readable by the archive user, then taken by each service's user.
+  stage=$(mktemp -d "$OUT_DIR/.extract-XXXXXX")
+  TMP_DIRS+=("$stage")
+  chmod 0755 "$stage"
+  own zkb_indexer:zkb_indexer "$stage"
+  must_cli mirror-states --dir "$dir" --out "$stage/states" --newest "$STATES_PER_CHAIN"
+  for entry in "zkb_runner $RUNNER_STATE/beacon-states" "zkb_backend $BACKEND_STATE/beacon-states"; do
+    read -r user dest <<<"$entry"
+    if [ -d "$stage/states" ]; then
+      log "beacon states -> $dest"
+      copy_tree "$user" "$stage/states" "$dest" 077
+      IMPORT_CONFLICTS=$((IMPORT_CONFLICTS + TREE_CONFLICTS))
+    fi
+  done
+  finish_import "$IMPORT_CONFLICTS"
+}
+
+# A nightly bundle of the old format (archive/*.ndjson, backend/backend.sqlite, files/...), unpacked into $1.
+import_legacy() {
+  local dir=$1 tree user rel dest
   must_cli migrate
   if [ -d "$dir/archive" ]; then
     run_cli import --in "$dir"
-    case $CLI_RC in 0) ;; 3) conflicts=$((conflicts + 1)); log "the archive recorded conflicts" ;; *) die "import failed (exit $CLI_RC)" ;; esac
+    case $CLI_RC in 0) ;; 3) IMPORT_CONFLICTS=$((IMPORT_CONFLICTS + 1)); log "the archive recorded conflicts" ;; *) die "import failed (exit $CLI_RC)" ;; esac
   else
     log "the bundle has no archive directory"
   fi
-
-  if [ -f "$dir/backend/backend.sqlite" ]; then
-    run_cli ingest-backend --sqlite "$dir/backend/backend.sqlite"
-    case $CLI_RC in 0) ;; 3) conflicts=$((conflicts + 1)); log "ingest-backend recorded conflicts" ;; *) die "ingest-backend failed (exit $CLI_RC)" ;; esac
-    state=$(as_user zkb_backend bash -c "$INSTALL_IF_MISSING" _ "$dir/backend/backend.sqlite" "$BACKEND_STATE/backend.sqlite") \
-      || die "installing backend.sqlite failed"
-    if [ "$state" = installed ]; then
-      log "backend.sqlite: this server had none, the snapshot is installed"
-    else
-      log "backend.sqlite: left as it is; its proofs went into the archive instead"
-    fi
-  fi
+  if [ -f "$dir/backend/backend.sqlite" ]; then install_snapshot "$dir/backend/backend.sqlite"; fi
 
   # Each entry: user, path in the bundle, destination.
-  local tree n user rel dest
   for tree in "zkb_runner files/runner/proof-cache $RUNNER_STATE/proof-cache" \
     "zkb_runner files/runner/beacon-states $RUNNER_STATE/beacon-states" \
     "zkb_backend files/backend/beacon-states $BACKEND_STATE/beacon-states"; do
@@ -606,33 +732,32 @@ cmd_import() {
     if [ -d "$dir/$rel" ]; then
       log "files: $rel -> $dest"
       copy_tree "$user" "$dir/$rel" "$dest" 077
-      n=$TREE_CONFLICTS
-      conflicts=$((conflicts + n))
+      IMPORT_CONFLICTS=$((IMPORT_CONFLICTS + TREE_CONFLICTS))
     else
       log "files: $rel is not in the bundle"
     fi
   done
-
-  log "done: $conflicts conflict(s)"
-  printf 'conflicts: %s\n' "$conflicts"
-  if [ "$conflicts" -gt 0 ]; then
-    log "files and archive entries that differ were NOT overwritten; see the lines above"
-    exit 3
-  fi
+  finish_import "$IMPORT_CONFLICTS"
 }
 
 # --- verify -------------------------------------------------------------------------------------------------------
 cmd_verify() {
-  local bundle=${1:-} f
-  if [ -z "$bundle" ]; then
-    for f in "$OUT_DIR"/zk-bridge-proofs-*.tar.gz; do
-      [ -e "$f" ] && bundle=$f
-    done
-    [ -n "$bundle" ] || die "no bundle in $OUT_DIR"
-    log "newest bundle: $bundle"
+  resolve_input "${1:-}"
+  if [ "$INPUT_KIND" = legacy ]; then
+    run_cli verify-storage --in "$INPUT"
+  else
+    local manifest
+    manifest=$(newest "$INPUT/manifests" .json)
+    [ -n "$manifest" ] || die "$INPUT has no manifest"
+    case $manifest in
+      "$(date -u +%Y%m%d)"T*) log "newest manifest: $manifest (today)" ;;
+      *) log "WARNING: the newest manifest is $manifest, not today's: did tonight's export run?" ;;
+    esac
+    run_cli mirror-check --dir "$INPUT" --exact
+    [ "$CLI_RC" -eq 0 ] || die "the mirror does not match $manifest (exit $CLI_RC)"
+    log "the mirror matches $manifest"
+    run_cli verify-storage --mirror "$INPUT"
   fi
-  extract_bundle "$bundle"
-  run_cli verify-storage --in "$EXTRACTED"
   if [ "$CLI_RC" -ne 0 ]; then
     log "verify-storage exit $CLI_RC: at least one proof did not verify"
     exit "$CLI_RC"
@@ -640,8 +765,27 @@ cmd_verify() {
   log "all storage proofs verify"
 }
 
+# --- bundle -------------------------------------------------------------------------------------------------------
+# One tar.gz of the whole mirror, for a one-off copy (another machine, a disk). Nothing makes or keeps these nightly.
+cmd_bundle() {
+  local stamp=${ZKB_PROOFS_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}
+  local bundle=$OUT_DIR/zk-bridge-mirror-$stamp.tar.gz
+  [ -d "$MIRROR/manifests" ] || die "no mirror at $MIRROR: run proofs.sh export first"
+  [ ! -e "$bundle" ] || die "$bundle exists already"
+  umask 027
+  tar -czf "$bundle.part" -C "$MIRROR" .
+  mv "$bundle.part" "$bundle"
+  own root:root "$bundle"
+  chmod 0640 "$bundle"
+  printf '%s  %s\n' "$(sha256_of "$bundle")" "$(basename "$bundle")" >"$bundle.sha256"
+  own root:root "$bundle.sha256"
+  chmod 0640 "$bundle.sha256"
+  log "bundled the mirror; copy it, then delete it"
+  printf 'bundle: %s\n' "$bundle"
+}
+
 usage() {
-  log "usage: proofs.sh export | import <bundle.tar.gz> | verify [<bundle.tar.gz>] | publish [--dry-run]"
+  log "usage: proofs.sh export | import [<mirror dir> | <bundle.tar.gz>] | verify [<mirror dir>] | publish [--dry-run] | bundle"
   exit 2
 }
 
@@ -651,7 +795,7 @@ main() {
   exec </dev/null
   umask 022
   local cmd=${1:-}
-  case $cmd in export | import | verify | publish) ;; *) usage ;; esac
+  case $cmd in export | import | verify | publish | bundle) ;; *) usage ;; esac
   [ -n "${ZKB_PROOFS_UNPRIVILEGED:-}" ] || [ "$(id -u)" -eq 0 ] || die "run as root"
   trap cleanup EXIT
   prepare_out_dir
@@ -662,6 +806,7 @@ main() {
     import) cmd_import "$@" ;;
     verify) cmd_verify "$@" ;;
     publish) cmd_publish "$@" ;;
+    bundle) cmd_bundle ;;
   esac
 }
 

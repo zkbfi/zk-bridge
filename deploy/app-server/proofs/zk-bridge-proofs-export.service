@@ -1,6 +1,7 @@
-# Nightly export of the durable proof archive (deploy/app-server/proofs.sh): the held proofs and files go into the
-# archive, and one bundle zk-bridge-proofs-<stamp>.tar.gz (+ .sha256) lands in /var/backups/zk-bridge/proofs. The newest
-# 14 stay. Started by zk-bridge-proofs-export.timer. provision.sh installs both units; deploy.sh does not.
+# Nightly update of the private proof mirror (deploy/app-server/proofs.sh export): the held proofs and files go into
+# the archive, and /var/backups/zk-bridge/proofs/mirror gets the new record files, beacon states, a SQLite snapshot and
+# the manifest of the day; beacon states, snapshots and manifests older than 30 days are dropped. Started by
+# zk-bridge-proofs-export.timer. provision.sh installs both units; deploy.sh does not.
 #
 #   journalctl -u zk-bridge-proofs-export --since -1d
 #   systemctl list-units --failed 'zk-bridge-proofs-export*'
