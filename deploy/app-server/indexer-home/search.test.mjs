@@ -98,7 +98,7 @@ test("a light client, a bridge and a transfer link through the same builder as t
   await run("getPair()"); await settle();
   const head = page.headRow({ chainId: 943, trackedChainId: 11155111, initialized: true, storedHeadSlot: 100, updateCount: 0, lagSeconds: 10 }, null, 1000);
   assert.match(head, /<a href="https:\/\/next\.zkb\.fi\/#\/explore\/contract\/943\/0x2323232323232323232323232323232323232323">Open in Explore<\/a>/);
-  assert.match(head, /href="#lookup=0x2323232323232323232323232323232323232323"/);
+  assert.doesNotMatch(head, /href="#lookup=|>Indexer</); // this page does not link to itself
   assert.match(head, /href="https:\/\/status\.zkb\.fi\/#check=lightclient-first-to-second" target="_blank" rel="noreferrer">Status<\/a>/);
   assert.match(head, /PulseChain testnet scan/);
   const message = run(`xlinks({ type: "message", messageId: "${ID}", direction: "first-to-second" })`);
