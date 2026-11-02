@@ -153,8 +153,16 @@ hosts, fetch times and backend job ids. The public tree on IPFS is built separat
   state, a snapshot, a damaged record) is a **conflict**: the file is left as it is, the run logs `ERROR`, finishes
   everything else (manifest, hook, publication) and then exits 1.
 - **Owners and modes.** The mirror belongs to `zkb_indexer`, the archive CLI's user, which writes and prunes there. The
-  top directory is 0750 (root and the archive user only), the directories in it 0755, every file 0644. Each run sets
-  that again, so a file copied in by hand (an rsync onto a fresh server) is brought into line.
+  top directory is 0750 (root and the archive user only), the directories in it 0755, every file 0644. Root only
+  creates and hands over the top directory (in its own 0711 parent; a top directory that is a link is refused). The
+  modes inside are set by the archive user on what it owns, with `find -P` (links are never followed); entries of
+  another owner and links are reported and left alone.
+- **Root trusts nothing in the mirror.** The archive user can write it, so root never reads, chmods or chowns a path
+  inside it: the archive user streams a tar when root needs a copy (import, `bundle`, the public tree), and root checks
+  that copy (a directory only root can write) for links, special files and hard links. Root records the sha256 of each
+  day's manifest in `/var/backups/zk-bridge/proofs/manifests.sha256` (root:root 0644, in the root-owned 0711 backup
+  directory, appended to only), right after the CLI wrote it. Import, verify and the Mac pull use only a manifest whose
+  hash is in that list.
 - **What the services hold is copied, never moved.** The runner's proof cache and both services' beacon states are
   copied by their own users into a staging directory with `install -m 0644` or `cat` (never `cp`, which would keep the
   services' 0600 and leave the copies unreadable to the archive user). The SQLite snapshot is taken by the backend's user
@@ -198,7 +206,8 @@ The output ends with `mirror: <dir>` and `manifest: <file>`. Old nightly tarball
 `/var/backups/zk-bridge/proofs` are left alone and logged; nothing makes new ones. Delete them by hand once the mirror
 has been pulled.
 
-**Verify** checks the mirror against its newest manifest exactly (every listed file with its hash, no file unlisted,
+**Verify** checks that the newest manifest's sha256 is in `manifests.sha256`, then the mirror against that manifest
+exactly (every listed file with its hash, no file unlisted,
 every record file's content equal to the hash in its name), warns when that manifest is not today's, then reads each
 storage proof's block header by its hash from `EXPLORER_RPC_URL_<chainId>` (headers stay on every node) and checks the
 account proof against `stateRoot` and each storage proof against the account's `storageHash` (EIP-1186 Merkle Patricia
@@ -208,9 +217,12 @@ orphaned block).
 
 **Import** works into a fresh server:
 
-1. A directory (default: this server's mirror) is checked against its newest manifest. A listed file that is missing or
-   differs stops it; a file the manifest does not list is taken too (a copy may hold records the server lost), and a
-   record file whose content does not match its name counts as invalid.
+1. The input (a directory, by default this server's mirror read by the archive user, or an unpacked tar.gz) is copied
+   into a directory only root can write. A link, a special file or a hard link stops it. Its newest manifest must be in
+   `manifests.sha256`, or match `--manifest-sha256 <hex>` for a mirror from another server (its line in that server's
+   list, or in `~/zkb-backups/proofs/manifests.sha256` on the Mac). The other manifests leave the copy, and the copy
+   must match that manifest exactly: a missing, changed or unlisted file (a planted snapshot, say) stops the import
+   before anything is imported or installed.
 2. It migrates the schema and upserts every record file. A light client record whose slots or hash do not match its proof
    is refused as invalid, and so is evidence whose hash does not match its body. Versions of one record merge by the fill
    rule; two different non-null values are a conflict.
@@ -228,7 +240,8 @@ From the operator machine (venv of `docs/deploy-blue-green.md`):
 cd deploy/ansible
 ansible-playbook proofs.yml -e action=export      # export now, then pull the mirror to ~/zkb-backups/proofs/mirror
 ansible-playbook proofs.yml -e action=import      # restore the archive from the server's own mirror
-ansible-playbook proofs.yml -e action=import -e mirror=~/zkb-backups/proofs/mirror   # copy up what the server lacks, import
+ansible-playbook proofs.yml -e action=import -e mirror=~/zkb-backups/proofs/mirror [-e manifest_sha256=<hex>]
+                                                  # copied up into <backup dir>/incoming-mirror (root's), then imported
 ansible-playbook proofs.yml -e action=import -e bundle=<local zk-bridge-proofs-*.tar.gz or zk-bridge-mirror-*.tar.gz>
 ansible-playbook proofs.yml -e action=verify
 ansible-playbook proofs.yml -e action=publish -e dry_run=true
@@ -246,7 +259,8 @@ copies the mirror into `~/zkb-backups/proofs/mirror`:
   window; the deletions are counted in the log.
 - Each rsync holds a shared `flock` on the server's lock file, so it waits for a running export (and an export waits for
   it, up to an hour). rsync puts a file in place only when it is complete.
-- Then the newest manifest is checked: every listed file here with its sha256. A missing file (the pull met an export)
+- Then the newest manifest is checked: its own sha256 must be in the server's `manifests.sha256` (fetched to
+  `~/zkb-backups/proofs/manifests.sha256`), and every file it lists must be here with its sha256. A missing file (the pull met an export)
   gets one more pull; a file that differs fails the run and is left for a person to look at.
 - The mirror directories are 0700. The log is `~/zkb-backups/proofs/pull.log`. `ZKB_PULL_HOOK` runs after a good pull
   with `<mirror dir> <newest manifest>`.
@@ -256,7 +270,9 @@ copies the mirror into `~/zkb-backups/proofs/mirror`:
 - `--render` previews the agent and `--uninstall` removes it (the mirror stays).
 
 **Off-site hook (for Cloudflare R2 later):** after the manifest, `proofs.sh export` runs `ZKB_PROOFS_OFFSITE_HOOK`, or
-every executable in `/etc/zk-bridge/proofs/offsite.d/`, with `<mirror dir> <manifest of the day>`. Files are never
+every executable in `/etc/zk-bridge/proofs/offsite.d/`, with `<mirror dir> <manifest of the day>`. Hooks run as root
+and must read the mirror as `zkb_indexer` (`runuser -u zkb_indexer -- ...`), never as root, and check the manifest's
+sha256 against `manifests.sha256`. Files are never
 rewritten, so an uploader copies the names the remote side lacks (and may drop the pruned ones the manifest no longer
 lists). Without a hook it does nothing. A failing hook makes the run exit non-zero after the mirror is complete.
 
@@ -309,8 +325,11 @@ It reports the file and the reason, never the value. SSZ states are binary chain
 
 `proofs.sh publish` works like this:
 
-1. It builds the tree: the records from the archive, the beacon states from the mirror (only plain files with the exact
-   names; the mirror holds the window that the nightly export has just pruned), then the manifest and the sanitizer.
+1. The archive user builds the tree: the records from the archive, the beacon states from the mirror (only plain files
+   with the exact names, never a link; the mirror holds the window that the nightly export has just pruned), then the
+   manifest. Root takes it as a tar stream into a directory only root can write, refuses links, special files and hard
+   links there, and runs the sanitizer on that copy, which is what gets added. The sanitizer skips `.ssz` files, so a
+   key could only reach the tree through a link; that path is closed by construction.
 2. It adds the tree to the server's kubo node through the HTTP RPC API with curl: `POST
    /api/v0/add?cid-version=1&pin=true&pin-name=zkb-proofs-<stamp>`, one multipart part per directory and file, the way
    kubo's own client sends a tree. The API secret never goes on a command line. The node's user reads `AuthSecret` from

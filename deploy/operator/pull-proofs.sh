@@ -13,8 +13,9 @@
 #   - beacon-states/, snapshots/, manifests/: rsync --ignore-existing --delete. What the server pruned is deleted here
 #     too, and the count is logged.
 # Each rsync waits for a running export on the server (a shared flock on its lock file), and rsync puts each file in
-# place only when it is complete. Then the newest manifest is checked: every file it lists must be here with its
-# sha256. A file that is missing (the pull met an export half way) gets one more pull; a file whose content differs is a
+# place only when it is complete. Then the newest manifest is checked: its own sha256 must be in the server's
+# manifests.sha256 (fetched to ~/zkb-backups/proofs/manifests.sha256; root appends a line each night, outside the
+# mirror), and every file it lists must be here with its sha256. A file that is missing (the pull met an export half way) gets one more pull; a file whose content differs is a
 # failure (exit 1) and is left as it is for a person to look at. The log is ~/zkb-backups/proofs/pull.log (bounded to
 # about 1 MB, one rotated copy). It names the host alias only. No secret is read or written.
 #
@@ -27,6 +28,7 @@
 # Settings (environment; defaults in brackets):
 #   ZKB_PULL_HOST [zkbfi-app]   ZKB_PULL_REMOTE_DIR [/var/backups/zk-bridge/proofs/mirror]
 #   ZKB_PULL_REMOTE_LOCK [/var/backups/zk-bridge/proofs/.lock; empty: no lock]
+#   ZKB_PULL_REMOTE_TRUST [/var/backups/zk-bridge/proofs/manifests.sha256]
 #   ZKB_PULL_LOCAL_DIR [~/zkb-backups/proofs] (the mirror goes to <local dir>/mirror)   ZKB_PULL_LOG [<local dir>/pull.log]
 #   ZKB_PULL_NODE [node on PATH]   ZKB_PULL_RSYNC [rsync on PATH]   ZKB_PULL_SSH [ssh]
 #   ZKB_PULL_HOOK   an executable called as `<hook> <mirror dir> <newest manifest>` after a pull that verified (a copy to
@@ -36,6 +38,9 @@ set -euo pipefail
 HOST=${ZKB_PULL_HOST:-zkbfi-app}
 REMOTE_DIR=${ZKB_PULL_REMOTE_DIR:-/var/backups/zk-bridge/proofs/mirror}
 REMOTE_LOCK=${ZKB_PULL_REMOTE_LOCK-/var/backups/zk-bridge/proofs/.lock}
+# The server's list of the sha256 of each day's manifest: root writes it at export time, outside the mirror, so whoever
+# can write the mirror cannot change it.
+REMOTE_TRUST=${ZKB_PULL_REMOTE_TRUST:-/var/backups/zk-bridge/proofs/manifests.sha256}
 LOCAL_DIR=${ZKB_PULL_LOCAL_DIR:-$HOME/zkb-backups/proofs}
 MIRROR_DIR=$LOCAL_DIR/mirror
 LOG=${ZKB_PULL_LOG:-$LOCAL_DIR/pull.log}
@@ -85,6 +90,10 @@ for p, v in json.load(open(sys.argv[1]))["files"].items():
   die "neither node nor python3 is available to read the manifest (set ZKB_PULL_NODE)"
 }
 
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
+}
+
 # sha256_check <list>: checks "<sha256>  <path>" lines from the mirror directory; prints the paths that fail.
 sha256_check() {
   local out status=0
@@ -123,6 +132,9 @@ sync_once() {
         ;;
     esac
   done
+  # Last, so that it lists every manifest just fetched.
+  # shellcheck disable=SC2086
+  $RSYNC -t ${lock[@]+"${lock[@]}"} -e "$SSH $SSH_OPTS" "$HOST:$REMOTE_TRUST" "$LOCAL_DIR/manifests.sha256" || { log "rsync of manifests.sha256 from $HOST failed"; return 1; }
 }
 
 # verify: the newest manifest against the files here. Sets MISSING and CHANGED (counts) and NEWEST (its path).
@@ -133,6 +145,13 @@ verify() {
   NEWEST=""
   for name in "$MIRROR_DIR"/manifests/*.json; do [ -f "$name" ] && NEWEST=$name; done
   [ -n "$NEWEST" ] || { log "the mirror has no manifest"; MISSING=1; return 1; }
+  # The manifest itself must be one the server's root recorded.
+  sha=$(sha256_of "$NEWEST")
+  if ! grep -q "^$sha " "$LOCAL_DIR/manifests.sha256" 2>/dev/null; then
+    log "$(basename "$NEWEST") (sha256 $sha) is not in the server's manifests.sha256: it was changed after the export"
+    CHANGED=1
+    return 1
+  fi
   lines=$(manifest_lines "$NEWEST") || { log "$(basename "$NEWEST") cannot be read"; CHANGED=1; return 1; }
   list=$(mktemp "$LOCAL_DIR/.check-XXXXXX")
   listed=$(mktemp "$LOCAL_DIR/.listed-XXXXXX")

@@ -6,8 +6,9 @@
 #   ansible-playbook proofs.yml -e action=export                       # update the mirror now, then pull it here
 #   ansible-playbook proofs.yml -e action=export -e commit=<hash>      # ... with the scripts and the CLI of that release
 #   ansible-playbook proofs.yml -e action=import                       # restore the archive from the server's own mirror
-#   ansible-playbook proofs.yml -e action=import -e mirror=~/zkb-backups/proofs/mirror   # copy a mirror up, then import
+#   ansible-playbook proofs.yml -e action=import -e mirror=~/zkb-backups/proofs/mirror [-e manifest_sha256=<hex>]
 #   ansible-playbook proofs.yml -e action=import -e bundle=<local zk-bridge-proofs-<stamp>.tar.gz or zk-bridge-mirror-...>
+#                                                 [-e manifest_sha256=<hex>]
 #   ansible-playbook proofs.yml -e action=verify                       # the server's mirror: manifest, then the chain
 #   ansible-playbook proofs.yml -e action=verify -e bundle=<file name on the server>
 #   ansible-playbook proofs.yml -e action=publish -e dry_run=true      # build the PUBLIC tree only; prints its path
@@ -22,7 +23,10 @@
 # following the server's 30 day window, then the newest manifest checked here. The server also runs the export every
 # night (zk-bridge-proofs-export.timer). No tarball is made; `proofs.sh bundle` on the server makes one by hand.
 # import: without bundle or mirror, from the server's own mirror (after a lost database). With -e mirror=<local dir>, the
-# files the server's mirror lacks are copied up first (rsync --ignore-existing; nothing there is replaced). With
+# mirror is copied up into <backup dir>/incoming-mirror (root's, never the server's mirror, which the archive user can
+# write) and imported from there. The newest manifest of the input must be in the server's manifests.sha256, or match
+# -e manifest_sha256 (for a mirror from another server: its line in ~/zkb-backups/proofs/manifests.sha256, which the
+# daily pull keeps). With
 # -e bundle=<local tar.gz>, the bundle (and its .sha256, when it sits next to it) is copied into the backup directory and
 # imported: a mirror bundle, or a nightly bundle of the old format. Nothing that differs is overwritten. Exit 3 of the
 # import (conflicts) FAILS the play, after the summary is shown: the data that did not conflict is already in, and the
@@ -141,16 +145,16 @@
       vars:
         zkb_proofs_remote_bundle: "{{ zkb_proofs_dir }}/{{ (bundle | default('')) | basename }}"
       block:
-        - name: Copy the files the server's mirror lacks (nothing there is replaced)
+        - name: Copy the mirror up into a directory only root can write (never into the server's mirror)
           ansible.builtin.command:
             argv:
               - rsync
               - -rt
-              - --ignore-existing
+              - --delete
               - -e
               - ssh -o BatchMode=yes
               - "{{ mirror | expanduser }}/"
-              - "{{ inventory_hostname }}:{{ zkb_proofs_mirror }}/"
+              - "{{ inventory_hostname }}:{{ zkb_proofs_dir }}/incoming-mirror/"
           delegate_to: localhost
           become: false
           changed_when: true
@@ -185,7 +189,11 @@
 
         - name: Run the import
           ansible.builtin.command:
-            argv: "{{ ['bash', zkb_proofs_release ~ '/deploy/app-server/proofs.sh', 'import'] + ([zkb_proofs_remote_bundle] if bundle is defined else []) }}"
+            argv: >-
+              {{ ['bash', zkb_proofs_release ~ '/deploy/app-server/proofs.sh', 'import']
+                 + ([zkb_proofs_remote_bundle] if bundle is defined else [])
+                 + ([zkb_proofs_dir ~ '/incoming-mirror'] if mirror is defined else [])
+                 + (['--manifest-sha256', manifest_sha256] if manifest_sha256 is defined else []) }}
           environment:
             ZKB_RELEASE_DIR: "{{ zkb_proofs_release }}"
           register: zkb_proofs_run
