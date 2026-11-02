@@ -7,7 +7,7 @@
  *
  * 1. {@link readGateStatus} reads the gate and the latest block, and says whether the epoch of the next block needs a
  *    confirmation.
- * 2. {@link buildGateEvidence} takes the parent beacon block root of the latest block (the root that EIP-4788 stores
+ * 2. {@link buildGateEvidence} takes the parent beacon block root of the evidence block (two blocks behind the latest) (the root that EIP-4788 stores
  *    under the block's time), reads that header and a compact multiproof of its state from a beacon node, and builds the
  *    evidence. It checks the evidence with the contract's own rules (`checkConfirmEvidence` of `@zkb/core`) against the
  *    root that the beacon roots contract returns on chain, so a beacon node that lies cannot pass.
@@ -67,7 +67,23 @@ export const GATE_MODES = ["enforcing", "detect-beacon-roots", "detect-beacon-ro
 /** One of {@link GATE_MODES}. */
 export type GateMode = (typeof GATE_MODES)[number];
 
-/** What a sender needs to know of a gate. Every read names the same block. */
+/**
+ * How many blocks behind the latest one the evidence block is. The evidence names the parent beacon block root of one
+ * block, and the simulation must run on a node that has that block. Reading the latest block from one backend of a load
+ * balancer and simulating on another one block behind makes the root unavailable (`BeaconRootUnavailable`). Two blocks
+ * back, every backend that is at most two blocks behind has it. The cost: the header is older, so right after an epoch
+ * starts the answer is `wait` for two more slots.
+ */
+export const EVIDENCE_BLOCK_LAG = 2n;
+
+/** The block whose parent beacon block root the evidence proves. */
+export interface EvidenceBlock {
+  readonly number: bigint;
+  readonly timestamp: bigint;
+  readonly parentBeaconBlockRoot: Hex | null;
+}
+
+/** What a sender needs to know of a gate. The gate reads name `block`; the evidence names `evidenceBlock`. */
 export interface GateStatus {
   readonly gate: Address;
   readonly mode: GateMode;
@@ -82,7 +98,9 @@ export interface GateStatus {
   readonly genesisValidatorsRoot: Hex;
   readonly beaconRoots: Address;
   /** The latest block, whose state every read names. */
-  readonly block: { readonly number: bigint; readonly timestamp: bigint; readonly parentBeaconBlockRoot: Hex | null };
+  readonly block: EvidenceBlock;
+  /** The block that the evidence and its simulation are pinned to: {@link EVIDENCE_BLOCK_LAG} blocks before `block` (or `block` on a young chain). */
+  readonly evidenceBlock: EvidenceBlock;
   /** The epoch of the next block (one slot after the latest): the epoch that a send now lands in. */
   readonly epoch: bigint;
   /** Whether a send in `epoch` needs a confirmation first: the gate enforces, is not sealed, and has not confirmed `epoch`. */
@@ -100,6 +118,8 @@ export async function readGateStatus(input: { readonly client: GateChainClient; 
   const gate = normalizeAddress(input.gate);
   const block = await client.getBlock({ blockTag: "latest" });
   const blockNumber = block.number as bigint;
+  const evidenceNumber = blockNumber >= EVIDENCE_BLOCK_LAG ? blockNumber - EVIDENCE_BLOCK_LAG : blockNumber;
+  const evidence = evidenceNumber === blockNumber ? block : await client.getBlock({ blockNumber: evidenceNumber });
   const read = (functionName: string): Promise<unknown> => client.readContract({ address: gate, abi: beaconForkGateAbi, functionName, blockNumber } as never);
   const [mode, enforcing, sealed, confirmed, genesisTime, secondsPerSlot, slotsPerEpoch, genesisValidatorsRoot, beaconRoots] = await Promise.all(
     ["mode", "enforcing", "isSealed", "confirmedEpoch", "genesisTime", "secondsPerSlot", "slotsPerEpoch", "genesisValidatorsRoot", "beaconRoots"].map(read),
@@ -120,6 +140,7 @@ export async function readGateStatus(input: { readonly client: GateChainClient; 
     genesisValidatorsRoot: genesisValidatorsRoot as Hex,
     beaconRoots: normalizeAddress(beaconRoots as string),
     block: { number: blockNumber, timestamp: block.timestamp, parentBeaconBlockRoot: block.parentBeaconBlockRoot ?? null },
+    evidenceBlock: { number: evidenceNumber, timestamp: evidence.timestamp, parentBeaconBlockRoot: evidence.parentBeaconBlockRoot ?? null },
     epoch,
     needsConfirmation: (enforcing as boolean) && !(sealed as boolean) && confirmedEpoch !== epoch,
   };
@@ -247,7 +268,7 @@ export async function buildGateEvidence(input: {
   readonly status?: GateStatus;
 }): Promise<ReadyGateEvidence | WaitForGateHeader> {
   const status = input.status ?? (await readGateStatus(input));
-  const { block } = status;
+  const block = status.evidenceBlock;
   if (block.parentBeaconBlockRoot === null) throw new GateEvidenceError("no-parent-beacon-root", `block ${block.number} names no parent beacon block root: the chain has no EIP-4788`);
   // What the gate will read: the beacon roots contract, keyed by the time of the block.
   const answer = await input.client.call({ to: status.beaconRoots, data: padHex(numberToHex(block.timestamp), { size: 32 }), blockNumber: block.number });
@@ -301,15 +322,28 @@ export async function buildGateEvidence(input: {
  * found along its causes, as `revert data 0x...`.
  */
 export function describeRevert(error: unknown): string {
+  const { text: found, data } = walkRevert(error);
+  let text = found;
+  if (text === "") text = error instanceof Error ? error.name : "an error";
+  return `${text.split("\n")[0]!.slice(0, 200)}${data === null ? "" : ` (revert data ${data.slice(0, 10)})`}`;
+}
+
+/** The first short message and the first revert data along the causes of an error. */
+function walkRevert(error: unknown): { readonly text: string; readonly data: string | null } {
   let text = "";
   let data: string | null = null;
   for (let cause = error as { shortMessage?: unknown; name?: unknown; data?: unknown; cause?: unknown } | undefined, depth = 0; cause !== undefined && cause !== null && depth < 8; cause = cause.cause as typeof cause, depth += 1) {
     if (text === "" && typeof cause.shortMessage === "string") text = cause.shortMessage;
     if (data === null && typeof cause.data === "string" && /^0x[0-9a-fA-F]{8,}$/.test(cause.data)) data = cause.data;
   }
-  if (text === "") text = error instanceof Error ? error.name : "an error";
-  return `${text.split("\n")[0]!.slice(0, 200)}${data === null ? "" : ` (revert data ${data.slice(0, 10)})`}`;
+  return { text, data };
 }
+
+/** The selector of `BeaconRootUnavailable(uint256)`: the beacon roots contract has no root for the evidence's time on the node that simulated. */
+export const BEACON_ROOT_UNAVAILABLE_SELECTOR = "0xbad725f7";
+
+/** How long {@link ensureGateConfirmed} waits before it simulates again after `BeaconRootUnavailable`, in milliseconds. */
+export const SIMULATION_RETRY_MILLISECONDS = 2_000;
 
 /** The answer of {@link ensureGateConfirmed}. */
 export type GateConfirmation =
@@ -347,6 +381,8 @@ export async function ensureGateConfirmed(input: {
   readonly gate: Address;
   readonly beacon: BeaconProofSource;
   readonly account: Address;
+  /** Waits between the two simulations. Default: a timer. */
+  readonly sleep?: (milliseconds: number) => Promise<void>;
 }): Promise<GateConfirmation> {
   const status = await readGateStatus(input);
   if (status.sealed) return { kind: "sealed", epoch: status.epoch };
@@ -355,11 +391,21 @@ export async function ensureGateConfirmed(input: {
   const evidence = await buildGateEvidence({ ...input, status });
   if (evidence.kind === "wait") return evidence;
   const call = { to: evidence.to, data: evidence.data };
+  // Pinned to the evidence block, whose state holds the root of its time. A node that serves "latest" one block behind
+  // would miss it. If this node still lacks the root, it is catching up: wait a moment and ask once more.
+  const simulate = (): Promise<bigint> => input.client.estimateGas({ account: input.account, ...call, blockNumber: status.evidenceBlock.number });
+  const sleep = input.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   let gas: bigint;
   try {
-    gas = await input.client.estimateGas({ account: input.account, ...call });
+    try {
+      gas = await simulate();
+    } catch (error) {
+      if (walkRevert(error).data?.slice(0, 10).toLowerCase() !== BEACON_ROOT_UNAVAILABLE_SELECTOR) throw error;
+      await sleep(SIMULATION_RETRY_MILLISECONDS);
+      gas = await simulate();
+    }
   } catch (error) {
-    throw new GateEvidenceError("simulation-reverted", `confirm would revert: ${describeRevert(error)}`);
+    throw new GateEvidenceError("simulation-reverted", `confirm would revert (simulated at block ${status.evidenceBlock.number}): ${describeRevert(error)}`);
   }
   return { kind: "confirm", call, gas, epoch: evidence.epoch, forkVersion: evidence.forkVersion, shape: evidence.shape, validUntil: evidence.validUntil, evidence };
 }

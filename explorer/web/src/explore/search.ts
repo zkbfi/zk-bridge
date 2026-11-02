@@ -5,6 +5,7 @@
  */
 import type { Address } from "viem";
 import type { ChainConfig, FeedItem, PairConfig, TokenInfo } from "@terminal/model/types";
+import { classifyQuery, type QueryCandidateKind } from "@zk-bridge/shared";
 import { formatRoute } from "../app/route";
 import { nativeTokensOf } from "../bridge/bridge-model";
 import { CONTRACT_NAMES } from "./contract-names";
@@ -13,21 +14,29 @@ import type { ProofRow } from "./explore-source";
 /** What the band recognised. */
 export type Recognised = { readonly kind: "hash" | "address" | "partial" | "number" | "cid" | "symbol" | "empty" | "unknown"; readonly label: string };
 
+const RECOGNISED: Readonly<Record<QueryCandidateKind, Recognised>> = {
+  "message-id": { kind: "hash", label: "Transaction or message hash" },
+  transaction: { kind: "hash", label: "Transaction or message hash" },
+  address: { kind: "address", label: "Address" },
+  "hex-prefix": { kind: "partial", label: "Partial hash or address" },
+  proof: { kind: "number", label: "Slot, block or proof number" },
+  slot: { kind: "number", label: "Slot, block or proof number" },
+  block: { kind: "number", label: "Slot, block or proof number" },
+  cid: { kind: "cid", label: "Release CID" },
+  symbol: { kind: "symbol", label: "Token symbol" },
+};
+
 /**
- * What a typed text looks like.
+ * What a typed text looks like. The reading is the shared one (`classifyQuery` of @zkb/core), the one that the palette,
+ * the indexer's search route and the indexer's page use.
  *
  * @param text The text in the band.
  */
 export const recognise = (text: string): Recognised => {
-  const value = text.trim();
-  if (value === "") return { kind: "empty", label: "" };
-  if (/^0x[0-9a-fA-F]{64}$/.test(value)) return { kind: "hash", label: "Transaction or message hash" };
-  if (/^0x[0-9a-fA-F]{40}$/.test(value)) return { kind: "address", label: "Address" };
-  if (/^0x[0-9a-fA-F]{1,63}$/.test(value)) return { kind: "partial", label: "Partial hash or address" };
-  if (/^\d+$/.test(value)) return { kind: "number", label: "Slot, block or proof number" };
-  if (/^(bafy[a-z2-7]{20,}|Qm[1-9A-HJ-NP-Za-km-z]{40,})$/.test(value)) return { kind: "cid", label: "Release CID" };
-  if (/^[A-Za-z][A-Za-z0-9.]{0,15}$/.test(value)) return { kind: "symbol", label: "Token symbol" };
-  return { kind: "unknown", label: "Nothing recognised" };
+  const { query, candidates } = classifyQuery(text);
+  if (query === "") return { kind: "empty", label: "" };
+  const first = candidates[0];
+  return first === undefined ? { kind: "unknown", label: "Nothing recognised" } : RECOGNISED[first.kind];
 };
 
 /** One result. `match` is the part of `title` or `sub` that matched (underlined on the page). */

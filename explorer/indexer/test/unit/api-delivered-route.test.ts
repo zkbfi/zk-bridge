@@ -66,6 +66,17 @@ describe("GET /api/delivered", () => {
   });
 });
 
+describe("GET /api/delivered defaults", () => {
+  it("uses the clock without a usable now, and counts a token without values as zero", async () => {
+    serve([{ sourceChainId: 1, destinationChainId: 369, token, day: 1, week: 1, dayValue: null, weekValue: null }]);
+    const before = Math.floor(Date.now() / 1000);
+    const { body } = await get("/api/delivered?now=x");
+    expect(body.now).toBeGreaterThanOrEqual(before);
+    expect(body.directions[0].byToken[0]).toMatchObject({ value24h: "0", value7d: "0" });
+    expect((await get("/api/delivered")).status).toBe(200);
+  });
+});
+
 describe("GET /api/delivered timing", () => {
   it("asks per direction for the deliveries of the last 24 hours and of the last 7 days, and shows each window's stats", async () => {
     serve([], (sourceChainId, since) =>

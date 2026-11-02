@@ -22,7 +22,8 @@ const MOVE_KEYS: readonly string[] = ["ArrowDown", "ArrowUp", "Home", "End"];
 /**
  * The search and quick navigation, drawn like the token picker (owner: the search band is a burn streak edge to edge,
  * with a square close flush right). One field finds views, pairs, tokens, transfers by identifier or transaction hash,
- * addresses, actions and documentation. The arrow keys move through the results, Enter opens one, Escape closes.
+ * addresses, slots, blocks, proofs, releases, actions and documentation. A result of the shared search shows its links to the
+ * other pages (Explore, the indexer, the status page, the backend, the block explorers) under its text. The arrow keys move through the results, Enter opens one, Escape closes.
  *
  * @param props The recent results, the wallet state and the handlers.
  */
@@ -61,7 +62,7 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
         <input
           ref={inputReference}
           role="combobox"
-          aria-label="Search views, pairs, tokens, transfers, addresses, actions and docs"
+          aria-label="Search views, pairs, tokens, transfers, transactions, addresses, blocks, proofs, actions and docs"
           aria-expanded="true"
           aria-controls={listId}
           aria-autocomplete="list"
@@ -101,6 +102,27 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
                 >
                   <span className="zb-palette-title">{result.title}</span>
                   <span className="zb-palette-sub">{result.subtitle}</span>
+                  {result.links === undefined || result.links.length === 0 ? null : (
+                    <span className="zb-palette-xlinks" aria-label="The same on other pages">
+                      {result.links.map((link, index) => (
+                        <span key={`${link.surface}:${link.url}`}>
+                          {index === 0 ? null : " · "}
+                          <a
+                            href={link.url}
+                            {...(link.surface === "dapp" ? {} : { target: "_blank", rel: "noreferrer" })}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (link.surface !== "dapp") return;
+                              event.preventDefault();
+                              onSelect(result);
+                            }}
+                          >
+                            {link.label}
+                          </a>
+                        </span>
+                      ))}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>

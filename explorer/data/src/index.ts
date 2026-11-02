@@ -507,4 +507,42 @@ export {
   describeRevert,
   type GateConfirmation,
   ensureGateConfirmed,
+  EVIDENCE_BLOCK_LAG,
+  SIMULATION_RETRY_MILLISECONDS,
+  type EvidenceBlock,
 } from "./gate-evidence.js";
+
+// Chain metadata: native coin tickers and block explorers
+export { type ExplorerInfo, type ChainMetadata, CHAIN_METADATA, chainNameOf, nativeSymbolOfChain, explorerLinks } from "./chain-metadata.js";
+
+// Cross-referenced search: the resolver and the links of a result to every surface
+export {
+  SEARCH_SURFACES,
+  type SearchSurface,
+  type SearchLink,
+  type SearchSites,
+  ZKB_SITES,
+  DAPP_ORIGINS,
+  type SearchContractRole,
+  CONTRACT_ROLE_NAMES,
+  type SearchChain,
+  searchChainsFromPair,
+  type SearchDirection,
+  type SearchTarget,
+  type LinkContext,
+  directionTo,
+  lookupTextOf,
+  crossLinks,
+  SEARCH_RESULT_KINDS,
+  type SearchResultKind,
+  type SearchAddressType,
+  type SearchResult,
+  type SearchMessage,
+  type SearchHeadUpdate,
+  type SearchToken,
+  type SearchProof,
+  type SearchSources,
+  type SearchResolution,
+  type ResolveOptions,
+  resolve,
+} from "./search.js";

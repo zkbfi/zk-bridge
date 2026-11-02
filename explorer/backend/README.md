@@ -39,7 +39,7 @@ The backend reads no endpoint from the environment.
 | `rpcUrls` | The execution endpoint of each chain, by chain identifier. Both chains of the pair are required. |
 | `beaconUrls` | The beacon endpoint of each chain. The `requests` module needs both. |
 | `stateUrls` | Optional. More beacon APIs of each chain, by chain identifier, as a list. The prover asks them in order, only for states, when the beacon endpoint does not serve an old state. The prover also keeps every state it verified in `beacon-states/` next to `databasePath`, and reads the start state of a job from there first. |
-| `headerRpcUrls` | Optional. More execution RPCs of each chain, by chain identifier, as a list. The prover asks them in order, only for `debug_getRawHeader`, when the RPC endpoint lacks it (the `opening-proof` command needs the raw header of the other chain's block). Every header is checked against its block hash. |
+| `headerRpcUrls` | Optional. More execution RPCs of each chain, by chain identifier, as a list. The prover asks them in order, only for `debug_getRawHeader`, when the RPC endpoint lacks it (the `opening-proof` command needs the raw header of the other chain's block, and the `evidence` command the raw header of a Gloas source block). The prover file names them for both sides of a route (`source.header_rpc_urls`, `destination.header_rpc_urls`). Every header is checked against its block hash. |
 | `msgboardUrl` | The msgboard node. The `webhook` and `msgboard-indexer` modules need it. |
 | `indexerUrl` | The chain indexer. The `requests` module needs it and refuses to start without it. Without it the archive reports `degraded`. |
 | `acceptOracleProof` | Local testing only. See below. Default `false`. |
@@ -151,6 +151,14 @@ below the head is applied already.
   for it is refused as `duplicate`.
 - A proof whose slots another job already brought is not stored a second time: the webhook keeps the first, fails the
   later job with `the same proof is held already`, and logs `proof_duplicate`.
+
+### Copies in the indexer's proof archive
+
+The backend deletes a held proof once its job ends, and deletes the evidence of a message once the message is delivered.
+So the explorer indexer keeps a copy of each. It reads `GET /archive/proofs` on the backend's loopback port every few
+minutes: the board proof (`proofs`), every `webhook_proofs` row (posted or held), and every `evidence` row. No Caddy
+host passes this route on. The nightly export (`deploy/app-server/proofs.sh`) also takes the proofs from a snapshot of
+the SQLite file. See docs/proof-archive.md.
 
 ## Proving on finality
 

@@ -1,49 +1,89 @@
 /**
- * Searches that need the indexer: a message identifier, a transaction hash on either chain, and an address. It uses
- * the existing routes of the indexer only. An address needs no read to be a result: the address page reads its
- * transfers and balances itself.
+ * Searches that go beyond the local lists: a message identifier, a transaction hash, an address, the start of a hash, a
+ * beacon slot, a block, a proof, a release. They run through the shared search (`resolve` of @zkb/data), the same one
+ * that the indexer's search route and the indexer's page use, over the readers of this page: the indexer client and the
+ * tokens it has loaded. Every result carries its links to the other surfaces.
  */
-import type { PairConfig } from "@terminal/model/types";
+import type { Hex } from "viem";
+import type { PairConfig, TokenInfo } from "@terminal/model/types";
+import { classifyQuery, resolve, type SearchMessage, type SearchSources, type SearchToken } from "@zk-bridge/shared";
 import type { IndexerClient } from "../data/indexer-client";
-import { chainNameOf, type MessageDetail } from "../data/message-detail";
-import { addressResult, transferResult, type QueryShape, type SearchResult } from "./search-model";
+import type { MessageDetail } from "../data/message-detail";
+import { PALETTE_SITES, crossResult, searchChainsOf, type SearchResult } from "./search-model";
 
-/** What the indexer lookup found, and why it found nothing when it did not. */
+/** What the lookup found, and why it found nothing when it did not. */
 export type IdentifierSearchOutcome = {
   readonly results: readonly SearchResult[];
-  /** A sentence for the user when the lookup failed or found nothing. Null when there is a result. */
+  /** A sentence for the user when a lookup failed or found nothing sure. Null when there is a result. */
   readonly problem: string | null;
 };
 
-const subtitleOf = (detail: MessageDetail, pair: PairConfig, foundBy: "identifier" | "transaction"): string =>
-  `${detail.kind === "token" ? "Transfer" : "Message"} · ${detail.status.replace(/_/g, " ")} · ${chainNameOf(pair, detail.sourceChainId)} to ${chainNameOf(pair, detail.destinationChainId)} · found by ${foundBy}`;
+/** Whether the shared search has anything to look up for this text: a hash, an address, a number, a CID. A word is a local search. */
+export const isCrossReferenced = (query: string): boolean => {
+  const { candidates, unsupported } = classifyQuery(query);
+  return unsupported !== null || candidates.some((candidate) => candidate.kind !== "symbol");
+};
 
-const found = (detail: MessageDetail, pair: PairConfig, foundBy: "identifier" | "transaction"): IdentifierSearchOutcome => ({
-  results: [transferResult({ messageId: detail.id, subtitle: subtitleOf(detail, pair, foundBy) })],
-  problem: null,
+const messageOf = (detail: MessageDetail): SearchMessage => ({
+  messageId: detail.id,
+  kind: detail.kind,
+  status: detail.status,
+  sourceChainId: detail.sourceChainId,
+  destinationChainId: detail.destinationChainId,
+  sentTransactionHash: detail.sourceTransactionHash,
+  deliveredTransactionHash: detail.destinationTransactionHash,
+  symbol: detail.transfer?.sourceToken.symbol ?? null,
+});
+
+const tokenOf = (pair: PairConfig, token: TokenInfo): SearchToken => ({
+  chainId: (token.side === "first" ? pair.first : pair.second).chainId,
+  address: token.address,
+  symbol: token.symbol,
+  name: null,
 });
 
 /**
- * Looks up a query that is an address or a 32 byte hash.
+ * The readers of the shared search over this page's data.
  *
- * @param shape The classified query.
- * @param dependencies The indexer client and the pair.
+ * @param dependencies The indexer client, the pair and the tokens that the page has loaded.
  */
-export const searchIdentifiers = async (
-  shape: QueryShape,
-  dependencies: { readonly indexer: IndexerClient; readonly pair: PairConfig },
+export const paletteSources = (dependencies: { readonly indexer: IndexerClient; readonly pair: PairConfig; readonly tokens: readonly TokenInfo[] }): SearchSources => {
+  const { indexer, pair, tokens } = dependencies;
+  return {
+    sites: PALETTE_SITES,
+    chains: searchChainsOf(pair),
+    indexer: {
+      message: async (messageId) => {
+        const detail = await indexer.message(messageId as Hex);
+        return detail === null ? null : messageOf(detail);
+      },
+      messageByTransaction: async (hash) => {
+        const messageId = await indexer.findMessageByTransaction(hash as Hex);
+        const detail = messageId === null ? null : await indexer.message(messageId);
+        return detail === null ? null : messageOf(detail);
+      },
+      tokens: async () => tokens.map((token) => tokenOf(pair, token)),
+    },
+  };
+};
+
+const NOTHING_SURE = "The indexer knows no message with this identifier or transaction hash.";
+
+/**
+ * Looks a query up through the shared search.
+ *
+ * @param query The text in the search field.
+ * @param dependencies The indexer client, the pair and the loaded tokens.
+ */
+export const searchCrossReferenced = async (
+  query: string,
+  dependencies: { readonly indexer: IndexerClient; readonly pair: PairConfig; readonly tokens: readonly TokenInfo[] },
 ): Promise<IdentifierSearchOutcome> => {
-  if (shape.kind === "address") return { results: [addressResult(shape.address)], problem: null };
-  if (shape.kind !== "hash") return { results: [], problem: null };
-  try {
-    const byIdentifier = await dependencies.indexer.message(shape.hash);
-    if (byIdentifier !== null) return found(byIdentifier, dependencies.pair, "identifier");
-    const messageId = await dependencies.indexer.findMessageByTransaction(shape.hash);
-    const byTransaction = messageId === null ? null : await dependencies.indexer.message(messageId);
-    return byTransaction === null
-      ? { results: [], problem: "The indexer knows no message with this identifier or transaction hash." }
-      : found(byTransaction, dependencies.pair, "transaction");
-  } catch (error) {
-    return { results: [], problem: `The indexer lookup failed: ${error instanceof Error ? error.message : String(error)}` };
-  }
+  const resolution = await resolve(query, paletteSources(dependencies));
+  const results = resolution.results.map(crossResult);
+  const asksForHash = resolution.candidates.some((candidate) => candidate.kind === "message-id");
+  const sure = resolution.results.some((result) => result.confirmed);
+  if (resolution.unsupported !== null) return { results, problem: "Names such as ENS names are not searched. Try an address, a hash or a number." };
+  if (resolution.problems.length > 0) return { results, problem: `The indexer lookup failed: ${(resolution.problems[0] as string).replace(/^indexer: /, "")}` };
+  return { results, problem: asksForHash && !sure ? NOTHING_SURE : null };
 };

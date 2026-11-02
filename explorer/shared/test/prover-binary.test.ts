@@ -50,7 +50,7 @@ interface Seen {
   readonly configPath: string | null;
 }
 
-async function setup(answer: { code: number; stdout?: string; stderr?: string }, extra: { backend?: typeof remote | null; secret?: boolean; defaultDirectory?: boolean; handoff?: { webhookUrl: string; bearerVariable: string }; stateCacheDirectory?: string } = {}) {
+async function setup(answer: { code: number; stdout?: string; stderr?: string }, extra: { backend?: typeof remote | null; secret?: boolean; defaultDirectory?: boolean; handoff?: { webhookUrl: string; bearerVariable: string }; stateCacheDirectory?: string; proofCacheDirectory?: string } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "prover-binary-"));
   scratch.push(directory);
   const seen: Seen[] = [];
@@ -76,6 +76,7 @@ async function setup(answer: { code: number; stdout?: string; stderr?: string },
     ...(extra.handoff === undefined ? {} : { handoff: extra.handoff }),
     ...(extra.defaultDirectory === true ? {} : { temporaryDirectory: join(directory, "nested") }),
     ...(extra.stateCacheDirectory === undefined ? {} : { stateCacheDirectory: extra.stateCacheDirectory }),
+    ...(extra.proofCacheDirectory === undefined ? {} : { proofCacheDirectory: extra.proofCacheDirectory }),
     logger,
   });
   return { binary, seen, directory, events };
@@ -158,6 +159,14 @@ describe("prove", () => {
     const { binary, seen } = await setup({ code: 0, stdout: JSON.stringify(proofPackage) }, { stateCacheDirectory: "/var/lib/bot/beacon-states" });
     await binary.prove({ direction: "first-to-second" });
     expect(seen[0]!.configText).toContain('state_cache_dir = "/var/lib/bot/beacon-states"');
+  });
+
+  it("names the proof cache directory in the file of opening-proof when the caller keeps one", async () => {
+    const opening = { schemaVersion: 1 };
+    const { binary, seen } = await setup({ code: 1, stderr: "boom", stdout: JSON.stringify(opening) }, { backend: null, proofCacheDirectory: "/var/lib/bot/proof-cache" });
+    await expect(binary.openingProof({ direction: "second-to-first" })).rejects.toThrow();
+    expect(seen[0]!.configText).toContain('proof_cache_dir = "/var/lib/bot/proof-cache"');
+    expect(seen[0]!.configText).not.toContain("state_cache_dir");
   });
 
   it("keeps the secret out of the child environment when none is given", async () => {

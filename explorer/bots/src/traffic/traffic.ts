@@ -1,6 +1,6 @@
 import { formatUnits, type Address, type Hex } from "viem";
 import { bridgedSymbolOf, defaultTip, encodeFeeDirector, GateEvidenceError, type FeeDirector, type GateConfirmation, type ProtectedAddress, type ProofDirection } from "@zk-bridge/shared";
-import { sendTerms, worstCaseCostWei, type TransactionPort } from "../chain/transactions.ts";
+import { sendTerms, worstCaseCostWei, type Simulation, type TransactionPort } from "../chain/transactions.ts";
 import type { Logger } from "../logging/logger.ts";
 import { approvalData, messageIdOf, relayData, relayRefusalOf, type TrafficReader } from "./chain.ts";
 import type { TrafficGate } from "./gate.ts";
@@ -56,6 +56,15 @@ export interface TrafficInput {
  */
 export const GATE_WAITS = 3;
 
+/**
+ * How many times the gate is asked again after a node error (not a refusal of the evidence). A public RPC behind a load
+ * balancer may answer the latest block from one node and then lack it on the next ("block not found").
+ */
+export const GATE_NODE_RETRIES = 3;
+
+/** The pause before asking the gate again after a node error. */
+export const GATE_NODE_RETRY_MILLISECONDS = 3000;
+
 /** What one attempt did. */
 export type TrafficOutcome =
   | {
@@ -93,6 +102,11 @@ export interface Traffic {
 /** The source and destination sides of a direction. */
 function sidesOf(sides: readonly [TrafficSide, TrafficSide], direction: ProofDirection): { readonly source: TrafficSide; readonly destination: TrafficSide } {
   return direction === "first-to-second" ? { source: sides[0], destination: sides[1] } : { source: sides[1], destination: sides[0] };
+}
+
+/** The gas limit and fee cap that a failed simulation carried, for the log of the skip. */
+function simulatedWith(simulation: Extract<Simulation, { readonly ok: false }>): Record<string, unknown> {
+  return simulation.used === undefined ? {} : { simulatedGas: simulation.used.gas, simulatedMaxFeePerGas: simulation.used.maxFeePerGas === null ? "none" : simulation.used.maxFeePerGas };
 }
 
 /** Builds the traffic bot. */
@@ -162,7 +176,7 @@ export function createTraffic(input: TrafficInput): Traffic {
     if ((await source.reader.allowance(candidate.sourceToken, wallet, source.contracts.mediator)) < amount) {
       const data = approvalData(source.contracts.mediator);
       const simulation = await source.port.simulate({ to: candidate.sourceToken, data });
-      if (!simulation.ok) return skip(direction, "approval-simulation-reverted", { ...described, detail: simulation.reason });
+      if (!simulation.ok) return skip(direction, "approval-simulation-reverted", { ...described, detail: simulation.reason, ...simulatedWith(simulation) });
       const terms = sendTerms(await source.port.feeQuote(), simulation.gas);
       const worst = worstCaseCostWei(terms);
       if (native < worst + source.minimumNativeWei) {
@@ -194,7 +208,7 @@ export function createTraffic(input: TrafficInput): Traffic {
     const simulation = await source.port.simulate({ to: source.contracts.mediator, data });
     if (!simulation.ok) {
       const refused = relayRefusalOf(simulation.reason);
-      return skip(direction, refused.refusal, { ...described, error: refused.error, detail: simulation.reason });
+      return skip(direction, refused.refusal, { ...described, error: refused.error, detail: simulation.reason, ...simulatedWith(simulation) });
     }
     const terms = sendTerms(await source.port.feeQuote(), simulation.gas);
     const worst = worstCaseCostWei(terms);
@@ -230,10 +244,17 @@ export function createTraffic(input: TrafficInput): Traffic {
   ): Promise<{ readonly kind: "ready"; readonly spentWei: bigint } | SkippedOutcome> {
     const gate = source.gate as TrafficGate;
     let confirmation: GateConfirmation;
-    for (let waited = 0; ; waited += 1) {
+    for (let waited = 0, retried = 0; ; waited += 1) {
       try {
         confirmation = await gate.ensure(wallet);
       } catch (error) {
+        // A refused evidence is final; a node error is asked again, and does not count as a wait.
+        if (!(error instanceof GateEvidenceError) && retried < GATE_NODE_RETRIES) {
+          retried += 1;
+          waited -= 1;
+          await sleep(GATE_NODE_RETRY_MILLISECONDS);
+          continue;
+        }
         const code = error instanceof GateEvidenceError ? error.code : null;
         return skip(direction, "gate-evidence-failed", { ...described, chain: source.name, code, detail: (error as Error).message });
       }

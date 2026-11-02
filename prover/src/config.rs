@@ -273,6 +273,12 @@ pub struct SourceConfig {
     /// still serves an old state. It keeps the 16 newest states of each chain and every state younger than 3 days.
     #[serde(default)]
     pub state_cache_dir: Option<String>,
+    /// More execution RPCs of the source chain, asked in order only for `debug_getRawHeader`, when `rpc_url` does not serve
+    /// the raw header (a node without the method answers -32601). The `evidence` command reads the raw header of a source
+    /// block at or after Gloas, whose fields the JSON of the block does not all show; a public node often lacks the method.
+    /// Every header is still checked against the block hash, so none is trusted.
+    #[serde(default)]
+    pub header_rpc_urls: Vec<String>,
 }
 
 /// The destination side of a route: the chain with the light client that the proofs update.
@@ -300,6 +306,14 @@ pub struct DestinationConfig {
     /// keep too little proof history. Every header is still checked against the block hash, so none is trusted.
     #[serde(default)]
     pub header_rpc_urls: Vec<String>,
+    /// A directory of `eth_getProof` answers of this chain that a runner fetched near the tip, while the node still served
+    /// them (`<dir>/<chain id>/<address>/<block number>-<block hash>.json`). A node answers `eth_getProof` only for recent
+    /// blocks, and the block of a stored light-client head is older than that window by the time an opening is attempted.
+    /// The `opening-proof` command reads an entry for its block before it asks `rpc_url`. The cache is not trusted: the
+    /// command verifies a cached answer against the state root of the header exactly as it verifies a live one, and asks
+    /// `rpc_url` when the entry is missing or does not verify.
+    #[serde(default)]
+    pub proof_cache_dir: Option<String>,
 }
 
 fn default_log_range() -> u64 {
@@ -666,6 +680,11 @@ fn validate_route(name: &str, route: &RouteConfig) -> Result<()> {
             "source.rpc_url must start with http:// or https://".into(),
         ));
     }
+    if source.header_rpc_urls.iter().any(|url| !is_http_url(url)) {
+        return Err(context(
+            "every source.header_rpc_urls entry must start with http:// or https://".into(),
+        ));
+    }
     if destination
         .header_rpc_urls
         .iter()
@@ -924,6 +943,11 @@ light_client = \"0x2222222222222222222222222222222222222222\"
                 "beacon_url = \"https://beacon.example.org\"\nstate_urls = [\"https://states.example.org\", \"states.example.net\"]",
                 "every source.state_urls entry must start with",
             ),
+            (
+                "beacon_url = \"https://beacon.example.org\"",
+                "beacon_url = \"https://beacon.example.org\"\nheader_rpc_urls = [\"https://headers.example.org\", \"headers.example.net\"]",
+                "every source.header_rpc_urls entry must start with",
+            ),
         ];
         for (from, to, expected) in cases {
             let error = Config::load(&SAMPLE.replace(from, to), &no_environment)
@@ -957,6 +981,29 @@ light_client = \"0x2222222222222222222222222222222222222222\"
         assert_eq!(
             route.source.state_cache_dir.as_deref(),
             Some("/var/lib/states")
+        );
+    }
+
+    /// Claim: a source may name header RPC URLs; the list is empty by default and keeps its order.
+    /// Why it matters: the `evidence` command reads the raw header of a Gloas source block, and the main RPC of the source
+    /// may lack `debug_getRawHeader`.
+    #[test]
+    fn a_source_may_name_header_rpc_urls() {
+        let plain = Config::load(SAMPLE, &no_environment).unwrap();
+        let (_, route) = plain.route(None).unwrap();
+        assert!(route.source.header_rpc_urls.is_empty());
+        let with = SAMPLE.replace(
+            "beacon_url = \"https://beacon.example.org\"",
+            "beacon_url = \"https://beacon.example.org\"\nheader_rpc_urls = [\"https://a.example.org\", \"http://b.example.org\"]",
+        );
+        let loaded = Config::load(&with, &no_environment).unwrap();
+        let (_, route) = loaded.route(None).unwrap();
+        assert_eq!(
+            route.source.header_rpc_urls,
+            vec![
+                "https://a.example.org".to_string(),
+                "http://b.example.org".to_string()
+            ]
         );
     }
 
@@ -1023,5 +1070,28 @@ light_client = \"0x2222222222222222222222222222222222222222\"
         ] {
             assert!(!is_loopback_url(url), "{url}");
         }
+    }
+
+    /// Claim: a destination may name a proof cache directory; it is unset by default.
+    /// Why it matters: an old configuration file still loads, and a runner can point the opening proof at its cache.
+    #[test]
+    fn a_destination_may_name_a_proof_cache() {
+        let plain = Config::load(SAMPLE, &no_environment).unwrap();
+        assert_eq!(
+            plain.route(None).unwrap().1.destination.proof_cache_dir,
+            None
+        );
+        let with = format!("{SAMPLE}proof_cache_dir = \"/var/lib/proofs\"\n");
+        let loaded = Config::load(&with, &no_environment).unwrap();
+        assert_eq!(
+            loaded
+                .route(None)
+                .unwrap()
+                .1
+                .destination
+                .proof_cache_dir
+                .as_deref(),
+            Some("/var/lib/proofs")
+        );
     }
 }

@@ -29,18 +29,54 @@ def get(port, route):
     return status, body
 
 
+NULL = "null"
+
+
 def shape(value):
+    """The keys and value types of an answer. A list has the merged shape of all its items, so order does not matter, and
+    null merges with any type (a nullable field is null in some items and set in others)."""
     if value is None:
-        return "null"
+        return NULL
     if isinstance(value, list):
-        return "[" + (shape(value[0]) if value else "") + "]"
+        merged = NULL
+        for item in value:
+            merged = merge(merged, shape(item))
+        return ("list", merged)
     if isinstance(value, dict):
-        return "{" + ",".join("%s:%s" % (key, shape(value[key])) for key in sorted(value)) + "}"
+        return ("object", tuple(sorted((key, shape(child)) for key, child in value.items())))
     if isinstance(value, bool):
         return "boolean"
     if isinstance(value, (int, float)):
         return "number"
     return "string"
+
+
+def merge(a, b):
+    """The shape of two items of one list, or "mixed" when they disagree."""
+    if a == NULL:
+        return b
+    if b == NULL or a == b:
+        return a
+    if isinstance(a, tuple) and isinstance(b, tuple) and a[0] == b[0] == "list":
+        return ("list", merge(a[1], b[1]))
+    if isinstance(a, tuple) and isinstance(b, tuple) and a[0] == b[0] == "object":
+        left, right = dict(a[1]), dict(b[1])
+        if set(left) != set(right):
+            return "mixed"
+        return ("object", tuple(sorted((key, merge(left[key], right[key])) for key in left)))
+    return "mixed"
+
+
+def compatible(a, b):
+    """Whether blue and green answer the same shape. Null on either side matches any type."""
+    if a == NULL or b == NULL:
+        return True
+    if isinstance(a, tuple) and isinstance(b, tuple) and a[0] == b[0]:
+        if a[0] == "list":
+            return compatible(a[1], b[1])
+        left, right = dict(a[1]), dict(b[1])
+        return set(left) == set(right) and all(compatible(left[key], right[key]) for key in left)
+    return a == b
 
 
 def leaves(value, path, out):
@@ -73,7 +109,7 @@ def main():
             print("FAIL %s: status blue %s, green %s" % (route, blue_status, green_status))
             failures += 1
             continue
-        if blue_status == 200 and shape(blue) != shape(green):
+        if blue_status == 200 and not compatible(shape(blue), shape(green)):
             print("FAIL %s: the shape of the answer differs" % route)
             failures += 1
             continue

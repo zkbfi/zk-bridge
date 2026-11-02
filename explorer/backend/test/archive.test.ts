@@ -4,7 +4,7 @@ import { runArchiveCycle, health, start } from "../src/archive/module.ts";
 import { directionOf, RETRY_DELAY_MILLISECONDS } from "../src/archive/build.ts";
 import { MODULES } from "../src/main.ts";
 import { createApp } from "../src/app.ts";
-import { makeBackend, makeConfig } from "./support.ts";
+import { ARCHIVE_RPC_URLS, isNodeRequest, makeBackend, makeConfig, receiptResponse } from "./support.ts";
 
 const id = (digit: string) => `0x${digit.repeat(64)}`;
 const transactionHash = (digit: string) => `0x${digit.repeat(64)}`;
@@ -37,7 +37,8 @@ const evidenceFor = (messageId: string) => ({
 
 /** An indexer whose work list and message statuses the test sets. */
 function fakeIndexer(state: { work: Item[]; statuses: Record<string, string> }) {
-  return vi.fn(async (input: string | URL | Request) => {
+  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    if (isNodeRequest(init)) return receiptResponse();
     const url = new URL(String(input));
     if (url.pathname === "/api/undelivered") return Response.json({ items: state.work, nextCursor: null });
     const messageId = url.pathname.split("/").pop() as string;
@@ -47,7 +48,7 @@ function fakeIndexer(state: { work: Item[]; statuses: Record<string, string> }) 
 }
 
 function setup(evidence: ProverBinary["evidence"]) {
-  const base = makeBackend({ config: makeConfig({ indexerUrl: "http://indexer.test/" }), enabled: ["archive"] });
+  const base = makeBackend({ config: makeConfig({ indexerUrl: "http://indexer.test/", rpcUrls: ARCHIVE_RPC_URLS }), enabled: ["archive"] });
   const prover: ProverBinary = { ...base.prover.binary, evidence };
   const context = { ...base.context, prover };
   const app = createApp({ context, modules: MODULES, enabled: ["archive"] });
@@ -197,7 +198,8 @@ describe("evidence archive", () => {
     const backend = setup(async (request) => evidenceFor(id(request.logIndex === 10 ? "a" : "b")) as never);
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: string | URL | Request) => {
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        if (isNodeRequest(init)) return receiptResponse();
         const url = new URL(String(input));
         if (url.pathname.startsWith("/api/messages")) return Response.json({ error: "unknown" }, { status: 404 });
         return url.searchParams.get("after") === null

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { getAddress, type Address, type PublicClient } from "viem";
+import { getAddress, keccak256, toRlp, type Address, type Hex, type PublicClient } from "viem";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { proofCategory } from "@zk-bridge/shared";
 import { describeRoute } from "@zk-bridge/shared/prover";
@@ -13,6 +13,7 @@ import { deliverySettingsOf, startRunner, type RunnerOverrides } from "../../src
 import { PROGRAM_KEY, fakeProver, proofPayload, word } from "../support/builders.ts";
 import { startFakeBoard, type FakeBoard } from "../../../shared/test/support/fake-board.ts";
 import { startFakeIndexer, type FakeIndexer } from "../support/fake-indexer.ts";
+import { openingStorageKey } from "@zk-bridge/shared/prover";
 import { createServiceWorld, type ServiceWorld, type ServiceWorldOptions } from "../support/service-world.ts";
 
 // The first two public development keys of Anvil. Neither holds funds on a live chain.
@@ -322,6 +323,122 @@ describe("startRunner opens the bridge of the destination chain", () => {
     expect(existsSync(join(started.created.directory, "state", "runner-eth-pls-first-to-second.json"))).toBe(false);
   });
 
+  it("prefetches the opening proof of the source chain into the proof cache while the bridge is closed, and names the cache in the opening-proof config", async () => {
+    const started = await prepare();
+    const genesis = 1_606_824_023n;
+    // Block 899 is at slot 63 and block 900 at slot 64, the first slot of an epoch: block 900 is a checkpoint.
+    const base = clientWith({ depositsOpen: false });
+    const request = vi.fn(async (_args: unknown) => ({ accountProof: ["0x01"], storageProof: [] }));
+    const client = {
+      ...base,
+      getBlock: async ({ blockNumber }: { blockNumber: bigint }) => ({ number: blockNumber, hash: word(Number(blockNumber % 200n)), timestamp: genesis + (blockNumber - 836n) * 12n }),
+      request,
+    } as unknown as PublicClient;
+    const configs: string[] = [];
+    const { overrides } = standardOverrides({
+      publicClient: () => client,
+      executor: async (spec) => {
+        configs.push(readFileSync(spec.args[1] as string, "utf8"));
+        return { code: 1, stdout: "", stderr: "distance to target block exceeds maximum proof window" };
+      },
+    });
+    await run(started, overrides);
+    const cacheDirectory = join(started.created.directory, "state", "proof-cache");
+    const lightClient = started.created.context.pair.sides[0].contracts.lightClient.toLowerCase();
+    const file = join(cacheDirectory, "1", lightClient, `900-${word(900 % 200)}.json`);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ chainId: 1, blockNumber: 900, address: lightClient, storedSlot: 100, proof: { accountProof: ["0x01"] } });
+    expect(request).toHaveBeenCalledWith({ method: "eth_getProof", params: [started.created.context.pair.sides[0].contracts.lightClient, [expect.any(String)], "0x384"] });
+    expect(started.created.events().find((event) => event.event === "proof_prefetched")).toMatchObject({ chainId: 1, blockNumber: "900", direction: "first-to-second" });
+    expect(configs[0]).toContain(`proof_cache_dir = "${cacheDirectory}"`);
+  });
+
+  it("takes the opening proof entry from the indexer's proof archive once it proves the stored head's key, and asks no node for it", async () => {
+    const started = await prepare();
+    const genesis = 1_606_824_023n;
+    const base = clientWith({ depositsOpen: false });
+    const request = vi.fn(async (_args: unknown) => ({}));
+    const lightClient = started.created.context.pair.sides[0].contracts.lightClient.toLowerCase() as Address;
+    // A real state of one account with one slot: executionBlockHashes[100] (the head the fake light client holds).
+    const slotKey = openingStorageKey(100n);
+    const stored = word(7);
+    const storageLeaf = toRlp([`0x20${keccak256(slotKey).slice(2)}`, toRlp(stored)]);
+    const storageRoot = keccak256(storageLeaf);
+    const codeHash = keccak256("0x6080");
+    const accountLeaf = toRlp([`0x20${keccak256(lightClient).slice(2)}`, toRlp(["0x01", "0x", storageRoot, codeHash])]);
+    const stateRoot = keccak256(accountLeaf);
+    const client = {
+      ...base,
+      getBlock: async ({ blockNumber, blockHash }: { blockNumber?: bigint; blockHash?: Hex }) =>
+        blockHash !== undefined
+          ? { number: 900n, stateRoot }
+          : { number: blockNumber, hash: word(Number((blockNumber as bigint) % 200n)), timestamp: genesis + ((blockNumber as bigint) - 836n) * 12n },
+      request,
+    } as unknown as PublicClient;
+    const entry = (storedSlot: number, keys: Hex[]) => ({
+      schemaVersion: 1, chainId: 1, blockNumber: 900, blockHash: word(900 % 200), address: lightClient, storedSlot, storageKeys: keys, fetchedAt: "2026-11-01T00:00:00.000Z",
+      proof: { balance: "0x0", nonce: "0x1", codeHash, storageHash: storageRoot, accountProof: [accountLeaf], storageProof: [{ key: slotKey, value: stored, proof: [storageLeaf] }] },
+    });
+    // A poisoned entry first: it claims another stored slot. The good one follows.
+    started.indexer.storageProofs[`/api/proofs/storage/1/${lightClient}/900`] = [entry(99, [openingStorageKey(99n)]), entry(100, [slotKey])];
+    const { overrides } = standardOverrides({
+      publicClient: () => client,
+      executor: async () => ({ code: 1, stdout: "", stderr: "distance to target block exceeds maximum proof window" }),
+    });
+    await run(started, overrides);
+    const file = join(started.created.directory, "state", "proof-cache", "1", lightClient, `900-${word(900 % 200)}.json`);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ blockNumber: 900, storedSlot: 100 });
+    expect(request).not.toHaveBeenCalled();
+    expect(started.created.events().find((event) => event.event === "proof_archive_entry_refused")).toMatchObject({ reason: "another stored slot" });
+    expect(started.created.events().find((event) => event.event === "proof_archive_hit")).toMatchObject({ chainId: 1, blockNumber: "900" });
+    // Before the opening proof the opener asked the archive for the block of the stored head.
+    expect(started.indexer.requested.filter((path) => path.startsWith("/api/proofs/storage/1/")).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("checks an archived entry against the entry's own slot when the node can no longer read the head at that block", async () => {
+    const started = await prepare();
+    const genesis = 1_606_824_023n;
+    const base = clientWith({ depositsOpen: false });
+    const readContract = vi.fn(async (call: { functionName: string; blockNumber?: bigint }) => {
+      if (call.functionName === "head" && call.blockNumber !== undefined) throw new Error("missing trie node");
+      return base.readContract(call as never);
+    });
+    const client = {
+      ...base,
+      readContract,
+      getBlock: async ({ blockNumber, blockHash }: { blockNumber?: bigint; blockHash?: Hex }) =>
+        blockHash !== undefined ? { number: 900n, stateRoot: word(1) } : { number: blockNumber, hash: word(Number((blockNumber as bigint) % 200n)), timestamp: genesis + ((blockNumber as bigint) - 836n) * 12n },
+      request: vi.fn(async () => ({})),
+    } as unknown as PublicClient;
+    const lightClient = started.created.context.pair.sides[0].contracts.lightClient.toLowerCase();
+    started.indexer.storageProofs[`/api/proofs/storage/1/${lightClient}/900`] = [
+      { schemaVersion: 1, chainId: 1, blockNumber: 900, blockHash: word(900 % 200), address: lightClient, storedSlot: 99, storageKeys: [openingStorageKey(98n)], fetchedAt: "x", proof: {} },
+    ];
+    const { overrides } = standardOverrides({ publicClient: () => client, executor: async () => ({ code: 1, stdout: "", stderr: "proof window" }) });
+    await run(started, overrides);
+    expect(started.created.events().find((event) => event.event === "proof_archive_entry_refused")).toMatchObject({ reason: "no proof of the stored slot's key" });
+  });
+
+  it("asks the archive nothing before the opening proof while the stored head has no block", async () => {
+    const started = await prepare();
+    const base = clientWith({ depositsOpen: false });
+    const readContract = vi.fn(async (call: { functionName: string }) => (call.functionName === "executionBlockHashes" ? `0x${"00".repeat(32)}` : base.readContract(call as never)));
+    const client = { ...base, readContract, getBlock: async () => ({ number: 900n, hash: word(1), timestamp: 0n }), request: vi.fn(async () => ({})) } as unknown as PublicClient;
+    const { overrides } = standardOverrides({ publicClient: () => client, executor: async () => ({ code: 1, stdout: "", stderr: "proof window" }) });
+    await run(started, overrides);
+    expect(readContract.mock.calls.some(([call]) => call.functionName === "executionBlockHashes")).toBe(true);
+    expect(started.indexer.requested.some((path) => /^\/api\/proofs\/storage\/1\/0x[0-9a-f]+\/\d{6,}$/.test(path))).toBe(false);
+  });
+
+  it("does not prefetch once the state file records the bridge as open", async () => {
+    const started = await prepare();
+    await mkdir(join(started.created.directory, "state"), { recursive: true });
+    await writeFile(join(started.created.directory, "state", "runner-eth-pls-first-to-second.json"), JSON.stringify({ schemaVersion: 1, finished: {}, depositsOpen: true }));
+    const { overrides } = standardOverrides();
+    await run(started, overrides);
+    expect(started.created.events().find((event) => event.event === "proof_prefetch_stopped")).toMatchObject({ chainId: 1, reason: "deposits-open" });
+    expect(started.created.events().some((event) => event.event === "proof_prefetched")).toBe(false);
+  });
+
   it("uses the opening prover that the overrides give, with the direction of the opposite route", async () => {
     const started = await prepare();
     const openingProver = vi.fn((_direction: string) => ({
@@ -405,7 +522,9 @@ describe("startRunner keeps running until the signal fires", () => {
 
   it("logs a message that the runner cannot process, instead of stopping", async () => {
     const started = await prepare();
-    const { overrides, subscribers } = standardOverrides();
+    const { overrides, client, subscribers } = standardOverrides();
+    // The simulation answers (it needs no fee quote); the step after it asks for one.
+    Object.assign(client, { call: async () => ({ data: "0x" }), estimateGas: async () => 100_000n });
     const controller = new AbortController();
     const done = run(started, overrides, { runOnce: false, signal: controller.signal });
     for (let attempt = 0; attempt < 200 && subscribers.length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));

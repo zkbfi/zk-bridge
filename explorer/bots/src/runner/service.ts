@@ -1,12 +1,22 @@
 import { join } from "node:path";
 import { createPublicClient, http, type Address, type PublicClient } from "viem";
-import { messageBridgeAbi, proofCategory, type ProofDirection } from "@zk-bridge/shared";
+import { beaconLightClientAbi, messageBridgeAbi, proofCategory, secondsPerSlot, type ProofDirection } from "@zk-bridge/shared";
 import { BotConfigError, runnerMinimumPriorityFeeWei, type RunnerConfig } from "../config/bot-config.ts";
 import { createTransactionPort, type TransactionPort } from "../chain/transactions.ts";
 import { createIndexerClient } from "../indexer/client.ts";
 import { createBoardFeed, type BoardFeed } from "@zk-bridge/shared/msgboard";
 import { executeCommand, type CommandExecutor } from "@zk-bridge/shared/prover";
 import { createLightClientReader, createProverBinary, createVerifyGuard, describeRoute, type OpeningProver, type ProverBinary } from "@zk-bridge/shared/prover";
+import {
+  createArchivedProofCacheStore,
+  createProofArchiveClient,
+  createProofCacheStore,
+  createProofPrefetcher,
+  createViemPrefetchClient,
+  lightClientClock,
+  storedHeadBlockHashes,
+  storedHeadCacheKey,
+} from "@zk-bridge/shared/prover";
 import { sidesOfDirection, type BotContext } from "../runtime/context.ts";
 import { acquireLock, type HeldLock } from "../runtime/lock-file.ts";
 import { runLoop } from "../runtime/loop.ts";
@@ -82,6 +92,11 @@ function valuations(settings: Readonly<Record<string, string>>): Readonly<Record
 /** The direction the other way round. */
 function oppositeOf(direction: ProofDirection): ProofDirection {
   return direction === "first-to-second" ? "second-to-first" : "first-to-second";
+}
+
+/** The proof cache of the runner: `eth_getProof` answers that the opening proof reads (`proof-prefetch.ts`). */
+function proofCacheDirectoryOf(context: BotContext): string {
+  return join(context.config.stateDirectory, "proof-cache");
 }
 
 function runnerStatePath(context: BotContext, direction: ProofDirection): string {
@@ -166,6 +181,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
 
   const jobs: Promise<void>[] = [];
   const subscriptions: Array<{ close(): Promise<void> }> = [];
+  const openers: DepositOpener[] = [];
   for (const direction of setup.directions as readonly ProofDirection[]) {
     const { source, destination } = sidesOfDirection(pair, direction);
     const directionLogger = logger.child({ bot: "runner", pair: pair.name, direction });
@@ -181,6 +197,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       baseEnvironment: { PATH: context.environment.PATH ?? "/usr/bin:/bin" },
       temporaryDirectory: join(context.config.stateDirectory, "tmp"),
       stateCacheDirectory: join(context.config.stateDirectory, "beacon-states"),
+      proofCacheDirectory: proofCacheDirectoryOf(context),
       logger: directionLogger,
     });
     const prover = overrides.prover?.(direction) ?? binary;
@@ -213,6 +230,27 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
     // The updates of this direction land on the destination chain, so they can open the bridge there: for the prover it is
     // the source bridge of the opposite route (see `DepositOpenerDependencies`).
     const openingDirection = oppositeOf(direction);
+    // The proof cache of the opening proof, archive first: the indexer's proof archive, then the local cache, then (in
+    // the prefetcher and the prover) a node. An archived entry is used only when it proves what was asked: the account of
+    // the source light client in the requested block (its header read by hash from the source chain), and the key of the
+    // head that light client held there (read at that block when the node still can; else the key of the entry's slot).
+    const proofCache = createArchivedProofCacheStore({
+      archive: createProofArchiveClient({ baseUrl: runnerConfig.indexerUrl }),
+      local: createProofCacheStore(proofCacheDirectoryOf(context)),
+      readHeader: async (blockHash) => {
+        const block = await sourceClient.getBlock({ blockHash });
+        return { number: block.number as bigint, stateRoot: block.stateRoot };
+      },
+      storedSlot: async (key) => {
+        try {
+          return BigInt(await sourceClient.readContract({ address: key.address as Address, abi: beaconLightClientAbi, functionName: "head", blockNumber: key.blockNumber }));
+        } catch {
+          return null;
+        }
+      },
+      logger: directionLogger,
+    });
+    const openingCacheKey = storedHeadCacheKey(destinationPort.client, destination.contracts.lightClient, { chainId: source.chainId, lightClient: source.contracts.lightClient });
     const opener: DepositOpener = createDepositOpener({
       enabled: runnerConfig.openDeposits,
       route: describeRoute(pair, openingDirection).name,
@@ -221,12 +259,42 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       readDepositsOpen: async () => (await destinationPort.client.readContract({ address: destination.contracts.bridge, abi: messageBridgeAbi, functionName: "depositsOpen" })) as boolean,
       lightClient,
       prover: overrides.openingProver?.(openingDirection) ?? binary,
+      prepareOpening: async () => {
+        const key = await openingCacheKey();
+        if (key !== null) await proofCache.has(key);
+      },
       chain: destinationPort.chain,
       queue: queueOf(destination.chainId),
       state,
       now,
       logger: directionLogger,
     });
+    openers.push(opener);
+    if (runnerConfig.openDeposits) {
+      // The opening proof of this bridge needs `eth_getProof` on the source chain at the block of a stored head, which a
+      // node serves only for a short while. Fetch it at each epoch boundary while it is new, until the bridge is open.
+      const prefetcher = createProofPrefetcher({
+        chainId: source.chainId,
+        address: source.contracts.lightClient,
+        client: createViemPrefetchClient(sourceClient),
+        store: proofCache,
+        // The light client on the destination chain tracks the beacon chain of the source: its stored heads are on its grid.
+        clock: lightClientClock(destinationPort.client, destination.contracts.lightClient),
+        isOpen: async () => (await state.load()).depositsOpen,
+        protectedBlockHashes: storedHeadBlockHashes(destinationPort.client, destination.contracts.lightClient),
+        logger: directionLogger,
+      });
+      jobs.push(
+        runLoop({
+          name: `proof prefetch ${direction}`,
+          intervalMilliseconds: secondsPerSlot(source.chainId) * 1000,
+          step: () => prefetcher.step(),
+          signal,
+          runOnce: input.runOnce,
+          logger: directionLogger,
+        }),
+      );
+    }
     const runner: Runner = createRunner({
       pairName: pair.name,
       direction,
@@ -278,6 +346,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
     );
   }
   await Promise.all(jobs);
+  for (const opener of openers) opener.stop();
   await Promise.all(subscriptions.map((subscription) => subscription.close()));
   await feed.close();
   await signer.dispose();

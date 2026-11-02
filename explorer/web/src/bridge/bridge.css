@@ -246,6 +246,9 @@
 .zb-palette-row[aria-selected="true"] { background: var(--zb-raised); }
 .zb-palette-row[aria-selected="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--zb-accent); }
 .zb-palette-title { font-weight: 600; overflow-wrap: anywhere; }
+.zb-palette-xlinks { font-size: var(--zb-step--1); color: var(--zb-muted); overflow-wrap: anywhere; }
+.zb .zb-palette-xlinks a { color: var(--zb-accent-text); text-decoration: none; font-weight: 600; }
+.zb .zb-palette-xlinks a:hover { text-decoration: underline; }
 .zb-palette-sub { font-size: var(--zb-step--1); color: var(--zb-muted); overflow-wrap: anywhere; }
 /* The palette is a column: band, list, footer. On desktop it hangs from 12vh and is as tall as its list (up to 78vh), so
    no empty space sits under the rows; on phones it fills the screen and the footer sits on the bottom edge. */

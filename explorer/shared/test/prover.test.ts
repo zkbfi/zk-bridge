@@ -53,20 +53,28 @@ describe("the prover configuration file", () => {
     expect(text).toContain("light_client = ");
   });
 
-  it("names the header RPCs of the destination when they are set, and nothing otherwise", () => {
+  it("names the header RPCs of each side in that side's section when they are set, and nothing otherwise", () => {
     const withHeaders = loadPair({
       environment: { ...environment, EXPLORER_HEADER_RPC_URL_1: "https://header.example.org/key, https://second.example.org" },
       deployment,
     });
+    const headers = 'header_rpc_urls = ["https://header.example.org/key", "https://second.example.org"]';
     const text = renderProverConfig(describeRoute(withHeaders, "second-to-first"), null);
-    const destination = text.slice(text.indexOf("[routes.pulsechain_to_ethereum.destination]"));
-    expect(destination).toContain('header_rpc_urls = ["https://header.example.org/key", "https://second.example.org"]');
-    expect(renderProverConfig(describeRoute(withHeaders, "first-to-second"), null)).not.toContain("header_rpc_urls");
+    const destinationAt = text.indexOf("[routes.pulsechain_to_ethereum.destination]");
+    expect(text.slice(destinationAt)).toContain(headers);
+    expect(text.slice(0, destinationAt)).not.toContain("header_rpc_urls");
+    // The other direction: chain 1 is the source, so the evidence command reads its Gloas headers from these endpoints.
+    const reverse = renderProverConfig(describeRoute(withHeaders, "first-to-second"), null);
+    const reverseDestinationAt = reverse.indexOf("[routes.ethereum_to_pulsechain.destination]");
+    expect(reverse.slice(reverse.indexOf("[routes.ethereum_to_pulsechain.source]"), reverseDestinationAt)).toContain(headers);
+    expect(reverse.slice(reverseDestinationAt)).not.toContain("header_rpc_urls");
     const { headerRpcUrls: _dropped, ...bareSide } = withHeaders.sides[0];
     const bare: Pair = { ...withHeaders, sides: [bareSide, withHeaders.sides[1]] };
     expect(renderProverConfig(describeRoute(bare, "second-to-first"), null)).not.toContain("header_rpc_urls");
+    expect(renderProverConfig(describeRoute(bare, "first-to-second"), null)).not.toContain("header_rpc_urls");
     const quote: Pair = { ...withHeaders, sides: [{ ...withHeaders.sides[0], headerRpcUrls: ['https://h.example/"x'] }, withHeaders.sides[1]] };
     expect(() => renderProverConfig(describeRoute(quote, "second-to-first"), null)).toThrow(/destination header rpc endpoint/);
+    expect(() => renderProverConfig(describeRoute(quote, "first-to-second"), null)).toThrow(/source header rpc endpoint/);
   });
 
   it("names the state URLs and the state cache of the source when they are set, and nothing otherwise", () => {
@@ -82,6 +90,15 @@ describe("the prover configuration file", () => {
     const bare: Pair = { ...pair, sides: [pair.sides[0], bareSide] };
     expect(renderProverConfig(describeRoute(bare, "second-to-first"), null)).not.toContain("state_urls");
     expect(() => renderProverConfig(describeRoute(pair, "first-to-second"), null, undefined, { stateCacheDirectory: '/tmp/"x' })).toThrow(/cannot carry/);
+  });
+
+  it("names the proof cache in the destination section when it is set, and nothing otherwise", () => {
+    const text = renderProverConfig(describeRoute(pair, "second-to-first"), null, undefined, { proofCacheDirectory: "/var/lib/bot/proof-cache" });
+    const destination = text.slice(text.indexOf("[routes.pulsechain_to_ethereum.destination]"));
+    expect(destination).toContain('proof_cache_dir = "/var/lib/bot/proof-cache"');
+    expect(text.slice(0, text.indexOf("[routes.pulsechain_to_ethereum.destination]"))).not.toContain("proof_cache_dir");
+    expect(renderProverConfig(describeRoute(pair, "second-to-first"), null)).not.toContain("proof_cache_dir");
+    expect(() => renderProverConfig(describeRoute(pair, "first-to-second"), null, undefined, { proofCacheDirectory: '/tmp/"x' })).toThrow(/proof cache directory/);
   });
 
   it("leaves the backend out for the commands that need none", () => {

@@ -4,7 +4,10 @@ import { parseDocPages } from "../../src/docs/docs-index";
 import {
   actionResults,
   addressResult,
-  classifyQuery,
+  crossResult,
+  linkContextOf,
+  PALETTE_SITES,
+  searchChainsOf,
   docResults,
   emptyQueryGroups,
   flattenGroups,
@@ -31,13 +34,46 @@ const everything = [
   ...docResults(pages),
 ];
 
-describe("classifyQuery", () => {
-  it("tells an address, a 32 byte hash, words and nothing apart", () => {
-    expect(classifyQuery("  ").kind).toBe("empty");
-    expect(classifyQuery(`0x${"ab".repeat(20)}`).kind).toBe("address");
-    expect(classifyQuery(`0x${"AB".repeat(32)}`)).toEqual({ kind: "hash", hash: `0x${"ab".repeat(32)}` });
-    expect(classifyQuery("0x1234").kind).toBe("text");
-    expect(classifyQuery("usdc").kind).toBe("text");
+describe("the cross-referenced results", () => {
+  const context = linkContextOf(FIXTURE_PAIR);
+  const [first, second] = [FIXTURE_PAIR.first, FIXTURE_PAIR.second];
+  const base = { subtitle: "s", confirmed: true, chainId: null, addressType: null, rank: 0, links: [] as const };
+  const line = (target: Parameters<typeof crossResult>[0]["target"], id = "x", title = "t") => crossResult({ ...base, id, kind: "message", title, target });
+
+  it("takes the hosts of zkb.fi, with relative links into this page, and the chains of the pair", () => {
+    expect(PALETTE_SITES).toMatchObject({ dapp: "", indexer: "https://indexer.zkb.fi", status: "https://status.zkb.fi", backend: "https://prove.zkb.fi" });
+    expect(searchChainsOf(FIXTURE_PAIR).map((chain) => [chain.chainId, chain.side])).toEqual([[first.chainId, "first"], [second.chainId, "second"]]);
+    expect(searchChainsOf(FIXTURE_PAIR)[0]?.contracts.bridge).toBe(first.contracts.messageBridge);
+  });
+
+  it("opens each kind of target on the page of the dapp that shows it", () => {
+    const messageId = `0x${"ab".repeat(32)}` as const;
+    const address = `0x${"cd".repeat(20)}`;
+    expect(line({ type: "message", messageId }, "message:x")).toMatchObject({ id: `transfer:${messageId}`, kind: "transfer", jump: { type: "route", route: { name: "message", messageId } } });
+    expect(line({ type: "transaction", chainId: 1, hash: messageId }).jump).toEqual({ type: "route", route: { name: "explore", page: { kind: "tx", chainId: 1, id: messageId } } });
+    expect(line({ type: "address", address, chainId: null, role: null }, "address:a")).toMatchObject({ kind: "address", jump: { type: "route", route: { name: "address", address } } });
+    expect(line({ type: "address", address }, "address:b").jump).toEqual({ type: "route", route: { name: "address", address } });
+    expect(line({ type: "address", address, chainId: 1, role: "gate" }).jump).toEqual({ type: "route", route: { name: "explore", page: { kind: "contract", chainId: 1, id: address } } });
+    expect(line({ type: "address", address, chainId: 1, role: null }).jump).toMatchObject({ route: { name: "address" } });
+    expect(line({ type: "address", address, chainId: null, role: "gate" }).jump).toMatchObject({ route: { name: "address" } });
+    expect(line({ type: "token", side: "second", chainId: 369, address }).jump).toEqual({ type: "route", route: { name: "explore", page: { kind: "token", id: `second:${address}` } } });
+    expect(line({ type: "slot", slot: "7" })).toMatchObject({ kind: "slot", jump: { route: { page: { kind: "slot", id: "7" } } } });
+    expect(line({ type: "block", chainId: 1, number: "7" })).toMatchObject({ kind: "block", jump: { route: { page: { kind: "block", chainId: 1, id: "7" } } } });
+    expect(line({ type: "proof", chainId: 1, index: "7" })).toMatchObject({ kind: "proof", jump: { route: { page: { kind: "proof", chainId: 1, id: "7" } } } });
+    expect(line({ type: "release", cid: "bafy" })).toMatchObject({ kind: "release", jump: { route: { page: { kind: "release", id: "bafy" } } } });
+  });
+
+  it("keeps the links of the shared search", () => {
+    const links = [{ surface: "indexer", label: "Indexer", url: "https://indexer.zkb.fi/#lookup=1" }] as const;
+    expect(crossResult({ ...base, id: "slot:1", kind: "slot", title: "Slot 1", target: { type: "slot", slot: "1" }, links }).links).toEqual(links);
+  });
+
+  it("gives a token of the pair its links when the caller asks, and none otherwise", () => {
+    const token = FIXTURE_TOKENS[0]!;
+    const [withLinks] = tokenResults([token], FIXTURE_PAIR, context);
+    expect(withLinks?.links?.map((link) => link.surface)).toContain("indexer");
+    expect(withLinks?.links?.find((link) => link.surface === "dapp")?.url).toBe(`#/explore/token/${token.side}/${token.address.toLowerCase()}`);
+    expect(tokenResults([token], FIXTURE_PAIR)[0]?.links).toBeUndefined();
   });
 });
 

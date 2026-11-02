@@ -1,0 +1,254 @@
+---
+# Exports, imports and verifies the durable proof archive (deploy/app-server/proofs.sh on the server).
+#
+#   cd deploy/ansible
+#   ansible-playbook proofs.yml -e action=export                       # run an export now (from /opt/zk-bridge/current)
+#   ansible-playbook proofs.yml -e action=export -e commit=<hash>      # ... with the scripts and the CLI of that release
+#   ansible-playbook proofs.yml -e action=import -e bundle=<local path to zk-bridge-proofs-<stamp>.tar.gz>
+#   ansible-playbook proofs.yml -e action=verify                       # the newest bundle on the server
+#   ansible-playbook proofs.yml -e action=publish -e dry_run=true      # build the PUBLIC tree only; prints its path
+#   ansible-playbook proofs.yml -e action=publish                      # add the public tree to IPFS; prints the CID
+#   ansible-playbook proofs.yml -e action=publish -e publish_dns=true -e confirm_production=yes
+#                                                                      # ... and point _dnslink.proofs at the new CID
+#   ansible-playbook proofs.yml -e publish_dns=true -e cid=<cid> -e confirm_production=yes   # DNS only, for a CID made earlier
+#   ansible-playbook proofs.yml -e action=verify -e bundle=<file name on the server>
+#
+# export: runs the export on the server, then fetches the new bundle and its .sha256 into zkb_proofs_local_dir
+# (default ~/zkb-backups; -e zkb_proofs_local_dir=<dir>) and checks the sha256 here. The server also runs this export
+# every night (zk-bridge-proofs-export.timer) and keeps the newest 14 bundles.
+# import: copies the bundle (and its .sha256, when it sits next to it) into the server's backup directory and runs the
+# import. Nothing that differs is overwritten. Exit 3 of the import (conflicts) FAILS the play, after the summary is
+# shown: the data that did not conflict is already in, and the conflicts need a person to look at them.
+# publish: proofs.sh publish on the server (see its header). The tree is public data from an allowlist, checked by the
+# archive CLI's sanitizer before anything is added. Review a dry run first. The DNSLink record is written only with
+# -e publish_dns=true (and confirm_production=yes), by the same tasks that sites.yml uses for docs.zkb.fi, which first
+# check that a public gateway serves the CID; the old record content is printed first and is the rollback.
+# verify: re-checks the bundle against the chain (needs the RPC settings of the indexer on the server).
+- name: Export, import or verify the proof archive
+  hosts: zkbfi
+  gather_facts: false
+  vars:
+    zkb_proofs_action: "{{ action | default('dns' if (publish_dns | default(false) | bool) else '') }}"
+  tasks:
+    - name: Check the action
+      ansible.builtin.assert:
+        that:
+          - zkb_proofs_action in ['export', 'import', 'verify', 'publish', 'dns']
+        fail_msg: "Say what to do: -e action=export, -e action=import -e bundle=<local file>, -e action=verify, or -e action=publish."
+        quiet: true
+
+    - name: Check the bundle that import needs
+      when: zkb_proofs_action == 'import'
+      block:
+        - name: Require -e bundle=<local file>
+          ansible.builtin.assert:
+            that:
+              - bundle is defined
+              - bundle | length > 0
+            fail_msg: "import needs -e bundle=<path of zk-bridge-proofs-<stamp>.tar.gz on this machine>."
+            quiet: true
+
+        - name: Look for the bundle here
+          ansible.builtin.stat:
+            path: "{{ bundle | expanduser }}"
+          delegate_to: localhost
+          become: false
+          register: zkb_proofs_local_bundle
+          check_mode: false
+
+        - name: Check that it is a file
+          ansible.builtin.assert:
+            that:
+              - zkb_proofs_local_bundle.stat.exists
+              - zkb_proofs_local_bundle.stat.isreg
+            fail_msg: "{{ bundle }} is not a file on this machine."
+            quiet: true
+
+    - name: Find the release when one is named
+      ansible.builtin.include_tasks: tasks/resolve_release.yml
+      when: commit is defined or zkb_built_commit is defined
+
+    - name: Name the script and the release it uses
+      ansible.builtin.set_fact:
+        zkb_proofs_release: "{{ zkb_release | default(zkb_current) }}"
+
+    # ---- export --------------------------------------------------------------------------------------------------
+    - name: Export
+      when: zkb_proofs_action == 'export'
+      block:
+        - name: Run the export on the server
+          ansible.builtin.command:
+            argv:
+              - bash
+              - "{{ zkb_proofs_release }}/deploy/app-server/proofs.sh"
+              - export
+          environment:
+            ZKB_RELEASE_DIR: "{{ zkb_proofs_release }}"
+          register: zkb_proofs_run
+          changed_when: true
+
+        - name: Show the summaries
+          ansible.builtin.debug:
+            msg: "{{ zkb_proofs_run.stdout_lines }}"
+
+        - name: Take the bundle path from the last line
+          ansible.builtin.set_fact:
+            zkb_proofs_bundle: "{{ (zkb_proofs_run.stdout_lines | select('match', '^bundle: ') | list | last) | regex_replace('^bundle: ', '') }}"
+
+        - name: Make the local directory
+          ansible.builtin.file:
+            path: "{{ zkb_proofs_local_dir | expanduser }}"
+            state: directory
+            mode: "0700"
+          delegate_to: localhost
+          become: false
+
+        - name: Fetch the bundle and its checksum
+          ansible.builtin.fetch:
+            src: "{{ item }}"
+            dest: "{{ zkb_proofs_local_dir | expanduser }}/{{ item | basename }}"
+            flat: true
+          loop:
+            - "{{ zkb_proofs_bundle }}"
+            - "{{ zkb_proofs_bundle }}.sha256"
+
+        - name: Hash the fetched bundle here
+          ansible.builtin.stat:
+            path: "{{ zkb_proofs_local_dir | expanduser }}/{{ zkb_proofs_bundle | basename }}"
+            checksum_algorithm: sha256
+          delegate_to: localhost
+          become: false
+          register: zkb_proofs_local_stat
+
+        - name: Check the hash against the .sha256 from the server
+          ansible.builtin.assert:
+            that:
+              - zkb_proofs_local_stat.stat.checksum == (lookup('ansible.builtin.file', zkb_proofs_local_dir | expanduser ~ '/' ~ (zkb_proofs_bundle | basename) ~ '.sha256') | trim).split()[0]
+            fail_msg: "The fetched bundle does not match its .sha256."
+            quiet: true
+
+        - name: Say where it is
+          ansible.builtin.debug:
+            msg: "Bundle saved to {{ zkb_proofs_local_dir | expanduser }}/{{ zkb_proofs_bundle | basename }} (sha256 checked)."
+
+    # ---- import --------------------------------------------------------------------------------------------------
+    - name: Import
+      when: zkb_proofs_action == 'import'
+      vars:
+        zkb_proofs_remote_bundle: "{{ zkb_proofs_dir }}/{{ bundle | basename }}"
+      block:
+        - name: Look for the .sha256 next to the bundle
+          ansible.builtin.stat:
+            path: "{{ bundle | expanduser }}.sha256"
+          delegate_to: localhost
+          become: false
+          register: zkb_proofs_local_sum
+          check_mode: false
+
+        - name: Copy the bundle to the server
+          ansible.builtin.copy:
+            src: "{{ bundle | expanduser }}"
+            dest: "{{ zkb_proofs_remote_bundle }}"
+            owner: root
+            group: root
+            mode: "0640"
+
+        - name: Copy its .sha256 when there is one
+          ansible.builtin.copy:
+            src: "{{ bundle | expanduser }}.sha256"
+            dest: "{{ zkb_proofs_remote_bundle }}.sha256"
+            owner: root
+            group: root
+            mode: "0640"
+          when: zkb_proofs_local_sum.stat.exists
+
+        - name: Run the import
+          ansible.builtin.command:
+            argv:
+              - bash
+              - "{{ zkb_proofs_release }}/deploy/app-server/proofs.sh"
+              - import
+              - "{{ zkb_proofs_remote_bundle }}"
+          environment:
+            ZKB_RELEASE_DIR: "{{ zkb_proofs_release }}"
+          register: zkb_proofs_run
+          changed_when: true
+          failed_when: zkb_proofs_run.rc not in [0, 3]
+
+        - name: Show the summaries
+          ansible.builtin.debug:
+            msg: "{{ zkb_proofs_run.stdout_lines + zkb_proofs_run.stderr_lines }}"
+
+        - name: Fail when the import found conflicts
+          ansible.builtin.fail:
+            msg: >-
+              Imported with conflicts. Everything that did not conflict is in; nothing that differed was overwritten.
+              Conflicting files: {{ zkb_proofs_run.stdout_lines | select('match', '^conflict: ') | list }}.
+              Conflicting archive entries are recorded in the proof_archive conflicts table (see the lines above).
+          when: zkb_proofs_run.rc == 3
+
+    # ---- verify --------------------------------------------------------------------------------------------------
+    - name: Verify
+      when: zkb_proofs_action == 'verify'
+      block:
+        - name: Re-check the bundle against the chain
+          ansible.builtin.command:
+            argv: "{{ ['bash', zkb_proofs_release ~ '/deploy/app-server/proofs.sh', 'verify'] + ([zkb_proofs_dir ~ '/' ~ (bundle | basename)] if bundle is defined else []) }}"
+          environment:
+            ZKB_RELEASE_DIR: "{{ zkb_proofs_release }}"
+          register: zkb_proofs_run
+          changed_when: false
+
+        - name: Show the summaries
+          ansible.builtin.debug:
+            msg: "{{ zkb_proofs_run.stdout_lines + zkb_proofs_run.stderr_lines }}"
+
+    # ---- publish -------------------------------------------------------------------------------------------------
+    - name: Publish
+      when: zkb_proofs_action == 'publish'
+      block:
+        - name: Build the public tree, and add it to IPFS unless this is a dry run
+          ansible.builtin.command:
+            argv: "{{ ['bash', zkb_proofs_release ~ '/deploy/app-server/proofs.sh', 'publish'] + (['--dry-run'] if (dry_run | default(false) | bool) else []) }}"
+          environment:
+            ZKB_RELEASE_DIR: "{{ zkb_proofs_release }}"
+          register: zkb_proofs_run
+          changed_when: not (dry_run | default(false) | bool)
+
+        - name: Show the summaries
+          ansible.builtin.debug:
+            msg: "{{ zkb_proofs_run.stdout_lines + zkb_proofs_run.stderr_lines }}"
+
+        - name: Remember the CID for the DNS step
+          ansible.builtin.set_fact:
+            zkb_proofs_cid: "{{ (zkb_proofs_run.stdout_lines | select('match', '^cid: ') | list | last | regex_replace('^cid: ', '')) }}"
+          when: "zkb_proofs_run.stdout_lines | select('match', '^cid: ') | list | length > 0"
+
+# The DNSLink record of the public proofs. Never runs unless -e publish_dns=true. It runs on this machine (like
+# sites.yml): the Cloudflare token is read with `op read`, and the tasks are no_log.
+- name: Point the DNSLink record of the public proofs at the CID
+  hosts: control
+  gather_facts: false
+  tasks:
+    - name: Do nothing unless asked
+      ansible.builtin.meta: end_play
+      when: not (publish_dns | default(false) | bool)
+
+    - name: Take the CID from the publish step or from -e cid=
+      ansible.builtin.set_fact:
+        zkb_proofs_dns_cid: "{{ cid | default(hostvars[groups['zkbfi'][0]].zkb_proofs_cid | default('')) }}"
+
+    - name: Check the request
+      ansible.builtin.assert:
+        that:
+          - zkb_proofs_dns_cid | length > 0
+          - confirm_production | default('') == 'yes'
+          - not (dry_run | default(false) | bool)
+        fail_msg: "publish_dns needs a real publication (or -e cid=<cid>), -e confirm_production=yes, and no dry_run."
+        quiet: true
+
+    - name: Write the record (the old content is printed first)
+      ansible.builtin.include_tasks: tasks/site_docs.yml
+      vars:
+        docs_cid: "{{ zkb_proofs_dns_cid }}"
+        zkb_dnslink_name: "{{ zkb_proofs_dnslink_name }}"

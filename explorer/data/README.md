@@ -104,11 +104,11 @@ Ethereum later). The bots, the terminal and the web app use the same functions:
 | `ensureGateConfirmed({ client, gate, beacon, account })` | What a sender does before a send: `not-needed` (`not-enforcing` or `confirmed`), `sealed`, `wait`, or `confirm` with the `call` to send first and the `gas` of its simulation from `account`. A confirmation that would revert throws `GateEvidenceError` with the code `simulation-reverted`. |
 | `GateEvidenceError` (`code`), `describeRevert`, `GATE_MODES`, `SHAPE_REQUEST_ORDER` | The error, a revert for a log without the URL, the modes, the order in which shapes are asked for. |
 
-How the evidence is bound: the latest block names its `parentBeaconBlockRoot`, and EIP-4788 stores that root under the
+How the evidence is bound: the evidence block (`status.evidenceBlock`, two blocks behind the latest, `EVIDENCE_BLOCK_LAG`) names its `parentBeaconBlockRoot`, and EIP-4788 stores that root under the
 block's time. The evidence takes that time, the header of that root, and two branches under its state root
 (`fork.current_version` and `genesis_validators_root`). The gate accepts it only while the header lies in the epoch of the
 block that carries `confirm`, so it is good until `validUntil` (the start of the next epoch, at most 6.4 minutes on
-Ethereum). In the first slot of an epoch the newest header is from the epoch before: `wait` one slot.
+Ethereum). In the first slots of an epoch the newest header is from the epoch before: `wait` one slot. The simulation of `confirm` runs at the evidence block, so a load-balanced backend that is a block behind cannot miss the root; if it still reverts `BeaconRootUnavailable`, the simulation is repeated once after `SIMULATION_RETRY_MILLISECONDS`.
 
 Send `call` as its own transaction, then the send. There is no Multicall3 bundle: inside a multicall, `msg.sender` of the
 send is the multicall, and the token mediator pulls the tokens from `msg.sender`. A wallet that batches and keeps the sender
@@ -203,3 +203,7 @@ pnpm typecheck     # tsc -p .
 pnpm build         # tsc -p tsconfig.build.json -> dist/
 pnpm abis          # regenerate src/abis from the Foundry output (forge build first)
 ```
+
+## Search
+
+`resolve(text, sources)` reads a search text (`classifyQuery` of `@zkb/core`) and returns typed results (`message`, `transaction`, `address`, `token`, `slot`, `block`, `proof`, `release`), each with `links` to the dapp's Explore, the indexer's page (`#lookup=`), the status page (`#check=`), the backend JSON, the IPFS gateway and the block explorers of the chain (`crossLinks`, `CHAIN_METADATA`). The readers (`sources.indexer`, `sources.chain`, `sources.proofs`, `sources.backend`) are the caller's and all optional; a reader that fails is named in `problems` and the rest still answer. Ranking is fixed: exact identifier, address, prefix, token symbol, number; found before shaped. `SearchSites` are link targets, not connections: the public hosts are `ZKB_SITES`, an empty base makes relative links. The dapp's palette, the indexer's `GET /api/search` and the indexer's page (`deploy/app-server/indexer-home/zkb-search.js`, built by `pnpm --filter @zk-bridge/web run build:indexer-search`) all use it.

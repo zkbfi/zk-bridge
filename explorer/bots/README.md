@@ -226,24 +226,46 @@ With `runner.openDeposits` on (the default), each direction of the runner checks
 start and after each pass, and also right after an update of its own is mined:
 
 1. When the state file says open, nothing happens, for good.
-2. It reads the head of the light client on D. When no attempt used a newer head, it waits: the proof needs a block that
-   a node still serves the state of, and an old head fails again with "distance to target block exceeds maximum proof
-   window".
+2. It reads the head of the light client on D. When no attempt used a newer head, it waits (unless the last failure was
+   an RPC failure, which has its own timer, see below): the proof needs a block that a node still serves the state of, and
+   a logic failure on an old head fails again.
 3. It reads `depositsOpen()` and logs `deposits_open_checked` (`bridge`, `headSlot`, `open`). Open: it writes
    `depositsOpen: true` to the state file and stops checking.
 4. It runs `zk-bridge-prover opening-proof --route <D>_to_<S>`. For the prover this bridge is the source bridge of the
    opposite route. With the default slots the prover takes the head of the light client on D, and runs `eth_getProof` on
    S (the remote RPC of that route) at the block of S that the head stored, the newest one. It logs `deposits_opening`
    (`route`, `remoteSlot`, `storedSlot`, `remoteBlockNumber`).
+   Before the prover runs, the runner asks the explorer indexer's proof archive (`GET /api/proofs/storage/...` on
+   `runner.indexerUrl`) for the `eth_getProof` answer at the block of that head. It uses an entry only if it proves the
+   requested account, block and stored slot's key (not the ones the entry names) against the block's state root, with a
+   block hash that is not zero. When it does, the runner copies it into its proof cache so the prover reads it there. The proof
+   prefetcher reads in the same order: archive first, the local cache second, a node last. A failure is logged as
+   `deposits_opening_cache_failed` or `proof_archive_unavailable` and changes nothing else (docs/proof-archive.md).
 5. It simulates `openDeposits` with `eth_call`. A revert sends nothing. It sends from the runner's signer, with the runner's
    priority fee settings (0.01 gwei or more on chains 943 and 369), through the same queue as its other transactions, and
    logs `deposits_opened` (`transactionHash`, `gasUsed`).
 
 A failure logs `deposits_open_failed` (warning) with `reason` (`read-failed`, `proof-failed`, `wrong-target`,
-`simulation-reverted`, `send-failed`, `transaction-reverted`), `detail` and `retryAfterSeconds`. The next attempt waits for a
-newer head of the light client and a backoff of 60 seconds that doubles with each failure up to 30 minutes, so it never
-loops on a head that cannot work. Until the other light client has its first update the prover refuses with "it needs its
-first update"; that is the same wait.
+`simulation-reverted`, `send-failed`, `transaction-reverted`), `failureClass`, `detail` and `retryAfterSeconds`. What happens next
+depends on the class:
+
+- **`rpc`: the node could not answer now.** These are reads that fail, and a prover error whose text names a proof window
+  ("distance to target block exceeds maximum proof window"), a timeout, a connection error, HTTP 429 or 5xx, "header not
+  found" or a rate limit. The head is not at fault, and the block it stored becomes provable the moment the provider
+  widens its window, so the opener retries the **same head on its own timer**, independent of new heads: after 30 seconds,
+  doubling to 10 minutes, each delay shortened by up to 25 percent of random jitter. Each retry logs `deposits_open_retry`
+  (`reason`, `reasonClass`, `attempt`, `retryAfterSeconds`). It goes on until the bridge opens or a newer head arrives; a
+  newer head is used at once (the next check after it, without waiting for the timer) and starts the count over. A retry
+  starts like any attempt, with a read of `depositsOpen()` and the simulation, so the bridge is opened once.
+- **`logic`: the attempt itself was wrong or reverted.** These are `wrong-target`, `simulation-reverted`,
+  `transaction-reverted`, `send-failed` and a prover error that no RPC pattern matches. No timer: the next attempt waits for
+  a newer head of the light client and a backoff of 60 seconds that doubles with each failure up to 30 minutes. A failed
+  send is a logic failure on purpose: the transaction may be in the mempool, and a blind retry could send twice. Until the
+  other light client has its first update the prover refuses with "it needs its first update"; that is the same wait.
+
+Neither class loops: an attempt never repeats within its delay, the polls of the runner do not touch a head that waits for
+its timer, and a bridge that reports open (or the state file's `depositsOpen`) ends all retries for good. The timer does not
+keep the process alive, and the runner cancels it when it stops.
 
 **The raw header of the remote block.** Besides `eth_getProof`, the proof needs the exact header of that block of S, which
 the prover asks with `debug_getRawHeader` (a Gloas header on Sepolia has fields that the block JSON does not show, so a
@@ -264,11 +286,42 @@ or set `EXPLORER_HEADER_RPC_URL_<chainId>` in the environment of the bot:
 ```
 
 The prover file then gets `header_rpc_urls = [...]` in the destination section of each route whose destination is that
-chain. The prover asks the main RPC first, then each header RPC in order, only for `debug_getRawHeader`, then the rebuild
-from the JSON. Every header must hash to the block hash that the own light client stored, so a header RPC is never trusted:
+chain (the `opening-proof` command reads the remote header there), and in the source section of each route whose source
+is that chain (the `evidence` command reads the header of a Gloas source block there). The prover asks the main RPC
+first, then each header RPC in order, only for `debug_getRawHeader`; `opening-proof` then tries the rebuild from the JSON,
+which cannot give a Gloas header, so `evidence` has no such last step. Every header must hash to the block hash that the own light client stored, so a header RPC is never trusted:
 a wrong one is refused and the next is asked. When all fail, the error names each source (`destination.rpc_url`,
-`destination.header_rpc_urls[0]`, ..., the rebuild from JSON) with its cause and no URL. Header RPC URLs can carry a key;
+`destination.header_rpc_urls[0]`, ..., the rebuild from JSON; or `source.rpc_url`, `source.header_rpc_urls[0]`, ... for
+`evidence`) with its cause and no URL. Header RPC URLs can carry a key;
 each URL and its key-like parts are removed from every log line.
+
+**The proof cache.** Owner, 2026-11-01: "and if the proofs get harder to compute the further back one has to go simply
+based on the rpc recomputing it, then we should also be caching the proofs right? as in, starting now". A node answers
+`eth_getProof` only inside its proof window (measured on 2026-11-01: about 64 blocks on the public Sepolia node, and flaky;
+about 128 on the public chain 943 node; 4096 or more on the official chain 943 RPC; valve refuses every historical depth).
+The head that the light client on D stores is a finalized checkpoint of S, about two epochs old when it is stored, so its
+block is often outside the window by the time the opener asks. So while the bridge on D is closed and
+`runner.openDeposits` is on, each direction also runs a **proof prefetcher** (`createProofPrefetcher` in
+`@zk-bridge/shared/prover`, one step per slot of S):
+
+1. It follows the head of S. At each epoch boundary it takes the checkpoint block: the block of the epoch's first slot, or,
+   when that slot is empty, the latest block before it (slot = (timestamp - genesis) / seconds per slot, with the genesis
+   time and the slot length read from the light client on D, which tracks exactly that grid). It looks at most 16 blocks
+   behind the tip.
+2. At that block it reads `head()` of the light client on S and runs the same `eth_getProof` that `opening-proof` runs: the
+   light client on S, one storage key, `keccak256(abi.encode(head, 3))`. It tries 3 times, 2 then 4 seconds apart, and logs
+   `proof_prefetch_retry`, then `proof_prefetched` (`chainId`, `blockNumber`, `blockHash`, `storedSlot`, `attempts`) or
+   `proof_prefetch_failed` (warning). No log line holds a URL: an error keeps only the host of each URL in it.
+3. It writes the node's raw answer to `<stateDirectory>/proof-cache/<chain id of S>/<light client>/<block>-<hash>.json`
+   and keeps the 256 newest entries of each chain (over a day of epochs) plus the entry of the head the light client on D
+   stores now (`proof_cache_pruned`).
+4. Once the state file says open it logs `proof_prefetch_stopped` and reads nothing more.
+
+The prover file of `opening-proof` names the cache as `proof_cache_dir` in its destination section. The prover reads the
+entry for the block of the stored head before it asks a node (`proof_cache_hit`, `proof_cache_miss`), and verifies the
+cached answer against the state root of the header exactly as it verifies a live one: the cache is not trusted. An entry
+that does not verify is logged as `proof_cache_refused` and the prover asks the node as before. A head whose block was
+never prefetched (the runner was down at that epoch) still depends on the node's window; a later head is prefetched.
 
 ## The traffic bot
 
@@ -331,7 +384,7 @@ a tip only in a token it has a value for.
 
 | Reason | Meaning |
 |---|---|
-| `no-eligible-token` | No candidate can go; `candidates` says why for each (`home-balance-at-minimum`, `copy-balance-below-amount`, `waiting-for-first-return`). |
+| `no-eligible-token` | No candidate can go; `candidates` says why for each (`home-balance-at-minimum`, `copy-balance-below-amount`). |
 | `native-below-reserve` | The worst case of the approval, the confirmation of the gate (`step: "gate-confirm"`) or the relay would take the native coin below `minimumNativeWei`. |
 | `gate-evidence-failed` | No confirmation of the gate: `code` names why (`simulation-reverted`, `beacon-request-failed`, `no-proof`, ...; `detail` holds no URL). Nothing was sent. |
 | `gate-epoch-has-no-header` | The gate needs a confirmation and no header of the epoch came on chain in three slots. |
@@ -343,14 +396,11 @@ a tip only in a token it has a value for.
 | `approval-simulation-reverted`, `relay-simulation-reverted` | The node refused the call; `error` names the error when an ABI knows it. |
 | `approval-reverted`, `relay-reverted` | The transaction was mined and reverted. |
 
-**The first send of each token is delivered by hand.** Until a copy of a native token came home once, the mediator
-sends every relay of it as a deploy message, and the runner skips a deploy message with `no-price-for-fee-token` (the
-indexer names no destination token for it). So a native token goes out once, when it was never relayed, and then waits
-(`waiting-for-first-return`) until a copy came home; its copies go home first. `traffic_sent` marks the one deploy
-message with `deployMessage: true` (and `deploysCopy: true` when the copy has no code yet). Deliver it once by hand
-through the delivery router (anyone may). The copies then go home as ordinary releases that the runner prices, and from
-then on every send is one. That is one hand delivery for each test token: four on the testnet. The end-to-end stage
-`traffic` does exactly that.
+**Deploy messages.** Until a copy of a native token came home once, the mediator sends every relay of it as a deploy
+message (`traffic_sent` marks it with `deployMessage: true`, and `deploysCopy: true` while the copy has no code yet).
+The runner prices it in the copy that the token factory predicts, with the decimals of the home token, and the mediator
+reuses a copy that exists, so the bot keeps sending the token. It does not wait for a copy to come home: while the way
+home is closed (deposits not open yet), that wait would stop all traffic, and with it the proofs that open the way home.
 
 An attempt uses up its planned time, sent or skipped. The time is marked in `stateDirectory/traffic-<pair>.json` before the
 first transaction leaves, so an attempt whose receipt never arrives is not sent twice. `--once` sends in each enabled

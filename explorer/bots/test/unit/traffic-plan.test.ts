@@ -104,13 +104,10 @@ describe("pickTransfer", () => {
     });
   });
 
-  it("sends a native token that was never relayed, and holds it back until a copy came home", () => {
+  it("sends a native token again before a copy came home, because the runner prices a deploy message", () => {
+    // The way home may be closed (deposits not open yet), so waiting for a copy to come home could wait forever.
     expect(pickTransfer([candidate({ homeRecord: { registered: false, acknowledged: false } })], () => 0).kind).toBe("send");
-    expect(pickTransfer([candidate({ homeRecord: { registered: true, acknowledged: false } })], () => 0)).toEqual({
-      kind: "skip",
-      reason: "no-eligible-token",
-      candidates: [{ symbol: "tUSD", kind: "native", reason: "waiting-for-first-return" }],
-    });
+    expect(pickTransfer([candidate({ homeRecord: { registered: true, acknowledged: false } })], () => 0).kind).toBe("send");
   });
 
   it("sends a copy home first while its native token has not seen a copy come home", () => {

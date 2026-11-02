@@ -592,11 +592,17 @@ fn run_evidence(
         &route.source.state_urls,
         state_cache.as_ref(),
     );
+    let source_header_sources = header_clients(
+        "source",
+        route.source.chain_id,
+        &route.source.header_rpc_urls,
+    );
     let evidence = build_evidence(&evidence_request(
         name,
         route,
         &EvidenceClients {
             source: &source,
+            source_header_sources: &source_header_sources,
             destination: &destination,
             beacon: &beacon,
         },
@@ -610,9 +616,10 @@ fn run_evidence(
     Ok(0)
 }
 
-/// The three clients that the evidence builder reads.
+/// The clients that the evidence builder reads.
 struct EvidenceClients<'a> {
     source: &'a ChainClient,
+    source_header_sources: &'a [ChainClient],
     destination: &'a ChainClient,
     beacon: &'a HttpBeaconSource,
 }
@@ -632,6 +639,7 @@ fn evidence_request<'a>(
         source_bridge: route.source.bridge_address()?,
         destination_bridge: route.destination.bridge_address()?,
         light_client: route.destination.light_client_address()?,
+        source_header_sources: clients.source_header_sources,
         transaction,
         log_index: arguments.log_index,
         anchor_slot: arguments.anchor_slot,
@@ -719,6 +727,21 @@ fn run_checkpoint(
     Ok(0)
 }
 
+/// The header-only clients of `<side>.header_rpc_urls`, in order, each named `<side>.header_rpc_urls[i]` so that an error
+/// names the entry and not its URL.
+fn header_clients(side: &str, chain_id: u64, urls: &[String]) -> Vec<ChainClient> {
+    urls.iter()
+        .enumerate()
+        .map(|(index, url)| {
+            ChainClient::header_only(
+                &format!("{side}.header_rpc_urls[{index}]"),
+                chain_id,
+                Box::new(HttpRpc::new(url)),
+            )
+        })
+        .collect()
+}
+
 /// Prints the opening proof of the source bridge of a route as one JSON object.
 ///
 /// # Errors
@@ -744,19 +767,11 @@ fn run_opening_proof(
         route.destination.chain_id,
         &route.destination.rpc_url,
     )?;
-    let header_sources: Vec<ChainClient> = route
-        .destination
-        .header_rpc_urls
-        .iter()
-        .enumerate()
-        .map(|(index, url)| {
-            ChainClient::header_only(
-                &format!("destination.header_rpc_urls[{index}]"),
-                route.destination.chain_id,
-                Box::new(HttpRpc::new(url)),
-            )
-        })
-        .collect();
+    let header_sources = header_clients(
+        "destination",
+        route.destination.chain_id,
+        &route.destination.header_rpc_urls,
+    );
     let package = build_opening_proof(&OpeningRequest {
         route: name,
         own_chain: &own,
@@ -766,6 +781,11 @@ fn run_opening_proof(
         remote_light_client: route.destination.light_client_address()?,
         remote_slot: arguments.remote_slot,
         stored_slot: arguments.stored_slot,
+        proof_cache_dir: route
+            .destination
+            .proof_cache_dir
+            .as_deref()
+            .map(std::path::Path::new),
     })?;
     write_json(out, &package.to_json())?;
     Ok(0)

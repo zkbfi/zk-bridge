@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { LightClientHead } from "@terminal/model/types";
-import { lightClientDelay } from "../../src/bridge/bridge-model";
+import { FIXTURE_PAIR } from "@terminal/data/fixtures";
+import { chainsFor, lightClientDelay, transferEstimate, transferSteps, withLightClientStep } from "../../src/bridge/bridge-model";
 
 // Recorded from https://indexer.zkb.fi/api/heads (2026-10-30): the light client on Sepolia (side "first"), which tracks
 // PulseChain v4, was 9504 slots (95,690 s) behind; the one on PulseChain v4 reported no lag.
@@ -16,5 +17,19 @@ describe("the light client a transfer waits for", () => {
     expect(lightClientDelay([onSepolia, onPulseChain], "first")).toBeNull();
     expect(lightClientDelay([{ ...onSepolia, lagSlots: 20n }], "second")).toBeNull();
     expect(lightClientDelay([], "second")).toBeNull();
+  });
+});
+
+describe("the light client's age in the step list, not the time", () => {
+  const { source, destination } = chainsFor(FIXTURE_PAIR, "second-to-first");
+  it("adds a row that says how far behind it is and that it adds no wait; the total stays the plain estimate", () => {
+    const steps = withLightClientStep(transferSteps(source, destination), lightClientDelay([onSepolia, onPulseChain], "second"));
+    const row = steps.find((step) => /Light client is 32 h behind/.test(step.label));
+    expect(row).toMatchObject({ estimate: "no added wait", seconds: 0 });
+    expect(steps.reduce((sum, step) => sum + step.seconds, 0)).toBe(transferSteps(source, destination).reduce((sum, step) => sum + step.seconds, 0));
+    expect(transferEstimate(source, destination)).not.toMatch(/light client|behind/);
+  });
+  it("adds nothing without a delay", () => {
+    expect(withLightClientStep(transferSteps(source, destination), null)).toEqual(transferSteps(source, destination));
   });
 });

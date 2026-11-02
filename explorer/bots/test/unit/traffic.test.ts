@@ -109,7 +109,7 @@ describe("a traffic send", () => {
     expect(eventsNamed(logs, "traffic_sent")[1]).toMatchObject({ deploysCopy: false, messageGasLimit: null });
   });
 
-  it("marks the first send of a token as a deploy message, and holds the token back after it", async () => {
+  it("marks every send of a token as a deploy message until a copy came home, and keeps sending it", async () => {
     const { first, logs, traffic } = world();
     first.state.balances.set(DOLLAR.toLowerCase(), 100_000n * DOLLAR_UNIT);
     first.state.allowances.set(DOLLAR.toLowerCase(), 10n ** 30n);
@@ -117,8 +117,9 @@ describe("a traffic send", () => {
     await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
     expect(eventsNamed(logs, "traffic_sent")[0]).toMatchObject({ deployMessage: true, deploysCopy: false });
     first.state.records.set(DOLLAR.toLowerCase(), { registered: true, acknowledged: false });
-    expect(await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "no-eligible-token" });
-    expect(eventsNamed(logs, "traffic_skipped")[0]).toMatchObject({ candidates: [{ symbol: "tUSD", kind: "native", reason: "waiting-for-first-return" }, { kind: "copy" }] });
+    await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
+    expect(eventsNamed(logs, "traffic_skipped")).toEqual([]);
+    expect(eventsNamed(logs, "traffic_sent")[1]).toMatchObject({ deployMessage: true });
   });
 
   it("logs a send that deploys the copy also without a gas limit for it", async () => {
@@ -176,6 +177,17 @@ describe("a traffic send", () => {
     first.port.simulations.set(DOLLAR.toLowerCase(), { ok: false, reason: "paused" });
     expect(await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "approval-simulation-reverted" });
     expect(first.port.sent).toHaveLength(0);
+  });
+
+  it("names the gas and the fee that the failed simulation used", async () => {
+    const { first, logs, traffic } = world();
+    first.state.balances.set(DOLLAR.toLowerCase(), 100_000n * DOLLAR_UNIT);
+    first.port.simulations.set(DOLLAR.toLowerCase(), { ok: false, reason: "paused", used: { gas: 30_000_000n, maxFeePerGas: null } });
+    await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
+    expect(eventsNamed(logs, "traffic_skipped")[0]).toMatchObject({ detail: "paused", simulatedGas: "30000000", simulatedMaxFeePerGas: "none" });
+    first.port.simulations.set(DOLLAR.toLowerCase(), { ok: false, reason: "paused", used: { gas: 1n, maxFeePerGas: 9n } });
+    await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
+    expect(eventsNamed(logs, "traffic_skipped")[1]).toMatchObject({ simulatedGas: "1", simulatedMaxFeePerGas: "9" });
   });
 
   it("keeps the native reserve before the approval", async () => {
@@ -367,6 +379,22 @@ describe("the gate of the source chain", () => {
     expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "gate-evidence-failed" });
     expect(eventsNamed(built.logs, "traffic_skipped")[1]).toMatchObject({ code: null, detail: "socket hang up" });
     expect(built.first.port.sent).toHaveLength(0);
+  });
+
+  it("asks again after a node error, such as a load-balanced node that lacks the block yet, and then sends", async () => {
+    const gate = gateAnswering(new Error("Requested resource not found. block not found: 0xb7d98a"), new Error("socket hang up"), { kind: "not-needed", epoch: 6n } as GateConfirmation);
+    const built = world({ gate });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ kind: "sent" });
+    expect(gate.ensure).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not ask again when the evidence itself is refused", async () => {
+    const gate = gateAnswering(new GateEvidenceError("simulation-reverted", "confirm would revert"), { kind: "not-needed", epoch: 6n } as GateConfirmation);
+    const built = world({ gate });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "gate-evidence-failed" });
+    expect(gate.ensure).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the native reserve before the confirmation", async () => {
