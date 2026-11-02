@@ -14,6 +14,8 @@
 #   6. Caddy as the TLS proxy. Until the backend has a host name it answers 503 on port 80.
 #   7. An IPFS node (kubo) that pins the release archives. Its RPC API listens on 127.0.0.1:5001 only, and it runs no
 #      HTTP gateway. Peers reach it on port 4001 (TCP and UDP), which the cloud firewall must allow.
+#   8. The proof archive backup: /var/backups/zk-bridge/proofs, and the nightly export timer (proofs.sh). The units come
+#      from the release in /opt/zk-bridge/current; on a new server, run this script again after the first deploy.
 #
 # It installs no secret, and no service of ours except the IPFS node. The others come with the deploy step. The token
 # of the IPFS API is set with zkb-ipfs-api-token, which this script installs. The token travels on standard input only:
@@ -281,6 +283,24 @@ if jq -e '.API.Authorizations | length > 0' "$IPFS_PATH/config" >/dev/null; then
 else
   systemctl stop zk-bridge-ipfs.service
   log "ipfs: no API token yet, so the node stays stopped. Set one: op read op://zkb.fi/kubo/credential | ssh zkbfi-app zkb-ipfs-api-token"
+fi
+
+# --- 8. Proof archive backup ----------------------------------------------------------------------------------
+log "proof archive backup"
+# 0711: the archive user and the service users reach the staging directories inside, and nobody lists it. The bundles
+# are 0640 root:root.
+install -d -m 0755 -o root -g root /var/backups/zk-bridge
+install -d -m 0711 -o root -g root /var/backups/zk-bridge/proofs
+# proofs.env (config/proofs/proofs.env.example) and the off-site hooks (offsite.d): root's, nobody else's.
+install -d -m 0750 -o root -g root /etc/zk-bridge/proofs /etc/zk-bridge/proofs/offsite.d
+PROOFS_UNITS=/opt/zk-bridge/current/deploy/app-server/proofs
+if [ -f "$PROOFS_UNITS/zk-bridge-proofs-export.service" ] && [ -f "$PROOFS_UNITS/zk-bridge-proofs-export.timer" ]; then
+  install -m 0644 -o root -g root "$PROOFS_UNITS/zk-bridge-proofs-export.service" "$PROOFS_UNITS/zk-bridge-proofs-export.timer" /etc/systemd/system/
+  systemctl daemon-reload
+  # The timer only; the service runs when the timer says (or by hand: systemctl start zk-bridge-proofs-export).
+  systemctl enable --now zk-bridge-proofs-export.timer
+else
+  log "proofs: no release yet, so no export units. Deploy, then run this script again."
 fi
 
 log "done: node $(node --version), $(RUSTUP_HOME=$RUSTUP_HOME "$CARGO_HOME/bin/rustc" --version), $(psql --version)"

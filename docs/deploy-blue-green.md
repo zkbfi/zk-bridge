@@ -150,6 +150,17 @@ same switch without the warning.
 Binary upgrades (`apt upgrade caddy`) restart the process and drop connections for a moment. Do them alone, never in the
 same window as another step. Never `systemctl restart caddy` for a config change.
 
+## Proof archive
+
+Each indexer release gets a new Ponder schema, but the proof archive lives in its own schema, `proof_archive`, and
+moves across releases untouched. It is backed up separately from the backend snapshots above:
+
+- The nightly `zk-bridge-proofs-export.timer` writes a bundle to `/var/backups/zk-bridge/proofs`.
+- `ansible-playbook proofs.yml -e action=export|import|verify|publish` runs the same steps by hand.
+- The owner's Mac pulls a copy every day.
+
+See docs/proof-archive.md.
+
 ## Hosted sites
 
 These are not on the app server. `sites.yml` runs on your machine with the repository's scripts and wrangler, and does only

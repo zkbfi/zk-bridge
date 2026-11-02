@@ -235,6 +235,12 @@ start and after each pass, and also right after an update of its own is mined:
    opposite route. With the default slots the prover takes the head of the light client on D, and runs `eth_getProof` on
    S (the remote RPC of that route) at the block of S that the head stored, the newest one. It logs `deposits_opening`
    (`route`, `remoteSlot`, `storedSlot`, `remoteBlockNumber`).
+   Before the prover runs, the runner asks the explorer indexer's proof archive (`GET /api/proofs/storage/...` on
+   `runner.indexerUrl`) for the `eth_getProof` answer at the block of that head. It uses an entry only if it proves the
+   requested account, block and stored slot's key (not the ones the entry names) against the block's state root, with a
+   block hash that is not zero. When it does, the runner copies it into its proof cache so the prover reads it there. The proof
+   prefetcher reads in the same order: archive first, the local cache second, a node last. A failure is logged as
+   `deposits_opening_cache_failed` or `proof_archive_unavailable` and changes nothing else (docs/proof-archive.md).
 5. It simulates `openDeposits` with `eth_call`. A revert sends nothing. It sends from the runner's signer, with the runner's
    priority fee settings (0.01 gwei or more on chains 943 and 369), through the same queue as its other transactions, and
    logs `deposits_opened` (`transactionHash`, `gasUsed`).

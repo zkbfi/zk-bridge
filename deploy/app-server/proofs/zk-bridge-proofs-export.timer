@@ -1,0 +1,12 @@
+# Runs zk-bridge-proofs-export.service every night at about 03:30 UTC. A missed run (server down) runs at boot
+# (Persistent). systemd never starts the oneshot again while a run is still going.
+[Unit]
+Description=zk-bridge proof archive export, nightly
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+RandomizedDelaySec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -53,6 +53,8 @@ curl -s 'localhost:42069/api/feed?status=sent,covered&limit=20'
 | `EXPLORER_DEFAULT_DELIVERY_GAS` | Gas that `/api/delivery-cost` gives for a kind with no samples. The default is the Foundry measured sum: the delivery router delivery call with the gas based fee (about 197807 gas, `test/hardened/mediator/DeliveryRouterGas.t.sol`), plus the bridge proof check (290655 gas, `test/hardened/MessageBridgeGas.t.sol`), plus 21000 gas of transaction base. That sum is 509462. The default rounds it up to 550000 for calldata. | 550000 |
 | `DATABASE_URL` | Postgres connection string. Without it, Ponder uses its embedded PGlite database in `.ponder/pglite`. | PGlite |
 | `PORT` / `--port` | HTTP port. | 42069 |
+| `PROOF_ARCHIVE` | `off` turns the proof archive off. It is on whenever `DATABASE_URL` is set. | on |
+| `PROOF_ARCHIVE_BACKEND_URL` | The backend whose held proofs and evidence the archive reads (`GET /archive/proofs`, loopback only). | none (skipped) |
 
 No endpoint, key or address of a deployment is committed. The API never shows RPC or beacon URLs.
 
@@ -292,6 +294,30 @@ Example GraphQL:
 ```
 
 Prefer the JSON routes above for the dashboard: they join tokens, format amounts as strings and need no schema import.
+
+## Proof archive
+
+The indexer also keeps the proofs that are hard to compute again, in the Postgres schema `proof_archive`. That schema
+sits beside Ponder's versioned schemas and survives every release. Rows are written by upsert and never deleted; a
+different value for the same key is recorded as a conflict and never replaces the first one. The code is in
+`src/proof-archive`, and docs/proof-archive.md has the design, the tables, the export and import scripts and the IPFS
+publication.
+
+- **Storage proofs:** `archiver.ts`, in this process, fetches `eth_getProof` for the light client of each side at every
+  epoch boundary within 16 blocks of the tip, using the runner's prefetcher.
+- **Light client proofs:** the `HeadUpdated` handler takes the `update` calldata, direct or inside Multicall3. Held
+  proofs and evidence come from the backend.
+- **Read routes:**
+  - `GET /api/proofs/storage/:chainId/:address/:block` returns `{ entries }` (proof cache entries without the fetch
+    time), or 404.
+  - `GET /api/proofs/light-client/:direction?startSlot=&limit=`
+  - `GET /api/proofs/evidence/:messageId`
+  - `GET /api/proofs/summary`
+
+  They show the same public fields as the IPFS tree (no source host, fetch time, job id or source) and answer 503 while
+  the archive is off. Nothing they serve is trusted: verify before use.
+- **Command line:** `bin/zk-bridge-proof-archive.mjs` (migrate, export, import, ingest-backend, ingest-cache,
+  manifest-write, manifest-check, verify-storage, public-export, public-check), run by `deploy/app-server/proofs.sh`.
 
 ## How it derives status
 

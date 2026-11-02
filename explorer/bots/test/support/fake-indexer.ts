@@ -10,6 +10,10 @@ export interface FakeIndexer {
   readonly items: FeedItem[];
   /** The call data by message identifier. */
   readonly data: Record<string, Hex>;
+  /** The proof archive: entries by path, such as `/api/proofs/storage/1/0x.../900`. Other paths answer 404. */
+  readonly storageProofs: Record<string, unknown[]>;
+  /** The paths it was asked, in order. */
+  readonly requested: string[];
   stop(): Promise<void>;
 }
 
@@ -17,9 +21,17 @@ export interface FakeIndexer {
 export async function startFakeIndexer(): Promise<FakeIndexer> {
   const items: FeedItem[] = [];
   const data: Record<string, Hex> = {};
+  const storageProofs: Record<string, unknown[]> = {};
+  const requested: string[] = [];
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
+    requested.push(url.pathname);
     response.setHeader("content-type", "application/json");
+    const archived = storageProofs[url.pathname];
+    if (archived !== undefined) {
+      response.end(JSON.stringify({ entries: archived }));
+      return;
+    }
     if (url.pathname === "/api/feed") {
       const statuses = (url.searchParams.get("status") ?? "").split(",");
       response.end(JSON.stringify({ items: items.filter((item) => statuses.includes(item.status)), nextCursor: null }));
@@ -39,6 +51,8 @@ export async function startFakeIndexer(): Promise<FakeIndexer> {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     items,
     data,
+    storageProofs,
+    requested,
     stop: () =>
       new Promise<void>((resolve) => {
         server.closeAllConnections();

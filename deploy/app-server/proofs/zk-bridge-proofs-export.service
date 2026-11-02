@@ -1,0 +1,48 @@
+# Nightly export of the durable proof archive (deploy/app-server/proofs.sh): the held proofs and files go into the
+# archive, and one bundle zk-bridge-proofs-<stamp>.tar.gz (+ .sha256) lands in /var/backups/zk-bridge/proofs. The newest
+# 14 stay. Started by zk-bridge-proofs-export.timer. provision.sh installs both units; deploy.sh does not.
+#
+#   journalctl -u zk-bridge-proofs-export --since -1d
+#   systemctl list-units --failed 'zk-bridge-proofs-export*'
+#
+# It runs as root because it hands each piece of work to the owner of the data (runuser for the service users'
+# files, systemd-run for the archive CLI as zkb_indexer), and writes nothing else than the backup directory. The
+# state directories are writable in this sandbox only because the SQLite snapshot (WAL mode) opens its -shm file for
+# writing; the snapshot itself is written into the backup directory.
+[Unit]
+Description=zk-bridge proof archive export
+Wants=network-online.target
+After=network-online.target postgresql.service
+ConditionPathExists=/opt/zk-bridge/current/deploy/app-server/proofs.sh
+# OnFailure=zk-bridge-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+# Off by default. ZKB_PROOFS_PUBLISH=1 here adds the public IPFS publication to each run (proofs.env.example).
+EnvironmentFile=-/etc/zk-bridge/proofs/proofs.env
+ExecStart=/opt/zk-bridge/current/deploy/app-server/proofs.sh export
+TimeoutStartSec=2h
+# A background job: it must not slow the indexer, the backend or the bots.
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+
+# Sandbox. Writable: the backup directory and the state directories of the two services whose files are read.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/backups/zk-bridge/proofs /var/lib/zk-bridge-backend /var/lib/zk-bridge-runner
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0022

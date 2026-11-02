@@ -5,6 +5,7 @@ import { initialHeadColumns, readInitialHead, type ContractReader } from "../lib
 import { ageMessages, coverMessages } from "../lib/message-store";
 import { pair } from "../lib/pair";
 import { recordTransactionCost } from "../lib/transaction-costs";
+import { archiveHeadUpdate } from "../proof-archive/runtime";
 
 /** Every few blocks: store the chain clock and age the sends that passed the finality window. */
 ponder.on("ChainTip:block", async ({ event, context }) => {
@@ -72,6 +73,15 @@ ponder.on("BeaconLightClient:HeadUpdated", async ({ event, context }) => {
     poster: event.transaction.from,
   });
   await recordTransactionCost(context, event);
+  // The proof that stored this head is in the calldata: keep it in the durable archive. Never throws.
+  await archiveHeadUpdate(pair, {
+    chainId,
+    input: event.transaction.input,
+    transactionHash: event.transaction.hash,
+    blockNumber: event.block.number,
+    slot: event.args.slot,
+    headerRoot: event.args.headerRoot,
+  });
   const previous = await context.db.find(lightClientHeads, { chainId });
   // No tip read the deployment head yet (the update came first): the state one block earlier still holds it.
   const initial =

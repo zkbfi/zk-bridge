@@ -1,6 +1,6 @@
 import type { Address, Hex } from "viem";
 import type { ProofDirection } from "@zk-bridge/shared";
-import type { LightClientReader, OpeningProver } from "@zk-bridge/shared/prover";
+import { withoutUrls, type LightClientReader, type OpeningProver } from "@zk-bridge/shared/prover";
 import { sendTerms, type TransactionPort } from "../chain/transactions.ts";
 import type { Logger } from "../logging/logger.ts";
 import type { StateStore } from "../runtime/state-file.ts";
@@ -32,6 +32,12 @@ export interface DepositOpenerDependencies {
   /** The light client on the destination chain: its head is the newest block of the source chain it stored. */
   readonly lightClient: LightClientReader;
   readonly prover: OpeningProver;
+  /**
+   * Runs before each opening proof: the runner fetches the proof cache entry of the stored head from the indexer's proof
+   * archive into the local cache, so the prover finds it there and does not ask a node that may have pruned it. A failure
+   * is logged and the prover goes on (it asks a node when the entry is missing). Optional.
+   */
+  readonly prepareOpening?: () => Promise<void>;
   /** The port of the destination chain, with the runner's signer and fee settings. */
   readonly chain: TransactionPort;
   /** The queue of the runner's transactions on the destination chain, so that no two sends race for a nonce. */
@@ -183,6 +189,13 @@ export function createDepositOpener(dependencies: DepositOpenerDependencies): De
     logger.info("deposits_open_checked", { bridge, headSlot, open });
     if (open) return markOpen();
 
+    if (dependencies.prepareOpening !== undefined) {
+      try {
+        await dependencies.prepareOpening();
+      } catch (error) {
+        logger.warn("deposits_opening_cache_failed", { route, bridge, headSlot, detail: withoutUrls(messageOf(error)) });
+      }
+    }
     const opening = await failingAs("proof-failed", () => dependencies.prover.openingProof({ direction: dependencies.openingDirection }), "text");
     if (opening.to.toLowerCase() !== bridge.toLowerCase()) throw new AttemptFailure("wrong-target", `the proof is for ${opening.to}, the bridge is ${bridge}`);
     if (opening.depositsOpen) return markOpen();

@@ -105,6 +105,7 @@ interface WorldOptions {
   readonly random?: (() => number) | null;
   /** Leave the scheduler out of the dependencies, so the opener uses its own timer. */
   readonly realTimer?: boolean;
+  readonly prepareOpening?: () => Promise<void>;
 }
 
 /** A timer the test fires by hand: the fake clock of the retries. */
@@ -157,6 +158,7 @@ function world(options: WorldOptions = {}) {
     now: () => clock,
     logger,
     ...(options.realTimer === true ? {} : { schedule: timers.schedule }),
+    ...(options.prepareOpening === undefined ? {} : { prepareOpening: options.prepareOpening }),
     ...(options.random === null ? {} : { random: options.random ?? (() => 0) }),
   };
   const opener = createDepositOpener(dependencies);
@@ -530,5 +532,24 @@ describe("the deposit opener and its state file", () => {
     };
     const run = world({ open: [true], state });
     await expect(run.opener.check()).rejects.toThrow("disk full");
+  });
+});
+
+describe("the opener fetches the cache entry of the stored head before the prover runs", () => {
+  it("prepares before each opening proof, and goes on with the proof when the preparation fails, logging no URL", async () => {
+    const order: string[] = [];
+    const prepareOpening = vi.fn(async () => {
+      order.push("prepare");
+      if (prepareOpening.mock.calls.length === 1) throw new Error("the proof archive at https://indexer.example/key answered 503");
+    });
+    const setup = world({ prepareOpening });
+    setup.openingProof.mockImplementation(async () => {
+      order.push("prove");
+      return openingPackage();
+    });
+    await setup.opener.check();
+    expect(order).toEqual(["prepare", "prove"]);
+    const warning = setup.events().find((event) => event.event === "deposits_opening_cache_failed");
+    expect(warning).toMatchObject({ route: ROUTE, bridge: BRIDGE, detail: "the proof archive at https://indexer.example answered 503" });
   });
 });
