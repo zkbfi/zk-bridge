@@ -135,10 +135,14 @@ function stateLines(stateUrls: readonly string[], cacheDirectory: string | undef
   return lines;
 }
 
-/** `header_rpc_urls` of the destination: the endpoints that the `opening-proof` command asks for the raw header. */
-function headerLines(headerRpcUrls: readonly string[]): readonly string[] {
+/**
+ * `header_rpc_urls` of one side: the endpoints that the prover asks for the raw header when the main RPC lacks
+ * `debug_getRawHeader`. The `opening-proof` command reads them on the destination, the `evidence` command on the source
+ * (a Gloas source block).
+ */
+function headerLines(headerRpcUrls: readonly string[], side: "source" | "destination"): readonly string[] {
   if (headerRpcUrls.length === 0) return [];
-  return [`header_rpc_urls = [${headerRpcUrls.map((url) => quoted(url, "destination header rpc endpoint")).join(", ")}]`];
+  return [`header_rpc_urls = [${headerRpcUrls.map((url) => quoted(url, `${side} header rpc endpoint`)).join(", ")}]`];
 }
 
 function handoffLines(handoff: HandoffSection | undefined): readonly string[] {
@@ -183,6 +187,7 @@ export function renderProverConfig(
     `rpc_url = ${quoted(source.rpcUrl, "source rpc endpoint")}`,
     `bridge = ${quoted(source.contracts.bridge, "source bridge")}`,
     ...stateLines(source.stateUrls ?? [], options.stateCacheDirectory),
+    ...headerLines(source.headerRpcUrls ?? [], "source"),
     "",
     `[routes.${route.name}.destination]`,
     `chain_id = ${destination.chainId}`,
@@ -190,7 +195,7 @@ export function renderProverConfig(
     `light_client = ${quoted(destination.contracts.lightClient, "destination light client")}`,
     `bridge = ${quoted(destination.contracts.bridge, "destination bridge")}`,
     `start_block = ${destination.startBlock}`,
-    ...headerLines(destination.headerRpcUrls ?? []),
+    ...headerLines(destination.headerRpcUrls ?? [], "destination"),
     "",
   );
   return lines.join("\n");

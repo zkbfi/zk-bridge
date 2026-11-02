@@ -420,6 +420,8 @@ Both calls must print `true`. Until then, a send reverts with `DepositsNotOpen()
 
 Every header is checked against the block hash that the own light client stored, so a header RPC is never trusted. When no source gives the header, the error names each one (`destination.rpc_url`, `destination.header_rpc_urls[i]`, the rebuild from JSON) with its cause and no URL. Never paste the keyed URL into a log or a ticket.
 
+**The delivery of a message from Sepolia needs the same header RPC.** On 2026-11-01 the first delivery Sepolia → chain 943 failed in `evidence` with `rpc error -32601: the method debug_getRawHeader does not exist/is not available`: a message in a Gloas block is proven with the raw header of its block, and the main Sepolia RPC lacks the method. The same setting covers it: the bots and the backend write the header RPCs of a chain into the source section of each route whose source is that chain, too. By hand, set `header_rpc_urls = ["<keyed Sepolia RPC>"]` in the source section of the route in `prover.toml`. The `evidence` command asks `source.rpc_url`, then each `source.header_rpc_urls` entry in order; a Gloas header cannot be rebuilt from the block JSON, so there is no rebuild step, and the error names `source.rpc_url` and each `source.header_rpc_urls[i]` with its cause and no URL.
+
 ## Step 9: confirm the gate on Sepolia
 
 Owner, 2026-11-01: "sounds like we need to finish the initial inputs to enable deposits, right?", then "yes, build the gate evidence tool", and: "more toolING - functions that can be used by other parts of the codebase such as the frontend".
