@@ -39,7 +39,7 @@ The backend reads no endpoint from the environment.
 | `rpcUrls` | The execution endpoint of each chain, by chain identifier. Both chains of the pair are required. |
 | `beaconUrls` | The beacon endpoint of each chain. The `requests` module needs both. |
 | `stateUrls` | Optional. More beacon APIs of each chain, by chain identifier, as a list. The prover asks them in order, only for states, when the beacon endpoint does not serve an old state. The prover also keeps every state it verified in `beacon-states/` next to `databasePath`, and reads the start state of a job from there first. |
-| `headerRpcUrls` | Optional. More execution RPCs of each chain, by chain identifier, as a list. The prover asks them in order, only for `debug_getRawHeader`, when the RPC endpoint lacks it (the `opening-proof` command needs the raw header of the other chain's block). Every header is checked against its block hash. |
+| `headerRpcUrls` | Optional. More execution RPCs of each chain, by chain identifier, as a list. The prover asks them in order, only for `debug_getRawHeader`, when the RPC endpoint lacks it (the `opening-proof` command needs the raw header of the other chain's block, and the `evidence` command the raw header of a Gloas source block). The prover file names them for both sides of a route (`source.header_rpc_urls`, `destination.header_rpc_urls`). Every header is checked against its block hash. |
 | `msgboardUrl` | The msgboard node. The `webhook` and `msgboard-indexer` modules need it. |
 | `indexerUrl` | The chain indexer. The `requests` module needs it and refuses to start without it. Without it the archive reports `degraded`. |
 | `acceptOracleProof` | Local testing only. See below. Default `false`. |

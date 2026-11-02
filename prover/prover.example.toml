@@ -50,6 +50,10 @@ bridge = "0x0000000000000000000000000000000000000001"          # REPLACE
 # so it does not depend on a node that still serves an old state. Keeps the 16 newest states and every state younger than
 # 3 days, files of mode 0600.
 # state_cache_dir = "/var/lib/zk-bridge-publisher/beacon-states"
+# More execution RPCs of the source chain, asked in order only for `debug_getRawHeader` when `rpc_url` lacks it. The
+# `evidence` command needs the raw header of a source block at or after Gloas (its fields are not all in the block JSON).
+# Every header is checked against the block hash, so none is trusted.
+# header_rpc_urls = ["https://REPLACE"]
 
 [routes.ethereum_to_pulsechain.destination]
 chain_id = 369
