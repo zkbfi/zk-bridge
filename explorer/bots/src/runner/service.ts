@@ -166,6 +166,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
 
   const jobs: Promise<void>[] = [];
   const subscriptions: Array<{ close(): Promise<void> }> = [];
+  const openers: DepositOpener[] = [];
   for (const direction of setup.directions as readonly ProofDirection[]) {
     const { source, destination } = sidesOfDirection(pair, direction);
     const directionLogger = logger.child({ bot: "runner", pair: pair.name, direction });
@@ -227,6 +228,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       now,
       logger: directionLogger,
     });
+    openers.push(opener);
     const runner: Runner = createRunner({
       pairName: pair.name,
       direction,
@@ -278,6 +280,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
     );
   }
   await Promise.all(jobs);
+  for (const opener of openers) opener.stop();
   await Promise.all(subscriptions.map((subscription) => subscription.close()));
   await feed.close();
   await signer.dispose();
