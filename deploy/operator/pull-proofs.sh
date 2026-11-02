@@ -100,12 +100,16 @@ verify_bundle() {
   done <<EOF_LINES
 $lines
 EOF_LINES
-  # No file may be missing from the manifest.
+  # No file may be missing from the manifest. The listed paths go to a file first: `grep -q` at the end of a pipe exits
+  # at the first match, the writer before it then dies of SIGPIPE, and pipefail turns the match into a failure.
+  local listed=$work.listed
+  printf '%s\n' "$lines" | sed 's/^[^ ]* //' >"$listed"
   while IFS= read -r rel; do
     rel=${rel#./}
     [ "$rel" = manifest.json ] && continue
-    printf '%s\n' "$lines" | sed 's/^[^ ]* //' | grep -qxF -- "$rel" || { log "$rel is in the bundle but not in the manifest"; return 1; }
+    grep -qxF -- "$rel" "$listed" || { rm -f "$listed"; log "$rel is in the bundle but not in the manifest"; return 1; }
   done < <(cd "$work" && find . -type f)
+  rm -f "$listed"
   rm -rf "$work"
   return 0
 }
