@@ -378,7 +378,7 @@ a tip only in a token it has a value for.
 
 | Reason | Meaning |
 |---|---|
-| `no-eligible-token` | No candidate can go; `candidates` says why for each (`home-balance-at-minimum`, `copy-balance-below-amount`, `waiting-for-first-return`). |
+| `no-eligible-token` | No candidate can go; `candidates` says why for each (`home-balance-at-minimum`, `copy-balance-below-amount`). |
 | `native-below-reserve` | The worst case of the approval, the confirmation of the gate (`step: "gate-confirm"`) or the relay would take the native coin below `minimumNativeWei`. |
 | `gate-evidence-failed` | No confirmation of the gate: `code` names why (`simulation-reverted`, `beacon-request-failed`, `no-proof`, ...; `detail` holds no URL). Nothing was sent. |
 | `gate-epoch-has-no-header` | The gate needs a confirmation and no header of the epoch came on chain in three slots. |
@@ -390,14 +390,11 @@ a tip only in a token it has a value for.
 | `approval-simulation-reverted`, `relay-simulation-reverted` | The node refused the call; `error` names the error when an ABI knows it. |
 | `approval-reverted`, `relay-reverted` | The transaction was mined and reverted. |
 
-**The first send of each token is delivered by hand.** Until a copy of a native token came home once, the mediator
-sends every relay of it as a deploy message, and the runner skips a deploy message with `no-price-for-fee-token` (the
-indexer names no destination token for it). So a native token goes out once, when it was never relayed, and then waits
-(`waiting-for-first-return`) until a copy came home; its copies go home first. `traffic_sent` marks the one deploy
-message with `deployMessage: true` (and `deploysCopy: true` when the copy has no code yet). Deliver it once by hand
-through the delivery router (anyone may). The copies then go home as ordinary releases that the runner prices, and from
-then on every send is one. That is one hand delivery for each test token: four on the testnet. The end-to-end stage
-`traffic` does exactly that.
+**Deploy messages.** Until a copy of a native token came home once, the mediator sends every relay of it as a deploy
+message (`traffic_sent` marks it with `deployMessage: true`, and `deploysCopy: true` while the copy has no code yet).
+The runner prices it in the copy that the token factory predicts, with the decimals of the home token, and the mediator
+reuses a copy that exists, so the bot keeps sending the token. It does not wait for a copy to come home: while the way
+home is closed (deposits not open yet), that wait would stop all traffic, and with it the proofs that open the way home.
 
 An attempt uses up its planned time, sent or skipped. The time is marked in `stateDirectory/traffic-<pair>.json` before the
 first transaction leaves, so an attempt whose receipt never arrives is not sent twice. `--once` sends in each enabled

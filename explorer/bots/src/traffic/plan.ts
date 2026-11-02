@@ -46,15 +46,15 @@ export interface Candidate {
   readonly homeBalance: bigint;
   /**
    * What the home mediator records of the native token. A relay of a native token is a deploy message until a copy came
-   * home (`acknowledged`), and the runner cannot price a deploy message. So a native token goes out once (when it was
-   * never relayed), then waits until a copy came home; and a copy whose native token is not acknowledged goes home first.
+   * home (`acknowledged`). The runner prices a deploy message like any other, so the native token keeps going out; a copy
+   * whose native token is not acknowledged goes home first.
    */
   readonly homeRecord: { readonly registered: boolean; readonly acknowledged: boolean };
   readonly bounds: TokenBounds;
 }
 
 /** Why a candidate cannot go now. */
-export type IneligibleReason = "home-balance-at-minimum" | "copy-balance-below-amount" | "waiting-for-first-return";
+export type IneligibleReason = "home-balance-at-minimum" | "copy-balance-below-amount";
 
 /** The chosen transfer, or why none goes. */
 export type Pick =
@@ -92,9 +92,10 @@ export function drawAmount(bounds: Bounds, decimals: number, random: Random): bi
  * Picks the transfer of one send. Each candidate draws its amount (a copy never more than its balance) and is eligible
  * when
  *
- * - native: it was never relayed, or a copy of it came home already (otherwise it waits: its relay would be one more
- *   deploy message, which the runner does not deliver); and its home balance stays at or above the minimum of its band
- *   after the send;
+ * - native: its home balance stays at or above the minimum of its band after the send. Until a copy came home each relay
+ *   is one more deploy message; the runner prices those (it names the copy that the factory deploys), and the mediator
+ *   reuses a copy that exists, so the token keeps going out. Waiting for a copy to come home could wait forever while the
+ *   way home is closed;
  * - copy: its balance reaches the smallest amount.
  *
  * Candidates that pull a balance back into its band go first: a native token whose home balance is above the band, and a
@@ -107,10 +108,6 @@ export function pickTransfer(candidates: readonly Candidate[], random: Random): 
   for (const candidate of candidates) {
     const drawn = drawAmount(candidate.bounds.amount, candidate.decimals, random);
     if (candidate.kind === "native") {
-      if (candidate.homeRecord.registered && !candidate.homeRecord.acknowledged) {
-        refused.push({ symbol: candidate.symbol, kind: candidate.kind, reason: "waiting-for-first-return" });
-        continue;
-      }
       if (candidate.sourceBalance < drawn || candidate.sourceBalance - drawn < candidate.bounds.balance.minimum) {
         refused.push({ symbol: candidate.symbol, kind: candidate.kind, reason: "home-balance-at-minimum" });
         continue;
