@@ -12,7 +12,7 @@ beforeEach(() => {
 describe("Explore's top", () => {
   it("leads with the search band, then browse rows with live counts, the map, the numbers, the light clients, the feed and the services", async () => {
     const { container } = renderWithWallet(<Shell />, { wallet: connectedWallet() });
-    expect(await screen.findByRole("searchbox", { name: "Search Explore" })).toBeInTheDocument();
+    expect(await screen.findByRole("combobox", { name: "Search Explore" })).toBeInTheDocument();
     const proofs = await screen.findByRole("link", { name: /Proofs\s*light-client updates/ });
     // The recorded indexer answer has one light-client update.
     await waitFor(() => expect(proofs.querySelector(".zb-tile-n")).toHaveTextContent("1"));
@@ -39,7 +39,7 @@ describe("Explore's top", () => {
 
   it("says what it recognised and groups the results, the match underlined", async () => {
     renderWithWallet(<Shell />, { wallet: connectedWallet() });
-    const band = await screen.findByRole("searchbox", { name: "Search Explore" });
+    const band = await screen.findByRole("combobox", { name: "Search Explore" });
     await userEvent.type(band, "0x4663c8c2");
     expect(await screen.findByText(/Partial hash or address · 2 found/)).toBeInTheDocument();
     const proofs = await screen.findByRole("heading", { name: /Proofs/ });
@@ -58,5 +58,84 @@ describe("Explore's top", () => {
     expect(within(row).getByText("posted")).toHaveClass("zb-xstatus");
     expect(row.lastElementChild).toHaveClass("zb-chev");
     expect(row.querySelector(".zb-xroute")).not.toBeNull();
+  });
+});
+
+describe("Explore's search shortcuts", () => {
+  const open = async () => {
+    renderWithWallet(<Shell />, { wallet: connectedWallet() });
+    const band = await screen.findByRole("combobox", { name: "Search Explore" });
+    await userEvent.click(band);
+    return band;
+  };
+
+  it("shows no hint chips under the empty box", async () => {
+    const { container } = renderWithWallet(<Shell />, { wallet: connectedWallet() });
+    await screen.findByRole("combobox", { name: "Search Explore" });
+    expect(container.querySelector(".zb-xkind")).toBeNull();
+    expect(screen.queryByText(/64 hex/)).toBeNull();
+  });
+
+  it("opens a listbox of real destinations when the empty box gets focus, closed until then", async () => {
+    renderWithWallet(<Shell />, { wallet: connectedWallet() });
+    const band = await screen.findByRole("combobox", { name: "Search Explore" });
+    expect(band).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await userEvent.click(band);
+    const list = await screen.findByRole("listbox", { name: "Shortcuts" });
+    expect(band).toHaveAttribute("aria-expanded", "true");
+    expect(band).toHaveAttribute("aria-controls", list.id);
+    const options = within(list).getAllByRole("option");
+    expect(options.length).toBeGreaterThan(0);
+    for (const group of within(list).getAllByRole("group")) expect(group).toHaveAccessibleName();
+    expect(within(list).getByText("Light clients")).toBeInTheDocument();
+  });
+
+  it("moves with the arrow keys, opens with Enter and closes with Escape", async () => {
+    const band = await open();
+    const list = await screen.findByRole("listbox");
+    const options = within(list).getAllByRole("option");
+    expect(options[0]).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{ArrowDown}");
+    expect(options[1]).toHaveAttribute("aria-selected", "true");
+    expect(band).toHaveAttribute("aria-activedescendant", options[1]!.id);
+    await userEvent.keyboard("{ArrowUp}{ArrowUp}");
+    expect(options.at(-1)).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(await screen.findByRole("listbox")).toBeInTheDocument();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => expect(window.location.hash).not.toBe("#/explore"));
+    expect(window.location.hash).toMatch(/^#\/explore\//);
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("opens the row that is clicked", async () => {
+    await open();
+    const option = within(await screen.findByRole("listbox")).getAllByRole("option")[0]!;
+    await userEvent.hover(option);
+    await userEvent.click(option);
+    await waitFor(() => expect(window.location.hash).toMatch(/^#\/explore\//));
+  });
+
+  it("closes when the user types, and the normal results take over", async () => {
+    const band = await open();
+    await screen.findByRole("listbox");
+    await userEvent.keyboard("0x4663c8c2");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(band).toHaveAttribute("aria-expanded", "false");
+    expect(await screen.findByText(/Partial hash or address · 2 found/)).toBeInTheDocument();
+    expect(window.location.hash).toBe("#/explore?q=0x4663c8c2");
+  });
+
+  it("closes when focus leaves the box, and keeps the focus when a row is pressed", async () => {
+    await open();
+    await screen.findByRole("listbox");
+    await userEvent.click(screen.getByRole("button", { name: "Clear the search" }));
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    await userEvent.click(document.body);
+    await userEvent.tab();
+    expect(screen.queryByRole("listbox")).toBeNull();
   });
 });

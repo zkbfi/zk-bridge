@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BlockNotFoundError, type Hex } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkManifest, exportArchive, importArchive, ingestCache, listFiles, verifyStorageProofs, writeManifest } from "../../src/proof-archive/bundle";
+import { checkManifest, exportArchive, importArchive, ingestCache, listFiles, recordsOf, verifyStorageProofs, writeManifest } from "../../src/proof-archive/bundle";
 import { defaultDependencies, main, parseOptions, rpcStateRoot, openPoolArchive, type CliDependencies } from "../../src/proof-archive/cli";
 import { canonicalJson, checkPublicTree, exportPublicTree, PUBLIC_README, suspiciousReason } from "../../src/proof-archive/public";
 import { evidenceRecord, lightClientRecord } from "../../src/proof-archive/records";
@@ -118,7 +118,7 @@ describe("verifyStorageProofs", () => {
       if (hash === `0x${"cc".repeat(32)}`) return `0x${"00".repeat(32)}`;
       return sepolia.stateRoot;
     });
-    const result = await verifyStorageProofs(directory, root);
+    const result = await verifyStorageProofs(recordsOf(join(directory, "archive", "storage_proofs.ndjson")), root);
     expect(result.verified).toBe(1);
     expect(result.unchecked.map((item) => item.reason)).toEqual(["the node does not have the block", "no EXPLORER_RPC_URL_11155111"]);
     expect(result.invalid.map((item) => item.reason)).toEqual(["node 0 does not match its hash", "the record does not parse", "no proof of the stored slot's key"]);

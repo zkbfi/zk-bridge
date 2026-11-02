@@ -1,29 +1,44 @@
 ---
-# Exports, imports and verifies the durable proof archive (deploy/app-server/proofs.sh on the server).
+# Exports, imports and verifies the durable proof archive (deploy/app-server/proofs.sh on the server; its private
+# mirror in /var/backups/zk-bridge/proofs/mirror, docs/proof-archive.md).
 #
 #   cd deploy/ansible
-#   ansible-playbook proofs.yml -e action=export                       # run an export now (from /opt/zk-bridge/current)
+#   ansible-playbook proofs.yml -e action=export                       # update the mirror now, then pull it here
 #   ansible-playbook proofs.yml -e action=export -e commit=<hash>      # ... with the scripts and the CLI of that release
-#   ansible-playbook proofs.yml -e action=import -e bundle=<local path to zk-bridge-proofs-<stamp>.tar.gz>
-#   ansible-playbook proofs.yml -e action=verify                       # the newest bundle on the server
+#   ansible-playbook proofs.yml -e action=import                       # restore the archive from the server's own mirror
+#   ansible-playbook proofs.yml -e action=import -e mirror=~/zkb-backups/proofs/mirror [-e trust_list=<local file>]
+#   ansible-playbook proofs.yml -e action=import -e bundle=<local zk-bridge-proofs-<stamp>.tar.gz or zk-bridge-mirror-...>
+#                                                 [-e trust_list=<local file> | -e manifest_sha256=<hex> [-e snapshot_sha256=<hex>]]
+#   ansible-playbook proofs.yml -e action=verify                       # the server's mirror: manifest, then the chain
+#   ansible-playbook proofs.yml -e action=verify -e bundle=<file name on the server>
 #   ansible-playbook proofs.yml -e action=publish -e dry_run=true      # build the PUBLIC tree only; prints its path
 #   ansible-playbook proofs.yml -e action=publish                      # add the public tree to IPFS; prints the CID
 #   ansible-playbook proofs.yml -e action=publish -e publish_dns=true -e confirm_production=yes
 #                                                                      # ... and point _dnslink.proofs at the new CID
 #   ansible-playbook proofs.yml -e publish_dns=true -e cid=<cid> -e confirm_production=yes   # DNS only, for a CID made earlier
-#   ansible-playbook proofs.yml -e action=verify -e bundle=<file name on the server>
 #
-# export: runs the export on the server, then fetches the new bundle and its .sha256 into zkb_proofs_local_dir
-# (default ~/zkb-backups; -e zkb_proofs_local_dir=<dir>) and checks the sha256 here. The server also runs this export
-# every night (zk-bridge-proofs-export.timer) and keeps the newest 14 bundles.
-# import: copies the bundle (and its .sha256, when it sits next to it) into the server's backup directory and runs the
-# import. Nothing that differs is overwritten. Exit 3 of the import (conflicts) FAILS the play, after the summary is
-# shown: the data that did not conflict is already in, and the conflicts need a person to look at them.
+# export: runs the export on the server (the mirror gets the day's files and manifest), then pulls the mirror into
+# zkb_proofs_local_dir/mirror (default ~/zkb-backups/proofs/mirror, the same copy the daily pull of the operator's Mac
+# keeps) with deploy/operator/pull-proofs.sh: rsync, records only ever added, beacon states, snapshots and manifests
+# following the server's 30 day window, then the newest manifest checked here. The server also runs the export every
+# night (zk-bridge-proofs-export.timer). No tarball is made; `proofs.sh bundle` on the server makes one by hand.
+# import: without bundle or mirror, from the server's own mirror (after a lost database). With -e mirror=<local dir>, the
+# mirror is copied up into <backup dir>/incoming-mirror (root's, never the server's mirror, which the archive user can
+# write) and imported from there. The newest manifest must be root's own copy on this server (and in its
+# manifests.sha256), the snapshot and the beacon states must have hashes root recorded. For a mirror from another
+# server, -e trust_list=<local file> (that server's manifests.sha256, which the daily pull keeps in
+# ~/zkb-backups/proofs/manifests.sha256) is copied up and used instead; or -e manifest_sha256=<hex>
+# [-e snapshot_sha256=<hex>] by hand (beacon states are then left out). With
+# -e bundle=<local tar.gz>, the bundle (and its .sha256, when it sits next to it) is copied into the backup directory and
+# imported: a mirror bundle, or a nightly bundle of the old format. Nothing that differs is overwritten. Exit 3 of the
+# import (conflicts) FAILS the play, after the summary is shown: the data that did not conflict is already in, and the
+# conflicts need a person to look at them.
 # publish: proofs.sh publish on the server (see its header). The tree is public data from an allowlist, checked by the
 # archive CLI's sanitizer before anything is added. Review a dry run first. The DNSLink record is written only with
 # -e publish_dns=true (and confirm_production=yes), by the same tasks that sites.yml uses for docs.zkb.fi, which first
 # check that a public gateway serves the CID; the old record content is printed first and is the rollback.
-# verify: re-checks the bundle against the chain (needs the RPC settings of the indexer on the server).
+# verify: the server's mirror against its newest manifest, then every storage proof against the chain (needs the RPC
+# settings of the indexer on the server).
 - name: Export, import or verify the proof archive
   hosts: zkbfi
   gather_facts: false
@@ -34,35 +49,37 @@
       ansible.builtin.assert:
         that:
           - zkb_proofs_action in ['export', 'import', 'verify', 'publish', 'dns']
-        fail_msg: "Say what to do: -e action=export, -e action=import -e bundle=<local file>, -e action=verify, or -e action=publish."
+        fail_msg: "Say what to do: -e action=export, -e action=import [-e mirror=<local mirror> | -e bundle=<local tar.gz>], -e action=verify, or -e action=publish."
         quiet: true
 
-    - name: Check the bundle that import needs
+    - name: Check what import was given
       when: zkb_proofs_action == 'import'
       block:
-        - name: Require -e bundle=<local file>
+        - name: Take a bundle or a mirror, not both
           ansible.builtin.assert:
             that:
-              - bundle is defined
-              - bundle | length > 0
-            fail_msg: "import needs -e bundle=<path of zk-bridge-proofs-<stamp>.tar.gz on this machine>."
+              - not (bundle is defined and mirror is defined)
+            fail_msg: "import takes -e bundle=<local tar.gz> or -e mirror=<local mirror directory> (or neither: the server's own mirror)."
             quiet: true
 
-        - name: Look for the bundle here
+        - name: Look for the bundle or the mirror here
           ansible.builtin.stat:
-            path: "{{ bundle | expanduser }}"
+            path: "{{ (bundle | default(mirror)) | expanduser }}"
           delegate_to: localhost
           become: false
-          register: zkb_proofs_local_bundle
+          register: zkb_proofs_local_input
           check_mode: false
+          when: bundle is defined or mirror is defined
 
-        - name: Check that it is a file
+        - name: Check that it is there
           ansible.builtin.assert:
             that:
-              - zkb_proofs_local_bundle.stat.exists
-              - zkb_proofs_local_bundle.stat.isreg
-            fail_msg: "{{ bundle }} is not a file on this machine."
+              - zkb_proofs_local_input.stat.exists
+              - (zkb_proofs_local_input.stat.isreg if bundle is defined else zkb_proofs_local_input.stat.isdir)
+              - mirror is not defined or (mirror | expanduser ~ '/manifests') is directory
+            fail_msg: "{{ bundle | default(mirror) }} is not a {{ 'file' if bundle is defined else 'mirror directory (with manifests/)' }} on this machine."
             quiet: true
+          when: bundle is defined or mirror is defined
 
     - name: Find the release when one is named
       ansible.builtin.include_tasks: tasks/resolve_release.yml
@@ -91,9 +108,9 @@
           ansible.builtin.debug:
             msg: "{{ zkb_proofs_run.stdout_lines }}"
 
-        - name: Take the bundle path from the last line
+        - name: Take the mirror path from the output
           ansible.builtin.set_fact:
-            zkb_proofs_bundle: "{{ (zkb_proofs_run.stdout_lines | select('match', '^bundle: ') | list | last) | regex_replace('^bundle: ', '') }}"
+            zkb_proofs_remote_mirror: "{{ (zkb_proofs_run.stdout_lines | select('match', '^mirror: ') | list | last) | regex_replace('^mirror: ', '') }}"
 
         - name: Make the local directory
           ansible.builtin.file:
@@ -103,40 +120,48 @@
           delegate_to: localhost
           become: false
 
-        - name: Fetch the bundle and its checksum
-          ansible.builtin.fetch:
-            src: "{{ item }}"
-            dest: "{{ zkb_proofs_local_dir | expanduser }}/{{ item | basename }}"
-            flat: true
-          loop:
-            - "{{ zkb_proofs_bundle }}"
-            - "{{ zkb_proofs_bundle }}.sha256"
-
-        - name: Hash the fetched bundle here
-          ansible.builtin.stat:
-            path: "{{ zkb_proofs_local_dir | expanduser }}/{{ zkb_proofs_bundle | basename }}"
-            checksum_algorithm: sha256
+        # The same script as the daily pull of the operator's Mac (deploy/operator/pull-proofs.sh): rsync over the ssh
+        # alias, then the newest manifest is checked here. Its log lines are on standard error.
+        - name: Pull the mirror here
+          ansible.builtin.command:
+            argv:
+              - bash
+              - "{{ playbook_dir }}/../operator/pull-proofs.sh"
+          environment:
+            ZKB_PULL_HOST: "{{ inventory_hostname }}"
+            ZKB_PULL_REMOTE_DIR: "{{ zkb_proofs_remote_mirror }}"
+            ZKB_PULL_REMOTE_LOCK: "{{ zkb_proofs_dir }}/.lock"
+            ZKB_PULL_LOCAL_DIR: "{{ zkb_proofs_local_dir | expanduser }}"
           delegate_to: localhost
           become: false
-          register: zkb_proofs_local_stat
-
-        - name: Check the hash against the .sha256 from the server
-          ansible.builtin.assert:
-            that:
-              - zkb_proofs_local_stat.stat.checksum == (lookup('ansible.builtin.file', zkb_proofs_local_dir | expanduser ~ '/' ~ (zkb_proofs_bundle | basename) ~ '.sha256') | trim).split()[0]
-            fail_msg: "The fetched bundle does not match its .sha256."
-            quiet: true
+          register: zkb_proofs_pull
+          changed_when: true
 
         - name: Say where it is
           ansible.builtin.debug:
-            msg: "Bundle saved to {{ zkb_proofs_local_dir | expanduser }}/{{ zkb_proofs_bundle | basename }} (sha256 checked)."
+            msg: "{{ zkb_proofs_pull.stderr_lines + ['Mirror saved to ' ~ (zkb_proofs_local_dir | expanduser) ~ '/mirror (checked against its newest manifest).'] }}"
 
     # ---- import --------------------------------------------------------------------------------------------------
     - name: Import
       when: zkb_proofs_action == 'import'
       vars:
-        zkb_proofs_remote_bundle: "{{ zkb_proofs_dir }}/{{ bundle | basename }}"
+        zkb_proofs_remote_bundle: "{{ zkb_proofs_dir }}/{{ (bundle | default('')) | basename }}"
       block:
+        - name: Copy the mirror up into a directory only root can write (never into the server's mirror)
+          ansible.builtin.command:
+            argv:
+              - rsync
+              - -rt
+              - --delete
+              - -e
+              - ssh -o BatchMode=yes
+              - "{{ mirror | expanduser }}/"
+              - "{{ inventory_hostname }}:{{ zkb_proofs_dir }}/incoming-mirror/"
+          delegate_to: localhost
+          become: false
+          changed_when: true
+          when: mirror is defined
+
         - name: Look for the .sha256 next to the bundle
           ansible.builtin.stat:
             path: "{{ bundle | expanduser }}.sha256"
@@ -144,6 +169,7 @@
           become: false
           register: zkb_proofs_local_sum
           check_mode: false
+          when: bundle is defined
 
         - name: Copy the bundle to the server
           ansible.builtin.copy:
@@ -152,6 +178,7 @@
             owner: root
             group: root
             mode: "0640"
+          when: bundle is defined
 
         - name: Copy its .sha256 when there is one
           ansible.builtin.copy:
@@ -160,15 +187,26 @@
             owner: root
             group: root
             mode: "0640"
-          when: zkb_proofs_local_sum.stat.exists
+          when: bundle is defined and zkb_proofs_local_sum.stat.exists
+
+        - name: Copy the trust list of the other server up (root's, 0600)
+          ansible.builtin.copy:
+            src: "{{ trust_list | expanduser }}"
+            dest: "{{ zkb_proofs_dir }}/incoming-trust.sha256"
+            owner: root
+            group: root
+            mode: "0600"
+          when: trust_list is defined
 
         - name: Run the import
           ansible.builtin.command:
-            argv:
-              - bash
-              - "{{ zkb_proofs_release }}/deploy/app-server/proofs.sh"
-              - import
-              - "{{ zkb_proofs_remote_bundle }}"
+            argv: >-
+              {{ ['bash', zkb_proofs_release ~ '/deploy/app-server/proofs.sh', 'import']
+                 + ([zkb_proofs_remote_bundle] if bundle is defined else [])
+                 + ([zkb_proofs_dir ~ '/incoming-mirror'] if mirror is defined else [])
+                 + (['--trust-list', zkb_proofs_dir ~ '/incoming-trust.sha256'] if trust_list is defined else [])
+                 + (['--manifest-sha256', manifest_sha256] if manifest_sha256 is defined else [])
+                 + (['--snapshot-sha256', snapshot_sha256] if snapshot_sha256 is defined else []) }}
           environment:
             ZKB_RELEASE_DIR: "{{ zkb_proofs_release }}"
           register: zkb_proofs_run
@@ -191,7 +229,7 @@
     - name: Verify
       when: zkb_proofs_action == 'verify'
       block:
-        - name: Re-check the bundle against the chain
+        - name: Check the mirror against its newest manifest, then the storage proofs against the chain
           ansible.builtin.command:
             argv: "{{ ['bash', zkb_proofs_release ~ '/deploy/app-server/proofs.sh', 'verify'] + ([zkb_proofs_dir ~ '/' ~ (bundle | basename)] if bundle is defined else []) }}"
           environment:
