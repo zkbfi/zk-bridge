@@ -4,6 +4,7 @@
   "signatureUrl": "./version.json.sig",
   "downloadBaseUrl": "https://github.com/zkbfi/releases/releases/download/v{version}",
   "gateways": [
+    "https://{cid}.ipfs.zkb.fi/",
     "https://gateway.zkb.fi/ipfs/",
     "https://{cid}.ipfs.inbrowser.link/"
   ],

@@ -167,7 +167,7 @@ done
 # the IPFS gateway, which has one node and no green.
 # The status service is the same: one process on one port, and so is the IPFS node's WebSocket listener.
 if grep -E '^[[:space:]]*reverse_proxy' "$DIR/Caddyfile" | grep -vF -e '{$ZKB_IPFS_GATEWAY_PORT:8080}' -e '{$ZKB_STATUS_PORT:8790}' -e '{$ZKB_IPFS_WS_PORT:4003}' | grep -q .; then
-  fail "Caddyfile: only the IPFS gateway, the IPFS WebSocket listener and the status service may reverse_proxy directly"
+  fail "Caddyfile: only the IPFS gateway (path and subdomain sites), the IPFS WebSocket listener and the status service may reverse_proxy directly"
 else
   pass "Caddyfile: only the IPFS gateway and the status service proxy directly"
 fi
@@ -897,6 +897,106 @@ EOS
     if [ "$PROOFS_STATUS" -eq 1 ] && [ "$PROOFS_OUT" = "proofs: run as root" ]; then pass "proofs.sh refuses to run without root"; else fail "proofs.sh without root (status $PROOFS_STATUS: $PROOFS_OUT)"; fi
   fi
   PT_DONE=1
+fi
+
+# --- IPFS subdomain gateway (<cid>.ipfs.zkb.fi) ---------------------------------------------------------------------
+# Caddy: a wildcard site with on-demand TLS, the ask option in the global block, and the apex site left as it was.
+if grep -qxF '{$ZKB_IPFS_SUBDOMAIN_HOSTS:*.ipfs.zkb.fi} {' "$DIR/Caddyfile"; then pass "Caddyfile: wildcard site for the IPFS subdomains"; else fail "Caddyfile: no wildcard site for the IPFS subdomains"; fi
+if awk '/^\{\$ZKB_IPFS_SUBDOMAIN_HOSTS/{in_site=1} in_site&&/^\t\ton_demand$/{found=1} in_site&&/^\}/{in_site=0} END{exit !found}' "$DIR/Caddyfile"; then pass "Caddyfile: the wildcard site uses tls on_demand"; else fail "Caddyfile: the wildcard site has no tls on_demand"; fi
+if awk '/^\{\$ZKB_IPFS_SUBDOMAIN_HOSTS/{in_site=1} in_site&&/reverse_proxy 127\.0\.0\.1:\{\$ZKB_IPFS_GATEWAY_PORT:8080\}/{found=1} in_site&&/^\}/{in_site=0} END{exit !found}' "$DIR/Caddyfile"; then pass "Caddyfile: the wildcard site proxies to the IPFS gateway"; else fail "Caddyfile: the wildcard site does not proxy to the IPFS gateway"; fi
+if awk '/^\{$/{g=1} g&&/^\ton_demand_tls \{$/{o=1} o&&/^\t\task http:\/\/127\.0\.0\.1:\{\$ZKB_TLSASK_PORT:8089\}\/check$/{found=1} /^\}$/{g=0;o=0} END{exit !found}' "$DIR/Caddyfile"; then pass "Caddyfile: global on_demand_tls asks the local check"; else fail "Caddyfile: no on_demand_tls ask in the global options"; fi
+if grep -qxF '{$ZKB_IPFS_HOST:ipfs.zkb.fi} {' "$DIR/Caddyfile" && grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_IPFS_WS_PORT:4003}' "$DIR/Caddyfile"; then pass "Caddyfile: the ipfs.zkb.fi apex still proxies the WebSocket listener"; else fail "Caddyfile: the ipfs.zkb.fi apex site changed"; fi
+if grep -qxF '{$ZKB_GATEWAY_HOST:gateway.zkb.fi} {' "$DIR/Caddyfile" && ! grep -qE 'redir|rewrite.*gateway' "$DIR/Caddyfile"; then pass "Caddyfile: gateway.zkb.fi stays path style, no redirect"; else fail "Caddyfile: gateway.zkb.fi changed or redirects"; fi
+# kubo: both gateway entries.
+if grep -q 'UseSubdomains: false' "$DIR/provision.sh" && grep -q 'UseSubdomains: true' "$DIR/provision.sh" && grep -q 'SUBDOMAIN_PARENT:-zkb.fi' "$DIR/provision.sh" && grep -qxF 'ipfs_as config --json Gateway.NoFetch true' "$DIR/provision.sh"; then pass "provision.sh: path gateway and zkb.fi subdomain gateway entries, NoFetch kept"; else fail "provision.sh: gateway entries"; fi
+# The ask service: unit hardening, user, installation.
+ASK_DIR=$DIR/ipfs-tls-ask
+for setting in User=zkb_tlsask Group=zkb_tlsask NoNewPrivileges=yes ProtectSystem=strict ProtectHome=yes PrivateTmp=yes PrivateDevices=yes CapabilityBoundingSet= RestrictSUIDSGID=yes SystemCallFilter=@system-service UMask=0077 Restart=on-failure; do
+  if grep -qxF -- "$setting" "$ASK_DIR/zk-bridge-ipfs-tls-ask.service"; then pass "ipfs-tls-ask unit: $setting"; else fail "ipfs-tls-ask unit: missing '$setting'"; fi
+done
+if grep -q '^ReadWritePaths=' "$ASK_DIR/zk-bridge-ipfs-tls-ask.service"; then fail "ipfs-tls-ask unit: must have no writable path"; else pass "ipfs-tls-ask unit: no writable path"; fi
+if grep -q 'zkb_tlsask' "$DIR/provision.sh" && grep -q 'zk-bridge-ipfs-tls-ask.service' "$DIR/provision.sh"; then pass "provision.sh creates the user and installs the ask unit"; else fail "provision.sh does not install the ask unit"; fi
+# The check itself, against a fake gateway that holds one CID.
+if command -v python3 >/dev/null 2>&1; then
+  if python3 -I - "$ASK_DIR/ipfs-tls-ask.py" <<'PY'
+import importlib.util, sys, threading, urllib.request, urllib.error
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+spec = importlib.util.spec_from_file_location("ask", sys.argv[1])
+ask = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ask)
+
+HELD = "bafybeibnoelefnzgwbcacyt4vh52ymxvzbjq7mmqhtcnwarfq4lzegsiqe"
+HELD_DIR = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"  # a directory: kubo redirects to a slash
+MISSING = "bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"
+seen = []
+
+class Fake(BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        seen.append(self.path)
+        if self.path == "/ipfs/" + HELD:
+            self.send_response(200)
+        elif self.path == "/ipfs/" + HELD_DIR:
+            self.send_response(301); self.send_header("Location", self.path + "/")
+        else:
+            self.send_response(404)
+        self.send_header("Content-Length", "0"); self.end_headers()
+    def log_message(self, *a): pass
+
+fake = ThreadingHTTPServer(("127.0.0.1", 0), Fake)
+threading.Thread(target=fake.serve_forever, daemon=True).start()
+checker = ask.Checker("http://127.0.0.1:%d" % fake.server_address[1], ".ipfs.zkb.fi", ttl=600, rate=1000)
+srv = ask.make_server(checker, "127.0.0.1", 0)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+def status(domain):
+    url = "http://127.0.0.1:%d/check?domain=%s" % (srv.server_address[1], domain)
+    try:
+        return urllib.request.urlopen(url).status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+cases = [
+    ("a held CID", HELD + ".ipfs.zkb.fi", 200),
+    ("a held directory CID (redirect)", HELD_DIR + ".ipfs.zkb.fi", 200),
+    ("a CID the gateway 404s", MISSING + ".ipfs.zkb.fi", 403),
+    ("a non-CID label", "www.ipfs.zkb.fi", 403),
+    ("a CIDv0 label", "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG.ipfs.zkb.fi", 403),
+    ("an uppercase CID", HELD.upper() + ".ipfs.zkb.fi", 403),
+    ("two labels", "x." + HELD + ".ipfs.zkb.fi", 403),
+    ("another domain", HELD + ".ipfs.example.com", 403),
+    ("the apex", "ipfs.zkb.fi", 403),
+    ("an over-long label", "b" + "a" * 70 + ".ipfs.zkb.fi", 403),
+    ("a label of 64 characters", "b" + "a" * 63 + ".ipfs.zkb.fi", 403),
+    ("no domain", "", 403),
+]
+bad = 0
+for name, domain, want in cases:
+    got = status(domain)
+    print(("PASS" if got == want else "FAIL"), " ask accepts/refuses:", name, "->", got)
+    bad += got != want
+# Cache: a second ask for the same CID does not reach the gateway again; names that are no CID never do.
+before = len(seen)
+status(HELD + ".ipfs.zkb.fi"); status("www.ipfs.zkb.fi")
+ok = len(seen) == before
+print(("PASS" if ok else "FAIL"), " ask caches results and never asks the node about a non-CID")
+bad += not ok
+# Rate limit: with no tokens left, an uncached CID is refused without a lookup.
+limited = ask.Checker("http://127.0.0.1:%d" % fake.server_address[1], ".ipfs.zkb.fi", rate=1)
+limited.tokens = 0; limited.last = limited.clock()
+n = len(seen)
+ok = (not limited.allowed(HELD + ".ipfs.zkb.fi")) and len(seen) == n
+print(("PASS" if ok else "FAIL"), " ask rate limits lookups in the node")
+bad += not ok
+sys.exit(1 if bad else 0)
+PY
+  then
+    pass "ipfs-tls-ask.py answers as specified"
+  else
+    fail "ipfs-tls-ask.py answers as specified"
+  fi
+else
+  printf 'SKIP  python3 is not installed\n'
 fi
 
 # --- Operator-side pull (deploy/operator) ---------------------------------------------------------------------------
