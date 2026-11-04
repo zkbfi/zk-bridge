@@ -165,9 +165,9 @@ for name in backend indexer; do
 done
 # The backend and the indexer go through the upstream snippets (blue/green). The only proxy written in the Caddyfile is
 # the IPFS gateway, which has one node and no green.
-# The status service is the same: one process on one port.
-if grep -E '^[[:space:]]*reverse_proxy' "$DIR/Caddyfile" | grep -vF -e '{$ZKB_IPFS_GATEWAY_PORT:8080}' -e '{$ZKB_STATUS_PORT:8790}' | grep -q .; then
-  fail "Caddyfile: only the IPFS gateway and the status service may reverse_proxy directly"
+# The status service is the same: one process on one port, and so is the IPFS node's WebSocket listener.
+if grep -E '^[[:space:]]*reverse_proxy' "$DIR/Caddyfile" | grep -vF -e '{$ZKB_IPFS_GATEWAY_PORT:8080}' -e '{$ZKB_STATUS_PORT:8790}' -e '{$ZKB_IPFS_WS_PORT:4003}' | grep -q .; then
+  fail "Caddyfile: only the IPFS gateway (path and subdomain sites), the IPFS WebSocket listener and the status service may reverse_proxy directly"
 else
   pass "Caddyfile: only the IPFS gateway and the status service proxy directly"
 fi
@@ -804,8 +804,10 @@ EOS
   pub() { # pub <out dir> <env...> -- args: runs proofs.sh publish with the publish test sources
     local out=$1
     shift
-    proofs "$out" "$PT/p-backend" "$PT/p-runner" ZKB_PROOFS_MIRROR="$PT/p-mirror" IPFS_DIR="$PT/ipfs" ZKB_IPFS_PATH="$PT/ipfs-repo" PATH="$PT/fakebin:$PATH" ZKB_PROOFS_AS="$PT/as-rec.sh" "$@"
+    proofs "$out" "$PT/p-backend" "$PT/p-runner" ZKB_PROOFS_MIRROR="$PT/p-mirror" IPFS_DIR="$PT/ipfs" ZKB_IPFS_PATH="$PT/ipfs-repo" PATH="$PT/fakebin:$PATH" ZKB_PROOFS_AS="$PT/as-rec.sh" ZKB_PINS_REFRESH="$PT/pins-refresh.sh" "$@"
   }
+  printf '#!/bin/sh\necho "$*" >>"%s/pins-refresh.log"\n' "$PT" >"$PT/pins-refresh.sh"
+  chmod +x "$PT/pins-refresh.sh"
   : >"$PT/calls.log"
   run_proofs pub "$PT/pub1" ZKB_PROOFS_STAMP=20260110T000000Z bash "$DIR/proofs.sh" publish --dry-run
   tree=$PT/pub1/.publish-20260110T000000Z/tree
@@ -831,6 +833,7 @@ EOS
     run_proofs pub "$PT/pub2" ZKB_PROOFS_STAMP=2026011${d}T000000Z bash "$DIR/proofs.sh" publish
   done
   if [ "$PROOFS_STATUS" -eq 0 ] && printf '%s' "$PROOFS_OUT" | grep -q '^cid: bafystub4$' && printf '%s' "$PROOFS_OUT" | grep -q '^gateway: .*/ipfs/bafystub4$'; then pass "publish prints the CID and the gateway form"; else fail "publish output (status $PROOFS_STATUS): $PROOFS_OUT"; fi
+  if [ "$(grep -cx refresh "$PT/pins-refresh.log")" -eq 4 ]; then pass "publish refreshes the pin list after each real publication (not on a dry run or a failed check)"; else fail "pin list refreshes: $(cat "$PT/pins-refresh.log" 2>&1)"; fi
   if [ "$(wc -l <"$PT/pub2/ipfs-cids.log" | tr -d ' ')" -eq 4 ] && [ "$(awk 'NF == 4 && $2 ~ /^bafystub/ && $3 == 7 && $4 == "abc123def"' "$PT/pub2/ipfs-cids.log" | wc -l | tr -d ' ')" -eq 4 ]; then pass "publish appends <time> <cid> <files> <commit> to ipfs-cids.log"; else fail "cid log: $(cat "$PT/pub2/ipfs-cids.log")"; fi
   if [ "$(sort "$PT/ipfs/pins" | tr '\n' ' ')" = "bafyforeign bafystub3 bafystub4 " ]; then pass "publish keeps the newest 2 pinned by default, unpins older logged CIDs only (not foreign pins)"; else fail "pins: $(tr '\n' ' ' <"$PT/ipfs/pins")"; fi
   if grep -q '^POST http://127\.0\.0\.1:5001/api/v0/add?cid-version=1&pin=true&pin-name=zkb-proofs-2026011[0-9]T000000Z&' "$PT/ipfs/calls"; then pass "publish: POST /api/v0/add with cid-version=1, pin=true and a pin name, at the api address"; else fail "add call: $(head -1 "$PT/ipfs/calls")"; fi
@@ -898,6 +901,160 @@ EOS
   fi
   PT_DONE=1
 fi
+
+# --- IPFS subdomain gateway (<cid>.ipfs.zkb.fi) ---------------------------------------------------------------------
+# Caddy: a wildcard site with on-demand TLS, the ask option in the global block, and the apex site left as it was.
+if grep -qxF '{$ZKB_IPFS_SUBDOMAIN_HOSTS:*.ipfs.zkb.fi} {' "$DIR/Caddyfile"; then pass "Caddyfile: wildcard site for the IPFS subdomains"; else fail "Caddyfile: no wildcard site for the IPFS subdomains"; fi
+if awk '/^\{\$ZKB_IPFS_SUBDOMAIN_HOSTS/{in_site=1} in_site&&/^\t\ton_demand$/{found=1} in_site&&/^\}/{in_site=0} END{exit !found}' "$DIR/Caddyfile"; then pass "Caddyfile: the wildcard site uses tls on_demand"; else fail "Caddyfile: the wildcard site has no tls on_demand"; fi
+if awk '/^\{\$ZKB_IPFS_SUBDOMAIN_HOSTS/{in_site=1} in_site&&/reverse_proxy 127\.0\.0\.1:\{\$ZKB_IPFS_GATEWAY_PORT:8080\}/{found=1} in_site&&/^\}/{in_site=0} END{exit !found}' "$DIR/Caddyfile"; then pass "Caddyfile: the wildcard site proxies to the IPFS gateway"; else fail "Caddyfile: the wildcard site does not proxy to the IPFS gateway"; fi
+if awk '/^\{$/{g=1} g&&/^\ton_demand_tls \{$/{o=1} o&&/^\t\task http:\/\/127\.0\.0\.1:\{\$ZKB_TLSASK_PORT:8089\}\/check$/{found=1} /^\}$/{g=0;o=0} END{exit !found}' "$DIR/Caddyfile"; then pass "Caddyfile: global on_demand_tls asks the local check"; else fail "Caddyfile: no on_demand_tls ask in the global options"; fi
+if grep -qxF '{$ZKB_IPFS_HOST:ipfs.zkb.fi} {' "$DIR/Caddyfile" && grep -qxF '	reverse_proxy 127.0.0.1:{$ZKB_IPFS_WS_PORT:4003}' "$DIR/Caddyfile"; then pass "Caddyfile: the ipfs.zkb.fi apex still proxies the WebSocket listener"; else fail "Caddyfile: the ipfs.zkb.fi apex site changed"; fi
+if grep -qxF '{$ZKB_GATEWAY_HOST:gateway.zkb.fi} {' "$DIR/Caddyfile" && ! grep -qE 'redir|rewrite.*gateway' "$DIR/Caddyfile"; then pass "Caddyfile: gateway.zkb.fi stays path style, no redirect"; else fail "Caddyfile: gateway.zkb.fi changed or redirects"; fi
+# kubo: both gateway entries.
+if grep -q 'UseSubdomains: false' "$DIR/provision.sh" && grep -q 'UseSubdomains: true' "$DIR/provision.sh" && grep -q 'SUBDOMAIN_PARENT:-zkb.fi' "$DIR/provision.sh" && grep -qxF 'ipfs_as config --json Gateway.NoFetch true' "$DIR/provision.sh"; then pass "provision.sh: path gateway and zkb.fi subdomain gateway entries, NoFetch kept"; else fail "provision.sh: gateway entries"; fi
+# The ask service: unit hardening, user, installation.
+ASK_DIR=$DIR/ipfs-tls-ask
+for setting in User=zkb_tlsask Group=zkb_tlsask NoNewPrivileges=yes ProtectSystem=strict ProtectHome=yes PrivateTmp=yes PrivateDevices=yes CapabilityBoundingSet= RestrictSUIDSGID=yes SystemCallFilter=@system-service UMask=0077 Restart=on-failure; do
+  if grep -qxF -- "$setting" "$ASK_DIR/zk-bridge-ipfs-tls-ask.service"; then pass "ipfs-tls-ask unit: $setting"; else fail "ipfs-tls-ask unit: missing '$setting'"; fi
+done
+if grep -q '^ReadWritePaths=' "$ASK_DIR/zk-bridge-ipfs-tls-ask.service"; then fail "ipfs-tls-ask unit: must have no writable path"; else pass "ipfs-tls-ask unit: no writable path"; fi
+if grep -q 'zkb_tlsask' "$DIR/provision.sh" && grep -q 'zk-bridge-ipfs-tls-ask.service' "$DIR/provision.sh"; then pass "provision.sh creates the user and installs the ask unit"; else fail "provision.sh does not install the ask unit"; fi
+# The check itself: a pins file decides; the node is never asked. CIDs are built here (sha2-256 dag-pb and raw are
+# strict; the identity hash, sha2-512 and other codecs are not).
+if command -v python3 >/dev/null 2>&1; then
+  if python3 -I - "$ASK_DIR/ipfs-tls-ask.py" <<'PY'
+import base64, hashlib, importlib.util, os, sys, tempfile, threading, urllib.request, urllib.error
+
+spec = importlib.util.spec_from_file_location("ask", sys.argv[1])
+ask = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(ask)
+
+def cid(codec, hash_code, digest):
+    raw = bytes([1, codec, hash_code, len(digest)]) + digest
+    return "b" + base64.b32encode(raw).decode().lower().rstrip("=")
+
+sha = lambda b, h=hashlib.sha256: h(b).digest()
+PINNED = cid(0x70, 0x12, sha(b"pin1"))
+PINNED_RAW = cid(0x55, 0x12, sha(b"pin2"))
+UNPINNED = cid(0x70, 0x12, sha(b"nopin"))
+LATE = cid(0x70, 0x12, sha(b"late"))
+IDENTITY = cid(0x55, 0x00, b"<h1>hi</h1>")
+SHA512 = cid(0x70, 0x13, sha(b"a", hashlib.sha512))
+CODEC = cid(0x71, 0x12, sha(b"a"))
+SHORT_DIGEST = cid(0x70, 0x12, sha(b"a")[:20])
+
+work = tempfile.mkdtemp()
+pins = os.path.join(work, "pins.txt")
+def write_pins(*lines):
+    tmp = pins + ".new"
+    with open(tmp, "w") as f:
+        f.write("".join(l + "\n" for l in lines))
+    os.replace(tmp, pins)
+    st = os.stat(pins)
+    os.utime(pins, ns=(st.st_atime_ns, st.st_mtime_ns + write_pins.n * 2_000_000_000)); write_pins.n += 1
+write_pins.n = 1
+# The identity CID and the others are in the file too: the shape check must refuse them regardless.
+write_pins(PINNED, PINNED_RAW, IDENTITY, SHA512, CODEC, SHORT_DIGEST)
+
+checker = ask.Checker(pins, ".ipfs.zkb.fi")
+srv = ask.make_server(checker, "127.0.0.1", 0)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+def status(domain):
+    url = "http://127.0.0.1:%d/check?domain=%s" % (srv.server_address[1], domain)
+    try:
+        return urllib.request.urlopen(url).status
+    except urllib.error.HTTPError as e:
+        return e.code
+
+bad = 0
+def expect(name, domain, want):
+    global bad
+    got = status(domain)
+    print(("PASS" if got == want else "FAIL"), " ask:", name, "->", got)
+    bad += got != want
+
+expect("a pinned dag-pb CID", PINNED + ".ipfs.zkb.fi", 200)
+expect("a pinned raw CID", PINNED_RAW + ".ipfs.zkb.fi", 200)
+expect("a strict CID that is not pinned", UNPINNED + ".ipfs.zkb.fi", 403)
+expect("an identity-hash CID (even if listed)", IDENTITY + ".ipfs.zkb.fi", 403)
+expect("a sha2-512 CID (even if listed)", SHA512 + ".ipfs.zkb.fi", 403)
+expect("an unknown codec (even if listed)", CODEC + ".ipfs.zkb.fi", 403)
+expect("a short digest (even if listed)", SHORT_DIGEST + ".ipfs.zkb.fi", 403)
+expect("a non-CID label", "www.ipfs.zkb.fi", 403)
+expect("a CIDv0 label", "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG.ipfs.zkb.fi", 403)
+expect("an uppercase CID", PINNED.upper() + ".ipfs.zkb.fi", 403)
+expect("two labels", "x." + PINNED + ".ipfs.zkb.fi", 403)
+expect("another domain", PINNED + ".ipfs.example.com", 403)
+expect("the apex", "ipfs.zkb.fi", 403)
+expect("an over-long label", "b" + "a" * 70 + ".ipfs.zkb.fi", 403)
+expect("a label of 64 characters", "b" + "a" * 63 + ".ipfs.zkb.fi", 403)
+expect("no domain", "", 403)
+# Reload: a pin added to the file is picked up without a restart, and a removed one is dropped.
+expect("a CID before it is pinned", LATE + ".ipfs.zkb.fi", 403)
+write_pins(PINNED, LATE)
+expect("the same CID after the file changed", LATE + ".ipfs.zkb.fi", 200)
+expect("a CID removed from the file", PINNED_RAW + ".ipfs.zkb.fi", 403)
+os.remove(pins)
+expect("a missing file", PINNED + ".ipfs.zkb.fi", 403)
+sys.exit(1 if bad else 0)
+PY
+  then
+    pass "ipfs-tls-ask.py answers as specified"
+  else
+    fail "ipfs-tls-ask.py answers as specified"
+  fi
+else
+  printf 'SKIP  python3 is not installed\n'
+fi
+# The ask unit takes no network except its own listener, and reads the pins directory only.
+for setting in RestrictAddressFamilies=AF_INET 'ReadOnlyPaths=-/var/lib/zk-bridge-ipfs-pins'; do
+  if grep -qxF -- "$setting" "$ASK_DIR/zk-bridge-ipfs-tls-ask.service"; then pass "ipfs-tls-ask unit: $setting"; else fail "ipfs-tls-ask unit: missing '$setting'"; fi
+done
+if grep -qE 'http\.client|urlopen|ZKB_TLSASK_GATEWAY|api/v0' "$ASK_DIR/ipfs-tls-ask.py"; then fail "ipfs-tls-ask.py must not talk to the node"; else pass "ipfs-tls-ask.py does not talk to the node"; fi
+# The pins writer (ipfs-pins.sh): a fake curl answers pin/ls with a mix of CID forms; the token stays out of argv.
+PW=$(mktemp -d)
+mkdir -p "$PW/bin" "$PW/repo"
+tok=pinTOKENnotInArgv7q
+printf '{"API":{"Authorizations":{"operator":{"AuthSecret":"bearer:%s"}}},"Addresses":{"API":"/ip4/127.0.0.1/tcp/5001"}}\n' "$tok" >"$PW/repo/config"
+printf '/ip4/127.0.0.1/tcp/5001\n' >"$PW/repo/api"
+cat >"$PW/bin/curl" <<'EOS'
+#!/bin/sh
+printf '%s\n' "$*" >>"$PW_DIR/argv"
+cat >>"$PW_DIR/headers"
+for a in "$@"; do url=$a; done
+echo "$url" >>"$PW_DIR/calls"
+[ -z "${PW_FAIL:-}" ] || { echo '{"Message":"boom"}'; exit 22; }
+cat "$PW_DIR/answer"
+EOS
+chmod +x "$PW/bin/curl"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s/as-argv"\nshift\nexec "$@"\n' "$PW" >"$PW/as.sh"
+chmod +x "$PW/as.sh"
+cat >"$PW/answer" <<'EOS'
+{"Keys":{"bafybeid7fd7craeysmup5xufs2lx2b5iic3qt55pafk6zxtxfc4irmyba4":{"Type":"recursive"},"QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG":{"Type":"recursive"},"BAFYUPPERCASE":{"Type":"recursive"},"zdj7WWeQ43G6JJvLWQWZpyHuAMq6uYWRjkBXFad11vE2LHhQ7":{"Type":"recursive"},"bafkreibspakongvhbu5yyh2pd4jdyecivtrmcbst3pjsfdq4symyqajkku":{"Type":"recursive"},"b1invalid":{"Type":"recursive"}}}
+EOS
+pins_run() {
+  env PW_DIR="$PW" PATH="$PW/bin:$PATH" ZKB_IPFS_PATH="$PW/repo" ZKB_PINS_FILE="$PW/out/pins.txt" ZKB_PINS_AS="$PW/as.sh" "$@" bash "$ASK_DIR/ipfs-pins.sh" refresh >"$PW/out.log" 2>&1
+}
+if pins_run && [ "$(cat "$PW/out/pins.txt")" = "bafkreibspakongvhbu5yyh2pd4jdyecivtrmcbst3pjsfdq4symyqajkku
+bafybeid7fd7craeysmup5xufs2lx2b5iic3qt55pafk6zxtxfc4irmyba4" ]; then pass "ipfs-pins.sh keeps only CIDv1 base32 (no CIDv0, uppercase, other bases), one per line"; else fail "ipfs-pins.sh output: $(cat "$PW/out/pins.txt" 2>&1)"; fi
+if grep -q '/api/v0/pin/ls?type=recursive$' "$PW/calls" && [ "$(ls -ld "$PW/out/pins.txt" | cut -c1-10)" = "-rw-r--r--" ]; then pass "ipfs-pins.sh asks for recursive pins and writes a 0644 file"; else fail "ipfs-pins.sh call or mode: $(cat "$PW/calls")"; fi
+if grep -qF "$tok" "$PW/argv" "$PW/as-argv" "$PW/out.log"; then fail "the pins writer puts the API token in an argv or its output"; else pass "ipfs-pins.sh: the API token is in no argv"; fi
+if [ "$(sort -u "$PW/headers")" = "Authorization: Bearer $tok" ] && grep -q -- '-H @-' "$PW/argv"; then pass "ipfs-pins.sh: the token goes to curl -H @- on standard input"; else fail "ipfs-pins.sh header handling"; fi
+cp "$PW/out/pins.txt" "$PW/before"
+if pins_run PW_FAIL=1 && false; then :; elif cmp -s "$PW/before" "$PW/out/pins.txt" && [ -z "$(ls -A "$PW/out" | grep -v '^pins.txt$')" ]; then pass "ipfs-pins.sh: a failed call keeps the earlier list and leaves no temporary file"; else fail "ipfs-pins.sh failure handling"; fi
+printf '{"Keys":{}}\n' >"$PW/answer"
+if pins_run && [ ! -s "$PW/out/pins.txt" ]; then pass "ipfs-pins.sh: no pins gives an empty list"; else fail "ipfs-pins.sh empty list"; fi
+rm -rf "$PW"
+# Units and wiring.
+for f in zk-bridge-ipfs-pins.service zk-bridge-ipfs-pins.timer; do
+  [ -f "$ASK_DIR/$f" ] && pass "$f exists" || fail "$f is missing"
+done
+if grep -qxF 'OnUnitActiveSec=2min' "$ASK_DIR/zk-bridge-ipfs-pins.timer" && grep -qxF 'ExecStart=/opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask/ipfs-pins.sh refresh' "$ASK_DIR/zk-bridge-ipfs-pins.service" && grep -qxF 'Type=oneshot' "$ASK_DIR/zk-bridge-ipfs-pins.service"; then pass "pins unit: oneshot refresh every 2 minutes"; else fail "pins unit or timer"; fi
+if grep -q 'zk-bridge-ipfs-pins.timer' "$DIR/provision.sh" && grep -q '/var/lib/zk-bridge-ipfs-pins' "$DIR/provision.sh" && grep -qE 'install -d -m 0755 -o zkb_ipfs -g zkb_ipfs /var/lib/zk-bridge-ipfs-pins' "$DIR/provision.sh" && grep -qxF 'User=zkb_ipfs' "$ASK_DIR/zk-bridge-ipfs-pins.service"; then pass "provision.sh installs the pins timer; the node's user writes the 0755 pins directory"; else fail "provision.sh pins wiring"; fi
+if grep -q 'ZKB_PINS_REFRESH' "$DIR/proofs.sh"; then pass "proofs.sh publish refreshes the pin list"; else fail "proofs.sh does not refresh the pin list"; fi
+# Root never writes in the node's pins directory: proofs.sh starts the unit, and the script hands a root run to zkb_ipfs.
+if grep -qF 'ZKB_PINS_REFRESH:-systemctl start zk-bridge-ipfs-pins.service' "$DIR/proofs.sh" && grep -qF 'exec runuser -u zkb_ipfs -- "$0" "$@"' "$ASK_DIR/ipfs-pins.sh"; then pass "pin list: root never writes in the node's directory"; else fail "pin list: a root path writes in the node's directory"; fi
 
 # --- Operator-side pull (deploy/operator) ---------------------------------------------------------------------------
 operator_status=0

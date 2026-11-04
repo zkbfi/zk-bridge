@@ -51,6 +51,8 @@ export interface BlockStamp {
 /**
  * The checkpoint blocks between two consecutive blocks: for each epoch whose first slot lies after `previous` and at or
  * before `next`, the block at that slot (`next`, when it holds it) or else the latest block before it (`previous`).
+ * When `next` holds the epoch's first slot, `previous` comes too: from the Gloas fork on, a beacon block commits to the
+ * execution block of the slot before its own, so the head a light client stores for that checkpoint is `previous`.
  */
 export function checkpointsBetween(previous: BlockStamp, next: BlockStamp, clock: BeaconClock): BlockStamp[] {
   const perEpoch = clock.slotsPerEpoch ?? SLOTS_PER_EPOCH;
@@ -58,8 +60,9 @@ export function checkpointsBetween(previous: BlockStamp, next: BlockStamp, clock
   const nextSlot = slotOfTimestamp(next.timestamp, clock);
   const firstBoundary = (previousSlot / perEpoch + 1n) * perEpoch;
   const found: BlockStamp[] = [];
-  if (firstBoundary < nextSlot) found.push(previous);
-  if (nextSlot % perEpoch === 0n && nextSlot >= firstBoundary) found.push(next);
+  const nextStartsEpoch = nextSlot % perEpoch === 0n && nextSlot >= firstBoundary;
+  if (firstBoundary < nextSlot || nextStartsEpoch) found.push(previous);
+  if (nextStartsEpoch) found.push(next);
   return found;
 }
 

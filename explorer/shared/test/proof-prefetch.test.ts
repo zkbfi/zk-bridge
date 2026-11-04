@@ -42,8 +42,10 @@ describe("slotOfTimestamp", () => {
 });
 
 describe("checkpointsBetween", () => {
-  it("is the next block when it holds the first slot of an epoch", () => {
-    expect(checkpointsBetween(at(9n, 63n), at(10n, 64n), CLOCK)).toEqual([at(10n, 64n)]);
+  it("is the next block and the one before it when the next one holds the first slot of an epoch", () => {
+    // Before Gloas the checkpoint at an epoch start holds the execution block of that slot; from Gloas on (Sepolia, live
+    // block 12049871 at slot 11492479 for the checkpoint at slot 11492480) it holds the block of the slot before. Both.
+    expect(checkpointsBetween(at(9n, 63n), at(10n, 64n), CLOCK)).toEqual([at(9n, 63n), at(10n, 64n)]);
   });
 
   it("is the previous block when the first slot of the epoch is empty", () => {
@@ -61,7 +63,7 @@ describe("checkpointsBetween", () => {
   });
 
   it("takes the slots of an epoch from the clock", () => {
-    expect(checkpointsBetween(at(9n, 7n), at(10n, 8n), { ...CLOCK, slotsPerEpoch: 8n })).toEqual([at(10n, 8n)]);
+    expect(checkpointsBetween(at(9n, 7n), at(10n, 8n), { ...CLOCK, slotsPerEpoch: 8n })).toEqual([at(9n, 7n), at(10n, 8n)]);
   });
 });
 
@@ -165,11 +167,11 @@ describe("createProofPrefetcher", () => {
   it("stores the eth_getProof answer at the checkpoint block of an epoch, with the key of the stored head, and logs it without a URL", async () => {
     // Slots: block 0 at 62, 1 at 63, 2 at 64 (an epoch start).
     const { prefetcher, chain, cache, log } = prefetcherOn([62n, 63n, 64n]);
-    expect(await prefetcher.step()).toEqual({ kind: "followed", tip: 2n, checkpoints: 1, stored: 1, failed: 0 });
+    expect(await prefetcher.step()).toEqual({ kind: "followed", tip: 2n, checkpoints: 2, stored: 2, failed: 0 });
     const key = openingStorageKey(4242n);
-    expect(chain.calls).toEqual(["blockNumber", "block 1", "block 2", `head ${ADDRESS} 2`, `proof ${ADDRESS} ${key} 2`]);
-    expect([...cache.entries.values()]).toEqual([
-      {
+    expect(chain.calls).toEqual(["blockNumber", "block 1", "block 2", `head ${ADDRESS} 1`, `proof ${ADDRESS} ${key} 1`, `head ${ADDRESS} 2`, `proof ${ADDRESS} ${key} 2`]);
+    expect([...cache.entries.values()].map((entry) => entry.blockNumber)).toEqual([1, 2]);
+    expect(cache.entries.get(`2-${hashOf(2n)}`)).toEqual({
         schemaVersion: 1,
         chainId: CHAIN,
         blockNumber: 2,
@@ -179,15 +181,28 @@ describe("createProofPrefetcher", () => {
         storageKeys: [key],
         fetchedAt: "2026-11-01T00:00:00.000Z",
         proof: { accountProof: ["0x2"], storageProof: [{ key, value: "0x1", proof: [] }] },
-      },
-    ]);
-    expect(log.lines.find((line) => line.event === "proof_prefetched")).toEqual({
+    });
+    expect(log.lines.filter((line) => line.event === "proof_prefetched").map((line) => line.fields.blockNumber)).toEqual([1n, 2n]);
+    expect(log.lines.filter((line) => line.event === "proof_prefetched").at(-1)).toEqual({
       level: "info",
       event: "proof_prefetched",
       fields: { chainId: CHAIN, blockNumber: 2n, blockHash: hashOf(2n), storedSlot: 4242n, attempts: 1 },
     });
     expect(cache.pruned).toEqual([{ keep: 256, protectedBlockHashes: [] }]);
     expect(log.lines.find((line) => line.event === "proof_cache_pruned")).toMatchObject({ fields: { chainId: CHAIN, removed: 1 } });
+  });
+
+  it("stores the block before the epoch start, which is the stored head of a light client from the Gloas fork on", async () => {
+    // Live case: the beacon block at slot 11492480 commits to the execution block of slot 11492479, so the light client
+    // stores that one (12049871) as the head of the checkpoint, while the block at the epoch start (12049872) is another.
+    const { prefetcher, chain, cache } = prefetcherOn([62n, 63n, 64n]);
+    chain.state.head = 1n;
+    chain.client.storedHead = async (_address, blockNumber) => (blockNumber === 1n ? 7777n : 8888n);
+    expect(await prefetcher.step()).toMatchObject({ checkpoints: 2, stored: 2, failed: 0 });
+    const stored = cache.entries.get(`1-${hashOf(1n)}`);
+    expect(stored).toMatchObject({ blockNumber: 1, blockHash: hashOf(1n), storedSlot: 7777 });
+    expect(stored?.proof).toEqual({ accountProof: ["0x1"], storageProof: [expect.objectContaining({ value: "0x1" })] });
+    expect(cache.entries.get(`2-${hashOf(2n)}`)).toMatchObject({ storedSlot: 8888 });
   });
 
   it("follows the head from the block it saw last, and does nothing while the tip has not moved", async () => {
@@ -227,15 +242,15 @@ describe("createProofPrefetcher", () => {
   });
 
   it("does not fetch again a block the cache already holds", async () => {
-    const { prefetcher, chain, cache } = prefetcherOn([63n, 64n]);
-    await cache.store.write({ schemaVersion: 1, chainId: CHAIN, blockNumber: 1, blockHash: hashOf(1n), address: ADDRESS, storedSlot: 1, storageKeys: [], fetchedAt: "", proof: {} });
+    const { prefetcher, chain, cache } = prefetcherOn([63n, 65n]);
+    await cache.store.write({ schemaVersion: 1, chainId: CHAIN, blockNumber: 0, blockHash: hashOf(0n), address: ADDRESS, storedSlot: 1, storageKeys: [], fetchedAt: "", proof: {} });
     expect(await prefetcher.step()).toEqual({ kind: "followed", tip: 1n, checkpoints: 1, stored: 0, failed: 0 });
     expect(chain.calls.some((call) => call.startsWith("proof"))).toBe(false);
     expect(cache.pruned).toEqual([]);
   });
 
   it("retries a failed fetch with a growing pause, and logs each retry and the success without the URL", async () => {
-    const { prefetcher, chain, log, sleep } = prefetcherOn([63n, 64n], { attempts: 3, retryDelayMilliseconds: 1000 });
+    const { prefetcher, chain, log, sleep } = prefetcherOn([63n, 65n], { attempts: 3, retryDelayMilliseconds: 1000 });
     chain.state.headFailures = 1;
     chain.state.proofFailures = 1;
     expect(await prefetcher.step()).toMatchObject({ stored: 1, failed: 0 });
@@ -247,14 +262,14 @@ describe("createProofPrefetcher", () => {
   });
 
   it("gives up after the last attempt, logs a warning without the URL, and stores nothing", async () => {
-    const { prefetcher, chain, cache, log } = prefetcherOn([63n, 64n], { attempts: 2 });
+    const { prefetcher, chain, cache, log } = prefetcherOn([63n, 65n], { attempts: 2 });
     chain.state.proofFailures = 5;
     expect(await prefetcher.step()).toMatchObject({ checkpoints: 1, stored: 0, failed: 1 });
     expect(cache.entries.size).toBe(0);
     expect(log.lines.find((line) => line.event === "proof_prefetch_failed")).toEqual({
       level: "warn",
       event: "proof_prefetch_failed",
-      fields: { chainId: CHAIN, blockNumber: 1n, attempts: 2, error: "429 Too Many Requests at https://rpc.example.org" },
+      fields: { chainId: CHAIN, blockNumber: 0n, attempts: 2, error: "429 Too Many Requests at https://rpc.example.org" },
     });
   });
 
@@ -266,7 +281,7 @@ describe("createProofPrefetcher", () => {
   });
 
   it("does not prune when the protected heads cannot be read, and says so", async () => {
-    const { prefetcher, cache, log } = prefetcherOn([63n, 64n], {
+    const { prefetcher, cache, log } = prefetcherOn([63n, 65n], {
       protectedBlockHashes: async () => {
         throw new Error("down at http://node.internal/key");
       },
@@ -284,7 +299,7 @@ describe("createProofPrefetcher", () => {
   });
 
   it("turns a failed read of the head into a warning without the URL, and tries again on the next step", async () => {
-    const { prefetcher, chain, log } = prefetcherOn([63n, 64n]);
+    const { prefetcher, chain, log } = prefetcherOn([63n, 65n]);
     const blockNumber = chain.client.blockNumber;
     chain.client.blockNumber = async () => {
       throw new Error("connection refused https://rpc.example.org/SECRET");
@@ -315,7 +330,7 @@ describe("createProofPrefetcher", () => {
   it("uses the real clock and a real pause by default", async () => {
     vi.useFakeTimers({ now: Date.parse("2027-01-02T03:04:05.000Z") });
     try {
-      const chain = fakeChain([63n, 64n]);
+      const chain = fakeChain([63n, 65n]);
       chain.state.proofFailures = 1;
       const cache = memoryStore();
       const prefetcher = createProofPrefetcher({ chainId: CHAIN, address: ADDRESS, client: chain.client, store: cache.store, clock: async () => CLOCK, isOpen: async () => false, logger: logs().logger });

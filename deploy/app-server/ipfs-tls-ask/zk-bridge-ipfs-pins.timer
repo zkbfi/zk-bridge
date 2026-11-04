@@ -1,0 +1,11 @@
+# Refreshes the list of pinned CIDs every 2 minutes (zk-bridge-ipfs-pins.service). provision.sh installs it.
+[Unit]
+Description=zk-bridge list of pinned IPFS CIDs, every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

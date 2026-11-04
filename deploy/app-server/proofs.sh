@@ -97,6 +97,7 @@
 #   ZKB_INDEXER_ENV [/etc/zk-bridge/indexer/indexer.env]   ZKB_PROOFS_STAMP [UTC now]
 #   ZKB_PROOFS_CLI        a command prefix that replaces the systemd-run call (the command and its options follow)
 #   ZKB_PROOFS_AS         an executable called as `$ZKB_PROOFS_AS <user> <command...>` instead of `runuser -u <user> --`
+#   ZKB_PINS_REFRESH [systemctl start zk-bridge-ipfs-pins.service]   the command that refreshes the list of pinned CIDs after a publish
 #   ZKB_IPFS_PATH [/var/lib/zk-bridge-ipfs/repo]   the node's repository: its config (API secret) and api file (address)
 #   ZKB_PROOFS_UNPRIVILEGED=1   no root check, no chown
 set -euo pipefail
@@ -462,6 +463,10 @@ EOF_OLD
   if [ "$unpinned" -gt 0 ] && [ "${ZKB_PROOFS_IPFS_GC:-1}" = 1 ]; then
     if ipfs_rpc "/api/v0/repo/gc?quiet=true" >/dev/null; then log "ipfs repo gc: done"; else log "WARNING: ipfs repo gc failed"; fi
   fi
+  # The list of pinned CIDs behind the TLS check of <cid>.ipfs.zkb.fi (ipfs-tls-ask): refreshed now, so the new tree
+  # has its subdomain at once and an unpinned one loses it. The timer does the same every 2 minutes.
+  # The unit, not the script: it runs as the node's user in its sandbox, so root writes nothing in that directory.
+  ${ZKB_PINS_REFRESH:-systemctl start zk-bridge-ipfs-pins.service} || log "WARNING: the list of pinned CIDs could not be refreshed (the timer retries)"
   log "published $files files; $((total - unpinned)) publication(s) of the log pinned, $unpinned unpinned"
   printf 'cid: %s\n' "$cid"
   printf 'files: %s\n' "$files"

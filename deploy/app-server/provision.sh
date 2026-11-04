@@ -40,6 +40,8 @@ KUBO_VERSION=v0.43.1
 IPFS_PATH=/var/lib/zk-bridge-ipfs/repo
 IPFS_HOST=${IPFS_HOST:-ipfs.zkb.fi}
 GATEWAY_HOST=${GATEWAY_HOST:-gateway.zkb.fi}
+# The parent domain of the <cid>.ipfs.zkb.fi gateway (the key of its Gateway.PublicGateways entry).
+SUBDOMAIN_PARENT=${SUBDOMAIN_PARENT:-zkb.fi}
 
 # --- 1. Base system ---------------------------------------------------------------------------------------------
 log "base system"
@@ -108,6 +110,8 @@ ensure_user zkb_indexer /var/lib/zk-bridge-indexer
 ensure_user zkb_publisher /var/lib/zk-bridge-publisher
 ensure_user zkb_runner /var/lib/zk-bridge-runner
 ensure_user zkb_traffic /var/lib/zk-bridge-traffic
+# Owns no data: it runs the on-demand TLS check for the IPFS subdomains (step 7).
+id zkb_tlsask >/dev/null 2>&1 || useradd --system --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin zkb_tlsask
 ensure_user zkb_status /var/lib/zk-bridge-status
 
 # Code: owned by root, readable by the services, written only by the deploy step.
@@ -191,9 +195,14 @@ ipfs_as config Addresses.API /ip4/127.0.0.1/tcp/5001
 # (the release archives), never anyone else's content. Path style only, no subdomains, no DNSLink.
 ipfs_as config Addresses.Gateway /ip4/127.0.0.1/tcp/8080
 ipfs_as config --json Gateway.NoFetch true
-ipfs_as config --json Gateway.PublicGateways "$(jq -cn --arg h "$GATEWAY_HOST" '{($h): {Paths: ["/ipfs"], UseSubdomains: false, NoDNSLink: true}}')"
+# Two entries: gateway.zkb.fi stays path style (browser IPFS clients fetch raw blocks there), and zkb.fi serves
+# <cid>.ipfs.zkb.fi (Caddy forwards the Host header). Kubo matches a subdomain host to its parent domain's entry.
+ipfs_as config --json Gateway.PublicGateways "$(jq -cn --arg h "$GATEWAY_HOST" --arg s "$SUBDOMAIN_PARENT" '{($h): {Paths: ["/ipfs"], UseSubdomains: false, NoDNSLink: true}, ($s): {Paths: ["/ipfs"], UseSubdomains: true, NoDNSLink: true}}')"
 ipfs_as config Datastore.StorageMax 20GB
 ipfs_as config Swarm.ResourceMgr.MaxMemory 1GB
+# Every browser peer behind Caddy (wss://ipfs.zkb.fi) arrives from 127.0.0.1: exempt it from the per-IP limits, or the
+# node resets them once a handful are connected.
+ipfs_as config --json Swarm.ResourceMgr.Allowlist '["/ip4/127.0.0.1/ipcidr/32"]'
 # Announce only what is pinned here: the release archives.
 ipfs_as config Provide.Strategy pinned
 # Secure WebSockets with a libp2p.direct certificate: browsers (inbrowser.link, Safari) need them to fetch from us.
@@ -203,10 +212,22 @@ ipfs_as config --json AutoTLS.Enabled true
 ipfs_as config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001", "/ip6/::/tcp/4001",
   "/ip4/0.0.0.0/tcp/4001/tls/sni/*.libp2p.direct/ws", "/ip6/::/tcp/4001/tls/sni/*.libp2p.direct/ws",
   "/ip4/0.0.0.0/udp/4001/webrtc-direct", "/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/udp/4001/quic-v1/webtransport",
-  "/ip6/::/udp/4001/webrtc-direct", "/ip6/::/udp/4001/quic-v1", "/ip6/::/udp/4001/quic-v1/webtransport"]'
+  "/ip6/::/udp/4001/webrtc-direct", "/ip6/::/udp/4001/quic-v1", "/ip6/::/udp/4001/quic-v1/webtransport",
+  "/ip4/127.0.0.1/tcp/4003/ws"]'
+# Our own secure WebSocket address, which does not depend on libp2p.direct (its DNS stopped resolving on 2026-11-02 and
+# browsers could not fetch from us): Caddy terminates TLS for ipfs.zkb.fi on 443 and forwards the WebSocket to the plain
+# listener above on localhost (the Caddyfile's ipfs.zkb.fi site).
 # Announce the host name as well, so peers and pinning services can name the node: ipfs.zkb.fi (A and AAAA).
-ipfs_as config --json Addresses.AppendAnnounce "$(jq -cn --arg h "$IPFS_HOST" '[
-  "/dns4/\($h)/tcp/4001", "/dns4/\($h)/udp/4001/quic-v1", "/dns6/\($h)/tcp/4001", "/dns6/\($h)/udp/4001/quic-v1"]')"
+# gateway.zkb.fi as an HTTPS address too: in-browser clients (inbrowser.link, Helia) fetch raw blocks from a provider's
+# HTTPS address and check them against the CID, with no WebSocket or WebRTC (the way the large providers serve browsers).
+ipfs_as config --json Addresses.AppendAnnounce "$(jq -cn --arg h "$IPFS_HOST" --arg g "$GATEWAY_HOST" '[
+  "/dns4/\($h)/tcp/4001", "/dns4/\($h)/udp/4001/quic-v1", "/dns6/\($h)/tcp/4001", "/dns6/\($h)/udp/4001/quic-v1",
+  "/dns4/\($h)/tcp/443/tls/ws", "/dns6/\($h)/tcp/443/tls/ws",
+  "/dns4/\($g)/tcp/443/tls/http", "/dns6/\($g)/tcp/443/tls/http"]')"
+# The server profile filters 127.0.0.0/8, which makes kubo reject every connection Caddy forwards to that listener.
+ipfs_as config --json Swarm.AddrFilters "$(ipfs_as config Swarm.AddrFilters | jq -c 'map(select(. != "/ip4/127.0.0.0/ipcidr/8"))')"
+# The localhost WebSocket listener is reached through Caddy only: never announce it.
+ipfs_as config --json Addresses.NoAnnounce '["/ip4/127.0.0.1/tcp/4003/ws"]'
 # The unit is written here and not by deploy.sh: the node holds the pins and does not change with a release.
 cat > /etc/systemd/system/zk-bridge-ipfs.service <<EOF
 # The IPFS node (kubo) that pins the release archives. provision.sh writes this file. RPC API on 127.0.0.1:5001 only,
@@ -283,6 +304,25 @@ if jq -e '.API.Authorizations | length > 0' "$IPFS_PATH/config" >/dev/null; then
 else
   systemctl stop zk-bridge-ipfs.service
   log "ipfs: no API token yet, so the node stays stopped. Set one: op read op://zkb.fi/kubo/credential | ssh zkbfi-app zkb-ipfs-api-token"
+fi
+
+# The on-demand TLS check for <cid>.ipfs.zkb.fi. A certificate is issued only for a CID that the node has pinned
+# recursively. zk-bridge-ipfs-pins (root, every 2 minutes, and proofs.sh publish) writes the pin list to a root-owned
+# file, which the check service (zkb_tlsask, no token, no access to the node) reads. Code and units come from the
+# release (like the proof export units), so a new server has them after the first deploy and a second run of this script.
+# The node's user writes the list (it holds the API token and is the authority on its pins); the check service reads it.
+install -d -m 0755 -o zkb_ipfs -g zkb_ipfs /var/lib/zk-bridge-ipfs-pins
+TLSASK_DIR=/opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask
+if [ -f "$TLSASK_DIR/zk-bridge-ipfs-tls-ask.service" ] && [ -f "$TLSASK_DIR/zk-bridge-ipfs-pins.service" ] && [ -f "$TLSASK_DIR/zk-bridge-ipfs-pins.timer" ]; then
+  install -m 0644 -o root -g root "$TLSASK_DIR/zk-bridge-ipfs-tls-ask.service" "$TLSASK_DIR/zk-bridge-ipfs-pins.service" "$TLSASK_DIR/zk-bridge-ipfs-pins.timer" /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl enable --now zk-bridge-ipfs-pins.timer
+  # The first list at once (the node must be running with its API token); the timer keeps it fresh.
+  systemctl start zk-bridge-ipfs-pins.service || log "ipfs: the pin list could not be written yet (is the API token set?); the timer retries"
+  systemctl enable zk-bridge-ipfs-tls-ask.service
+  systemctl restart zk-bridge-ipfs-tls-ask.service
+else
+  log "ipfs: no release yet, so no TLS ask service for the IPFS subdomains. Deploy, then run this script again."
 fi
 
 # --- 8. Proof archive backup ----------------------------------------------------------------------------------

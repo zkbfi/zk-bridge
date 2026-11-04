@@ -17,6 +17,11 @@
 
 {
 	email {$ZKB_ACME_EMAIL}
+	# On-demand certificates for <cid>.ipfs.zkb.fi: Caddy asks this local service first, and it says yes only for a
+	# CIDv1 label that the IPFS node holds (deploy/app-server/ipfs-tls-ask).
+	on_demand_tls {
+		ask http://127.0.0.1:{$ZKB_TLSASK_PORT:8089}/check
+	}
 }
 
 # The upstreams are in two files that the playbooks in deploy/ansible own (docs/deploy-blue-green.md). Each one defines
@@ -64,6 +69,23 @@ import /etc/caddy/upstreams/indexer.caddy
 		reverse_proxy 127.0.0.1:{$ZKB_IPFS_GATEWAY_PORT:8080}
 	}
 	import not_found
+}
+
+# The subdomain gateway of the release archives: https://<cid>.ipfs.zkb.fi/. Each release gets its own browser origin.
+# The node (a Gateway.PublicGateways entry for zkb.fi with UseSubdomains) serves it from its own pins. Caddy keeps the
+# original Host header, which the node needs to find the CID. The certificate of each name is issued on demand, once
+# the ask service (global options) agrees. Only one label deep: the apex ipfs.zkb.fi below is a different site.
+{$ZKB_IPFS_SUBDOMAIN_HOSTS:*.ipfs.zkb.fi} {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:{$ZKB_IPFS_GATEWAY_PORT:8080}
+}
+
+# Secure WebSockets for IPFS peers in browsers (inbrowser.link, Helia): wss://ipfs.zkb.fi forwards to the IPFS node's
+# plain WebSocket listener on localhost (provision.sh). It does not rely on libp2p.direct certificates or DNS.
+{$ZKB_IPFS_HOST:ipfs.zkb.fi} {
+	reverse_proxy 127.0.0.1:{$ZKB_IPFS_WS_PORT:4003}
 }
 
 # The status page and its JSON API (explorer/status): status.zkb.fi/ and /api/*. Read only; the service runs on this
