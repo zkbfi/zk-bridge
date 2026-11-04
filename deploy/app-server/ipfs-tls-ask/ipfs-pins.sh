@@ -23,6 +23,9 @@ IPFS_REPO=${ZKB_IPFS_PATH:-/var/lib/zk-bridge-ipfs/repo}
 PINS_FILE=${ZKB_PINS_FILE:-/var/lib/zk-bridge-ipfs-pins/pins.txt}
 
 [ "${1:-}" = refresh ] || { log "usage: ipfs-pins.sh refresh"; exit 2; }
+# Root never writes in the node's directory (zkb_ipfs owns it and could plant links there): it hands the whole run to the
+# node's user. ZKB_PINS_AS is the test hook and skips this.
+if [ -z "${ZKB_PINS_AS:-}" ] && [ "$(id -u)" -eq 0 ]; then exec runuser -u zkb_ipfs -- "$0" "$@"; fi
 
 # As the node's user: reads the secret, builds the header the way kubo does, and calls the API.
 IPFS_RPC='

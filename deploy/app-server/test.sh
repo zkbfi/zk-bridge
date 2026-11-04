@@ -1053,6 +1053,8 @@ done
 if grep -qxF 'OnUnitActiveSec=2min' "$ASK_DIR/zk-bridge-ipfs-pins.timer" && grep -qxF 'ExecStart=/opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask/ipfs-pins.sh refresh' "$ASK_DIR/zk-bridge-ipfs-pins.service" && grep -qxF 'Type=oneshot' "$ASK_DIR/zk-bridge-ipfs-pins.service"; then pass "pins unit: oneshot refresh every 2 minutes"; else fail "pins unit or timer"; fi
 if grep -q 'zk-bridge-ipfs-pins.timer' "$DIR/provision.sh" && grep -q '/var/lib/zk-bridge-ipfs-pins' "$DIR/provision.sh" && grep -qE 'install -d -m 0755 -o zkb_ipfs -g zkb_ipfs /var/lib/zk-bridge-ipfs-pins' "$DIR/provision.sh" && grep -qxF 'User=zkb_ipfs' "$ASK_DIR/zk-bridge-ipfs-pins.service"; then pass "provision.sh installs the pins timer; the node's user writes the 0755 pins directory"; else fail "provision.sh pins wiring"; fi
 if grep -q 'ZKB_PINS_REFRESH' "$DIR/proofs.sh"; then pass "proofs.sh publish refreshes the pin list"; else fail "proofs.sh does not refresh the pin list"; fi
+# Root never writes in the node's pins directory: proofs.sh starts the unit, and the script hands a root run to zkb_ipfs.
+if grep -qF 'ZKB_PINS_REFRESH:-systemctl start zk-bridge-ipfs-pins.service' "$DIR/proofs.sh" && grep -qF 'exec runuser -u zkb_ipfs -- "$0" "$@"' "$ASK_DIR/ipfs-pins.sh"; then pass "pin list: root never writes in the node's directory"; else fail "pin list: a root path writes in the node's directory"; fi
 
 # --- Operator-side pull (deploy/operator) ---------------------------------------------------------------------------
 operator_status=0
