@@ -66,6 +66,12 @@ import /etc/caddy/upstreams/indexer.caddy
 	import not_found
 }
 
+# Secure WebSockets for IPFS peers in browsers (inbrowser.link, Helia): wss://ipfs.zkb.fi forwards to the IPFS node's
+# plain WebSocket listener on localhost (provision.sh). It does not rely on libp2p.direct certificates or DNS.
+{$ZKB_IPFS_HOST:ipfs.zkb.fi} {
+	reverse_proxy 127.0.0.1:{$ZKB_IPFS_WS_PORT:4003}
+}
+
 # The status page and its JSON API (explorer/status): status.zkb.fi/ and /api/*. Read only; the service runs on this
 # server, so if the server is down the page is too (watch /api/summary from outside).
 {$ZKB_STATUS_HOST:status.zkb.fi} {

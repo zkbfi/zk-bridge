@@ -165,9 +165,9 @@ for name in backend indexer; do
 done
 # The backend and the indexer go through the upstream snippets (blue/green). The only proxy written in the Caddyfile is
 # the IPFS gateway, which has one node and no green.
-# The status service is the same: one process on one port.
-if grep -E '^[[:space:]]*reverse_proxy' "$DIR/Caddyfile" | grep -vF -e '{$ZKB_IPFS_GATEWAY_PORT:8080}' -e '{$ZKB_STATUS_PORT:8790}' | grep -q .; then
-  fail "Caddyfile: only the IPFS gateway and the status service may reverse_proxy directly"
+# The status service is the same: one process on one port, and so is the IPFS node's WebSocket listener.
+if grep -E '^[[:space:]]*reverse_proxy' "$DIR/Caddyfile" | grep -vF -e '{$ZKB_IPFS_GATEWAY_PORT:8080}' -e '{$ZKB_STATUS_PORT:8790}' -e '{$ZKB_IPFS_WS_PORT:4003}' | grep -q .; then
+  fail "Caddyfile: only the IPFS gateway, the IPFS WebSocket listener and the status service may reverse_proxy directly"
 else
   pass "Caddyfile: only the IPFS gateway and the status service proxy directly"
 fi
