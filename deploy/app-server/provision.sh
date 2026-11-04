@@ -194,6 +194,9 @@ ipfs_as config --json Gateway.NoFetch true
 ipfs_as config --json Gateway.PublicGateways "$(jq -cn --arg h "$GATEWAY_HOST" '{($h): {Paths: ["/ipfs"], UseSubdomains: false, NoDNSLink: true}}')"
 ipfs_as config Datastore.StorageMax 20GB
 ipfs_as config Swarm.ResourceMgr.MaxMemory 1GB
+# Every browser peer behind Caddy (wss://ipfs.zkb.fi) arrives from 127.0.0.1: exempt it from the per-IP limits, or the
+# node resets them once a handful are connected.
+ipfs_as config --json Swarm.ResourceMgr.Allowlist '["/ip4/127.0.0.1/ipcidr/32"]'
 # Announce only what is pinned here: the release archives.
 ipfs_as config Provide.Strategy pinned
 # Secure WebSockets with a libp2p.direct certificate: browsers (inbrowser.link, Safari) need them to fetch from us.
@@ -203,10 +206,22 @@ ipfs_as config --json AutoTLS.Enabled true
 ipfs_as config --json Addresses.Swarm '["/ip4/0.0.0.0/tcp/4001", "/ip6/::/tcp/4001",
   "/ip4/0.0.0.0/tcp/4001/tls/sni/*.libp2p.direct/ws", "/ip6/::/tcp/4001/tls/sni/*.libp2p.direct/ws",
   "/ip4/0.0.0.0/udp/4001/webrtc-direct", "/ip4/0.0.0.0/udp/4001/quic-v1", "/ip4/0.0.0.0/udp/4001/quic-v1/webtransport",
-  "/ip6/::/udp/4001/webrtc-direct", "/ip6/::/udp/4001/quic-v1", "/ip6/::/udp/4001/quic-v1/webtransport"]'
+  "/ip6/::/udp/4001/webrtc-direct", "/ip6/::/udp/4001/quic-v1", "/ip6/::/udp/4001/quic-v1/webtransport",
+  "/ip4/127.0.0.1/tcp/4003/ws"]'
+# Our own secure WebSocket address, which does not depend on libp2p.direct (its DNS stopped resolving on 2026-11-02 and
+# browsers could not fetch from us): Caddy terminates TLS for ipfs.zkb.fi on 443 and forwards the WebSocket to the plain
+# listener above on localhost (the Caddyfile's ipfs.zkb.fi site).
 # Announce the host name as well, so peers and pinning services can name the node: ipfs.zkb.fi (A and AAAA).
-ipfs_as config --json Addresses.AppendAnnounce "$(jq -cn --arg h "$IPFS_HOST" '[
-  "/dns4/\($h)/tcp/4001", "/dns4/\($h)/udp/4001/quic-v1", "/dns6/\($h)/tcp/4001", "/dns6/\($h)/udp/4001/quic-v1"]')"
+# gateway.zkb.fi as an HTTPS address too: in-browser clients (inbrowser.link, Helia) fetch raw blocks from a provider's
+# HTTPS address and check them against the CID, with no WebSocket or WebRTC (the way the large providers serve browsers).
+ipfs_as config --json Addresses.AppendAnnounce "$(jq -cn --arg h "$IPFS_HOST" --arg g "$GATEWAY_HOST" '[
+  "/dns4/\($h)/tcp/4001", "/dns4/\($h)/udp/4001/quic-v1", "/dns6/\($h)/tcp/4001", "/dns6/\($h)/udp/4001/quic-v1",
+  "/dns4/\($h)/tcp/443/tls/ws", "/dns6/\($h)/tcp/443/tls/ws",
+  "/dns4/\($g)/tcp/443/tls/http", "/dns6/\($g)/tcp/443/tls/http"]')"
+# The server profile filters 127.0.0.0/8, which makes kubo reject every connection Caddy forwards to that listener.
+ipfs_as config --json Swarm.AddrFilters "$(ipfs_as config Swarm.AddrFilters | jq -c 'map(select(. != "/ip4/127.0.0.0/ipcidr/8"))')"
+# The localhost WebSocket listener is reached through Caddy only: never announce it.
+ipfs_as config --json Addresses.NoAnnounce '["/ip4/127.0.0.1/tcp/4003/ws"]'
 # The unit is written here and not by deploy.sh: the node holds the pins and does not change with a release.
 cat > /etc/systemd/system/zk-bridge-ipfs.service <<EOF
 # The IPFS node (kubo) that pins the release archives. provision.sh writes this file. RPC API on 127.0.0.1:5001 only,
