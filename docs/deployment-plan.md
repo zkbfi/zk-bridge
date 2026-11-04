@@ -71,9 +71,19 @@ server with NVMe disks becomes the better choice only when we run our own chain 
     `*.ipfs.zkb.fi` site forwards with the original Host header. It needs a wildcard DNS record
     (`*.ipfs.zkb.fi`, A and AAAA, DNS only, like the other names). Certificates are issued on demand, one per CID, and
     only after the ask service (`deploy/app-server/ipfs-tls-ask`, `zk-bridge-ipfs-tls-ask.service`, user `zkb_tlsask`,
-    127.0.0.1:8089) agrees: the host must be exactly a lowercase CIDv1 base32 label and the node must hold the CID.
-    Answers are cached for ten minutes and lookups in kubo are limited to 20 per second. Let's Encrypt limits
-    new certificates per registered domain (50 per week), which bounds how many releases can get a name.
+    127.0.0.1:8089) agrees. It answers 200 only for a strict CID, and only if the node has that CID pinned recursively.
+    Strict means CIDv1, lowercase base32, codec dag-pb (0x70) or raw (0x55), hash sha2-256 with a 32 byte digest, in one
+    DNS label. The identity hash is refused (its content is the CID itself, so anyone could mint a page), as are other
+    hashes and codecs. A gateway lookup is not used: it also succeeds for blocks the node merely has cached.
+    The ask service has no token and no access to the node. It reads `/var/lib/zk-bridge-ipfs-pins/pins.txt` (root-owned,
+    0644, in a root-owned 0755 directory), which `zk-bridge-ipfs-pins.service` writes as root every 2 minutes
+    (`zk-bridge-ipfs-pins.timer`) and `proofs.sh publish` writes right after it pins. The writer calls
+    `/api/v0/pin/ls?type=recursive` as `zkb_ipfs`, with the API secret on standard input (`curl -H @-`, never in an
+    argument list), and keeps only CIDv1 base32 entries. A release pinned from the operator's machine (`script/release/
+    publish.sh`) gets its list entry at the next timer run; to have it at once, run
+    `ssh zkbfi-app systemctl start zk-bridge-ipfs-pins.service`. Unpinning removes the name from the list within 2
+    minutes (its certificate stays until it expires). Only pinned CIDs can ask for a certificate, so Let's Encrypt's
+    limit of about 50 new certificates per week per registered domain is spent on our own releases.
   - `wss://ipfs.zkb.fi` (the apex) stays the secure WebSocket for browser peers.
 - Every consumer takes these addresses from configuration: the dapp from `VITE_EXPLORER_*_URL` at build time and from its
   Connections view at run time, the prover worker from the `webhookUrl` that the backend sends with each job.
