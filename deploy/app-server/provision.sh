@@ -40,6 +40,8 @@ KUBO_VERSION=v0.43.1
 IPFS_PATH=/var/lib/zk-bridge-ipfs/repo
 IPFS_HOST=${IPFS_HOST:-ipfs.zkb.fi}
 GATEWAY_HOST=${GATEWAY_HOST:-gateway.zkb.fi}
+# The parent domain of the <cid>.ipfs.zkb.fi gateway (the key of its Gateway.PublicGateways entry).
+SUBDOMAIN_PARENT=${SUBDOMAIN_PARENT:-zkb.fi}
 
 # --- 1. Base system ---------------------------------------------------------------------------------------------
 log "base system"
@@ -108,6 +110,8 @@ ensure_user zkb_indexer /var/lib/zk-bridge-indexer
 ensure_user zkb_publisher /var/lib/zk-bridge-publisher
 ensure_user zkb_runner /var/lib/zk-bridge-runner
 ensure_user zkb_traffic /var/lib/zk-bridge-traffic
+# Owns no data: it runs the on-demand TLS check for the IPFS subdomains (step 7).
+id zkb_tlsask >/dev/null 2>&1 || useradd --system --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin zkb_tlsask
 ensure_user zkb_status /var/lib/zk-bridge-status
 
 # Code: owned by root, readable by the services, written only by the deploy step.
@@ -191,7 +195,9 @@ ipfs_as config Addresses.API /ip4/127.0.0.1/tcp/5001
 # (the release archives), never anyone else's content. Path style only, no subdomains, no DNSLink.
 ipfs_as config Addresses.Gateway /ip4/127.0.0.1/tcp/8080
 ipfs_as config --json Gateway.NoFetch true
-ipfs_as config --json Gateway.PublicGateways "$(jq -cn --arg h "$GATEWAY_HOST" '{($h): {Paths: ["/ipfs"], UseSubdomains: false, NoDNSLink: true}}')"
+# Two entries: gateway.zkb.fi stays path style (browser IPFS clients fetch raw blocks there), and zkb.fi serves
+# <cid>.ipfs.zkb.fi (Caddy forwards the Host header). Kubo matches a subdomain host to its parent domain's entry.
+ipfs_as config --json Gateway.PublicGateways "$(jq -cn --arg h "$GATEWAY_HOST" --arg s "$SUBDOMAIN_PARENT" '{($h): {Paths: ["/ipfs"], UseSubdomains: false, NoDNSLink: true}, ($s): {Paths: ["/ipfs"], UseSubdomains: true, NoDNSLink: true}}')"
 ipfs_as config Datastore.StorageMax 20GB
 ipfs_as config Swarm.ResourceMgr.MaxMemory 1GB
 # Every browser peer behind Caddy (wss://ipfs.zkb.fi) arrives from 127.0.0.1: exempt it from the per-IP limits, or the
@@ -298,6 +304,18 @@ if jq -e '.API.Authorizations | length > 0' "$IPFS_PATH/config" >/dev/null; then
 else
   systemctl stop zk-bridge-ipfs.service
   log "ipfs: no API token yet, so the node stays stopped. Set one: op read op://zkb.fi/kubo/credential | ssh zkbfi-app zkb-ipfs-api-token"
+fi
+
+# The ask service of Caddy's on-demand TLS for <cid>.ipfs.zkb.fi. Its code and unit come from the release (like the
+# proof export units), so a new server has them after the first deploy and a second run of this script.
+TLSASK_DIR=/opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask
+if [ -f "$TLSASK_DIR/zk-bridge-ipfs-tls-ask.service" ]; then
+  install -m 0644 -o root -g root "$TLSASK_DIR/zk-bridge-ipfs-tls-ask.service" /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl enable zk-bridge-ipfs-tls-ask.service
+  systemctl restart zk-bridge-ipfs-tls-ask.service
+else
+  log "ipfs: no release yet, so no TLS ask service for the IPFS subdomains. Deploy, then run this script again."
 fi
 
 # --- 8. Proof archive backup ----------------------------------------------------------------------------------

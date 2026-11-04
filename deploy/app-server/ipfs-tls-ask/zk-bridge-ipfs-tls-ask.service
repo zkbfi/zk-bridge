@@ -1,0 +1,51 @@
+# The ask endpoint of Caddy's on-demand TLS for <cid>.ipfs.zkb.fi (ipfs-tls-ask.py, Caddyfile). provision.sh installs
+# this file from the release; deploy.sh does not. 127.0.0.1 only, no secret, no writable path. It asks the IPFS node's
+# gateway (127.0.0.1:8080) whether the node holds a CID, so Caddy gets certificates only for content we serve.
+#
+#   journalctl -u zk-bridge-ipfs-tls-ask
+#   curl -s -o /dev/null -w '%{http_code}\n' 'http://127.0.0.1:8089/check?domain=<cid>.ipfs.zkb.fi'
+[Unit]
+Description=zk-bridge on-demand TLS check for IPFS subdomains
+After=network.target zk-bridge-ipfs.service
+ConditionPathExists=/opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask/ipfs-tls-ask.py
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=zkb_tlsask
+Group=zkb_tlsask
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -I /opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask/ipfs-tls-ask.py
+Restart=on-failure
+RestartSec=5
+MemoryMax=128M
+
+# Sandbox. Nothing is writable.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
