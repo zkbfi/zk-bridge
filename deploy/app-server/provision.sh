@@ -306,12 +306,18 @@ else
   log "ipfs: no API token yet, so the node stays stopped. Set one: op read op://zkb.fi/kubo/credential | ssh zkbfi-app zkb-ipfs-api-token"
 fi
 
-# The ask service of Caddy's on-demand TLS for <cid>.ipfs.zkb.fi. Its code and unit come from the release (like the
-# proof export units), so a new server has them after the first deploy and a second run of this script.
+# The on-demand TLS check for <cid>.ipfs.zkb.fi. A certificate is issued only for a CID that the node has pinned
+# recursively. zk-bridge-ipfs-pins (root, every 2 minutes, and proofs.sh publish) writes the pin list to a root-owned
+# file, which the check service (zkb_tlsask, no token, no access to the node) reads. Code and units come from the
+# release (like the proof export units), so a new server has them after the first deploy and a second run of this script.
+install -d -m 0755 -o root -g root /var/lib/zk-bridge-ipfs-pins
 TLSASK_DIR=/opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask
-if [ -f "$TLSASK_DIR/zk-bridge-ipfs-tls-ask.service" ]; then
-  install -m 0644 -o root -g root "$TLSASK_DIR/zk-bridge-ipfs-tls-ask.service" /etc/systemd/system/
+if [ -f "$TLSASK_DIR/zk-bridge-ipfs-tls-ask.service" ] && [ -f "$TLSASK_DIR/zk-bridge-ipfs-pins.service" ] && [ -f "$TLSASK_DIR/zk-bridge-ipfs-pins.timer" ]; then
+  install -m 0644 -o root -g root "$TLSASK_DIR/zk-bridge-ipfs-tls-ask.service" "$TLSASK_DIR/zk-bridge-ipfs-pins.service" "$TLSASK_DIR/zk-bridge-ipfs-pins.timer" /etc/systemd/system/
   systemctl daemon-reload
+  systemctl enable --now zk-bridge-ipfs-pins.timer
+  # The first list at once (the node must be running with its API token); the timer keeps it fresh.
+  systemctl start zk-bridge-ipfs-pins.service || log "ipfs: the pin list could not be written yet (is the API token set?); the timer retries"
   systemctl enable zk-bridge-ipfs-tls-ask.service
   systemctl restart zk-bridge-ipfs-tls-ask.service
 else

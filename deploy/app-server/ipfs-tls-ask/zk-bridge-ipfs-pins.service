@@ -1,0 +1,36 @@
+# Writes the CIDs that the IPFS node has pinned recursively to /var/lib/zk-bridge-ipfs-pins/pins.txt, which the on-demand
+# TLS check reads (ipfs-pins.sh, ipfs-tls-ask.py). Started by zk-bridge-ipfs-pins.timer, and by proofs.sh publish.
+# provision.sh installs this file from the release. It runs as root because the node's API secret is readable by the
+# node's user only: the script hands that part to zkb_ipfs (runuser), and writes nothing else than the pins directory.
+#
+#   journalctl -u zk-bridge-ipfs-pins --since -1h
+[Unit]
+Description=zk-bridge list of pinned IPFS CIDs for the TLS check
+After=zk-bridge-ipfs.service
+ConditionPathExists=/opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask/ipfs-pins.sh
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask/ipfs-pins.sh refresh
+TimeoutStartSec=90
+
+# Sandbox. Writable: the pins directory.
+ReadWritePaths=/var/lib/zk-bridge-ipfs-pins
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0022

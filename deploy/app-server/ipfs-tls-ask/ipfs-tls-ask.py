@@ -2,28 +2,28 @@
 """The "ask" endpoint of Caddy's on-demand TLS for <cid>.ipfs.zkb.fi (deploy/app-server/Caddyfile).
 
 Caddy asks GET /check?domain=<host> before it gets a certificate for a name it has none for. The answer is 200 only
-when the host is exactly <cidv1-base32>.<suffix> AND this node holds the content (a HEAD to the node's own gateway,
-which serves only its pins: Gateway.NoFetch). Everything else is 403. Names that are no CID cost nothing: they are
-refused before kubo is asked. Results are cached, and the lookups in kubo are rate limited, so a flood of random
-names cannot hammer the node.
+when the host is exactly <cid><suffix> with a strict CID (CIDv1, lowercase base32, dag-pb or raw, sha2-256) AND that
+CID is in the list of recursive pins of our IPFS node. Everything else is 403.
+
+The list is a file (default /var/lib/zk-bridge-ipfs-pins/pins.txt, one CID per line) that ipfs-pins.sh writes as root
+from the node's pin list. This service never talks to the node and holds no token, so a CID that is only cached in the
+node, or that carries its own content (an identity hash), gets no certificate. The file is read again when its
+modification time changes.
 
 Standard library only; runs as an unprivileged user (zk-bridge-ipfs-tls-ask.service), on 127.0.0.1.
-Settings (environment): ZKB_TLSASK_PORT (8089), ZKB_TLSASK_GATEWAY (http://127.0.0.1:8080),
-ZKB_TLSASK_SUFFIX (.ipfs.zkb.fi), ZKB_TLSASK_TTL (600 seconds), ZKB_TLSASK_RATE (20 lookups per second).
+Settings (environment): ZKB_TLSASK_PORT (8089), ZKB_TLSASK_PINS (the file above), ZKB_TLSASK_SUFFIX (.ipfs.zkb.fi).
 """
 import base64
 import binascii
-import http.client
 import os
 import re
 import threading
-import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAX_LABEL = 63          # one DNS label
-CACHE_MAX = 10000       # entries; the oldest go first
-LOOKUP_TIMEOUT = 3.0    # seconds for the node to answer
+DAG_PB, RAW = 0x70, 0x55
+SHA2_256 = 0x12
 _LABEL = re.compile(r"^b[a-z2-7]+$")
 
 
@@ -42,19 +42,23 @@ def _varint(data, pos):
 
 
 def is_cidv1_label(label):
-    """True for a CIDv1 in lowercase base32 (multibase prefix b) that fits one DNS label."""
+    """True for a CIDv1 in lowercase base32 that names a file tree or a raw block hashed with sha2-256 (32 bytes).
+
+    The identity hash (its content is the CID), other hashes and other codecs are refused.
+    """
     if len(label) > MAX_LABEL or not _LABEL.match(label):
         return False
     body = label[1:]
     try:
         raw = base64.b32decode(body.upper() + "=" * (-len(body) % 8))
         version, pos = _varint(raw, 0)
-        _codec, pos = _varint(raw, pos)
-        _hash_code, pos = _varint(raw, pos)
+        codec, pos = _varint(raw, pos)
+        hash_code, pos = _varint(raw, pos)
         digest_len, pos = _varint(raw, pos)
     except (ValueError, binascii.Error):
         return False
-    return version == 1 and digest_len > 0 and len(raw) - pos == digest_len
+    return (version == 1 and codec in (DAG_PB, RAW) and hash_code == SHA2_256 and digest_len == 32
+            and len(raw) - pos == 32)
 
 
 def cid_of_host(host, suffix):
@@ -65,53 +69,37 @@ def cid_of_host(host, suffix):
     return label if is_cidv1_label(label) else None
 
 
-class Checker:
-    def __init__(self, gateway, suffix, ttl=600.0, rate=20.0, clock=time.monotonic):
-        parsed = urllib.parse.urlsplit(gateway)
-        self.gateway_host, self.gateway_port = parsed.hostname, parsed.port or 80
-        self.suffix, self.ttl, self.rate, self.clock = suffix, ttl, rate, clock
-        self.cache = {}          # cid -> (expires, held)
-        self.tokens, self.last = rate, clock()
-        self.lock = threading.Lock()
+class Pins:
+    """The CIDs of the pins file; read again when the file's modification time (or size) changes."""
 
-    def _take_token(self):
-        now = self.clock()
-        self.tokens = min(self.rate, self.tokens + (now - self.last) * self.rate)
-        self.last = now
-        if self.tokens < 1:
-            return False
-        self.tokens -= 1
-        return True
+    def __init__(self, path):
+        self.path, self.stamp, self.cids, self.lock = path, None, frozenset(), threading.Lock()
 
-    def _held(self, cid):
-        conn = http.client.HTTPConnection(self.gateway_host, self.gateway_port, timeout=LOOKUP_TIMEOUT)
+    def current(self):
         try:
-            conn.request("HEAD", "/ipfs/" + cid)
-            # 2xx, or the redirect that a directory gets to its trailing slash. No redirect is followed.
-            return 200 <= conn.getresponse().status < 400
-        except (OSError, http.client.HTTPException):
-            return False
-        finally:
-            conn.close()
+            st = os.stat(self.path)
+            stamp = (st.st_mtime_ns, st.st_size, st.st_ino)
+        except OSError:
+            self.cids, self.stamp = frozenset(), None
+            return self.cids
+        with self.lock:
+            if stamp != self.stamp:
+                try:
+                    with open(self.path, encoding="ascii", errors="ignore") as handle:
+                        self.cids = frozenset(line.strip() for line in handle if is_cidv1_label(line.strip()))
+                    self.stamp = stamp
+                except OSError:
+                    self.cids, self.stamp = frozenset(), None
+            return self.cids
+
+
+class Checker:
+    def __init__(self, pins_path, suffix):
+        self.pins, self.suffix = Pins(pins_path), suffix
 
     def allowed(self, host):
         cid = cid_of_host(host, self.suffix)
-        if cid is None:
-            return False
-        with self.lock:
-            now = self.clock()
-            hit = self.cache.get(cid)
-            if hit and hit[0] > now:
-                return hit[1]
-            if not self._take_token():
-                return False  # not cached: Caddy asks again on the next handshake
-        held = self._held(cid)  # outside the lock: a slow node does not block the other answers
-        with self.lock:
-            if len(self.cache) >= CACHE_MAX:
-                for key in sorted(self.cache, key=lambda k: self.cache[k][0])[: CACHE_MAX // 10]:
-                    del self.cache[key]
-            self.cache[cid] = (self.clock() + self.ttl, held)
-        return held
+        return cid is not None and cid in self.pins.current()
 
 
 def make_server(checker, host="127.0.0.1", port=8089):
@@ -134,10 +122,8 @@ def make_server(checker, host="127.0.0.1", port=8089):
 
 def main():
     checker = Checker(
-        os.environ.get("ZKB_TLSASK_GATEWAY", "http://127.0.0.1:8080"),
+        os.environ.get("ZKB_TLSASK_PINS", "/var/lib/zk-bridge-ipfs-pins/pins.txt"),
         os.environ.get("ZKB_TLSASK_SUFFIX", ".ipfs.zkb.fi"),
-        float(os.environ.get("ZKB_TLSASK_TTL", "600")),
-        float(os.environ.get("ZKB_TLSASK_RATE", "20")),
     )
     make_server(checker, "127.0.0.1", int(os.environ.get("ZKB_TLSASK_PORT", "8089"))).serve_forever()
 
