@@ -11,7 +11,8 @@ ConditionPathExists=/opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask/ipfs-p
 
 [Service]
 Type=oneshot
-User=root
+User=zkb_ipfs
+Group=zkb_ipfs
 ExecStart=/opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask/ipfs-pins.sh refresh
 TimeoutStartSec=90
 
