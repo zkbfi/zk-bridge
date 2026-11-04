@@ -310,7 +310,8 @@ fi
 # recursively. zk-bridge-ipfs-pins (root, every 2 minutes, and proofs.sh publish) writes the pin list to a root-owned
 # file, which the check service (zkb_tlsask, no token, no access to the node) reads. Code and units come from the
 # release (like the proof export units), so a new server has them after the first deploy and a second run of this script.
-install -d -m 0755 -o root -g root /var/lib/zk-bridge-ipfs-pins
+# The node's user writes the list (it holds the API token and is the authority on its pins); the check service reads it.
+install -d -m 0755 -o zkb_ipfs -g zkb_ipfs /var/lib/zk-bridge-ipfs-pins
 TLSASK_DIR=/opt/zk-bridge/current/deploy/app-server/ipfs-tls-ask
 if [ -f "$TLSASK_DIR/zk-bridge-ipfs-tls-ask.service" ] && [ -f "$TLSASK_DIR/zk-bridge-ipfs-pins.service" ] && [ -f "$TLSASK_DIR/zk-bridge-ipfs-pins.timer" ]; then
   install -m 0644 -o root -g root "$TLSASK_DIR/zk-bridge-ipfs-tls-ask.service" "$TLSASK_DIR/zk-bridge-ipfs-pins.service" "$TLSASK_DIR/zk-bridge-ipfs-pins.timer" /etc/systemd/system/

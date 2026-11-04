@@ -75,8 +75,8 @@ server with NVMe disks becomes the better choice only when we run our own chain 
     Strict means CIDv1, lowercase base32, codec dag-pb (0x70) or raw (0x55), hash sha2-256 with a 32 byte digest, in one
     DNS label. The identity hash is refused (its content is the CID itself, so anyone could mint a page), as are other
     hashes and codecs. A gateway lookup is not used: it also succeeds for blocks the node merely has cached.
-    The ask service has no token and no access to the node. It reads `/var/lib/zk-bridge-ipfs-pins/pins.txt` (root-owned,
-    0644, in a root-owned 0755 directory), which `zk-bridge-ipfs-pins.service` writes as root every 2 minutes
+    The ask service has no token and no access to the node. It reads `/var/lib/zk-bridge-ipfs-pins/pins.txt` (written by the
+    node's user zkb_ipfs, 0644, in its 0755 directory), which `zk-bridge-ipfs-pins.service` writes every 2 minutes
     (`zk-bridge-ipfs-pins.timer`) and `proofs.sh publish` writes right after it pins. The writer calls
     `/api/v0/pin/ls?type=recursive` as `zkb_ipfs`, with the API secret on standard input (`curl -H @-`, never in an
     argument list), and keeps only CIDv1 base32 entries. A release pinned from the operator's machine (`script/release/

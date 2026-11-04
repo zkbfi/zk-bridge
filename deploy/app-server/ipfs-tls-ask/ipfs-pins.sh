@@ -8,7 +8,7 @@
 # RPC API for it. The node's user reads AuthSecret from the node's config, and the Authorization header goes to
 # `curl -H @-` on standard input, never into an argument list (the same way as proofs.sh). The answer of
 # /api/v0/pin/ls?type=recursive is cut down to CIDv1 in lowercase base32 (multibase prefix b) and written one per line,
-# atomically, to a root-owned file in a root-owned directory: nobody else can add a CID to it.
+# atomically, to a file in a directory that only the node's user (zkb_ipfs) can write: the check service only reads it.
 #
 #   ZKB_IPFS_PATH [/var/lib/zk-bridge-ipfs/repo]        the node's repository (config with the API secret, api file)
 #   ZKB_PINS_FILE [/var/lib/zk-bridge-ipfs-pins/pins.txt]
@@ -55,7 +55,10 @@ printf "Authorization: %s\n" "$header" | curl -sS --fail-with-body --max-time 30
 as_user() {
   local user=$1
   shift
-  if [ -n "${ZKB_PINS_AS:-}" ]; then "$ZKB_PINS_AS" "$user" "$@"; else runuser -u "$user" -- "$@"; fi
+  if [ -n "${ZKB_PINS_AS:-}" ]; then "$ZKB_PINS_AS" "$user" "$@"
+  # The timer runs this as the node's own user: no switch (runuser cannot inside the unit's sandbox).
+  elif [ "$(id -un)" = "$user" ]; then "$@"
+  else runuser -u "$user" -- "$@"; fi
 }
 
 dir=$(dirname "$PINS_FILE")
