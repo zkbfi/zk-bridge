@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Block, Inline } from "@web/docs/markdown";
+import { slugOfPageId } from "@web/docs/slug";
 import { collectPages, describePage, findUnresolvedLinks, joinPath, routeOf, SITE_INPUT, SITE_PAGES, type DocsSiteInput } from "../src/pages";
 import { parseMarkdown } from "@web/docs/markdown";
 
@@ -30,30 +31,34 @@ describe("collectPages", () => {
 
   it("a link between operator pages becomes a route", () => {
     const notes = collectPages(small()).find((page) => page.id === "audit/notes");
-    expect(linksIn(notes?.blocks ?? [])).toEqual(["#/tools"]);
+    expect(linksIn(notes?.blocks ?? [])).toEqual(["#/docs/tools"]);
   });
 
-  it("a relative .md link becomes a hash route, with the heading after a second hash", () => {
+  it("a relative .md link becomes a docs route, with the heading after a slash", () => {
     const [first] = collectPages(small());
-    expect(linksIn(first?.blocks ?? [])).toEqual(["#/help/second#part", "#/tools"]);
+    expect(linksIn(first?.blocks ?? [])).toEqual(["#/docs/second/part", "#/docs/tools"]);
   });
 
   it("a link to a file above the published folders becomes plain text, and an anchor link points into its own page", () => {
     const tools = collectPages(small()).find((page) => page.id === "tools");
-    expect(linksIn(tools?.blocks ?? [])).toEqual(["#/tools#tools"]);
+    expect(linksIn(tools?.blocks ?? [])).toEqual(["#/docs/tools/tools"]);
     expect(JSON.stringify(tools?.blocks)).toContain("readme");
   });
 
   it("keeps an https link and turns a link to a missing page or heading into text", () => {
     const pages = collectPages(small({ operatorPages: { "../../../docs/a.md": "# A\n\n[x](https://example.org) [y](nowhere.md) [z](tools.md#nothing) [w](a.md#a)" } }));
-    expect(linksIn(pages.find((page) => page.id === "a")?.blocks ?? [])).toEqual(["https://example.org", "#/a#a"]);
+    expect(linksIn(pages.find((page) => page.id === "a")?.blocks ?? [])).toEqual(["https://example.org", "#/docs/a/a"]);
   });
 
   it("rewrites links inside bold text, lists, tables and quotes", () => {
     const [page] = collectPages({ userPages: { "01-a.md": "# A\n\n**[x](01-a.md#a)**\n\n- [y](01-a.md)\n\n> [q](01-a.md)\n\n| h |\n|---|\n| [t](01-a.md) |\n\n| [h2](01-a.md) |\n|---|\n| c |" }, operatorPages: {} });
     const text = JSON.stringify(page?.blocks);
-    expect(text.match(/"href":"#\/help\/a/g)).toHaveLength(5);
+    expect(text.match(/"href":"#\/docs\/a/g)).toHaveLength(5);
     expect(text).not.toContain("01-a.md");
+  });
+
+  it("refuses two pages that would share one address", () => {
+    expect(() => collectPages({ userPages: { "01-tools.md": "# A" }, operatorPages: { "../../../docs/tools.md": "# B" } })).toThrow(/Two files make the address "tools"/);
   });
 
   it("lists the headings below the title", () => {
@@ -104,8 +109,47 @@ describe("joinPath and routeOf", () => {
   });
 
   it("builds a route with and without a heading", () => {
-    expect(routeOf("tools", "")).toBe("#/tools");
-    expect(routeOf("tools", "top")).toBe("#/tools#top");
+    expect(routeOf("", "")).toBe("#/docs");
+    expect(routeOf("tools", "")).toBe("#/docs/tools");
+    expect(routeOf("tools", "top")).toBe("#/docs/tools/top");
+    expect(routeOf("help/fees-explained", "top")).toBe("#/docs/fees-explained/top");
+    expect(routeOf("audit/known-issues", "top")).toBe("#/docs/audit%2Fknown-issues/top");
+  });
+});
+
+describe("the real pages (moved here from the dapp's old docs view, with the checks they had)", () => {
+  const helpPages = SITE_PAGES.filter((page) => page.group === "help");
+
+  it("holds every help page, in reading order", () => {
+    expect(helpPages.map((page) => slugOfPageId(page.id))).toEqual(["getting-started", "how-the-bridge-works", "bridging-tokens", "sending-messages", "fees-explained", "safety", "running-a-bot", "settings-and-explore", "glossary"]);
+  });
+
+  it("gives every help page a title and at least two headings that the search can find", () => {
+    for (const page of helpPages) {
+      expect(page.title.length).toBeGreaterThan(2);
+      expect(page.headings.length).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("explains exact versus estimate and the data source of the tip, and names no bridge fee schedule", () => {
+    const headings = (helpPages.find((page) => page.id === "help/fees-explained")?.headings ?? []).map((heading) => heading.text.toLowerCase()).join("|");
+    expect(headings).toContain("exact and estimate");
+    expect(headings).not.toContain("schedule");
+    expect(headings).not.toContain("bridge fee");
+    expect(headings).toContain("data source");
+  });
+
+  it("uses no acronym that the owner forbade in prose", () => {
+    const forbidden = [/\bAMB\b/, /\bSTE\b/, /\bUR4A\b/, /\bPR\b/, /\bRPC\b(?!\s+endpoint)/];
+    const text = helpPages.flatMap((page) => page.blocks.map((block) => JSON.stringify(block))).join("\n");
+    for (const pattern of forbidden) expect(text).not.toMatch(pattern);
+  });
+
+  it("holds no email address, no home path and no key-like value", () => {
+    const source = Object.values(SITE_INPUT.userPages).join("\n");
+    expect(source).not.toMatch(/[\w.+-]+@[\w-]+\.[\w.]+/);
+    expect(source).not.toMatch(/\/Users\//);
+    expect(source).not.toMatch(/0x[0-9a-fA-F]{64}/);
   });
 });
 
@@ -115,10 +159,10 @@ describe("the real pages", () => {
   });
 
   it("every link in the built pages is an https address or a route of an existing page", () => {
-    const ids = new Set(SITE_PAGES.map((page) => page.id));
+    const slugs = new Set(SITE_PAGES.map((page) => slugOfPageId(page.id)));
     const hrefs = SITE_PAGES.flatMap((page) => linksIn(page.blocks));
     for (const href of hrefs) {
-      const isRoute = href.startsWith("#/") && ids.has(href.slice(2).split("#")[0] as string);
+      const isRoute = href.startsWith("#/docs/") && slugs.has(decodeURIComponent(href.slice("#/docs/".length).split("/")[0] as string));
       expect(isRoute || href.startsWith("https:"), href).toBe(true);
     }
   });

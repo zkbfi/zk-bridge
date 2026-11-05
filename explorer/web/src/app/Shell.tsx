@@ -7,7 +7,7 @@ import type { ActionId, SearchResult } from "../search/search-model";
 import { useWallet } from "../wallet/wallet-port";
 import { AddressView } from "../views/AddressView";
 import { AuditView } from "../views/AuditView";
-import { DocsView } from "../views/DocsView";
+import { DocsRoute } from "../docs/DocsRoute";
 import { GlobalView } from "../views/GlobalView";
 import { HistoryPage } from "../views/HistoryView";
 import { EMPTY_HISTORY_FILTERS } from "../views/history-model";
@@ -97,8 +97,9 @@ const isTypingTarget = (target: EventTarget | null): boolean => {
 };
 
 /** Opens the palette with Ctrl+K, Command+K and the slash key, unless the viewer is typing in a field. */
-const usePaletteShortcuts = (open: () => void): void => {
+const usePaletteShortcuts = (open: () => void, enabled: boolean): void => {
   useEffect(() => {
+    if (!enabled) return;
     const onKeyDown = (event: KeyboardEvent): void => {
       const chord = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k";
       const slash = event.key === "/" && !isTypingTarget(event.target) && !event.ctrlKey && !event.metaKey && !event.altKey;
@@ -108,7 +109,7 @@ const usePaletteShortcuts = (open: () => void): void => {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open]);
+  }, [open, enabled]);
 };
 
 const renderRoute = (route: Route, navigate: (next: Route) => void, update: (next: Route) => void) => {
@@ -121,7 +122,6 @@ const renderRoute = (route: Route, navigate: (next: Route) => void, update: (nex
   if (route.name === "prover") return <ProverView />;
   if (route.name === "settings") return <ConnectionsView />;
   if (route.name === "history") return <HistoryPage route={route} onNavigate={navigate} onUpdate={update} />;
-  if (route.name === "docs") return <DocsView slug={route.slug} heading={route.heading} />;
   if (route.name === "address") return <AddressView address={route.address} />;
   // The message route renders in Explore's frame (see the Shell); it never reaches here.
   return null;
@@ -206,10 +206,12 @@ export const Shell = () => {
   const [recent, setRecent] = useState<readonly SearchResult[]>(() => loadRecent(browserStorage()));
   const [notice, setNotice] = useState<string | null>(null);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
-  usePaletteShortcuts(openPalette);
+  // The docs have their own search (the keys open it); the dapp's palette stays closed there.
+  usePaletteShortcuts(openPalette, route.name !== "docs");
 
   useEffect(() => {
-    document.title = `${routeTitle(route)} · zk-bridge explorer`;
+    // The docs set their own title, one per page.
+    if (route.name !== "docs") document.title = `${routeTitle(route)} · zk-bridge explorer`;
   }, [route]);
 
   const runAction = useCallback(
@@ -240,6 +242,9 @@ export const Shell = () => {
   );
 
   const actionsPort = useMemo(() => ({ open: (name: FormDialogName) => openDialog(name) }), [openDialog]);
+
+  // The docs are their own frame (header, search, footer), loaded on demand as a separate chunk.
+  if (route.name === "docs") return <DocsRoute slug={route.slug} heading={route.heading} />;
 
   return (
     <ActionsContext.Provider value={actionsPort}>

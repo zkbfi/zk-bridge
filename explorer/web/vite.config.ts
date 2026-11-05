@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { publicPagesPlugin } from "../docs/public-pages.ts";
 import { refuseSecretsPlugin } from "./src/config/refuse-secrets-plugin.ts";
 
 const terminalSource = fileURLToPath(new URL("../terminal/src", import.meta.url));
@@ -10,13 +11,18 @@ const msgboardHttpSource = fileURLToPath(new URL("../shared/src/msgboard/board-h
 const reactSource = fileURLToPath(new URL("../react/src/index.ts", import.meta.url));
 const reactStyles = fileURLToPath(new URL("../react/styles.css", import.meta.url));
 const explorerRoot = fileURLToPath(new URL("..", import.meta.url));
+const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 export default defineConfig({
-  plugins: [react(), refuseSecretsPlugin()],
+  // The docs (explorer/docs) are part of this app, loaded lazily at #/docs. Only the help pages and the operator pages named
+  // in explorer/docs/public-pages.json reach the build; any other docs/ import fails it.
+  plugins: [publicPagesPlugin({ repositoryRoot }), react(), refuseSecretsPlugin()],
   // The two subpaths come first: an alias matches by prefix, and the plain name would swallow them.
   resolve: {
     alias: {
       "@terminal": terminalSource,
+      "@web": fileURLToPath(new URL("./src", import.meta.url)),
+      "@docs": fileURLToPath(new URL("../docs/src", import.meta.url)),
       "@zk-bridge/shared/backend-client": backendClientSource,
       "@zk-bridge/shared/msgboard-http": msgboardHttpSource,
       "@zk-bridge/shared": sharedSource,

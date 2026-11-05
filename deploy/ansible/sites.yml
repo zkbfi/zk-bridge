@@ -7,8 +7,9 @@
 #   ansible-playbook sites.yml -e publish_next=/path/to/release-dir
 #   # Production landing (Worker zkb-fi on zkb.fi, www.zkb.fi): only a release that was tried on next.zkb.fi.
 #   ansible-playbook sites.yml -e publish_stable=/path/to/promoted-release-dir -e confirm_production=yes
-#   # docs.zkb.fi: the DNSLink TXT record names the new docs CID (pinned first; the old CID stays pinned).
-#   ansible-playbook sites.yml -e docs_cid=<cid> -e confirm_production=yes
+#   # docs.zkb.fi: the docs are inside the dapp (#/docs), so the DNSLink TXT record names the DAPP's CID from the release
+#   # (version.json, releases[name=dapp].cid; pinned first, the old CID stays pinned). The variable keeps its old name.
+#   ansible-playbook sites.yml -e docs_cid=<dapp cid> -e confirm_production=yes
 #   # Design UI Worker (zkb-fi-ui, routes zkb.fi/ui* and next.zkb.fi/ui*): upload a version, look at it, then deploy it.
 #   ansible-playbook sites.yml -e design_ui=upload
 #   ansible-playbook sites.yml -e design_ui=deploy -e confirm_production=yes
@@ -29,7 +30,7 @@
       ansible.builtin.assert:
         that:
           - publish_next is defined or publish_stable is defined or docs_cid is defined or design_ui is defined
-        fail_msg: "Nothing to publish. Name it: -e publish_next=<dir>, publish_stable=<dir>, docs_cid=<cid>, or design_ui=upload|deploy|rollback."
+        fail_msg: "Nothing to publish. Name it: -e publish_next=<dir>, publish_stable=<dir>, docs_cid=<dapp cid>, or design_ui=upload|deploy|rollback."
         quiet: true
 
     - name: Check the confirmation for production names
@@ -49,7 +50,7 @@
         loop_var: zkb_channel
 
     # --- docs.zkb.fi ------------------------------------------------------------------------------------------------
-    - name: Point docs.zkb.fi at a new docs CID
+    - name: Point docs.zkb.fi at the dapp CID
       ansible.builtin.include_tasks: tasks/site_docs.yml
       when: docs_cid is defined
 

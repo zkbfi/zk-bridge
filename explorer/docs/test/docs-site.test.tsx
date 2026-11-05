@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { useEffect, useState } from "react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { DocsSite } from "../src/DocsSite";
 import { collectPages } from "../src/pages";
@@ -11,7 +12,21 @@ const pages = collectPages({
   },
   operatorPages: {},
 });
-const show = () => render(<DocsSite pages={pages} />);
+/** Stands in for the dapp's shell: it reads `#/docs/<slug>/<heading>` and hands the parts to the site. */
+const Harness = ({ list = pages }: { readonly list?: typeof pages }) => {
+  const read = () => {
+    const [, , slug, heading] = window.location.hash.split("/").map(decodeURIComponent);
+    return { slug: slug ?? null, heading: heading ?? null };
+  };
+  const [at, setAt] = useState(read);
+  useEffect(() => {
+    const update = () => setAt(read());
+    window.addEventListener("hashchange", update);
+    return () => window.removeEventListener("hashchange", update);
+  }, []);
+  return <DocsSite pages={list} slug={at.slug} heading={at.heading} />;
+};
+const show = () => render(<Harness />);
 const goTo = (hash: string) =>
   act(() => {
     window.location.hash = hash;
@@ -28,7 +43,7 @@ describe("DocsSite", () => {
     show();
     expect(screen.getByRole("link", { name: "Skip to the text" })).toBeInTheDocument();
     expect(screen.getByRole("banner")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "zkb.fi docs, home" })).toHaveAttribute("href", "#/");
+    expect(screen.getByRole("link", { name: "zkb.fi docs, home" })).toHaveAttribute("href", "#/docs");
     expect(screen.getByRole("button", { name: /Search the docs/ })).toBeInTheDocument();
     expect(screen.getByRole("main")).toBeInTheDocument();
     expect(screen.getByRole("contentinfo")).toBeInTheDocument();
@@ -47,19 +62,19 @@ describe("DocsSite", () => {
     expect(screen.getByTestId("page-name")).toHaveTextContent("Docs");
     expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Using the bridge1 page", "How it works and what you trust1 page", "Running it1 page"]);
     const row = screen.getByRole("link", { name: /First/ });
-    expect(row).toHaveAttribute("href", "#/help/first");
+    expect(row).toHaveAttribute("href", "#/docs/first");
     expect(row).toHaveTextContent("Starts here.");
     expect(document.title).toBe("zkb.fi docs");
   });
 
   it("leaves out a group with no pages", () => {
-    render(<DocsSite pages={pages.filter((page) => page.section !== "run")} />);
+    render(<Harness list={pages.filter((page) => page.section !== "run")} />);
     expect(screen.queryByRole("heading", { name: /Running it/ })).toBeNull();
   });
 
   it("a page shows its title on the band, a meta line, the contents, the text and the next and previous pages", () => {
     show();
-    goTo("#/help/how-the-bridge-works");
+    goTo("#/docs/how-the-bridge-works");
     const article = screen.getByRole("article", { name: "Second" });
     expect(screen.getByRole("heading", { level: 1, name: "Second" })).toBeInTheDocument();
     expect(screen.getByText("1 min read · 1 section")).toBeInTheDocument();
@@ -67,36 +82,36 @@ describe("DocsSite", () => {
     expect(within(article).getByRole("heading", { level: 2, name: "Part" })).toHaveAttribute("id", "part");
     const contents = screen.getAllByRole("navigation", { name: "On this page" });
     expect(contents).toHaveLength(2);
-    expect(within(contents[0] as HTMLElement).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual(["#/help/how-the-bridge-works#part", "#/help/how-the-bridge-works#detail"]);
+    expect(within(contents[0] as HTMLElement).getAllByRole("link").map((link) => link.getAttribute("href"))).toEqual(["#/docs/how-the-bridge-works/part", "#/docs/how-the-bridge-works/detail"]);
     const pager = screen.getByRole("navigation", { name: "Previous and next page" });
     expect(within(pager).getAllByRole("link").map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
-      ["PreviousFirst", "#/help/first"],
-      ["NextBots", "#/help/running-a-bot"],
+      ["PreviousFirst", "#/docs/first"],
+      ["NextBots", "#/docs/running-a-bot"],
     ]);
     expect(document.title).toBe("Second · zkb.fi docs");
   });
 
   it("links between pages stay hash links", () => {
     show();
-    goTo("#/help/first");
-    expect(within(screen.getByRole("article")).getByRole("link", { name: "second" })).toHaveAttribute("href", "#/help/how-the-bridge-works#part");
+    goTo("#/docs/first");
+    expect(within(screen.getByRole("article")).getByRole("link", { name: "second" })).toHaveAttribute("href", "#/docs/how-the-bridge-works/part");
   });
 
   it("moves focus to the title after a move to another page", () => {
     show();
-    goTo("#/help/first");
+    goTo("#/docs/first");
     expect(document.activeElement).toBe(screen.getByRole("heading", { level: 1, name: "First" }));
   });
 
   it("says so when the page does not exist", () => {
-    window.location.hash = "#/nowhere";
+    window.location.hash = "#/docs/nowhere";
     show();
     expect(screen.getByText('There is no documentation page called "nowhere".')).toBeInTheDocument();
     expect(document.title).toBe("Not found · zkb.fi docs");
   });
 
   it("shows a notice when there are no pages", () => {
-    render(<DocsSite pages={[]} />);
+    render(<Harness list={[]} />);
     expect(screen.getByText("No pages are published yet.")).toBeInTheDocument();
   });
 
@@ -143,7 +158,7 @@ describe("the search", () => {
     fireEvent.change(field, { target: { value: "detail" } });
     expect(screen.getByRole("option", { selected: true })).toHaveTextContent("DetailSecond");
     fireEvent.keyDown(field, { key: "Enter" });
-    expect(window.location.hash).toBe("#/help/how-the-bridge-works#detail");
+    expect(window.location.hash).toBe("#/docs/how-the-bridge-works/detail");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -176,5 +191,18 @@ describe("the search", () => {
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "theme mono" } });
     fireEvent.click(screen.getByRole("option", { name: /Theme: Mono/ }));
     expect(document.documentElement).toHaveClass("theme-mono");
+  });
+});
+
+describe("in the dapp", () => {
+  it("opens an operator page by its encoded identifier and a heading by its slug", () => {
+    const operator = collectPages({ userPages: { "01-a.md": "# A\n\nx" }, operatorPages: { "../../../docs/audit/known-issues.md": "# Known issues\n\nText.\n\n## Open items\n\nmore" } });
+    render(<DocsSite pages={operator} slug="audit/known-issues" heading={null} />);
+    expect(screen.getByRole("heading", { level: 1, name: "Known issues" })).toBeInTheDocument();
+  });
+
+  it("links back to the bridge", () => {
+    show();
+    expect(screen.getByRole("link", { name: "Open the bridge" })).toHaveAttribute("href", "#/");
   });
 });

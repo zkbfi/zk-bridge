@@ -14,7 +14,7 @@ import {
   type SearchResult as CrossResult,
   type SearchSites,
 } from "@zk-bridge/shared";
-import type { DocPage } from "../docs/docs-index";
+import type { DocEntry } from "../docs/doc-entries";
 import type { Route } from "../app/route";
 
 /** What a result is. The order of this list is the order of the groups. */
@@ -147,7 +147,7 @@ export const actionResults = (input: { readonly pair: PairConfig; readonly walle
 };
 
 /** One result for the page and one for each heading of each documentation page, so a heading is a search target. */
-export const docResults = (pages: readonly DocPage[]): readonly SearchResult[] =>
+export const docResults = (pages: readonly DocEntry[]): readonly SearchResult[] =>
   pages.flatMap((page) => [
     { id: `doc:${page.slug}`, kind: "doc" as const, title: page.title, subtitle: "Docs", keywords: [], jump: { type: "route" as const, route: { name: "docs" as const, slug: page.slug, heading: null } } },
     ...page.headings.map((heading) => ({

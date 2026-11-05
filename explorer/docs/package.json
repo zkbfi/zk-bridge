@@ -3,16 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Static documentation site for zk-bridge: the help pages and the operator documents, built from Markdown with relative paths and hash routing so it loads from any path prefix.",
+  "description": "The documentation pages of zk-bridge as source for the dapp: the help pages and the operator documents, built from Markdown. The dapp loads them lazily at #/docs; there is no separate site or archive.",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "../../script/check-docs-public.sh && tsc --noEmit && vite build",
-    "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "gate": "../../script/check-docs-public.sh"
   },
   "dependencies": {
     "react": "19.3.0",

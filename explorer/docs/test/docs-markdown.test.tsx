@@ -34,9 +34,9 @@ describe("DocsMarkdown", () => {
   });
 
   it("an https link leaves without the referrer; a route stays a hash link; code blocks can take focus to scroll", () => {
-    show("[out](https://example.org) and [in](#/help/safety)\n\n```\ncode\n```");
+    show("[out](https://example.org) and [in](#/docs/safety)\n\n```\ncode\n```");
     expect(screen.getByRole("link", { name: "out" })).toHaveAttribute("rel", "noopener noreferrer");
-    expect(screen.getByRole("link", { name: "in" })).toHaveAttribute("href", "#/help/safety");
+    expect(screen.getByRole("link", { name: "in" })).toHaveAttribute("href", "#/docs/safety");
     expect(screen.getByText("code").closest("pre")).toHaveAttribute("tabindex", "0");
   });
 });
@@ -57,10 +57,10 @@ describe("searchDocs", () => {
   it("finds pages and headings by every word, title matches first", () => {
     const groups = searchDocs("fee", pages);
     expect(groups.map((group) => group.id)).toEqual(["pages", "headings"]);
-    expect(groups[0]?.results.map((result) => result.href)).toEqual(["#/help/fees"]);
+    expect(groups[0]?.results.map((result) => result.href)).toEqual(["#/docs/fees"]);
     expect(groups[1]?.results.map((result) => [result.title, result.href])).toEqual([
-      ["Fees and you", "#/help/safety#fees-and-you"],
-      ["The tip for delivery", "#/help/fees#the-tip-for-delivery"],
+      ["Fees and you", "#/docs/safety/fees-and-you"],
+      ["The tip for delivery", "#/docs/fees/the-tip-for-delivery"],
     ]);
     expect(searchDocs("tip delivery", pages).flatMap((group) => group.results.map((result) => result.title))).toEqual(["The tip for delivery"]);
     expect(searchDocs("nothing like this", pages)).toEqual([]);

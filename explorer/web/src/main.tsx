@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { Providers } from "./app/Providers";
 import { loaderHoldMilliseconds, loaderStartFromTiming } from "./app/loader";
 import { createServices } from "./app/services";
+import { sendDocsHostToDocs } from "./app/docs-host";
 import { Shell } from "./app/Shell";
 import "@zkb/react/styles.css";
 import "./bridge/bridge.css";
@@ -38,6 +39,8 @@ const holdForLoader = async (): Promise<void> => {
 };
 
 const start = async (): Promise<void> => {
+  // docs.zkb.fi serves this same app: its empty address opens the docs.
+  sendDocsHostToDocs(window.location, window.history);
   const configuration = await withDeploymentText(selectPair(readConfiguration(import.meta.env), requestedPair(window.location)));
   const pair = await loadPairConfig(configuration);
   const sharedPair = await loadSharedPair(configuration);

@@ -1,5 +1,5 @@
 {
-  // docs.zkb.fi redirects to the docs on IPFS (see worker.js). Deploy: npx wrangler deploy -c deploy/docs-redirect/wrangler.jsonc
+  // docs.zkb.fi redirects to the dapp on IPFS, which opens its docs (see worker.js). Deploy: npx wrangler deploy -c deploy/docs-redirect/wrangler.jsonc
   "name": "zkb-fi-docs",
   "main": "worker.js",
   "compatibility_date": "2026-10-01",
