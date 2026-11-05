@@ -7,7 +7,8 @@
 # at the end. Every build step runs with standard input closed, so no build tool can read the key. Nothing writes it.
 #
 # Steps:
-#   1. builds the dapp (explorer/web), the docs (explorer/docs) and the landing page (explorer/landing)
+#   1. builds the dapp (explorer/web, which holds the docs: they load lazily at #/docs) and the landing page
+#      (explorer/landing). There is no separate docs archive: docs.zkb.fi serves the dapp.
 #   2. packs each site into archives/<name>.car (UnixFS, CID version 1: the same files give the same CID)
 #   3. builds the terminal programs into downloads/ (script/build-terminal.sh)
 #   4. builds both guest programs (light-client.elf, fork-observation.elf) and the prover for this machine
@@ -24,7 +25,8 @@
 #                                version.json names channels.next, and the release is signed with the staging key.
 #   RELEASE_SKIP_PROVER=1        builds no prover and no guest program. version.json then lists no prover download,
 #                                and the script says so. For a test run on a machine without Docker or SP1 only.
-#   DOCS_GATE_WITHOUT_PRIVATE_PATTERNS=1 is passed through to the docs build (see script/check-docs-public.sh).
+#   DOCS_GATE_WITHOUT_PRIVATE_PATTERNS=1 is passed through to the dapp build, which runs the docs public-content gate
+#                                (see script/check-docs-public.sh).
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -55,10 +57,8 @@ mkdir -p "$release/archives" "$release/downloads"
 
 echo "== sites"
 (cd "$repository_root/explorer" && pnpm --filter @zk-bridge/web build) </dev/null
-(cd "$repository_root/explorer" && pnpm --filter @zk-bridge/docs build) </dev/null
 (cd "$repository_root/explorer/landing" && LANDING_CONFIG="$landing_config" node scripts/build.ts) </dev/null
 "${cli[@]}" pack "$repository_root/explorer/web/dist" "$release/archives/dapp.car" </dev/null
-"${cli[@]}" pack "$repository_root/explorer/docs/dist" "$release/archives/docs.car" </dev/null
 "${cli[@]}" pack "$repository_root/explorer/landing/dist" "$release/archives/landing.car" </dev/null
 
 echo "== terminal"

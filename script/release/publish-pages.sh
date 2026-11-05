@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploys the landing page of a verified release to Cloudflare, a mirror at the zkb.fi root. It is a Worker with static
 # assets only (no code): new projects are no longer classic Pages projects, and wrangler 4 creates a Worker for them.
-# Only the landing page goes to Pages. The dapp and the docs are published on IPFS only.
+# Only the landing page goes to Pages. The dapp (docs included, at #/docs) is published on IPFS only.
 # The signed release on IPFS is the source of truth: the mirror is the landing archive of that release, unpacked,
 # plus version.json and its signature, so the page checks the same signed manifest wherever it is loaded.
 #

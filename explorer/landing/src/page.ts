@@ -75,10 +75,16 @@ export function gatewayLinkList(cid: string, gateways: readonly string[]): Gatew
   return [...links.filter((link) => !link.sharedOrigin), ...links.filter((link) => link.sharedOrigin)];
 }
 
-function gatewayLinks(cid: string, gateways: readonly string[]): string {
+/** The docs are part of the dapp: its `#/docs` route at the same gateway form. The slash keeps relative assets working. */
+function docsAddress(address: string): string {
+  return `${address}${address.endsWith("/") ? "" : "/"}#/docs`;
+}
+
+function gatewayLinks(cid: string, gateways: readonly string[], withDocs: boolean): string {
   const items = gatewayLinkList(cid, gateways).map((link) => {
     const note = link.sharedOrigin ? " (shared origin: other sites on this gateway share the browser storage of the app)" : "";
-    return `<li><a href="${escapeHtml(link.address)}" rel="noopener">${escapeHtml(link.label)}</a>${escapeHtml(note)}</li>`;
+    const docs = withDocs ? ` · <a href="${escapeHtml(docsAddress(link.address))}" rel="noopener">Docs</a>` : "";
+    return `<li><a href="${escapeHtml(link.address)}" rel="noopener">${escapeHtml(link.label)}</a>${docs}${escapeHtml(note)}</li>`;
   });
   return `<ul>${items.join("")}</ul>`;
 }
@@ -90,7 +96,7 @@ function releaseSection(release: ReleaseEntry, gateways: readonly string[]): str
     `<p>Commit <code>${escapeHtml(release.commit)}</code>, published ${escapeHtml(release.publishedAt)}.</p>`,
     `<p>Content address: <code>${escapeHtml(release.cid)}</code></p>`,
     `<p>Archive SHA-256: <code>${escapeHtml(release.archiveSha256)}</code></p>`,
-    gatewayLinks(release.cid, gateways),
+    gatewayLinks(release.cid, gateways, release.name === "dapp"),
     `</section>`,
   ].join("");
 }
@@ -115,7 +121,8 @@ function downloadBase(state: Extract<LandingState, { kind: "verified" }>): strin
 }
 
 function verifiedBody(state: Extract<LandingState, { kind: "verified" }>): string {
-  const sites = state.manifest.releases.filter((release) => release.name === "dapp" || release.name === "docs");
+  // The docs are inside the dapp (Docs link above). A list signed before that may still name a docs site: it is read, not shown.
+  const sites = state.manifest.releases.filter((release) => release.name === "dapp");
   const note = state.sequenceNote === null ? "" : `<p>${escapeHtml(state.sequenceNote)}</p>`;
   const downloads = state.manifest.downloads.map((entry) => downloadItem(entry, downloadBase(state))).join("");
   return [

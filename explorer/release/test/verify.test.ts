@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { canonicalManifestBytes, parseManifest } from "../../landing/src/manifest.ts";
 import { packDirectory } from "../src/car.ts";
 import { assembleRelease } from "../src/main.ts";
+import { sha256Bytes } from "../src/checksums.ts";
 import { signManifest } from "../src/sign.ts";
 import { verifyRelease } from "../src/verify.ts";
 import { sampleSite, temporaryDirectory, throwawayKey, writeTree } from "./helpers.ts";
@@ -13,7 +14,7 @@ async function sampleRelease() {
   const release = await temporaryDirectory();
   const site = await temporaryDirectory();
   await writeTree(site, sampleSite);
-  for (const name of ["dapp", "docs", "landing"]) {
+  for (const name of ["dapp", "landing"]) {
     const { carBytes } = await packDirectory(site);
     await writeTree(release, { [`archives/${name}.car`]: carBytes });
   }
@@ -27,14 +28,31 @@ async function sampleRelease() {
 describe("verifyRelease", () => {
   it("accepts a complete release signed by a listed key", async () => {
     const { release, publicKey, manifest } = await sampleRelease();
-    expect(manifest.releases.map((entry) => entry.name)).toEqual(["dapp", "docs", "landing"]);
+    expect(manifest.releases.map((entry) => entry.name)).toEqual(["dapp", "landing"]);
     expect(manifest.downloads).toHaveLength(1);
+    expect(await verifyRelease(release, [publicKey])).toEqual({ ok: true });
+  });
+
+  it("still verifies a release list signed before the docs moved into the dapp, which names a docs archive", async () => {
+    const { release, manifest } = await sampleRelease();
+    const site = await temporaryDirectory();
+    await writeTree(site, sampleSite);
+    const { carBytes, cid } = await packDirectory(site);
+    await writeTree(release, { "archives/docs.car": carBytes });
+    const docs = { name: "docs" as const, version: "1.0.0", commit: "abc1234", cid, archiveSha256: sha256Bytes(carBytes), publishedAt: "2026-10-28T00:00:00Z" };
+    const legacy = { ...manifest, releases: [manifest.releases[0]!, docs, manifest.releases[1]!] };
+    await writeFile(join(release, "version.json"), canonicalManifestBytes(legacy));
+    const sums = await readFile(join(release, "SHA256SUMS"), "utf8");
+    await writeFile(join(release, "SHA256SUMS"), `${sums}${docs.archiveSha256}  archives/docs.car\n`);
+    const { privateKey, publicKey } = await throwawayKey();
+    await writeFile(join(release, "version.json.sig"), await signManifest({ manifest: legacy, privateKey }));
+    expect(parseManifest(await readFile(join(release, "version.json"), "utf8")).releases.map((entry) => entry.name)).toEqual(["dapp", "docs", "landing"]);
     expect(await verifyRelease(release, [publicKey])).toEqual({ ok: true });
   });
 
   it("verifyRelease reports a tampered archive and a wrong checksum", async () => {
     const { release, publicKey } = await sampleRelease();
-    const archive = join(release, "archives/docs.car");
+    const archive = join(release, "archives/landing.car");
     const bytes = await readFile(archive);
     bytes[bytes.length - 3] = bytes[bytes.length - 3]! ^ 0xff;
     await writeFile(archive, bytes);
@@ -42,8 +60,8 @@ describe("verifyRelease", () => {
     const result = await verifyRelease(release, [publicKey]);
     expect(result.ok).toBe(false);
     const problems = result.ok ? [] : result.problems;
-    expect(problems).toContain("archives/docs.car: the SHA-256 differs from version.json");
-    expect(problems.some((line) => line.startsWith("archives/docs.car: the archive is damaged"))).toBe(true);
+    expect(problems).toContain("archives/landing.car: the SHA-256 differs from version.json");
+    expect(problems.some((line) => line.startsWith("archives/landing.car: the archive is damaged"))).toBe(true);
     expect(problems).toContain("downloads/zk-bridge-terminal-linux-x64: the SHA-256 differs from version.json");
     expect(problems).toContain("SHA256SUMS: downloads/zk-bridge-terminal-linux-x64 does not match");
   });
@@ -89,14 +107,14 @@ describe("verifyRelease", () => {
   it("reports an archive whose root is not the CID that version.json names", async () => {
     const { release, manifest } = await sampleRelease();
     const other = "bafybeihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku";
-    const changed = { ...manifest, releases: manifest.releases.map((entry) => (entry.name === "docs" ? { ...entry, cid: other } : entry)) };
+    const changed = { ...manifest, releases: manifest.releases.map((entry) => (entry.name === "landing" ? { ...entry, cid: other } : entry)) };
     await writeFile(join(release, "version.json"), canonicalManifestBytes(changed));
     const { privateKey, publicKey } = await throwawayKey();
     await writeFile(join(release, "version.json.sig"), await signManifest({ manifest: changed, privateKey }));
-    const docs = manifest.releases.find((entry) => entry.name === "docs")!;
+    const docs = manifest.releases.find((entry) => entry.name === "landing")!;
     expect(await verifyRelease(release, [publicKey])).toEqual({
       ok: false,
-      problems: [`archives/docs.car: the root is ${docs.cid}, version.json says ${other}`],
+      problems: [`archives/landing.car: the root is ${docs.cid}, version.json says ${other}`],
     });
   });
 

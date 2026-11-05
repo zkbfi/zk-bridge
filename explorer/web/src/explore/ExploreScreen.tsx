@@ -426,7 +426,7 @@ const LightClients = ({ data }: { readonly data: ExploreData }) => {
   const cards = lightClientCards(data.heads, data.pair);
   return (
     <div className="zb-col">
-      <XGroup title="Light clients" right={<a href="#/docs">How it's trustless</a>} />
+      <XGroup title="Light clients" right={<a href="#/docs/how-the-bridge-works">How it's trustless</a>} />
       {cards.map((card) => (
         <a key={card.holderChainId} className="zb-xlc" href={card.verifiedSlot === null ? href({ kind: "browse", id: "proofs" }) : href({ kind: "slot", id: String(card.verifiedSlot) })}>
           <span className="zb-xlc-row">

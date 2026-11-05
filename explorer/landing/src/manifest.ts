@@ -35,6 +35,7 @@ export class ManifestError extends Error {
   }
 }
 
+// "docs" is no longer released (the docs are inside the dapp) but stays readable: lists signed earlier name it.
 const RELEASE_NAMES = ["dapp", "docs", "landing"] as const;
 const HEX_64 = /^[0-9a-f]{64}$/;
 const CONTENT_ADDRESS = /^[A-Za-z0-9]{10,200}$/;

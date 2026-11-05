@@ -131,7 +131,7 @@ export const DocsSearch = ({ pages, onSelect, onClose }: DocsSearchProps) => {
             <kbd>↓</kbd> move <kbd>↵</kbd> open <kbd>esc</kbd> close
           </span>
           <span className="zb-palette-links">
-            <button type="button" onClick={() => onSelect({ id: "page:", title: "Docs home", subtitle: "", href: "#/" })}>
+            <button type="button" onClick={() => onSelect({ id: "page:", title: "Docs home", subtitle: "", href: "#/docs" })}>
               Docs home
             </button>
           </span>

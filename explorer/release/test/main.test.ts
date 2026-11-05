@@ -18,7 +18,7 @@ async function packedRelease(withDownload = true): Promise<string> {
   const site = await temporaryDirectory();
   const release = await temporaryDirectory();
   await writeTree(site, sampleSite);
-  for (const name of ["dapp", "docs", "landing"]) {
+  for (const name of ["dapp", "landing"]) {
     const result = io();
     expect(await run(["pack", site, join(release, "archives", `${name}.car`)], result.value)).toBe(0);
     expect(result.out[0]).toMatch(/^bafy/);
@@ -34,7 +34,7 @@ describe("run", () => {
     const release = await packedRelease();
     const written = io();
     expect(await run(["manifest", release, ...manifestArguments], written.value)).toBe(0);
-    expect(written.out).toEqual(["version.json: sequence 1, 3 sites, 1 downloads"]);
+    expect(written.out).toEqual(["version.json: sequence 1, 2 sites, 1 downloads"]);
 
     const { privateKey } = await throwawayKey();
     const signed = io(streamOf(JSON.stringify(privateKey)));
@@ -153,7 +153,7 @@ describe("run", () => {
       };
       const pinned = io(streamOf(), env);
       expect(await run(["pin", release], pinned.value)).toBe(0);
-      expect(pinned.out).toEqual([`pinned dapp.car ${expected}`, `pinned docs.car ${expected}`, `pinned landing.car ${expected}`]);
+      expect(pinned.out).toEqual([`pinned dapp.car ${expected}`, `pinned landing.car ${expected}`]);
     } finally {
       server.close();
     }

@@ -1,7 +1,7 @@
 /**
  * Promotes a staging release (the next channel, signed with the staging key) to a production release directory.
  *
- * The dapp and the docs are not rebuilt: their archives are copied, so their content addresses stay exactly what was
+ * The dapp (which holds the docs) is not rebuilt: its archive is copied, so its content address stays exactly what was
  * tried on next.zkb.fi. Only the landing page differs, because it embeds the keys it trusts (the production landing
  * trusts the production key only), so the caller passes a landing archive built with the production configuration.
  * The result is unsigned: sign it with the production key, then verify it, as release.sh does.
@@ -15,7 +15,7 @@ import { writeManifest } from "./manifest-writer.ts";
 import { RELEASE_LAYOUT } from "./verify.ts";
 
 /** The sites whose archives a promotion copies unchanged. */
-const KEPT_SITES = ["dapp", "docs"] as const;
+const KEPT_SITES = ["dapp"] as const;
 
 async function isEmptyOrMissing(directory: string): Promise<boolean> {
   try {

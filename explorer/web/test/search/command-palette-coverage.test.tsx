@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { buildFixtureFeed, FIXTURE_NOW } from "@terminal/data/fixtures";
 import { ServicesProvider } from "../../src/app/services";
-import type { DocPage } from "../../src/docs/docs-index";
+import type { DocEntry } from "../../src/docs/doc-entries";
 import { createFixtureIndexerClient } from "../../src/data/fixture-indexer-client";
 import type { IndexerClient } from "../../src/data/indexer-client";
 import type { MessageDetail } from "../../src/data/message-detail";
@@ -12,14 +12,13 @@ import { renderPage } from "../render";
 import { buildTestServices } from "../render";
 
 const unknownHash = `0x${"77".repeat(32)}` as const;
-const page = (heading: string): DocPage => ({
+const page = (heading: string): DocEntry => ({
   slug: "custom",
   title: "Custom page",
-  blocks: [],
-  headings: [{ id: "custom-heading", text: heading, level: 2 }],
+  headings: [{ id: "custom-heading", text: heading }],
 });
 
-const open = (props: { readonly docPages?: readonly DocPage[]; readonly indexer?: IndexerClient } = {}) => {
+const open = (props: { readonly docPages?: readonly DocEntry[]; readonly indexer?: IndexerClient } = {}) => {
   const onSelect = vi.fn();
   const palette = <CommandPalette recent={[]} walletConnected={false} onSelect={onSelect} onClose={() => undefined} {...(props.docPages === undefined ? {} : { docPages: props.docPages })} />;
   const services = { ...buildTestServices(), indexer: props.indexer ?? createFixtureIndexerClient() };

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTokens } from "../app/queries";
 import { useServices } from "../app/services";
-import { DOC_PAGES, type DocPage } from "../docs/docs-index";
+import { loadDocEntries, type DocEntry } from "../docs/doc-entries";
 import { isCrossReferenced, searchCrossReferenced } from "./identifier-search";
 import {
   actionResults,
@@ -24,8 +24,8 @@ export type PaletteSearchInput = {
   /** The results that the user opened lately. */
   readonly recent: readonly SearchResult[];
   readonly walletConnected: boolean;
-  /** The documentation pages to search. Default: all. */
-  readonly docPages?: readonly DocPage[];
+  /** The documentation pages to search. Default: the real pages, downloaded when the first search is typed. */
+  readonly docPages?: readonly DocEntry[];
 };
 
 /** What the palette shows. */
@@ -55,6 +55,23 @@ export const usePaletteSearch = (input: PaletteSearchInput): PaletteSearch => {
   const empty = input.query.trim() === "";
   const crossReferenced = useMemo(() => isCrossReferenced(input.query), [input.query]);
   const loadedTokens = tokens.data;
+  // The docs are a separate chunk (see docs/DocsRoute.tsx): fetch it when the first search is typed, not when the palette opens.
+  const [loadedDocs, setLoadedDocs] = useState<readonly DocEntry[]>([]);
+  const needsDocs = !empty && input.docPages === undefined && loadedDocs.length === 0;
+  useEffect(() => {
+    if (!needsDocs) return;
+    let cancelled = false;
+    void loadDocEntries().then(
+      (entries) => {
+        if (!cancelled) setLoadedDocs(entries);
+      },
+      () => undefined,
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [needsDocs]);
+  const docPages = input.docPages ?? loadedDocs;
 
   const local = useMemo(
     () => [
@@ -62,9 +79,9 @@ export const usePaletteSearch = (input: PaletteSearchInput): PaletteSearch => {
       ...pairResults(knownPairs),
       ...tokenResults(tokens.data ?? [], pair, linkContextOf(pair)),
       ...actionResults({ pair, walletConnected: input.walletConnected }),
-      ...docResults(input.docPages ?? DOC_PAGES),
+      ...docResults(docPages),
     ],
-    [pair, knownPairs, tokens.data, input.walletConnected, input.docPages],
+    [pair, knownPairs, tokens.data, input.walletConnected, docPages],
   );
 
   useEffect(() => {

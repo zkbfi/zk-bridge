@@ -16,11 +16,13 @@
     "types": ["vite/client", "node"],
     "paths": {
       "@terminal/*": ["../terminal/src/*"],
+      "@web/*": ["./src/*"],
+      "@docs/*": ["../docs/src/*"],
       "@zk-bridge/shared": ["../shared/src/index.ts"],
       "@zkb/react": ["../react/src/index.ts"],
       "@zk-bridge/shared/backend-client": ["../shared/src/backend-client.ts"],
       "@zk-bridge/shared/msgboard-http": ["../shared/src/msgboard/board-http.ts"]
     }
   },
-  "include": ["src", "test", "e2e", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
+  "include": ["src", "test", "e2e", "../docs/src/virtual-modules.d.ts", "vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
 }

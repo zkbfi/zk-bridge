@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { escapeHtml, findMalformedGateway, gatewayLinkList, loadLandingState, renderLanding } from "../src/page.ts";
 import type { LandingConfig, LandingState } from "../src/page.ts";
-import { makeSigner, sampleManifest } from "./helpers.ts";
+import { parseManifest, canonicalManifestBytes } from "../src/manifest.ts";
+import { legacyManifest, makeSigner, sampleManifest } from "./helpers.ts";
 
 const gateways = ["https://one.example/ipfs/", "https://two.example/ipfs/", "https://three.example/ipfs/"];
 
@@ -16,7 +17,7 @@ test("a failed signature shows the warning and no link", () => {
   assert.ok(!html.includes("<a "));
 });
 
-test("a good manifest shows the dapp and docs CIDs with at least three gateway links each, and every download with its SHA-256", () => {
+test("a good manifest shows the dapp CID with at least three gateway links each, and every download with its SHA-256", () => {
   const html = renderLanding(verified());
   for (const release of sampleManifest.releases) {
     const links = html.match(new RegExp(`<a href="[^"]*${release.cid}"`, "g")) ?? [];
@@ -160,7 +161,7 @@ test("gateway links prefer subdomain style", () => {
   ]);
   const html = renderLanding(verified(sampleManifest, null, mixed));
   assert.ok(html.indexOf(`https://${cid}.ipfs.sub.example/`) < html.indexOf(`https://path.example/ipfs/${cid}`));
-  assert.equal((html.match(/shared origin/g) ?? []).length, 2 * 2);
+  assert.equal((html.match(/shared origin/g) ?? []).length, 2);
 });
 
 test("a content address that cannot be a host label gets no subdomain link", () => {
@@ -172,4 +173,21 @@ test("a content address that cannot be a host label gets no subdomain link", () 
 test("a subdomain template passes the gateway check and a bad one does not", () => {
   assert.equal(findMalformedGateway(["https://{cid}.ipfs.sub.example/"]), null);
   assert.equal(findMalformedGateway(["ftp://{cid}.ipfs.sub.example/"]), "ftp://{cid}.ipfs.sub.example/");
+});
+
+test("the dapp has a Docs link at each gateway form: the dapp's #/docs, with a slash before the hash", () => {
+  const html = renderLanding(verified(sampleManifest, null, ["https://one.example/ipfs/", "https://{cid}.ipfs.sub.example/"]));
+  const cid = sampleManifest.releases[0]!.cid;
+  assert.ok(html.includes(`<a href="https://${cid}.ipfs.sub.example/#/docs" rel="noopener">Docs</a>`));
+  assert.ok(html.includes(`<a href="https://one.example/ipfs/${cid}/#/docs" rel="noopener">Docs</a>`));
+  assert.equal(html.match(/>Docs<\/a>/g)?.length, 2);
+});
+
+test("a list signed before the docs moved into the dapp still reads, and lists the dapp only", () => {
+  const parsed = parseManifest(new TextDecoder().decode(canonicalManifestBytes(legacyManifest)));
+  assert.deepEqual(parsed.releases.map((release) => release.name), ["dapp", "docs"]);
+  const html = renderLanding(verified(parsed));
+  assert.ok(html.includes("<h2>dapp 1.0.0</h2>"));
+  assert.ok(!html.includes("<h2>docs"));
+  assert.ok(!html.includes(legacyManifest.releases[1]!.cid));
 });
