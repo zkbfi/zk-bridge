@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Promotes a staging release (the next channel, served at next.zkb.fi) to production (zkb.fi) without rebuilding the
-# dapp or the docs: their archives are copied, so production serves the exact content addresses that were tried on
-# staging. Only the landing page is rebuilt, from the same commit, with the production configuration, because each
+# dapp (which holds the docs, at #/docs): its archive is copied, so production serves the exact content address that
+# was tried on staging. Only the landing page is rebuilt, from the same commit, with the production configuration, because each
 # landing page embeds the one key it trusts (production never trusts the staging key).
 #
 # Usage:   script/release/promote.sh <staging-release-directory> <output-directory> < production-release-key.jwk
@@ -11,8 +11,8 @@
 #   2. checks the staging commit is a full SHA already on origin/main (production ships only what is on main), builds
 #      the landing page at that commit with landing.config.json, and checks it trusts exactly the operator's
 #      production keys (script/release/promote-checks.sh)
-#   3. writes the production version.json (channels.stable, sequence = production + 1) with the same dapp and docs
-#      archives, the new landing archive and the same downloads; refuses if a kept archive differs from staging
+#   3. writes the production version.json (channels.stable, sequence = production + 1) with the same dapp
+#      archive, the new landing archive and the same downloads; refuses if a kept archive differs from staging
 #   4. signs it with the production key from standard input, then verifies it against landing.config.json
 #   5. with PROMOTE_PUBLISH=1, runs publish.sh and publish-pages.sh for zkb.fi (their own settings apply)
 #

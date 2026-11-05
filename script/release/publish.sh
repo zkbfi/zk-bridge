@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Publishes a release made by script/release/release.sh: pins the three site archives, then pushes the signed
+# Publishes a release made by script/release/release.sh: pins the site archives (dapp, landing), then pushes the signed
 # manifest to the release remote. It refuses until both a release remote and a pinning account are configured.
 #
 # Usage:   script/release/publish.sh <release-directory>

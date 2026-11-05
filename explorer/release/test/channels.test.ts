@@ -26,7 +26,7 @@ async function packSite(files: Record<string, string>, archive: string): Promise
 /** A complete, signed release on the next channel, as release.sh with RELEASE_CHANNEL=next writes it. */
 async function stagingRelease(): Promise<string> {
   const release = await temporaryDirectory();
-  for (const name of ["dapp", "docs", "landing"]) {
+  for (const name of ["dapp", "landing"]) {
     await packSite({ ...sampleSite, "assets/main.js": `console.log(${JSON.stringify(name)});\n` }, join(release, "archives", `${name}.car`));
   }
   await writeTree(release, { "downloads/zk-bridge-terminal-linux-x64": "terminal" });
@@ -96,7 +96,7 @@ describe("promote", () => {
     return { code, out, result };
   }
 
-  it("keeps the dapp and docs content addresses, swaps the landing, writes the stable channel, and counts on from production", async () => {
+  it("keeps the dapp content address, swaps the landing, writes the stable channel, and counts on from production", async () => {
     const staging = await stagingRelease();
     const stagingManifest = parseManifest(await readFile(join(staging, "version.json"), "utf8"));
     const previous: ReleaseManifest = { ...stagingManifest, sequence: 7, channels: { stable: "0.1.1" } };
@@ -107,7 +107,7 @@ describe("promote", () => {
     expect(promoted.sequence).toBe(8);
     const cid = (manifest: ReleaseManifest, name: string) => manifest.releases.find((entry) => entry.name === name)!.cid;
     expect(cid(promoted, "dapp")).toBe(cid(stagingManifest, "dapp"));
-    expect(cid(promoted, "docs")).toBe(cid(stagingManifest, "docs"));
+    expect(promoted.releases.map((entry) => entry.name)).toEqual(["dapp", "landing"]);
     expect(cid(promoted, "landing")).not.toBe(cid(stagingManifest, "landing"));
     expect(promoted.downloads).toEqual(stagingManifest.downloads);
     expect(promoted.releases.every((entry) => entry.version === "0.1.2")).toBe(true);
@@ -118,7 +118,7 @@ describe("promote", () => {
     expect(await run(["verify", out, "--public-keys", join(out, "public-keys.json")], io().value)).toBe(0);
   });
 
-  it("refuses when a dapp or docs archive differs from what the staging manifest names", async () => {
+  it("refuses when the dapp archive differs from what the staging manifest names", async () => {
     const staging = await stagingRelease();
     await packSite({ ...sampleSite, "assets/main.js": "console.log('swapped');\n" }, join(staging, "archives", "dapp.car"));
     const { code, out, result } = await promotedFrom(staging);
@@ -126,6 +126,16 @@ describe("promote", () => {
     expect(result.err.join("\n")).toMatch(/dapp/);
     const written = spawnSync("ls", [out], { encoding: "utf8" }).stdout.trim();
     expect(written).toBe("");
+  });
+
+  it("writes into a directory that does not exist yet", async () => {
+    const staging = await stagingRelease();
+    const landing = join(await temporaryDirectory(), "landing.car");
+    await packSite({ ...sampleSite, "assets/main.js": "console.log('production landing');\n" }, landing);
+    const out = join(await temporaryDirectory(), "not-yet");
+    const args = ["promote", staging, out, "--landing", landing, "--version", "0.1.2", "--published-at", "2026-10-31T00:00:00Z"];
+    expect(await run(args, io().value)).toBe(0);
+    expect(parseManifest(await readFile(join(out, "version.json"), "utf8")).channels).toEqual({ stable: "0.1.2" });
   });
 
   it("refuses a staging release that is not on the next channel", async () => {

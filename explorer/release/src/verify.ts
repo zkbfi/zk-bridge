@@ -16,8 +16,12 @@ export const RELEASE_LAYOUT = {
   downloads: "downloads",
 } as const;
 
-/** The three sites every release carries. */
-export const SITE_NAMES = ["dapp", "docs", "landing"] as const;
+/**
+ * The sites every release carries. The docs are part of the dapp (they load lazily at `#/docs`), so a new release has
+ * no docs archive. A release list signed before that still names a `docs` site: it parses and verifies, because
+ * `archiveProblems` checks every site the list names.
+ */
+export const SITE_NAMES = ["dapp", "landing"] as const;
 
 async function readOrNull(path: string): Promise<Uint8Array | null> {
   try {

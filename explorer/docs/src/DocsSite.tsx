@@ -8,11 +8,15 @@ import { DocsMarkdown } from "./DocsMarkdown";
 import { DocsSearch } from "./DocsSearch";
 import type { DocsResult } from "./docs-search";
 import { routeOf, SECTION_TITLES, SECTIONS, type DocsSitePage } from "./pages";
-import { parseRoute } from "./route";
+import { pageIdMatchesSlug } from "@web/docs/slug";
 
 /** Props of {@link DocsSite}. */
 export type DocsSiteProps = {
   readonly pages: readonly DocsSitePage[];
+  /** The page named by the address (`#/docs/<slug>`), or null for the front page. */
+  readonly slug: string | null;
+  /** The heading named by the address (`#/docs/<slug>/<heading>`), or null. */
+  readonly heading: string | null;
 };
 
 const SITE_NAME = "zkb.fi docs";
@@ -27,17 +31,6 @@ const THEMES: readonly (readonly [ThemeChoice, string])[] = [
   ["mono", "Mono"],
 ];
 
-/** Follows the hash of the address, so the back button and a shared link both work. */
-const useHash = (): string => {
-  const [hash, setHash] = useState(() => window.location.hash);
-  useEffect(() => {
-    const update = () => setHash(window.location.hash);
-    window.addEventListener("hashchange", update);
-    return () => window.removeEventListener("hashchange", update);
-  }, []);
-  return hash;
-};
-
 /** Whether a key press happens inside a field, where `/` is typed rather than opening the search. */
 const isTyping = (target: EventTarget | null): boolean =>
   target instanceof HTMLElement && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
@@ -45,7 +38,7 @@ const isTyping = (target: EventTarget | null): boolean =>
 /** The header of the app: the mark (the docs' home), the page name in the middle, the search pill on the right. */
 const DocsHeader = ({ name, onSearch }: { readonly name: string; readonly onSearch: () => void }) => (
   <header className="zb-header zb-col">
-    <a className="zb-mark" href="#/" aria-label="zkb.fi docs, home">
+    <a className="zb-mark" href="#/docs" aria-label="zkb.fi docs, home">
       <BrandMark size={44} />
     </a>
     <span className="zb-page-name zd-page-name">
@@ -206,7 +199,7 @@ const NotFound = ({ id }: { readonly id: string }) => (
     <XBand label="zkb.fi docs" big={<h1 className="zd-title" tabIndex={-1}>Not found</h1>} />
     <div className="zb-col zd-home">
       <p className="zd-p">{`There is no documentation page called "${id}".`}</p>
-      <XRow href="#/" title="Docs home" sub="Every page, by group" />
+      <XRow href="#/docs" title="Docs home" sub="Every page, by group" />
     </div>
   </>
 );
@@ -217,15 +210,15 @@ const NotFound = ({ id }: { readonly id: string }) => (
  *
  * @param props The pages, in reading order.
  */
-export const DocsSite = ({ pages }: DocsSiteProps) => {
-  const route = parseRoute(useHash());
+export const DocsSite = ({ pages, slug, heading }: DocsSiteProps) => {
+  const route = { id: slug ?? "", anchor: heading ?? "" };
   const { theme, setTheme } = useThemeChoice();
   const [searchOpen, setSearchOpen] = useState(false);
   const trigger = useRef<HTMLElement | null>(null);
   const main = useRef<HTMLElement>(null);
-  const shownRoute = useRef(parseRoute(window.location.hash).id);
+  const shownRoute = useRef(route.id);
 
-  const index = route.id === "" ? -1 : pages.findIndex((candidate) => candidate.id === route.id);
+  const index = route.id === "" ? -1 : pages.findIndex((candidate) => pageIdMatchesSlug(candidate.id, route.id));
   const page = index < 0 ? null : (pages[index] as DocsSitePage);
   // The header names the article (ellipsized when long), as the app names its screen; "Docs" on the home page.
   const name = route.id === "" ? "Docs" : page === null ? "Not found" : page.title;
@@ -292,7 +285,7 @@ export const DocsSite = ({ pages }: DocsSiteProps) => {
   return (
     <div className="zb zd">
       <div className="zd-page" inert={searchOpen}>
-        <a className="zd-skip" href={window.location.hash === "" ? "#/" : window.location.hash} onClick={skip}>
+        <a className="zd-skip" href={window.location.hash === "" ? "#/docs" : window.location.hash} onClick={skip}>
           Skip to the text
         </a>
         <DocsHeader name={name} onSearch={openSearch} />
@@ -302,6 +295,9 @@ export const DocsSite = ({ pages }: DocsSiteProps) => {
         <footer className="zd-foot">
           <div className="zb-col zd-foot-in">
             <span className="zd-foot-name">{SITE_NAME}</span>
+            <a className="zd-foot-credit" href="#/">
+              Open the bridge
+            </a>
             <a className="zd-foot-credit" href="https://game-icons.net/" rel="noopener noreferrer" target="_blank">
               {ICON_CREDIT}
             </a>

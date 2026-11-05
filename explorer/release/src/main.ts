@@ -8,7 +8,7 @@
  *   promote <staging-directory> <out-directory> --landing <landing.car> --version <v> --published-at <time>
  *            [--previous <production version.json>]
  *                                             writes an unsigned production release that keeps the staging dapp and
- *                                             docs archives (same content addresses) with a production landing
+ *                                             archive (same content address) with a production landing
  *   sign <release-directory>                  reads the private key from standard input, writes version.json.sig
  *                                             and public-keys.json
  *   verify <release-directory> --public-keys <file>

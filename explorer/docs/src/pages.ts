@@ -1,10 +1,12 @@
 /**
- * The pages of the documentation site. The site publishes two sets of Markdown files: the help pages of the dapp
+ * The pages of the documentation site, which the dapp loads lazily at `#/docs/<page>(/<heading>)` (the same app serves
+ * docs.zkb.fi; see `explorer/web/src/app/docs-host.ts`). The site publishes two sets of Markdown files: the help pages of the dapp
  * (`explorer/web/docs/pages`, every file) and the operator documents named in `explorer/docs/public-pages.json` (none
  * until the owner picks them; no other file in `docs/` reaches the build). A link from one page to another `.md` file
- * becomes a route of the site, so the site works from any path prefix, an IPFS gateway path included.
+ * becomes a route of the dapp, so the pages work from any path prefix, an IPFS gateway path included.
  */
 import { parseMarkdown, type Block, type Inline } from "@web/docs/markdown";
+import { slugOfPageId } from "@web/docs/slug";
 import publicOperatorPages from "virtual:public-operator-pages";
 
 /** Which set of files a page comes from. */
@@ -34,7 +36,7 @@ export type DocsSiteHeading = { readonly id: string; readonly text: string; read
 
 /** One page of the site. */
 export type DocsSitePage = {
-  /** The route of the page, such as `help/fees-explained` or `audit/known-issues`. */
+  /** The identifier of the page, such as `help/fees-explained` or `audit/known-issues`. Its address uses the slug (see `slugOfPageId`). */
   readonly id: string;
   readonly group: DocsSiteGroup;
   /** The group of the front page that lists it. Operator pages are about running the bridge. */
@@ -132,6 +134,13 @@ const readPages = (input: DocsSiteInput): readonly SourcePage[] => {
     if (seen.has(page.id)) throw new Error(`Two files make the page "${page.id}".`);
     seen.add(page.id);
   }
+  // The address of a page is its slug, so two pages with one slug could not both be opened.
+  const slugs = new Set<string>();
+  for (const page of pages) {
+    const slug = slugOfPageId(page.id);
+    if (slugs.has(slug)) throw new Error(`Two files make the address "${slug}".`);
+    slugs.add(slug);
+  }
   return pages;
 };
 
@@ -167,12 +176,17 @@ const linksOf = (blocks: readonly Block[]): readonly string[] => {
 };
 
 /**
- * The route of a page, with an optional heading below the `#` that follows it.
+ * The address of a page in the dapp, with an optional heading: `#/docs/<slug>` or `#/docs/<slug>/<heading>`. An empty
+ * identifier is the front page of the docs, `#/docs`.
  *
  * @param id The page identifier.
  * @param anchor The heading identifier, or an empty text.
  */
-export const routeOf = (id: string, anchor: string): string => (anchor === "" ? `#/${id}` : `#/${id}#${anchor}`);
+export const routeOf = (id: string, anchor: string): string => {
+  if (id === "") return "#/docs";
+  const page = `#/docs/${encodeURIComponent(slugOfPageId(id))}`;
+  return anchor === "" ? page : `${page}/${encodeURIComponent(anchor)}`;
+};
 
 type Target = { readonly page: SourcePage; readonly anchor: string };
 
@@ -244,7 +258,7 @@ const rewriteLinks = (pages: readonly SourcePage[], page: SourcePage): readonly 
 /**
  * Reads the files into the pages of the site: the help pages in order of their number, then the operator pages in
  * order of their path. Files below `superpowers/` are left out. A link to another page becomes a route that starts with
- * `#/`. A link to a file that the site does not publish becomes plain text. An `https:` link stays a link.
+ * `#/docs`. A link to a file that the site does not publish becomes plain text. An `https:` link stays a link.
  *
  * @param input The help files and the operator files.
  * @throws When a help file has no order number, or two files make the same page.

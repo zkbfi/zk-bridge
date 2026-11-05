@@ -170,7 +170,7 @@ what a variable names. Each public name needs `-e confirm_production=yes`.
 | --- | --- | --- | --- |
 | `next.zkb.fi` (Worker `zkb-fi-next`) | `sites.yml -e publish_next=<release-dir>` | Open it; `/version.json` has the `sequence` and archive CIDs `release.sh` printed; try the testnet pair | New release to `next` |
 | `zkb.fi` (Worker `zkb-fi`) | `sites.yml -e publish_stable=<promoted-dir> -e confirm_production=yes` | The release was promoted by `promote.sh` from what ran on `next.zkb.fi` | A new, higher sequence that names the older archives, signed with the production key. Clients refuse a lower sequence, so an old `version.json` or `wrangler rollback` does not move users who saw the newer one. |
-| `docs.zkb.fi` (DNSLink) | `sites.yml -e docs_cid=<cid> -e confirm_production=yes` | The CID is pinned on the kubo node and a gateway serves it (the playbook asks one); load three pages | Run again with the old CID (printed first). Resolvers cache by TTL (printed). Never unpin the old CID for a week. |
+| `docs.zkb.fi` (DNSLink) | `sites.yml -e docs_cid=<dapp cid> -e confirm_production=yes` | The CID is pinned on the kubo node and a gateway serves it (the playbook asks one); load three pages | Run again with the old CID (printed first). Resolvers cache by TTL (printed). Never unpin the old CID for a week. |
 | Design UI (`zkb-fi-ui`) | `sites.yml -e design_ui=upload`, then `design_ui=deploy` | Request `https://next.zkb.fi/ui/` with `Cloudflare-Workers-Version-Overrides: zkb-fi-ui="<version-id>"` | `design_ui=rollback` |
 
 The release itself is built, signed and pinned before this (`script/release/release.sh`, `publish.sh`, `promote.sh`); the

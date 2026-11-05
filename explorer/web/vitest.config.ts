@@ -1,12 +1,15 @@
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
+import { publicPagesPlugin } from "../docs/public-pages.ts";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [publicPagesPlugin({ repositoryRoot: fileURLToPath(new URL("../..", import.meta.url)) }), react()],
   resolve: {
     alias: {
       "@terminal": fileURLToPath(new URL("../terminal/src", import.meta.url)),
+      "@web": fileURLToPath(new URL("./src", import.meta.url)),
+      "@docs": fileURLToPath(new URL("../docs/src", import.meta.url)),
       // The two subpaths come first: an alias matches by prefix, and the plain name would swallow them.
       "@zk-bridge/shared/backend-client": fileURLToPath(new URL("../shared/src/backend-client.ts", import.meta.url)),
       "@zk-bridge/shared/msgboard-http": fileURLToPath(new URL("../shared/src/msgboard/board-http.ts", import.meta.url)),

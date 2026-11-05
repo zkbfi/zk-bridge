@@ -4,7 +4,7 @@ import { SearchIcon } from "../bridge/icons";
 import { usePaletteSearch } from "./use-palette-search";
 import { actionResults, moveHighlight, viewResults, type MoveKey, type SearchResult } from "./search-model";
 import { useServices } from "../app/services";
-import type { DocPage } from "../docs/docs-index";
+import type { DocEntry } from "../docs/doc-entries";
 
 /** Props of {@link CommandPalette}. */
 export type CommandPaletteProps = {
@@ -14,7 +14,7 @@ export type CommandPaletteProps = {
   readonly onSelect: (result: SearchResult) => void;
   readonly onClose: () => void;
   /** Replaces the documentation pages. Tests use it. */
-  readonly docPages?: readonly DocPage[];
+  readonly docPages?: readonly DocEntry[];
 };
 
 const MOVE_KEYS: readonly string[] = ["ArrowDown", "ArrowUp", "Home", "End"];

@@ -81,6 +81,26 @@ describe("the shell: one search field instead of a menu", () => {
     expect(within(article).getByRole("heading", { name: "The data source of each number" })).toBeInTheDocument();
   });
 
+  it("opens the docs from an address, in the docs' own frame, and the dapp's palette keys do not open there", async () => {
+    window.location.hash = "#/docs/safety";
+    renderPage(<Shell />, { connected: false });
+    expect(await screen.findByRole("heading", { level: 1, name: "Safety" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Search and jump/ })).toBeNull();
+    await userEvent.keyboard("{Control>}k{/Control}");
+    expect(await screen.findByRole("dialog", { name: "Search the docs" })).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(document.title).toBe("Safety · zkb.fi docs");
+  });
+
+  it("goes from the docs back to the bridge with the link in the footer", async () => {
+    window.location.hash = "#/docs";
+    renderPage(<Shell />, { connected: false });
+    await userEvent.click(await screen.findByRole("link", { name: "Open the bridge" }));
+    await waitFor(() => expect(window.location.hash).not.toMatch(/^#\/docs/));
+    expect(await screen.findByRole("button", { name: /Search and jump/ })).toBeInTheDocument();
+    expect(document.title).toMatch(/· zk-bridge explorer$/);
+  });
+
   it("jumps to a transfer by message identifier", async () => {
     renderPage(<Shell />, { connected: false });
     const { buildFixtureFeed, FIXTURE_NOW } = await import("@terminal/data/fixtures");

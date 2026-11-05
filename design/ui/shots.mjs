@@ -1,6 +1,5 @@
-// Screenshots for zkb.fi/ui's "As built" section. Needs the app with sample data and the docs running:
+// Screenshots for zkb.fi/ui's "As built" section. Needs the app with sample data running (the docs are its #/docs route):
 //   (explorer/web)  VITE_EXPLORER_DATA=fixture npx vite --port 5210 --strictPort
-//   (explorer/docs) npx vite --port 5270 --strictPort
 // Usage: node design/ui/shots.mjs <explorer/web dir>   -> design/ui/built/<screen>-<phone|desktop>.png
 import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
@@ -12,7 +11,7 @@ const { chromium } = createRequire(`${webDir}/package.json`)("@playwright/test")
 const out = join(dirname(fileURLToPath(import.meta.url)), "built");
 mkdirSync(out, { recursive: true });
 const APP = "http://localhost:5210/";
-const DOCS = "http://127.0.0.1:5270/";
+const DOCS = APP + "#/docs";
 const views = {
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, colorScheme: "dark", hasTouch: true },
   desktop: { viewport: { width: 1280, height: 860 }, colorScheme: "light" },

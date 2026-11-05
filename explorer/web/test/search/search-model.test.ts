@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
-import { parseDocPages } from "../../src/docs/docs-index";
+import type { DocEntry } from "../../src/docs/doc-entries";
 import {
   actionResults,
   addressResult,
@@ -21,10 +21,17 @@ import {
   viewResults,
 } from "../../src/search/search-model";
 
-const pages = parseDocPages({
-  "/docs/pages/05-fees-explained.md": "# Fees explained\n\n## The data source line\n\ntext\n\n## Base fee time\n\ntext\n",
-  "/docs/pages/03-bridging-tokens.md": "# Bridging tokens\n\n## Failed releases\n\ntext\n",
-});
+const pages: readonly DocEntry[] = [
+  { slug: "bridging-tokens", title: "Bridging tokens", headings: [{ id: "failed-releases", text: "Failed releases" }] },
+  {
+    slug: "fees-explained",
+    title: "Fees explained",
+    headings: [
+      { id: "the-data-source-line", text: "The data source line" },
+      { id: "base-fee-time", text: "Base fee time" },
+    ],
+  },
+];
 
 const everything = [
   ...viewResults("eth-pls"),

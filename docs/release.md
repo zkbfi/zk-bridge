@@ -7,7 +7,7 @@ signed release on IPFS is the source of truth. Everything else is a mirror of it
 
 | Path | What it is |
 | --- | --- |
-| `archives/dapp.car`, `archives/docs.car`, `archives/landing.car` | Each site packed as one content-addressed archive (CAR). UnixFS, CID version 1, raw leaves, fixed 256 KiB chunks, files in sorted order. The same files always give the same CID. |
+| `archives/dapp.car`, `archives/landing.car` | Each site packed as one content-addressed archive (CAR). The docs are inside the dapp (route `#/docs`, loaded lazily as a separate chunk), so there is no docs archive. A release list signed before this may still name a `docs` site: it is read and verified as before, and the landing page lists only the dapp. UnixFS, CID version 1, raw leaves, fixed 256 KiB chunks, files in sorted order. The same files always give the same CID. |
 | `downloads/` | The terminal programs (`zk-bridge-terminal-<os>-<arch>`), the prover for the machine that made the release (`zk-bridge-prover-<os>-<arch>`), and both guest programs (`light-client.elf`, `fork-observation.elf`). |
 | `version.json` | The release list: each site with its version, commit, CID and archive SHA-256, and each download with its SHA-256. Written as the exact bytes the key signs (keys sorted, no spaces). Its `sequence` only goes up. |
 | `version.json.sig` | The 64-byte Ed25519 signature of `version.json`. |
@@ -113,14 +113,22 @@ reproducible across machines; compare them by building from source instead.
 | Terminal | macOS (arm64, x64), Linux (x64, arm64); Windows x64 when its build succeeds | Build from source: `script/build-terminal.sh <dir> bun-<os>-<arch>` |
 | Prover | The platform of the machine that made the release | Build from source: `cd prover && cargo build --release --no-default-features --features sp1` |
 | Guest programs | Any (`platform: any`) | `light-client/scripts/program-keys.sh` rebuilds and checks them |
-| Sites | IPFS | `pnpm --filter @zk-bridge/web build`, `pnpm --filter @zk-bridge/docs build`, `node explorer/landing/scripts/build.ts` |
+| Sites | IPFS | `pnpm --filter @zk-bridge/web build` (runs `script/check-docs-public.sh` first, because the docs pages are part of it), `node explorer/landing/scripts/build.ts` |
 
 ## Publishing
 
 Both targets are off until configured. Neither runs as part of `release.sh`. Both verify the release first.
 
-**Where things are hosted.** The dapp and the docs are published on IPFS only. Normal hosting is only for backends and
+**Where things are hosted.** The dapp (docs included, at `#/docs`) is published on IPFS only. Normal hosting is only for backends and
 landing pages: the landing page has a mirror on Cloudflare Pages at the zkb.fi root, and nothing else does.
+
+**docs.zkb.fi.** The docs are not a second site. Owner, verbatim: "perhaps docs should be async loaded in the same app as
+dapp? no need to consume a second domain" and "yes, point docs.zkb.fi at the dapp. have it go to /#/docs". The
+DNSLink record `_dnslink.docs.zkb.fi` names the dapp's CID (`releases[name=dapp].cid` in `version.json`), set with
+`deploy/ansible/sites.yml -e docs_cid=<dapp cid> -e confirm_production=yes` (the variable keeps its old name). When the
+dapp loads on a host that starts with `docs.` and the address has no hash or `#/`, it replaces the address with `#/docs`
+(`explorer/web/src/app/docs-host.ts`, no reload). The landing page lists the dapp with a "Docs" link at each gateway form:
+the same address plus `/#/docs`.
 
 ### IPFS: `script/release/publish.sh <release-directory>`
 
@@ -248,7 +256,7 @@ operator's `landing.config.json`, and no staging key (`script/release/promote-ch
 `promote.sh` verifies the staging release against the staging key, rebuilds only the landing page (at the staging
 commit, with the production configuration), and writes a production `version.json` (`channels.stable`, sequence =
 the live production sequence + 1, version = the staging version without `-next.N`, or `PROMOTE_VERSION`) that keeps the
-dapp and docs archives byte for byte: production serves the exact content addresses that were tried on staging, already
+dapp archive byte for byte: production serves the exact content address that was tried on staging, already
 pinned. It refuses if a kept archive differs from what the staging manifest names. It signs with the production key,
 verifies against the production key, and with `PROMOTE_PUBLISH=1` runs `publish.sh` and `publish-pages.sh` with the
 channel fixed to stable. Upload the downloads to the GitHub release of the production version as for any release.

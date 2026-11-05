@@ -1,5 +1,6 @@
 ---
-# docs.zkb.fi is DNSLink: the TXT record _dnslink.docs.zkb.fi names the docs CID, and the Worker zkb-fi-docs only
+# docs.zkb.fi is DNSLink: the TXT record _dnslink.docs.zkb.fi names the dapp CID (the docs are inside the dapp, at #/docs;
+# owner: "yes, point docs.zkb.fi at the dapp. have it go to /#/docs"; the dapp sends that host to #/docs by itself), and the Worker zkb-fi-docs only
 # redirects to a gateway that resolves it, so the Worker needs no deploy. The CID is pinned (kubo node) before this runs;
 # the old CID stays pinned for a week at least. Rollback: run this again with the old CID (printed below).
 - name: Check the CID
@@ -9,7 +10,7 @@
     fail_msg: "docs_cid is not a CIDv1 (bafy...) or CIDv0 (Qm...)."
     quiet: true
 
-- name: Check that the new docs CID is served by a public gateway (so it is pinned somewhere)
+- name: Check that the new CID is served by a public gateway (so it is pinned somewhere)
   ansible.builtin.uri:
     url: "{{ zkb_ipfs_gateway }}/ipfs/{{ docs_cid }}/"
     timeout: 60
