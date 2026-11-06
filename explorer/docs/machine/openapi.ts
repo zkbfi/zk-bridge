@@ -213,6 +213,9 @@ export const buildBackendSpec = (): OpenApiDocument => {
       "/benchmarks": {
         get: get("Proving timings", "Median and 90th percentile of each pipeline step over a window.", [query("window", "A number and m, h or d, from 1h to 30d.", { type: "string", default: "24h" })], json(open("Steps per direction."), "The timings."), { "400": errorResponse("Invalid window."), ...tooMany }),
       },
+      "/warmup/summary": {
+        get: get("Warm-up spending", "GPU warm-up sessions per day: used and wasted, billed seconds and estimated cost.", [query("days", "Days to report, 1 to 30.", { type: "integer", default: 1 })], json(open("Daily totals and the sum."), "The summary."), { "400": errorResponse("Invalid days."), ...tooMany }),
+      },
       "/archive/proofs": { get: get("Archived proof rows", "The proofs the backend archived.", [], json(open("The rows."), "The rows.")) },
       "/evidence/{messageId}": { get: get("Delivery evidence", "The archived evidence of a delivery, as JSON.", [messageId], json(open("The evidence."), "The evidence."), { "400": errorResponse("Not a message identifier."), "404": errorResponse("No evidence for this message.") }) },
       "/proofs/latest/{direction}": {

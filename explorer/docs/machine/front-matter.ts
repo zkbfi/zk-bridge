@@ -28,10 +28,12 @@ export type FrontMatter = {
   readonly kind: "page" | "skill";
   /** Skills only: the kebab-case name of the skill, which is its folder in `/docs/skills/<name>/SKILL.md`. */
   readonly name?: string;
+  /** Skills only: what the skill does and when to use it, which an agent reads to decide (Agent Skills format). */
+  readonly description?: string;
 };
 
 /** The keys the validator knows. Any other key is a mistake. */
-const KNOWN_KEYS: readonly string[] = ["title", "summary", "audience", "chains", "verified_release", "kind", "name"];
+const KNOWN_KEYS: readonly string[] = ["title", "summary", "audience", "chains", "verified_release", "kind", "name", "description"];
 const KEBAB = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
@@ -153,6 +155,10 @@ export const validateFrontMatter = (data: Record<string, unknown>): Validation =
   if (kind === "skill") {
     if (typeof name !== "string" || !KEBAB.test(name)) errors.push('a skill needs "name" in kebab-case, such as bridge-tokens');
   } else if (name !== undefined) errors.push('"name" is only for skills (kind: skill)');
+  const description = data.description;
+  if (kind === "skill") {
+    if (typeof description !== "string" || description.trim() === "") errors.push('a skill needs "description": what it does and when to use it');
+  } else if (description !== undefined) errors.push('"description" is only for skills (kind: skill)');
 
   if (errors.length > 0) return { ok: false, errors };
   return {
@@ -165,6 +171,7 @@ export const validateFrontMatter = (data: Record<string, unknown>): Validation =
       verified_release: release as string,
       kind: kind as "page" | "skill",
       ...(typeof name === "string" ? { name } : {}),
+      ...(typeof description === "string" ? { description } : {}),
     },
   };
 };

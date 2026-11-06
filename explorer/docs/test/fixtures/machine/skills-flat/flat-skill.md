@@ -5,6 +5,7 @@ audience: [user]
 chains: all
 verified_release: 0.1.0
 kind: skill
+description: A fixture skill for the docs tests.
 name: flat-skill
 ---
 
