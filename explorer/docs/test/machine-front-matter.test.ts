@@ -26,7 +26,7 @@ describe("front matter", () => {
     const read = readFrontMatter(page(valid), "p.md");
     expect(read.meta).toMatchObject({ title: "T", audience: ["user", "operator"], chains: "all", kind: "page" });
     expect(read.body).toBe("# T\n\ntext");
-    const skill = readFrontMatter(page(`${valid}\nkind: skill\nname: bridge-tokens`), "s.md");
+    const skill = readFrontMatter(page(`${valid}\nkind: skill\nname: bridge-tokens\ndescription: Send tokens across the bridge.`), "s.md");
     expect(skill.meta).toMatchObject({ kind: "skill", name: "bridge-tokens" });
   });
 
@@ -42,8 +42,10 @@ describe("front matter", () => {
     ["a bad chains value", valid.replace("chains: all", "chains: some"), /"chains"/],
     ["a bad version", valid.replace("0.1.0", "latest"), /verified_release/],
     ["an unknown key", `${valid}\nowner: me`, /unknown key "owner"/],
-    ["a skill without a name", `${valid}\nkind: skill`, /kebab-case/],
-    ["a skill with a bad name", `${valid}\nkind: skill\nname: Bridge_Tokens`, /kebab-case/],
+    ["a skill without a name", `${valid}\nkind: skill\ndescription: d`, /kebab-case/],
+    ["a skill without a description", `${valid}\nkind: skill\nname: bridge-tokens`, /needs "description"/],
+    ["a page with a description", `${valid}\ndescription: d`, /only for skills/],
+    ["a skill with a bad name", `${valid}\nkind: skill\nname: Bridge_Tokens\ndescription: d`, /kebab-case/],
     ["a name on a page", `${valid}\nname: x`, /only for skills/],
     ["a long summary", valid.replace('"One line: with a colon."', `"${"x".repeat(300)}"`), /summary/],
   ])("refuses %s", (_label, block, message) => {
