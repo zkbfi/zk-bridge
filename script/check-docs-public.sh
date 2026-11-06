@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Gate: every page that may be published holds nothing private.
-# Scans tracked and untracked files (the docs site builds from the working tree) in the docs, the web documentation pages, the readmes, progress.txt and script/. The generic patterns match exact case. The private patterns ignore case.
+# Scans tracked and untracked files (the docs site builds from the working tree) in the docs, the web documentation pages and skills, the readmes, progress.txt and script/. The generic patterns match exact case. The private patterns ignore case.
 # Prints file and line for each match and exits 1. The generic patterns below cover an email address, a home
 # directory path, a RunPod endpoint identifier, key-shaped strings and a literal key in a valve.city address.
 # Private names do not belong in this tracked file. Put them, one pattern per line, in the untracked file
@@ -12,7 +12,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 # Planning notes in docs/superpowers describe these patterns, so they are not scanned.
-scanned_paths=(docs explorer/web/docs/pages README.md 'explorer/*/README.md' progress.txt script ':!docs/superpowers' ':!script/check-docs-public.sh')
+scanned_paths=(docs explorer/web/docs/pages explorer/web/docs/skills README.md 'explorer/*/README.md' progress.txt script ':!docs/superpowers' ':!script/check-docs-public.sh')
 
 patterns=(
   # email address

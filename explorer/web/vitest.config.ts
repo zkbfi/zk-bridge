@@ -2,9 +2,10 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 import { publicPagesPlugin } from "../docs/public-pages.ts";
+import { machineDocsPlugin } from "../docs/machine/plugin.ts";
 
 export default defineConfig({
-  plugins: [publicPagesPlugin({ repositoryRoot: fileURLToPath(new URL("../..", import.meta.url)) }), react()],
+  plugins: [publicPagesPlugin({ repositoryRoot: fileURLToPath(new URL("../..", import.meta.url)) }), machineDocsPlugin({ repositoryRoot: fileURLToPath(new URL("../..", import.meta.url)) }), react()],
   resolve: {
     alias: {
       "@terminal": fileURLToPath(new URL("../terminal/src", import.meta.url)),

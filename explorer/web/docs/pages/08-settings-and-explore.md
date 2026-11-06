@@ -1,3 +1,11 @@
+---
+title: "Settings, search and Explore"
+summary: "Make the app yours: pick a theme, use your own RPC endpoint and beacon endpoint for each chain, swap any service the app reads, and find anything in the bridge from one search."
+audience: [user, integrator]
+chains: all
+verified_release: 0.1.0
+---
+
 # Settings, search and Explore
 
 Make the app yours: pick a theme, use your own RPC endpoint and beacon endpoint for each chain, swap any service the app reads, and find anything in the bridge from one search.

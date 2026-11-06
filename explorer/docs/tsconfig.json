@@ -23,5 +23,5 @@
       "@zk-bridge/shared/msgboard-http": ["../shared/src/msgboard/board-http.ts"]
     }
   },
-  "include": ["src", "test", "vitest.config.ts", "public-pages.ts"]
+  "include": ["src", "test", "machine", "scripts", "vitest.config.ts", "public-pages.ts"]
 }

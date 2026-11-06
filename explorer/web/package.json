@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "../../script/check-docs-public.sh && tsc --noEmit && vite build",
+    "build": "../../script/check-docs-public.sh && node ../docs/scripts/check-machine-docs.ts && tsc --noEmit && vite build && node ../docs/scripts/check-machine-docs.ts --dist dist",
     "build:indexer-search": "vite build --config vite.indexer-search.config.ts",
     "preview": "vite preview",
     "test": "vitest run --coverage",
