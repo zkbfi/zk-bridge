@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { openStorage } from "../src/storage.ts";
 import { findActiveJob, findLatestJob, getJob, getRequest, insertJob, insertRequest, pruneRequests, recentCallersOfAll, recentRequestsOfCaller, updateJob } from "../src/requests/jobs.ts";
@@ -9,6 +10,22 @@ const tables = (storage: ReturnType<typeof openStorage>) =>
   (storage.database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name);
 
 describe("storage", () => {
+  it("adds the billed time to a warm-up table of before 2026-11-06, keeping its rows", () => {
+    const directory = mkdtempSync(join(tmpdir(), "backend-storage-"));
+    try {
+      const path = join(directory, "backend.sqlite");
+      const old = new DatabaseSync(path);
+      old.exec("CREATE TABLE warmup_sessions (id TEXT PRIMARY KEY, direction TEXT NOT NULL, why TEXT NOT NULL, due_at INTEGER NOT NULL, lead_seconds INTEGER NOT NULL, started_at INTEGER NOT NULL, ready_at INTEGER, ended_at INTEGER, outcome TEXT)");
+      old.exec("INSERT INTO warmup_sessions (id, direction, why, due_at, lead_seconds, started_at, ended_at, outcome) VALUES ('a', 'first-to-second', 'message', 1, 60, 0, 5000, 'used')");
+      old.close();
+      const storage = openStorage(path);
+      expect(storage.database.prepare("SELECT id, billed_seconds AS billed FROM warmup_sessions").all()).toEqual([{ id: "a", billed: null }]);
+      storage.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("creates the four tables in one file and keeps the data after a reopen", () => {
     const directory = mkdtempSync(join(tmpdir(), "backend-storage-"));
     try {

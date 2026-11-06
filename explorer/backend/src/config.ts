@@ -165,6 +165,8 @@ export const backendConfigSchema = z
             leadP: z.number().gt(0).max(1).default(DEFAULT_WARMUP.leadP),
             /** How many of the newest observations count. */
             leadObservations: positiveInteger.default(DEFAULT_WARMUP.leadObservations),
+            /** Seconds added to that quantile, so the proof rarely waits for a worker that is almost ready. */
+            leadMarginSeconds: z.number().min(0).max(120).default(DEFAULT_WARMUP.leadMarginSeconds),
             /** The lead time until there is an observation. */
             defaultLeadSeconds: positiveInteger.default(DEFAULT_WARMUP.defaultLeadSeconds),
             minLeadSeconds: positiveInteger.default(DEFAULT_WARMUP.minLeadSeconds),
@@ -174,6 +176,10 @@ export const backendConfigSchema = z
             /** Ping again this often while no worker is ready. */
             intervalSeconds: positiveInteger.default(DEFAULT_WARMUP.intervalSeconds),
             graceSeconds: positiveInteger.default(DEFAULT_WARMUP.graceSeconds),
+            /** The endpoint's idle timeout: a worker is billed this long after its last request (the cost estimate). */
+            idleTimeoutSeconds: z.number().min(0).max(3600).default(DEFAULT_WARMUP.idleTimeoutSeconds),
+            /** What the remote GPU costs per hour, in USD (the cost estimate). */
+            gpuUsdPerHour: z.number().min(0).max(1000).default(DEFAULT_WARMUP.gpuUsdPerHour),
             minGapSeconds: positiveInteger.default(DEFAULT_WARMUP.minGapSeconds),
             /** The most warm-up seconds of both directions together in any 24 hours. */
             dailyCapSeconds: positiveInteger.default(DEFAULT_WARMUP.dailyCapSeconds),

@@ -165,6 +165,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
       findActiveJob: () => findActiveJob(context.storage, direction),
       readHeldProofs: () => readHeldProofs(context.storage, direction),
       readLastProofAt: () => lastProofStartedAt(context.storage, direction),
+      readAdmitAfterSeconds: () => service.admitAfterSeconds(direction),
       pendingStaleSeconds: config.limits.pendingProofStaleSeconds,
       batchRule,
       readEconomics: createEconomicsReader({

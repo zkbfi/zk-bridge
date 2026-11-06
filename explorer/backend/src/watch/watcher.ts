@@ -63,6 +63,8 @@ export type DirectionWatcherInput = {
    * the jobs table on each decision, so the minimum interval survives a restart.
    */
   readonly readLastProofAt: () => number | null;
+  /** Seconds until the request service admits a new job of the direction (0: now). */
+  readonly readAdmitAfterSeconds: () => number;
   /** Values the waiting messages. Only asked when the rule waits. */
   readonly readEconomics: (messages: readonly ListedMessage[]) => Promise<Economics>;
   readonly submit: (request: ProofRequest) => Promise<SubmitResult>;
@@ -110,7 +112,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let lastSeen = "";
-  let known: { facts: LightClientFacts; at: number; finalizedSlot: number; history: SourceHistory } | null = null;
+  let known: { facts: LightClientFacts; at: number; finalizedSlot: number; participants: number | null; history: SourceHistory } | null = null;
   let session: WarmupSession = IDLE;
   let scanFailing = false;
   /** Whether a warm-up ping waits for its answer: never more than one per direction. */
@@ -192,7 +194,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       retry(observation, attempt, REFUSED_RETRY_SECONDS);
       return;
     }
-    known = { facts, at: now(), finalizedSlot: observation.finalizedSlot, history };
+    known = { facts, at: now(), finalizedSlot: observation.finalizedSlot, participants: observation.participants, history };
     const seen = `${observation.finalizedSlot}/${observation.participants}`;
     if (seen !== lastSeen) {
       lastSeen = seen;
@@ -351,7 +353,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
   /** Ends the running session. Only called while one runs. */
   function endSession(reason: WarmupEnd | "timeout", at: number): void {
     const ending = session as ActiveSession;
-    input.warmupStore.endSession(ending.id, reason, at * 1000);
+    input.warmupStore.endSession(ending.id, reason, at * 1000, input.warmup.idleTimeoutSeconds);
     const warmSeconds = Math.round(at - ending.startedAt);
     const fields = { direction, why: ending.target.why, warmSeconds, ready: ending.phase === "warm", dueInSeconds: Math.round(ending.target.at - at) };
     if (reason === "used") logger.info("warmup_used", { ...fields, readyBeforeDueSeconds: ending.phase === "warm" ? Math.round(ending.target.at - ending.readyAt) : null });
@@ -430,7 +432,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
     try {
       if (known === null || now() - known.at >= FACTS_REUSE_MILLISECONDS) {
         const fresh = await input.readFacts();
-        known = { finalizedSlot: 0, history: { kind: "not-needed" }, ...known, facts: fresh, at: now() };
+        known = { finalizedSlot: 0, participants: null, history: { kind: "not-needed" }, ...known, facts: fresh, at: now() };
       }
       const { facts } = known;
       const listed = await input.readMessages();
@@ -438,7 +440,24 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       const batch = await batchOf(listed, facts);
       nowSeconds = now() / 1000;
       lead = input.warmupStore.lead(input.warmup);
-      const plan = warmupPlan({ facts, finalizedSlot: known.finalizedSlot, messages, pendingProof: pendingAt(facts.headSlot), history: known.history, policy: input.policy, nowSeconds, horizonSeconds: lead.seconds, ...(batch === undefined ? {} : { batch }) });
+      // The same decision as the real proof, asked for the moments ahead: see warmupPlan.
+      const plan = warmupPlan({
+        facts,
+        finalizedSlot: known.finalizedSlot,
+        participants: known.finalizedSlot === 0 ? undefined : known.participants,
+        minParticipants: input.minParticipants,
+        messages,
+        pendingProof: pendingAt(facts.headSlot),
+        history: known.history,
+        policy: input.policy,
+        nowSeconds,
+        pendingStaleSeconds: input.pendingStaleSeconds,
+        horizonSeconds: lead.seconds,
+        admitAtSeconds: nowSeconds + (input.readAdmitAfterSeconds()),
+        doneSlot,
+        keepAlivePeriod,
+        ...(batch === undefined ? {} : { batch }),
+      });
       const capReached = input.warmupStore.warmSecondsInWindow(nowSeconds * 1000) >= input.warmup.dailyCapSeconds;
       action = warmupStep({ nowSeconds, targets: plan.targets, live: plan.live, session, config: input.warmup, leadSeconds: lead.seconds, jobActive: input.findActiveJob() !== null, pingOutstanding, capReached });
       scanFailing = false;

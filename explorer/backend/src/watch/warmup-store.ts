@@ -23,6 +23,21 @@ export type ObservationSource = "ping" | "ping-timeout" | "job";
 /** How a session ended. `restart`: the backend stopped while it ran. `timeout`: its ping timed out. */
 export type SessionOutcome = WarmupEnd | "timeout" | "restart";
 
+/** One UTC day of warm-up sessions (by the day they started). `used`: a job started on the warm worker. */
+export type WarmupDay = {
+  readonly day: string;
+  readonly sessions: number;
+  readonly used: number;
+  readonly wasted: number;
+  /** Billed seconds estimated for all sessions, and for the wasted ones. */
+  readonly billedSeconds: number;
+  readonly wastedSeconds: number;
+  /** Seconds the worker sat ready before the due time in used sessions: the lead that was longer than needed. */
+  readonly idleBeforeDueSeconds: number;
+  readonly estimatedCostUsd: number;
+  readonly wastedCostUsd: number;
+};
+
 /** The warm-up record. Times in milliseconds since 1970. */
 export interface WarmupStore {
   /** The lead time from the newest observations of every direction (one endpoint serves both). */
@@ -31,11 +46,17 @@ export interface WarmupStore {
   /** Opens a session and answers its identifier. */
   openSession(input: { direction: ProofDirection; why: string; dueAt: number; leadSeconds: number; at: number }): string;
   markReady(id: string, at: number): void;
-  endSession(id: string, outcome: SessionOutcome, at: number): void;
+  /**
+   * Ends a session. Its billed time is the estimate from the start to `at`, plus the endpoint's idle timeout (a worker
+   * is billed until the timeout after its last request); `idleTimeoutSeconds` is added.
+   */
+  endSession(id: string, outcome: SessionOutcome, at: number, idleTimeoutSeconds: number): void;
   /** Ends every open session as `restart`, at `at`. A running backend has none open from before its start. */
   closeOpenSessions(at: number): number;
   /** The seconds that the sessions of every direction ran in the 24 hours before `at`, open ones up to `at`. */
   warmSecondsInWindow(at: number): number;
+  /** The sessions that ended from `from` (milliseconds) on, summed per UTC day, newest day first. */
+  summary(from: number, config: Pick<WarmupConfig, "gpuUsdPerHour" | "idleTimeoutSeconds">): WarmupDay[];
   /** Whether a session of the direction ran at `at`: then a job's wait for a worker is the warm-up's, not a cold start. */
   sessionAt(direction: ProofDirection, at: number): boolean;
 }
@@ -68,11 +89,40 @@ export function createWarmupStore(storage: Storage): WarmupStore {
     markReady(id, at) {
       database.prepare("UPDATE warmup_sessions SET ready_at = ? WHERE id = ? AND ready_at IS NULL").run(at, id);
     },
-    endSession(id, outcome, at) {
-      database.prepare("UPDATE warmup_sessions SET ended_at = ?, outcome = ? WHERE id = ? AND ended_at IS NULL").run(at, outcome, id);
+    endSession(id, outcome, at, idleTimeoutSeconds) {
+      database
+        .prepare("UPDATE warmup_sessions SET ended_at = ?, outcome = ?, billed_seconds = (? - started_at) / 1000.0 + ? WHERE id = ? AND ended_at IS NULL")
+        .run(at, outcome, at, idleTimeoutSeconds, id);
     },
     closeOpenSessions(at) {
-      return Number(database.prepare("UPDATE warmup_sessions SET ended_at = ?, outcome = 'restart' WHERE ended_at IS NULL").run(at).changes);
+      return Number(database.prepare("UPDATE warmup_sessions SET ended_at = ?, outcome = 'restart', billed_seconds = (? - started_at) / 1000.0 WHERE ended_at IS NULL").run(at, at).changes);
+    },
+    summary(from, config) {
+      // A session from before the billed time was recorded is estimated the same way from its own times.
+      const rows = database
+        .prepare(
+          `SELECT strftime('%Y-%m-%d', started_at / 1000, 'unixepoch') AS day,
+                  COUNT(*) AS sessions,
+                  SUM(outcome = 'used') AS used,
+                  SUM(outcome <> 'used') AS wasted,
+                  SUM(COALESCE(billed_seconds, (ended_at - started_at) / 1000.0 + ?)) AS billed,
+                  SUM(CASE WHEN outcome <> 'used' THEN COALESCE(billed_seconds, (ended_at - started_at) / 1000.0 + ?) ELSE 0 END) AS wastedBilled,
+                  SUM(CASE WHEN outcome = 'used' AND ready_at IS NOT NULL THEN MAX(0, due_at - ready_at) / 1000.0 ELSE 0 END) AS idle
+             FROM warmup_sessions WHERE ended_at IS NOT NULL AND started_at >= ? GROUP BY day ORDER BY day DESC`,
+        )
+        .all(config.idleTimeoutSeconds, config.idleTimeoutSeconds, from) as Array<{ day: string; sessions: number; used: number; wasted: number; billed: number; wastedBilled: number; idle: number }>;
+      const round = (value: number) => Math.round(value * 100) / 100;
+      return rows.map((row) => ({
+        day: row.day,
+        sessions: row.sessions,
+        used: row.used,
+        wasted: row.wasted,
+        billedSeconds: round(row.billed),
+        wastedSeconds: round(row.wastedBilled),
+        idleBeforeDueSeconds: round(row.idle),
+        estimatedCostUsd: Math.round((row.billed / 3600) * config.gpuUsdPerHour * 10_000) / 10_000,
+        wastedCostUsd: Math.round((row.wastedBilled / 3600) * config.gpuUsdPerHour * 10_000) / 10_000,
+      }));
     },
     warmSecondsInWindow(at) {
       const from = at - CAP_WINDOW_MILLISECONDS;

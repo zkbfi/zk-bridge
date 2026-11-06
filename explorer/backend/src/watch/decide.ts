@@ -235,40 +235,70 @@ export function expectedFinalityAt(slot: number, facts: Pick<LightClientFacts, "
   return slotTime((epoch + 3) * SLOTS_PER_EPOCH + 1, facts);
 }
 
-/** What the warm-up looks at: the times a proof is expected, and the keys that still wait for one. */
+/**
+ * The finalized slot the source is expected to have at a time (seconds since 1970): the checkpoint that finalized at
+ * the start of the latest epoch E, which is the first slot of epoch E - 2. Consistent with {@link expectedFinalityAt}:
+ * a block of slot `s` is covered from the time it returns.
+ */
+export function finalizedSlotAt(seconds: number, facts: Pick<LightClientFacts, "genesisTime" | "secondsPerSlot">): number {
+  const epoch = Math.floor(((seconds - facts.genesisTime) / facts.secondsPerSlot - 1) / SLOTS_PER_EPOCH);
+  return Math.max(0, (epoch - 2) * SLOTS_PER_EPOCH);
+}
+
+/** What the warm-up looks at: the time a proof is expected (at most one target), and the keys that still wait for one. */
 export type WarmupPlan = { readonly targets: readonly WarmupTarget[]; readonly live: ReadonlySet<string> };
 
 /** The key of a period handoff from the head `headSlot`: a new head is another handoff. */
 export const handoffKey = (headSlot: number) => `handoff:${headSlot}`;
 
+/** Input of {@link warmupPlan}. */
+export type WarmupPlanInput = Omit<DecisionInput, "participants" | "minParticipants"> & {
+  /** How far ahead a handoff finality is looked for (the lead time). */
+  readonly horizonSeconds: number;
+  /** The participation of the newest finality, null when unknown (nothing is due now then); absent assumes the threshold. Later finalities assume the threshold. */
+  readonly participants?: number | null;
+  readonly minParticipants?: number;
+  /**
+   * When the request service admits a new job of the direction (seconds since 1970): after a failed job, the spacing
+   * between jobs, or a spent daily budget. Absent: now.
+   */
+  readonly admitAtSeconds?: number;
+  /** The newest finalized slot a job started or joined for: a proof for it or an older one is never started again. */
+  readonly doneSlot?: number;
+  /** The sync-committee period in which the watcher last started a keep-alive: another one waits for an old head. */
+  readonly keepAlivePeriod?: number | null;
+};
+
 /**
- * The times at which a proof is expected to start, sorted, one per time: the expected finality of each message that is
- * not final yet (with a minimum interval, one time for the whole batch: when it is expected to pay, else when the
- * interval since the last proof ends, and never before its first finality), and the first finality within
- * `horizonSeconds` (the lead time) that makes a period handoff due, when no
- * keep-alive is due now. A handoff is due once the source's finality crosses into the new period, about two epochs
- * after the border, not when the clock crosses it. A keep-alive of the age rule asks for no warm worker.
+ * When a proof is next due, and whether it is certain: the single forecast of the warm-up, built on {@link decideProof}
+ * so the warm-up and the real proof cannot disagree. It collects the moments at which something could change the
+ * answer (now, the expected finality of each waiting message, the end of the batch interval and the moment the batch
+ * is expected to pay, the finality that crosses into a new committee period, and when the request service admits a
+ * job), asks `decideProof` at each of them with the finalized slot expected then, and takes the first at which it says
+ * due. A moment before the service admits a job, or at a finalized slot a job started for already, is not due.
+ * A keep-alive of the age rule asks for no warm worker.
  *
  * `live` holds every message the head (or a pending proof that still applies) does not cover, final or not, and the
  * handoff while one is due now or ahead: a warm-up for a key that left it is over.
  */
-export function warmupPlan(input: Omit<DecisionInput, "participants" | "minParticipants"> & { readonly horizonSeconds: number }): WarmupPlan {
+export function warmupPlan(input: WarmupPlanInput): WarmupPlan {
   const { facts, finalizedSlot, policy, nowSeconds, history } = input;
+  const minParticipants = input.minParticipants ?? MIN_PARTICIPANTS;
   const covered = coveredSlot(facts, input.pendingProof);
   const waiting = input.messages.filter((message) => message.slot > covered);
   const live = new Set<string>(waiting.map((message) => message.messageId));
-  const byTime = new Map<number, { why: WarmupTarget["why"]; keys: string[] }>();
-  const batch = input.batch;
-  if (batch !== undefined && batch.rule.minIntervalSeconds > 0) {
-    // One session per batch, timed to when its proof is expected to start: when it pays, else when the interval ends.
-    const plan = planBatch({ messages: waiting.map((message) => ({ ...message, finalAt: expectedFinalityAt(message.slot, facts) })), finalizedSlot, nowSeconds, rule: batch.rule, economics: batch.economics, lastProofAt: batch.lastProofAt });
-    if (plan !== null) byTime.set(plan.due ? nowSeconds : plan.startAt, { why: "message", keys: waiting.map((message) => message.messageId) });
-  } else {
-    for (const message of waiting.filter((candidate) => candidate.slot > finalizedSlot)) {
-      const at = expectedFinalityAt(message.slot, facts);
-      const entry = byTime.get(at) ?? { why: "message" as const, keys: [] };
-      entry.keys.push(message.messageId);
-      byTime.set(at, entry);
+  const candidates = new Set<number>();
+  const handoffAt = new Set<number>();
+  if (waiting.length > 0) {
+    candidates.add(nowSeconds);
+    for (const message of waiting) candidates.add(expectedFinalityAt(message.slot, facts));
+    const batch = input.batch;
+    if (batch !== undefined && batch.rule.minIntervalSeconds > 0) {
+      const plan = planBatch({ messages: waiting.map((message) => ({ ...message, finalAt: expectedFinalityAt(message.slot, facts) })), finalizedSlot, nowSeconds, rule: batch.rule, economics: batch.economics, lastProofAt: batch.lastProofAt });
+      if (plan !== null && !plan.due) {
+        candidates.add(plan.startAt);
+        candidates.add(plan.dueAt);
+      }
     }
   }
   if (applicable(input.pendingProof, facts) === null) {
@@ -280,24 +310,54 @@ export function warmupPlan(input: Omit<DecisionInput, "participants" | "minParti
       return assessment.waitForFinality ? null : keepAliveCall(assessment, facts, policy);
     };
     const dueNow = callAt(finalizedSlot, history, nowSeconds);
+    // Due now: the proof starts with the finality that made it due, a warm-up would only race it.
     if (dueNow === "handoff") live.add(key);
     // The source has served the handoffs so far; a period it has not been asked for yet is not counted as missing.
-    const nextHistory: SourceHistory = history.kind === "not-needed" ? { kind: "serves" } : history;
     const firstEpoch = Math.floor(currentSlotAt(facts, nowSeconds) / SLOTS_PER_EPOCH) + 1;
     for (let epoch = firstEpoch; dueNow === null; epoch += 1) {
       const finalityAt = slotTime(epoch * SLOTS_PER_EPOCH + 1, facts);
       // The next finality is always looked at; later ones while they lie within the horizon.
       if (epoch > firstEpoch && finalityAt > nowSeconds + input.horizonSeconds) break;
       // At the start of epoch E the checkpoint of epoch E - 2 finalizes.
-      if (callAt(Math.max(finalizedSlot, (epoch - 2) * SLOTS_PER_EPOCH), nextHistory, finalityAt) === "handoff") {
+      if (callAt(Math.max(finalizedSlot, (epoch - 2) * SLOTS_PER_EPOCH), history.kind === "not-needed" ? { kind: "serves" } : history, finalityAt) === "handoff") {
         live.add(key);
-        const entry = byTime.get(finalityAt) ?? { why: "keep-alive" as const, keys: [] };
-        entry.keys.push(key);
-        byTime.set(finalityAt, entry);
+        candidates.add(finalityAt);
+        handoffAt.add(finalityAt);
         break;
       }
     }
   }
-  const targets = [...byTime.entries()].map(([at, entry]) => ({ at, why: entry.why, keys: entry.keys })).sort((left, right) => left.at - right.at);
-  return { targets, live };
+  const admitAt = Math.max(nowSeconds, input.admitAtSeconds ?? nowSeconds);
+  const moments = [...new Set([...candidates].map((moment) => Math.max(moment, admitAt)))].sort((left, right) => left - right);
+  for (const moment of moments) {
+    // The finalized slot the clock says the source has by then. A finality the clock has passed but the watcher has not
+    // seen yet counts too (a late finality is awaited, not given up): it is the observed one only while nothing newer is due.
+    const finalized = Math.max(finalizedSlot, finalizedSlotAt(moment, facts));
+    const observed = finalized === finalizedSlot;
+    if (finalized <= (input.doneSlot ?? -1)) continue;
+    const decision = decideProof({
+      finalizedSlot: finalized,
+      participants: observed ? (input.participants === undefined ? minParticipants : input.participants) : minParticipants,
+      minParticipants,
+      facts,
+      messages: input.messages,
+      pendingProof: input.pendingProof,
+      history: !observed && history.kind === "not-needed" ? { kind: "serves" } : history,
+      policy,
+      nowSeconds: moment,
+      ...(input.pendingStaleSeconds === undefined ? {} : { pendingStaleSeconds: input.pendingStaleSeconds }),
+      ...(input.batch === undefined ? {} : { batch: input.batch }),
+    });
+    if (!decision.due) continue;
+    if (decision.why === "keep-alive") {
+      // The age rule is the indexer's gate, not the warm-up's. The watcher also holds a second keep-alive of a period back.
+      if (!decision.handoff) continue;
+      const headAge = moment - (facts.genesisTime + facts.headSlot * facts.secondsPerSlot);
+      if (input.keepAlivePeriod === Math.floor(finalized / facts.slotsPerPeriod) && headAge <= policy.keepAliveSeconds) continue;
+    }
+    const handoff = handoffAt.has(moment) ? [handoffKey(facts.headSlot)] : [];
+    const keys = decision.why === "message" ? [...decision.messageIds, ...handoff] : [handoffKey(facts.headSlot)];
+    return { targets: [{ at: moment, why: decision.why, keys }], live };
+  }
+  return { targets: [], live };
 }

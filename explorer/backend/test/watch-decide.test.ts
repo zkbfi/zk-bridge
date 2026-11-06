@@ -216,11 +216,8 @@ describe("warmupPlan", () => {
       nowSeconds: at(NOW_SLOT),
       horizonSeconds: 90,
     });
-    // Sorted by time, one target per time with the keys of all its messages.
-    expect(plan.targets).toEqual([
-      { at: expectedFinalityAt(NOW_SLOT - 2, facts(HEAD)), why: "message", keys: [id("c"), id("d")] },
-      { at: expectedFinalityAt(NOW_SLOT + 40, facts(HEAD)), why: "message", keys: [id("b")] },
-    ]);
+    // One target, the first moment decideProof says due: now, for the message that is final (the later ones are not asked).
+    expect(plan.targets).toEqual([{ at: at(NOW_SLOT), why: "message", keys: [id("f")] }]);
     // The final message still waits for its proof; the covered one does not.
     expect([...plan.live].sort()).toEqual([id("b"), id("c"), id("d"), id("f")]);
   });

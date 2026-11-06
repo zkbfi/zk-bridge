@@ -86,6 +86,12 @@ export interface RequestService {
    * no proof yet. A job whose proof already arrived waits for the webhook or for the timeout.
    */
   recover(): void;
+  /**
+   * Seconds until a new job of the direction is admitted: the wait after the newest job (the shorter retry wait after a
+   * failed one), or for the daily budget. 0 when one may start now. The caller limits are not counted. The watcher
+   * asks it so that the warm-up never wakes the prover for a proof the service would refuse.
+   */
+  admitAfterSeconds(direction: ProofDirection): number;
   /** Deletes the request rows older than the retention window. Returns how many rows went. */
   prune(): number;
   /** Resolves when no job runs in the background. A test awaits it. */
@@ -281,6 +287,12 @@ export function createRequestService(input: RequestServiceInput): RequestService
       for (const job of listActiveJobs(storage)) {
         if (job.startSlot === null) start(job.id, job.direction);
       }
+    },
+    admitAfterSeconds(direction) {
+      const current = now();
+      const directionWait = directionWaitSeconds({ latest: findLatestJob(storage, direction), now: current, limits });
+      const budgetWait = jobBudgetWaitSeconds({ recent: recentCostlyJobs(storage, direction, current - JOB_BUDGET_WINDOW_MILLISECONDS), now: current, limit: limits.jobsPerDirectionPerDay });
+      return Math.max(directionWait, budgetWait);
     },
     prune() {
       return pruneRequests(storage, now() - limits.requestRetentionHours * 3_600_000);
