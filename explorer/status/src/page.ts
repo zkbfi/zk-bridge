@@ -54,6 +54,12 @@ h2 { font-size: var(--step-0); margin: 32px 0 8px; }
 footer { margin-top: 32px; color: var(--muted); font-size: 0.9em; }
 .error { border-color: var(--bad); color: var(--bad); padding: 12px 16px; margin-bottom: 16px; border: 1px solid var(--bad); }
 .hidden { display: none; }
+.filter { display: block; width: 100%; margin: 16px 0 0; padding: 10px 14px; font: inherit; color: var(--ink); background: var(--raised); border: 1px solid var(--line); border-radius: 0; }
+.filter:focus-visible, .name a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.none-found { color: var(--muted); padding: 16px 0; }
+.name a { color: inherit; text-decoration: none; }
+.name a:hover { text-decoration: underline; }
+.row.target { background: var(--none); box-shadow: inset 4px 0 0 var(--accent); scroll-margin-top: 16px; }
 @media (max-width: 720px) { .row { grid-template-columns: 1fr; } .detail { margin-left: 24px; } }
 </style>
 </head>
@@ -65,7 +71,9 @@ footer { margin-top: 32px; color: var(--muted); font-size: 0.9em; }
   </header>
   <div id="error" class="error hidden" role="alert"></div>
   <div class="banner" id="banner"><span class="dot"></span><div><strong>Checking</strong><span>Reading the latest results.</span></div></div>
+  <input id="filter" class="filter" type="search" placeholder="Filter the checks by name, id, state or detail" aria-label="Filter the checks" autocomplete="off">
   <div id="sections"></div>
+  <p id="none-found" class="none-found hidden">No check matches.</p>
   <footer>
     <p id="footer">Checks run every minute from the app server. If the server is down, this page is down too: watch <a href="/api/summary" style="color:var(--accent-text)">/api/summary</a> from outside. Bars show the worst state in each slice of the window (24 hours, 7 days, 30 days); the percentage is the share of checks that were not down.</p>
   </footer>
@@ -98,10 +106,14 @@ footer { margin-top: 32px; color: var(--muted); font-size: 0.9em; }
 
   function row(check, histories, now) {
     var node = el("div", "row " + check.state);
+    node.setAttribute("data-check", check.id);
+    node.setAttribute("data-search", [check.name, check.id, check.detail, LABELS[check.state] || check.state, check.state].join(" ").toLowerCase());
     var left = el("div");
     var name = el("div", "name");
     name.appendChild(el("span", "dot " + check.state));
-    name.appendChild(el("span", "", check.name));
+    var link = el("a", "", check.name);
+    link.href = "#check=" + encodeURIComponent(check.id);
+    name.appendChild(link);
     var meta = [LABELS[check.state] || check.state];
     if (check.latencyMs !== null) meta.push(check.latencyMs + " ms");
     if (check.since !== null && check.state !== "ok") meta.push("since " + ago(now - check.since) + " ago");
@@ -121,6 +133,41 @@ footer { margin-top: 32px; color: var(--muted); font-size: 0.9em; }
     return node;
   }
 
+  function targetId() {
+    var hash = location.hash;
+    if (hash.indexOf("#check=") !== 0) return null;
+    try { return decodeURIComponent(hash.slice(7)); } catch (e) { return null; }
+  }
+  function applyFilter() {
+    var words = document.getElementById("filter").value.toLowerCase().split(" ").filter(Boolean);
+    var shown = 0;
+    Array.prototype.forEach.call(document.querySelectorAll("#sections .panel"), function (panel) {
+      var any = false;
+      Array.prototype.forEach.call(panel.children, function (rowNode) {
+        var text = rowNode.getAttribute("data-search");
+        var match = words.every(function (word) { return text.indexOf(word) !== -1; });
+        rowNode.classList.toggle("hidden", !match);
+        if (match) { any = true; shown += 1; }
+      });
+      panel.classList.toggle("hidden", !any);
+      panel.previousElementSibling.classList.toggle("hidden", !any);
+    });
+    document.getElementById("none-found").classList.toggle("hidden", shown > 0 || document.querySelector("#sections .panel") === null);
+  }
+  var scrolledFor = null;
+  function highlight(scroll) {
+    var id = targetId();
+    var found = null;
+    Array.prototype.forEach.call(document.querySelectorAll("#sections .row"), function (rowNode) {
+      var is = rowNode.getAttribute("data-check") === id;
+      rowNode.classList.toggle("target", is);
+      if (is) found = rowNode;
+    });
+    if (found === null) return;
+    if (found.classList.contains("hidden")) { document.getElementById("filter").value = ""; applyFilter(); }
+    if (scroll || scrolledFor !== id) { found.scrollIntoView({ block: "center" }); scrolledFor = id; }
+  }
+
   function render(status, histories) {
     var banner = document.getElementById("banner");
     var kind = BANNER[status.summary.status];
@@ -138,6 +185,8 @@ footer { margin-top: 32px; color: var(--muted); font-size: 0.9em; }
       section.checks.forEach(function (check) { panel.appendChild(row(check, histories, status.generatedAt)); });
       sections.appendChild(panel);
     });
+    applyFilter();
+    highlight(false);
     var stamp = status.summary.checkedAt === null ? "no check has run yet" : "last check " + ago(status.generatedAt - status.summary.checkedAt) + " ago";
     document.title = (status.summary.status === "operational" ? "" : status.summary.status + " \\u00b7 ") + "zkb.fi status";
     document.getElementById("error").classList.add("hidden");
@@ -157,6 +206,8 @@ footer { margin-top: 32px; color: var(--muted); font-size: 0.9em; }
       errorBox.classList.remove("hidden");
     });
   }
+  document.getElementById("filter").addEventListener("input", applyFilter);
+  window.addEventListener("hashchange", function () { scrolledFor = null; highlight(true); });
   load();
   setInterval(load, 30000);
 })();

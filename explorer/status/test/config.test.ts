@@ -27,9 +27,14 @@ describe("parseStatusConfig", () => {
     expect(config.intervalSeconds).toBe(60);
     expect(config.retentionDays).toBe(30);
     expect(config.services.indexerLocal).toBe("http://127.0.0.1:42069");
-    expect(config.units.map((unit) => unit.name)).toContain("zk-bridge-keepalive.timer");
+    expect(config.units.map((unit) => unit.name)).not.toContain("zk-bridge-keepalive.timer");
     expect(config.units.find((unit) => unit.name === "zk-bridge-traffic")?.optional).toBe(true);
     expect(config.lightClients).toEqual({ keepAliveSeconds: 43200, marginSeconds: 21600 });
+  });
+
+  it("drops the retired keep-alive timer from a file that still lists it", () => {
+    const config = parseStatusConfig(JSON.stringify({ ...base, units: [{ name: "zk-bridge-backend" }, { name: "zk-bridge-keepalive.timer" }, { name: "zk-bridge-keepalive.service", optional: true }] }));
+    expect(config.units.map((unit) => unit.name)).toEqual(["zk-bridge-backend"]);
   });
 
   it("refuses a file that is not JSON, has an unknown key or breaks a rule", () => {

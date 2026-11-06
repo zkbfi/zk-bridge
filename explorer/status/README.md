@@ -13,12 +13,12 @@ Each check has a timeout and ends as `ok`, `degraded` or `down`, with a latency 
 | | `backend-public`, `webhook` | `/health` on the prove and webhook hosts |
 | | `site-next`, `site-main` | the page answers 200; `version.json` has a release sequence that never goes back |
 | | `gateway-next`, `gateway-main` | the dapp CID in each channel's `version.json` is served by the IPFS gateway |
-| | `unit-<name>` | `systemctl show` of backend, indexer, runner, traffic (if installed), ipfs and the keepalive timer |
+| | `unit-<name>` | `systemctl show` of backend, indexer, runner, traffic (if installed), ipfs (the keep-alive timer is retired: the backend's watcher keeps the light clients alive) |
 | Chains & light clients | `rpc-<chain>` | latest block and its age |
 | | `beacon-<chain>` | newest finalized slot and its age |
 | | `lightclient-<direction>` | head age and the deadline by which the light client must update (the keep-alive planner of `explorer/backend/src/keepalive`, imported) |
 | Bridges & gates | `bridge-<chain>` | `depositsOpen()` |
-| | `gate-<chain>` | enforcing, sealed, last confirmed epoch (`readGateStatus` of `@zkb/data`) |
+| | `gate-<chain>` | enforcing and the last confirmed epoch (`readGateStatus` of `@zkb/data`); a detection-mode gate is ok (admits sends by design until the chain gains beacon roots or a newer opcode), an enforcing-mode gate that does not enforce is degraded, a sealed gate is down |
 | Proving pipeline | `pipeline-benchmarks` | backend `/benchmarks`: last proof and median time per direction |
 | | `pipeline-<direction>` | backend `/directions/<direction>/pipeline`: running job, failed job, held proof |
 | | `pipeline-deliveries` | indexer: last delivery per direction, transfers in 24 h, oldest undelivered transfer |
