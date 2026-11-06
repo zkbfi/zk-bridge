@@ -59,10 +59,12 @@ const useExploreData = () => {
   const gates = useQuery({ queryKey: ["explore", "gates"], queryFn: () => explore.gates(), refetchInterval: 30_000 });
   const costs = useQuery({ queryKey: ["explore", "costs"], queryFn: () => explore.lightClientCosts(), refetchInterval: 60_000 });
   const counts = useQuery({ queryKey: ["explore", "counts"], queryFn: () => explore.counts(), refetchInterval: 60_000 });
+  // The browse tiles' all-time counts. An indexer without `/api/counts` fails here, and the tiles fall back to what the page loaded.
+  const totals = useQuery({ queryKey: ["explore", "totals"], queryFn: () => explore.browse.counts(), refetchInterval: 20_000, retry: 1 });
   const feed = useFeed(pair.id, {}, 100);
   const tokens = useTokens(pair.id);
   const heads = useHeads(pair.id);
-  return { pair, now: now(), proofs: proofs.data ?? [], gates: gates.data ?? [], costs: costs.data ?? [], counts: counts.data ?? null, feed: feed.data?.items ?? [], tokens: tokens.data ?? [], heads: heads.data ?? [] };
+  return { pair, now: now(), totals: totals.data ?? (totals.isError ? null : undefined), proofs: proofs.data ?? [], gates: gates.data ?? [], costs: costs.data ?? [], counts: counts.data ?? null, feed: feed.data?.items ?? [], tokens: tokens.data ?? [], heads: heads.data ?? [] };
 };
 
 const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
@@ -316,7 +318,7 @@ const InFlight = ({ data }: { readonly data: ExploreData }) => {
 };
 
 const Browse = ({ data }: { readonly data: ExploreData }) => {
-  const { pair, feed, proofs, tokens, gates, costs, counts } = data;
+  const { pair, feed, proofs, tokens, gates, costs, counts, totals } = data;
   const inFlight = exploreNumbers(feed, data.now).inFlight;
   const addresses = new Set([...feed.flatMap((item) => [item.sender.toLowerCase(), item.recipient.toLowerCase()]), ...proofs.map((proof) => proof.poster.toLowerCase())]).size;
   const contracts = [pair.first, pair.second].flatMap((chain) => Object.values(chain.contracts).filter((address) => address !== null)).length;
@@ -325,13 +327,18 @@ const Browse = ({ data }: { readonly data: ExploreData }) => {
   const perProof = updates === 0 ? null : costWei / BigInt(updates);
   const costChain = costs[0] === undefined ? null : costs[0].chainId === pair.first.chainId ? pair.first : pair.second;
   const open = gates.filter((gate) => gate.depositsOpen).length;
+  // The all-time counts, from the indexer's aggregate. While they load a tile shows a dash; an indexer that has no counts
+  // leaves the numbers of what the page loaded (the latest 100 transfers, 200 proofs), labelled as such.
+  const n = (value: number | undefined, fallback: number): React.ReactNode => (totals === undefined ? "—" : (value ?? fallback).toLocaleString("en-US"));
   const tiles: readonly { readonly n: React.ReactNode; readonly title: string; readonly sub: string; readonly kind: string }[] = [
-    { n: feed.length, title: "Transfers & messages", sub: `latest ${feed.length} · ${inFlight} in flight`, kind: "transfers" },
-    { n: proofs.length, title: "Proofs", sub: "light-client updates", kind: "proofs" },
-    { n: tokens.length, title: "Tokens", sub: "bridged", kind: "tokens" },
-    { n: addresses, title: "Addresses", sub: "senders, receivers, posters", kind: "addresses" },
-    { n: contracts, title: "Contracts", sub: "on both chains", kind: "contracts" },
-    { n: gates.length, title: "Gates & escrow", sub: `${open} open · ${counts?.escrowed ?? "—"} escrowed`, kind: "gates" },
+    totals === null || totals === undefined
+      ? { n: n(undefined, feed.length), title: "Transfers & messages", sub: totals === null ? `latest ${feed.length} · ${inFlight} in flight` : "counting…", kind: "transfers" }
+      : { n: n(totals.messages.total, 0), title: "Transfers & messages", sub: `${totals.messages.inFlight.toLocaleString("en-US")} in flight`, kind: "transfers" },
+    { n: n(totals?.lightClientUpdates.total, proofs.length), title: "Proofs", sub: totals === null ? `latest ${proofs.length} · light-client updates` : "light-client updates", kind: "proofs" },
+    { n: n(totals?.tokens.total, tokens.length), title: "Tokens", sub: "bridged", kind: "tokens" },
+    { n: n(totals?.addresses.total, addresses), title: "Addresses", sub: totals === null ? "in the latest transfers and proofs" : "senders, receivers, posters", kind: "addresses" },
+    { n: n(totals?.contracts, contracts), title: "Contracts", sub: "on both chains", kind: "contracts" },
+    { n: n(totals?.gates.total, gates.length), title: "Gates & escrow", sub: `${totals?.gates.open ?? open} open · ${totals?.escrow.entries ?? counts?.escrowed ?? "—"} escrowed`, kind: "gates" },
     { n: perProof === null || costChain === null ? "—" : <Num text={amountText(perProof, 18)} />, title: "Costs", sub: perProof === null || costChain === null ? "per proof" : `${costChain.nativeSymbol} per proof · ${updates} posted`, kind: "costs" },
     { n: counts?.releases ?? "—", title: "Releases", sub: "signed, pinned CIDs", kind: "releases" },
   ];

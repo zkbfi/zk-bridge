@@ -162,6 +162,40 @@ How the indexer learns the deployment checkpoint: `head()` is read at a named bl
 | `limit` | 1 to 200. Default 50. |
 | `cursor` | The `nextCursor` of the previous page. |
 
+`GET /api/counts` returns the all-time totals that Explore's browse tiles show. They are SQL aggregates over the whole tables, cached for ten seconds, so a poll every 15 to 30 seconds costs one scan per ten seconds however many readers ask. Messages count from their send, as in the lists.
+
+```json
+{
+  "pair": "sepolia-pls943", "asOf": 1790000000,
+  "messages": { "total": 1284, "inFlight": 3, "transfers": 1200, "plain": 84,
+                "byStatus": { "sent": 1, "waiting_for_finality": 1, "covered": 1, "delivered": 1270, "failed_call": 10, "release_failed": 0 },
+                "directions": [{ "sourceChainId": 1, "destinationChainId": 369, "total": 700, "inFlight": 2 }] },
+  "lightClientUpdates": { "total": 221, "chains": [{ "chainId": 1, "count": 140 }] },
+  "addresses": { "total": 412, "senders": 200, "recipients": 300, "posters": 2 },
+  "tokens": { "total": 9, "chains": [{ "chainId": 1, "total": 5, "native": 4, "copies": 1 }] },
+  "contracts": 12, "gates": { "total": 2, "open": 1 }, "escrow": { "entries": 5 }
+}
+```
+
+The browse lists answer `{ items, total, limit, offset, asOf }`. `total` counts every row that matches the filters, not only the page, with the same conditions as the page. A page is `limit` rows (1 to 200, default 50) from `offset`. The rows of `messages` and `proofs` sort with a tie-break on their key, so a page never repeats or skips a row. Rows arrive while a reader pages, and they would shift an offset; a request that names `asOf` (Unix seconds) sees only rows sent or posted at or before that second, and the answer repeats it (the clock when the request named none). Pass the `asOf` of the first page to the next ones. `GET /api/feed` stays the cursor-based newest-first stream.
+
+`GET /api/browse/messages`: messages and transfers, items as in `/api/feed`.
+
+| Parameter | Meaning |
+|---|---|
+| `direction`, `kind`, `token`, `address`, `from`, `to` | As in `/api/feed`. |
+| `status` | A comma list of statuses. `inflight` stands for `sent`, `waiting_for_finality` and `covered`. |
+| `sender` | The account that sent the tokens, or the sender of a plain message. |
+| `recipient` | The account that receives the tokens, or is paid. |
+| `sort` | `newest` (default), `oldest` (with `status=inflight` this is the longest wait first), `amount-high`, `amount-low` (base units, so use them with `token`; transfers without an amount sort last). |
+| `limit`, `offset`, `asOf` | The page and the snapshot. |
+
+`GET /api/browse/proofs`: light client updates, items as in `/api/head-updates` plus `number`, the update's position on its chain from 1, oldest first (the number the Explore proof page uses). Parameters: `chainId` (the chain the light client is on), `poster`, `from`, `to`, `sort` (`newest`, `oldest`, `slot-high`, `slot-low`), `limit`, `offset`, `asOf`.
+
+`GET /api/browse/tokens`: items as in `/api/tokens` plus `transfers`, the transfers that name the token as source or destination (a transfer not yet delivered has no destination token, so a copy that was never delivered to counts none). Parameters: `chainId`, `kind` (`native` or `copy`), `sort` (`symbol` default, `transfers`), `limit`, `offset`.
+
+`GET /api/browse/addresses`: `{ address, sent, received, posted, lastActive }` for every account that sent or received a transfer, sent a plain message, or posted a light client update; `lastActive` is the newest of those times. Parameters: `role` (`sender`, `recipient`, `poster`), `q` (the start of an address, hex), `sort` (`activity` default, `recent`), `limit`, `offset`. The scan behind it is cached for ten seconds.
+
 An item:
 
 ```json

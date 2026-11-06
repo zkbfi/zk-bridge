@@ -18,11 +18,16 @@ describe("Explore's routes", () => {
     ["#/explore/gate/943", { name: "explore", page: { kind: "gate", chainId: 943, id: "943" } }],
     ["#/explore/costs", { name: "explore", page: { kind: "costs", id: "" } }],
     ["#/explore/browse/proofs", { name: "explore", page: { kind: "browse", id: "proofs" } }],
+    ["#/explore/browse/transfers?status=inflight&page=2", { name: "explore", page: { kind: "browse", id: "transfers", query: "status=inflight&page=2" } }],
   ];
 
   it.each(cases)("reads and writes %s", (hash, route) => {
     expect(parseRoute(hash)).toEqual(route);
     expect(formatRoute(route)).toBe(hash);
+  });
+
+  it("writes a browse page without a question mark when its query is empty", () => {
+    expect(formatRoute({ name: "explore", page: { kind: "browse", id: "proofs", query: "" } })).toBe("#/explore/browse/proofs");
   });
 
   it("refuses malformed identifiers by falling back to Explore's top", () => {
