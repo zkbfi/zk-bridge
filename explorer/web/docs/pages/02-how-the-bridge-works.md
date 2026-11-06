@@ -1,3 +1,11 @@
+---
+title: "How the bridge works"
+summary: "The bridge needs no validators and no signers: each chain checks the other with a light client and a zero-knowledge proof. Here is how a transfer gets across, and why it takes about a quarter of an hour."
+audience: [user, integrator]
+chains: all
+verified_release: 0.1.0
+---
+
 # How the bridge works
 
 The bridge needs no validators and no signers: each chain checks the other with a light client and a zero-knowledge proof. Here is how a transfer gets across, and why it takes about a quarter of an hour.

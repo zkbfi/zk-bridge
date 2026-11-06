@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { publicPagesPlugin } from "../docs/public-pages.ts";
+import { machineDocsPlugin } from "../docs/machine/plugin.ts";
 import { refuseSecretsPlugin } from "./src/config/refuse-secrets-plugin.ts";
 
 const terminalSource = fileURLToPath(new URL("../terminal/src", import.meta.url));
@@ -16,7 +17,7 @@ const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 export default defineConfig({
   // The docs (explorer/docs) are part of this app, loaded lazily at #/docs. Only the help pages and the operator pages named
   // in explorer/docs/public-pages.json reach the build; any other docs/ import fails it.
-  plugins: [publicPagesPlugin({ repositoryRoot }), react(), refuseSecretsPlugin()],
+  plugins: [publicPagesPlugin({ repositoryRoot }), machineDocsPlugin({ repositoryRoot }), react(), refuseSecretsPlugin()],
   // The two subpaths come first: an alias matches by prefix, and the plain name would swallow them.
   resolve: {
     alias: {

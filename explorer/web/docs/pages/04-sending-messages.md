@@ -1,3 +1,11 @@
+---
+title: "Sending messages"
+summary: "Call a contract on the other chain: the bridge carries your call, proves it, and runs it on the destination chain."
+audience: [user, integrator]
+chains: all
+verified_release: 0.1.0
+---
+
 # Sending messages
 
 Call a contract on the other chain: the bridge carries your call, proves it, and runs it on the destination chain.

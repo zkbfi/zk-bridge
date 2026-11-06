@@ -1,0 +1,1 @@
+{ "943": { "chain_id": 943, "minter": "0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc", "tokens": { "tUSD": { "address": "0x0123456789abcdef0123456789abcdef01234567", "decimals": 6, "name": "Test Dollar", "symbol": "tUSD" } }, "traffic_wallet": "0x5F8e98993D4F82fAEC3E19F792D4F90b9Ff908Ca" } }

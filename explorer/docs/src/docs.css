@@ -108,3 +108,20 @@ html, body { margin: 0; background: var(--zb-page); }
 
 /* The icon credit its licence asks for, quiet in the footer. */
 .zd-foot-credit { flex-basis: 100%; order: 3; font-size: var(--zb-step-micro); color: var(--zb-muted); }
+
+/* The Markdown source link above a page, and the line for assistants on the front page. */
+.zd-source {
+  margin: 0 0 1rem;
+  font-size: 0.8125rem;
+}
+.zd-source a,
+.zd-machine a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.zd-machine {
+  margin-top: 2rem;
+  font-size: 0.875rem;
+  opacity: 0.8;
+}

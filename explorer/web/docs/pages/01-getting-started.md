@@ -1,3 +1,11 @@
+---
+title: "Getting started"
+summary: "Move your first tokens between Ethereum and PulseChain in a few steps, and learn where to follow them on the way."
+audience: [user]
+chains: all
+verified_release: 0.1.0
+---
+
 # Getting started
 
 Move your first tokens between Ethereum and PulseChain in a few steps, and learn where to follow them on the way.

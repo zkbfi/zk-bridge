@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block, Inline } from "@web/docs/markdown";
 import { slugOfPageId } from "@web/docs/slug";
-import { collectPages, describePage, findUnresolvedLinks, joinPath, routeOf, SITE_INPUT, SITE_PAGES, type DocsSiteInput } from "../src/pages";
+import { collectPages, describePage, findUnresolvedLinks, joinPath, markdownPathOf, routeOf, SITE_INPUT, SITE_PAGES, type DocsSiteInput } from "../src/pages";
 import { parseMarkdown } from "@web/docs/markdown";
 
 const small = (overrides: Partial<DocsSiteInput> = {}): DocsSiteInput => ({
@@ -189,5 +189,21 @@ describe("the real pages", () => {
     expect(sectionOf("help/how-the-bridge-works")).toBe("trust");
     expect(sectionOf("help/safety")).toBe("trust");
     expect(sectionOf("help/running-a-bot")).toBe("run");
+  });
+
+  it("the front matter of a file is not part of the page, and the page gets the address of its Markdown file", () => {
+    const source = "---\ntitle: First\nsummary: x\naudience: user\nchains: all\nverified_release: 0.1.0\n---\n\n# First\n\nHello there.";
+    const [page] = collectPages({ userPages: { "01-first.md": source }, operatorPages: {} });
+    expect(page?.title).toBe("First");
+    expect(page?.description).toBe("Hello there.");
+    expect(JSON.stringify(page?.blocks)).not.toContain("verified_release");
+    expect(page?.slug).toBe("first");
+    expect(markdownPathOf("help/first")).toBe("docs/first.md");
+    expect(markdownPathOf("audit/known-issues")).toBe("docs/audit/known-issues.md");
+  });
+
+  it("every real page holds no placeholder that the build left unresolved and no front matter text", () => {
+    for (const source of Object.values(SITE_INPUT.userPages)) expect(source).not.toContain("{{");
+    for (const page of SITE_PAGES) expect(JSON.stringify(page.blocks), page.id).not.toContain("verified_release");
   });
 });

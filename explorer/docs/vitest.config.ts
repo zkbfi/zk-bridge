@@ -2,11 +2,12 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 import { publicPagesPlugin } from "./public-pages.ts";
+import { machineDocsPlugin } from "./machine/plugin.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 export default defineConfig({
-  plugins: [publicPagesPlugin({ repositoryRoot }), react()],
+  plugins: [publicPagesPlugin({ repositoryRoot }), machineDocsPlugin({ repositoryRoot }), react()],
   resolve: { alias: { "@web": fileURLToPath(new URL("../web/src", import.meta.url)) } },
   server: { fs: { allow: [repositoryRoot] } },
   test: {

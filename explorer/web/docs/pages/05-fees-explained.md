@@ -1,3 +1,11 @@
+---
+title: "Fees explained"
+summary: "You pay one fee for a transfer, and it covers everything needed to deliver it: the delivery gas, the proof and a tip for whoever delivers. The bridge contracts take nothing on top."
+audience: [user, deliverer]
+chains: all
+verified_release: 0.1.0
+---
+
 # Fees explained
 
 You pay one fee for a transfer, and it covers everything needed to deliver it: the delivery gas, the proof and a tip for whoever delivers. The bridge contracts take nothing on top.

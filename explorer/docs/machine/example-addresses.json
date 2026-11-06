@@ -1,0 +1,7 @@
+{
+  "$comment": "Addresses that may appear in page prose although they are not in contracts.json: well-known contracts and placeholders. Every key is lowercase; the value says why it is allowed.",
+  "addresses": {
+    "0x0000000000000000000000000000000000000000": "the zero address",
+    "0xca11bde05977b3631167028862be2a173976ca11": "the canonical Multicall3 address on every chain"
+  }
+}

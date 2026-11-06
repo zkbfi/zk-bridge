@@ -1,3 +1,11 @@
+---
+title: "Bridging tokens"
+summary: "Send tokens or the native coin to the other chain, to your own wallet or any address you choose, and know what arrives."
+audience: [user]
+chains: all
+verified_release: 0.1.0
+---
+
 # Bridging tokens
 
 Send tokens or the native coin to the other chain, to your own wallet or any address you choose, and know what arrives.
