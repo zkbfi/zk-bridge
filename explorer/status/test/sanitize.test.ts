@@ -38,6 +38,11 @@ describe("sanitize", () => {
     // A private key has the shape of a hash: never shown whole.
     const key = "0x" + "9c".repeat(32);
     expect(sanitize(`signer ${key} failed`)).toBe("signer 0x9c9c…9c9c failed");
+    // Short chunks joined by dashes or underscores are a name only when lowercase and each chunk is letters or a chain id.
+    expect(sanitize("key sk_live_AbC123dEf456GhI789jKl012 end")).toBe("key [redacted] end");
+    expect(sanitize("key ghp_a1b2c3d4e5_f6g7h8i9j0_k1l2m3n4o5 end")).toBe("key [redacted] end");
+    expect(sanitize("key abcdefgh-ijklmnop-qrstuvwx-yzabcdef-ghijklmn-opqrstuv-wxyzabcd-efghijkl-mnopqrst-uvwxyzab-cdefghij end")).toBe("key [redacted] end");
+    expect(sanitize("check gate-11155111-detect-beacon-roots ok")).toBe("check gate-11155111-detect-beacon-roots ok");
     // A long run of letters with no separators is a key by default (some keys have no digits).
     expect(sanitize(`key ${"qwertyuiopasdfghjklzxcvbnmqwertyuiop"} end`)).toBe("key [redacted] end");
     expect(sanitize(`key ${"QwErTyUiOpAsDfGhJkLzXcVbNmQwErTyUiOp"} end`)).toBe("key [redacted] end");
