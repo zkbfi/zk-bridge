@@ -22,6 +22,7 @@ export * from "./tip-copy.js";
 export * from "./message-merge.js";
 export * from "./send-decoding.js";
 export * from "./audit.js";
+export * from "./browse.js";
 export * from "./feed-query.js";
 export * from "./delivery-cost.js";
 export * from "./delivery-cost-settings.js";

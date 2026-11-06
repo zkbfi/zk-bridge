@@ -28,7 +28,7 @@ describe("the API application", () => {
   });
 
   it("serves the routes of the explorer next to them", async () => {
-    for (const path of ["/api/pair", "/api/heads", "/api/summary?now=1000", "/api/feed", "/api/undelivered", "/api/history", "/api/delivery-cost?chainId=1"]) {
+    for (const path of ["/api/pair", "/api/heads", "/api/summary?now=1000", "/api/feed", "/api/undelivered", "/api/history", "/api/delivery-cost?chainId=1", "/api/counts", "/api/browse/messages", "/api/browse/proofs", "/api/browse/tokens", "/api/browse/addresses"]) {
       expect((await app.request(path)).status, path).toBe(200);
     }
   });

@@ -3,6 +3,8 @@ import schema from "ponder:schema";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { client, graphql } from "ponder";
+import { registerBrowseRoutes } from "./routes/browse";
+import { registerCountsRoute } from "./routes/counts";
 import { registerDeliveredRoute } from "./routes/delivered";
 import { registerDeliveryCostRoutes } from "./routes/delivery-cost";
 import { registerFeedRoutes } from "./routes/feed";
@@ -36,6 +38,8 @@ app.use("/graphql", graphql({ db, schema }));
 app.use("/sql/*", client({ db, schema }));
 
 // The routes of the explorer. See explorer/indexer/README.md for the contract.
+registerBrowseRoutes(app);
+registerCountsRoute(app);
 registerDeliveredRoute(app);
 registerDeliveryCostRoutes(app);
 registerFeedRoutes(app);
