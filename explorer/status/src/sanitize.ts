@@ -10,8 +10,12 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HEX_64 = /^0x[0-9a-fA-F]{64}$/;
 /** A CID: version 1 (base32, "baf...") or version 0 ("Qm...", 46 characters). Public by design. */
 const CID = /^(?:baf[a-z2-7]{40,}|Qm[1-9A-HJ-NP-Za-km-z]{44})$/;
-/** A name: lowercase words of at most 16 letters joined by dashes or underscores, like detect-beacon-roots-and-registry. */
-const WORDS = /^[a-z]{1,16}(?:[-_][a-z0-9]{1,16})+$/i;
+/**
+ * A name: lowercase words of at most 16 letters, or chain ids of at most 9 digits, joined by dashes or underscores, at most
+ * 10 parts, like detect-beacon-roots-and-registry or gate-11155111. Case-sensitive, and no part mixes letters and digits:
+ * a key cut into short chunks (sk_live_AbC123...) does not pass as a name.
+ */
+const WORDS = /^[a-z]{1,16}(?:[-_](?:[a-z]{1,16}|[0-9]{1,9})){1,9}$/;
 /** A contract or type name: capitalised words of 3 to 16 letters, like BeaconForkGateWithRegistryAndDetection. */
 const CAMEL_WORDS = /^(?:[A-Z][a-z]{2,15}){2,}$/;
 /** Base64's look: +, = or mixed case with a digit. Such a token is hidden whole, even across a slash. */
