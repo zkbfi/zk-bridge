@@ -14,7 +14,13 @@ export const EXPLORE_KINDS = ["tx", "address", "proof", "block", "slot", "token"
  * One Explore page. `chainId` is set for what lives on one chain (a transaction, a proof, a block, a contract, a gate);
  * `id` is the hash, address, number, `<side>:<address>` (token), CID (release) or the kind to browse.
  */
-export type ExplorePage = { readonly kind: (typeof EXPLORE_KINDS)[number]; readonly id: string; readonly chainId?: number };
+export type ExplorePage = {
+  readonly kind: (typeof EXPLORE_KINDS)[number];
+  readonly id: string;
+  readonly chainId?: number;
+  /** A `browse` page keeps its filters, sort and page number here, as a query string without the `?`. */
+  readonly query?: string;
+};
 
 const ON_CHAIN: ReadonlySet<ExplorePage["kind"]> = new Set(["tx", "proof", "block", "contract", "gate"]);
 
@@ -44,7 +50,8 @@ const formatExplore = (route: Extract<Route, { name: "explore" }>): string => {
   if (kind === "gate") return `#/explore/gate/${chainId ?? id}`;
   if (kind === "token") return `#/explore/token/${id.replace(":", "/")}`;
   if (chainId !== undefined && ON_CHAIN.has(kind)) return `#/explore/${kind}/${chainId}/${id}`;
-  return `#/explore/${kind}/${encodeURIComponent(id)}`;
+  const path = `#/explore/${kind}/${encodeURIComponent(id)}`;
+  return kind === "browse" && route.page.query !== undefined && route.page.query !== "" ? `${path}?${route.page.query}` : path;
 };
 
 /** The place that the page shows. */
@@ -126,7 +133,7 @@ export const parseRoute = (hash: string): Route => {
   if (head === "activity") return { name: "activity" };
   if (head === "explore") {
     const page = explorePageOf(parts.slice(1));
-    if (page !== null) return { name: "explore", page };
+    if (page !== null) return { name: "explore", page: page.kind === "browse" && query !== "" ? { ...page, query } : page };
     const q = new URLSearchParams(query).get("q");
     return q === null || q.trim() === "" ? { name: "explore" } : { name: "explore", q };
   }

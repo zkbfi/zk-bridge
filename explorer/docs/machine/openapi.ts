@@ -59,6 +59,8 @@ export const buildIndexerSpec = (): OpenApiDocument => {
   ];
   const limit = (maximum: number, fallback: number): Json => query("limit", `Rows per page, 1 to ${maximum} (default ${fallback}).`, { type: "integer", minimum: 1, maximum, default: fallback });
   const cursor = query("cursor", "The nextCursor of the previous page.");
+  const offset = query("offset", "Rows to skip, for paging.", { type: "integer", minimum: 0, default: 0 });
+  const asOf = query("asOf", "Only rows sent or posted at or before this Unix second. Pass the asOf of the first page so new rows do not shift the pages.", { type: "integer", minimum: 0 });
   const notFound = { "404": errorResponse("Nothing stored under that identifier.") };
   const badRequest = { "400": errorResponse("A parameter is invalid; error names it.") };
   const archiveOff = { "503": errorResponse("The proof archive is off or its database cannot be reached.") };
@@ -92,6 +94,51 @@ export const buildIndexerSpec = (): OpenApiDocument => {
       },
       "/api/feed": {
         get: get("Transfer and message feed", "Sent messages and their transfers, newest first.", [...feedFilters, limit(200, 50), cursor], json(ref("Page"), "A page of items."), badRequest),
+      },
+      "/api/counts": { get: get("All-time counts", "Totals over the whole tables: messages per status, direction and kind, in flight, light client updates and tokens per chain, unique addresses, contracts, gates and escrow entries. Cached for ten seconds.", [], json(open("The counts."), "The counts.")) },
+      "/api/browse/messages": {
+        get: get(
+          "Browse messages and transfers",
+          "A page of messages and transfers with the total that match, filtered and sorted by the indexer. Items are as in the feed.",
+          [
+            ...feedFilters,
+            query("sender", "The account that sent the tokens, or the sender of a plain message.", ADDRESS),
+            query("recipient", "The account that receives the tokens, or is paid.", ADDRESS),
+            query("sort", "Order. Amounts are in base units, so sort by amount with a token filter.", { type: "string", enum: ["newest", "oldest", "amount-high", "amount-low"], default: "newest" }),
+            limit(200, 50),
+            offset,
+            asOf,
+          ],
+          json(open("items, total, limit, offset and asOf."), "A page of items."),
+          badRequest,
+        ),
+      },
+      "/api/browse/proofs": {
+        get: get(
+          "Browse light client updates",
+          "A page of light client updates, each with its number on its chain, and the total that match.",
+          [chainId, query("poster", "Who posted the update.", ADDRESS), query("from", "Earliest time, Unix seconds.", { type: "string", pattern: "^\\d+$" }), query("to", "Latest time, Unix seconds.", { type: "string", pattern: "^\\d+$" }), query("sort", "Order.", { type: "string", enum: ["newest", "oldest", "slot-high", "slot-low"], default: "newest" }), limit(200, 50), offset, asOf],
+          json(open("items, total, limit, offset and asOf."), "A page of updates."),
+          badRequest,
+        ),
+      },
+      "/api/browse/tokens": {
+        get: get(
+          "Browse tokens",
+          "A page of tokens, each with the transfers that name it, and the total that match.",
+          [chainId, query("kind", "Native tokens or bridged copies.", { type: "string", enum: ["native", "copy"] }), query("sort", "Order.", { type: "string", enum: ["symbol", "transfers"], default: "symbol" }), limit(200, 50), offset],
+          json(open("items, total, limit, offset and asOf."), "A page of tokens."),
+          badRequest,
+        ),
+      },
+      "/api/browse/addresses": {
+        get: get(
+          "Browse addresses",
+          "A page of the accounts that sent, received or posted, with what each did, and the total that match.",
+          [query("role", "Only accounts with this role.", { type: "string", enum: ["sender", "recipient", "poster"] }), query("q", "The start of an address, in hex."), query("sort", "Order.", { type: "string", enum: ["activity", "recent"], default: "activity" }), limit(200, 50), offset],
+          json(open("items, total, limit, offset and asOf."), "A page of addresses."),
+          badRequest,
+        ),
       },
       "/api/messages/{messageId}": {
         get: get("One message", "A message with its transfer, data and the step costs.", [path("messageId", "32 byte message identifier.", HASH)], json(open("The message."), "The message."), { ...badRequest, ...notFound }),

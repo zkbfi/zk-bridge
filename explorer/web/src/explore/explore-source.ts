@@ -4,7 +4,7 @@
  * strictly; a value the indexer does not have stays null and shows as "—".
  */
 import { getAddress, type Address, type Hex } from "viem";
-import { secondsPerSlot } from "@zk-bridge/shared";
+import { createBrowseClient, secondsPerSlot, type BrowseClient } from "@zk-bridge/shared";
 
 /** A light-client update: one proof posted on a chain. `number` counts from 1 per chain, oldest first. */
 export type ProofRow = {
@@ -133,6 +133,8 @@ export interface ExploreSource {
   delivered(): Promise<readonly DeliveredCounts[]>;
   /** The tracked beacon chains' clocks, from the light clients' stored heads (`GET /api/heads`). */
   beaconClocks(): Promise<readonly BeaconClock[]>;
+  /** The all-time counts and the paged, filtered, sorted lists (`GET /api/counts`, `GET /api/browse/*`). */
+  readonly browse: BrowseClient;
 }
 
 type Json = Record<string, unknown>;
@@ -249,6 +251,7 @@ export const createIndexerExploreSource = (baseUrl: () => string | null, request
     return request(`${base.replace(/\/$/, "")}${path}`);
   };
   return {
+    browse: createBrowseClient(baseUrl, request),
     proofs: async () => parseProofs(await get("/api/head-updates?limit=200")),
     gates: async () => parseGates(await get("/api/gate")),
     lightClientCosts: async () => parseLightClientCosts(await get("/api/light-client-costs")),
