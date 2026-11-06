@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { benchmarksCheck, indexerFeedCheck, pipelineCheck } from "../src/checks/pipeline.ts";
+import { benchmarksCheck, indexerFeedCheck, pipelineCheck, warmupCheck } from "../src/checks/pipeline.ts";
 import { fakeFetch, makeDeps } from "./support.ts";
 
 const NOW = 1_800_000_000_000;
@@ -54,6 +54,30 @@ describe("benchmarksCheck", () => {
     expect(await check(odd).run(odd)).toEqual({ state: "down", detail: "answered something that is not the benchmarks" });
     const sparse = makeDeps({ clock: c, fetch: fakeFetch({ [`${backend}/benchmarks?window=24h`]: { body: { steps: {} } } }, c) });
     expect((await check(sparse).run(sparse)).detail).toContain("no proof in 24 h");
+  });
+});
+
+describe("warmupCheck", () => {
+  const url = `${backend}/warmup/summary?days=1`;
+  const run = async (reply: { body?: object; status?: number; text?: string }) => {
+    const c = { now: NOW };
+    const deps = makeDeps({ clock: c, fetch: fakeFetch({ [url]: reply }, c) });
+    return warmupCheck(backend).run(deps);
+  };
+
+  it("gives the sessions, what was wasted, and the estimated cost", async () => {
+    expect(await run({ body: { total: { sessions: 6, used: 4, wasted: 2, estimatedCostUsd: 0.4567, wastedCostUsd: 0.1, wastedSeconds: 160 } } })).toEqual({
+      state: "ok",
+      detail: "6 warm-ups in 24 h, 4 used and 2 wasted; about $0.46 of GPU time, $0.10 of it wasted (3 min)",
+    });
+  });
+
+  it("says when there was none, and is down on a bad answer", async () => {
+    expect(await run({ body: { total: { sessions: 0 } } })).toEqual({ state: "ok", detail: "no warm-up in 24 h" });
+    expect(await run({ body: { total: {} } })).toEqual({ state: "ok", detail: "no warm-up in 24 h" });
+    expect(await run({ status: 429 })).toEqual({ state: "down", detail: "answered 429 on /warmup/summary" });
+    expect(await run({ text: "x" })).toEqual({ state: "down", detail: "answered something that is not the warm-up summary" });
+    expect(await run({ body: { total: { sessions: 1 } } })).toMatchObject({ state: "ok", detail: expect.stringContaining("1 warm-up in 24 h, 0 used and 0 wasted; about $0.00") });
   });
 });
 

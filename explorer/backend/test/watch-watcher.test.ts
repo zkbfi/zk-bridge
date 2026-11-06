@@ -14,6 +14,9 @@ import type { WatchDecision } from "../src/watch/decisions.ts";
 import { createDirectionWatcher, REFUSED_RETRIES, REFUSED_RETRY_SECONDS, type ListedMessage } from "../src/watch/watcher.ts";
 import { memoryLogger } from "./support.ts";
 
+/** The settings before 2026-11-06 (p90, no margin, 90 s grace): the scenarios of these tests rest on them. */
+const LEGACY_WARMUP = { ...DEFAULT_WARMUP, leadP: 0.9, leadMarginSeconds: 0, minLeadSeconds: 30, graceSeconds: 90 };
+
 // A Sepolia-like clock: 12 s slots, genesis at a round time, 8192 slots per period.
 const GENESIS = 1_600_000_000;
 const SLOT = 12;
@@ -76,6 +79,7 @@ function setup(
     active: null as Job | null,
     held: [] as HeldProof[],
     factsFail: false,
+    admitAfter: 0,
     history: { kind: "serves" } as SourceHistory,
   };
   const submitted: ProofRequest[] = [];
@@ -105,6 +109,7 @@ function setup(
     batchRule: options.batchRule ?? NO_WAIT,
     // The jobs table, as the module reads it: each started job below is a row in it.
     readLastProofAt: () => lastProofStartedAt(storage, "first-to-second"),
+    readAdmitAfterSeconds: () => state.admitAfter,
     readEconomics: async () => {
       reads.economics += 1;
       const economics = options.economics ?? { kind: "unknown", why: "no prices in this test" };
@@ -128,7 +133,7 @@ function setup(
           },
     policy: DEFAULT_POLICY,
     minParticipants: MIN_PARTICIPANTS,
-    warmup: { ...DEFAULT_WARMUP, ...options.warmup },
+    warmup: { ...LEGACY_WARMUP, ...options.warmup },
     warmupStore: store,
     maxRetrySeconds: 600,
     logger: log.logger,
@@ -386,7 +391,7 @@ describe("the direction watcher, warm-ups", () => {
   // A message sent in the epoch of slot HEAD + 100: final at the start of epoch + 3, plus a slot.
   const SENT = HEAD + 100;
   const expected = expectedFinalityAt(SENT, facts()) * 1000;
-  const LEAD = DEFAULT_WARMUP.defaultLeadSeconds * 1000;
+  const LEAD = LEGACY_WARMUP.defaultLeadSeconds * 1000;
   /** A ping the test answers: `answer` settles the oldest outstanding one. */
   function heldPing() {
     const waiting: Array<{ resolve: (status: number) => void; reject: (error: Error) => void }> = [];
@@ -414,7 +419,7 @@ describe("the direction watcher, warm-ups", () => {
     vi.setSystemTime(expected - LEAD + 15_000);
     await run.watcher.scan();
     expect(run.pings).toHaveLength(1);
-    vi.setSystemTime(expected - LEAD + DEFAULT_WARMUP.intervalSeconds * 1000);
+    vi.setSystemTime(expected - LEAD + LEGACY_WARMUP.intervalSeconds * 1000);
     await run.watcher.scan();
     expect(run.pings).toHaveLength(2);
     expect(run.named("warmup_ping")[1]).toMatchObject({ kind: "repeat" });
@@ -447,9 +452,9 @@ describe("the direction watcher, warm-ups", () => {
     held.answer(200);
     await scan;
     expect(run.named("warmup_ready")).toMatchObject([{ why: "message", readySeconds: 40, cold: true, secondsToDue: 50, sessionEnded: false }]);
-    expect(run.store.lead(DEFAULT_WARMUP)).toEqual({ seconds: 40, basis: "observed", observations: 1 });
+    expect(run.store.lead(LEGACY_WARMUP)).toEqual({ seconds: 40, basis: "observed", observations: 1 });
     // The hold timer pings just before the idle timeout, without waiting for a scan.
-    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000 - 1);
+    await vi.advanceTimersByTimeAsync(LEGACY_WARMUP.holdIntervalSeconds * 1000 - 1);
     expect(run.pings).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(run.pings).toHaveLength(2);
@@ -465,12 +470,47 @@ describe("the direction watcher, warm-ups", () => {
     expect(run.sessions()).toMatchObject([{ readyAt: expected - LEAD + 40_000, endedAt: expected - 10_000, outcome: "used" }]);
   });
 
+  it("a refused proof (the service admits a job only later) starts no warm-up, and ends the one that runs at once, with the billed time recorded", async () => {
+    const run = setup({ messages: [listed(SENT)], ping: async () => 200 });
+    // The service would refuse for 10 minutes (the wait after a failed job): the due time moves with it.
+    run.state.admitAfter = 600;
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    expect(run.pings).toEqual([]);
+    // A session that runs when the refusal comes is released at once, not held to the grace.
+    run.state.admitAfter = 0;
+    await run.watcher.scan();
+    expect(run.pings).toHaveLength(1);
+    run.state.admitAfter = 600;
+    vi.setSystemTime(expected - LEAD + 5_000);
+    await run.watcher.scan();
+    expect(run.named("warmup_wasted")).toMatchObject([{ reason: "unusable", ready: true, warmSeconds: 5 }]);
+    expect(run.sessions()).toMatchObject([{ outcome: "unusable", endedAt: expected - LEAD + 5_000 }]);
+    // Idle timeout (60 s) after the 5 s the session ran.
+    expect(run.storage.database.prepare("SELECT billed_seconds AS billed FROM warmup_sessions").get()).toEqual({ billed: 65 });
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(run.pings).toHaveLength(1);
+  });
+
+  it("a minimum interval since the last proof: no warm-up for a finality that decideProof would refuse", async () => {
+    const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 384, marginWad: 10n ** 18n };
+    const run = setup({ messages: [listed(SENT)], batchRule: WAIT, lastProofAt: expected - 10 * 60_000, ping: async () => 200 });
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    expect(run.pings).toEqual([]);
+    // Near the end of the interval, one starts.
+    const end = expected - 10 * 60_000 + 3_600_000;
+    vi.setSystemTime(end - LEAD);
+    await run.watcher.scan();
+    expect(run.pings).toEqual([end - LEAD]);
+  });
+
   it("a ready answer within seconds found a warm worker: nothing is learned", async () => {
     const run = setup({ messages: [listed(SENT)], ping: async () => 200 });
     vi.setSystemTime(expected - LEAD);
     await run.watcher.scan();
     expect(run.named("warmup_ready")).toMatchObject([{ readySeconds: 0, cold: false }]);
-    expect(run.store.lead(DEFAULT_WARMUP)).toMatchObject({ basis: "default" });
+    expect(run.store.lead(LEGACY_WARMUP)).toMatchObject({ basis: "default" });
   });
 
   it("stops when the message no longer waits (delivered or covered), and logs the warm-up as wasted", async () => {
@@ -491,11 +531,11 @@ describe("the direction watcher, warm-ups", () => {
     vi.setSystemTime(expected - LEAD);
     await run.watcher.scan();
     // Each hold re-arms the timer: pings every 40 s until the grace ends at expected + 90 s.
-    await vi.advanceTimersByTimeAsync(LEAD + DEFAULT_WARMUP.graceSeconds * 1000);
+    await vi.advanceTimersByTimeAsync(LEAD + LEGACY_WARMUP.graceSeconds * 1000);
     const holds = run.named("warmup_held").length;
     expect(holds).toBe(4);
-    expect(run.pings.every((at, index) => index === 0 || at - (run.pings[index - 1] as number) === DEFAULT_WARMUP.holdIntervalSeconds * 1000)).toBe(true);
-    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    expect(run.pings.every((at, index) => index === 0 || at - (run.pings[index - 1] as number) === LEGACY_WARMUP.holdIntervalSeconds * 1000)).toBe(true);
+    await vi.advanceTimersByTimeAsync(LEGACY_WARMUP.holdIntervalSeconds * 1000);
     expect(run.named("warmup_wasted")).toMatchObject([{ reason: "grace", ready: true, holds: 4 }]);
     expect(run.pings).toHaveLength(5);
   });
@@ -507,7 +547,7 @@ describe("the direction watcher, warm-ups", () => {
     const scan = run.watcher.scan();
     await vi.advanceTimersByTimeAsync(0);
     for (let step = 1; step <= 4; step += 1) {
-      vi.setSystemTime(expected - LEAD + step * DEFAULT_WARMUP.intervalSeconds * 1000);
+      vi.setSystemTime(expected - LEAD + step * LEGACY_WARMUP.intervalSeconds * 1000);
       await run.watcher.scan();
     }
     expect(held.outstanding()).toBe(1);
@@ -519,7 +559,7 @@ describe("the direction watcher, warm-ups", () => {
     held.answer(200);
     await scan;
     expect(run.named("warmup_ready")).toMatchObject([{ readySeconds: 120, cold: true, sessionEnded: true }]);
-    expect(run.store.lead(DEFAULT_WARMUP)).toMatchObject({ seconds: 120 });
+    expect(run.store.lead(LEGACY_WARMUP)).toMatchObject({ seconds: 120 });
     run.state.active = null;
     run.state.messages = [];
     await vi.advanceTimersByTimeAsync(300_000);
@@ -539,11 +579,11 @@ describe("the direction watcher, warm-ups", () => {
     expect(run.named("warmup_ping_failed")).toEqual([]);
     expect(run.named("warmup_wasted")).toEqual([]);
     expect(run.sessions()).toMatchObject([{ outcome: "timeout" }]);
-    expect(run.store.lead(DEFAULT_WARMUP)).toMatchObject({ seconds: 300, basis: "observed" });
+    expect(run.store.lead(LEGACY_WARMUP)).toMatchObject({ seconds: 300, basis: "observed" });
     // The second message's finality is near, but the gap since the timeout has not passed.
     const second = expectedFinalityAt(SENT + 32, facts()) * 1000;
     vi.setSystemTime(second);
-    expect(second - (expected - LEAD + 300_000)).toBeLessThan(DEFAULT_WARMUP.minGapSeconds * 1000);
+    expect(second - (expected - LEAD + 300_000)).toBeLessThan(LEGACY_WARMUP.minGapSeconds * 1000);
     await run.watcher.scan();
     expect(run.pings).toHaveLength(1);
     // An abort counts the same.
@@ -595,14 +635,14 @@ describe("the direction watcher, warm-ups", () => {
     vi.setSystemTime(start);
     await run.watcher.scan();
     // The hold at +40 s is answered 204: the worker may have left. The next hold waits the 30 s interval.
-    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    await vi.advanceTimersByTimeAsync(LEGACY_WARMUP.holdIntervalSeconds * 1000);
     expect(run.named("warmup_ping")).toMatchObject([{ kind: "hold", status: 204 }]);
-    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.intervalSeconds * 1000 - 1);
+    await vi.advanceTimersByTimeAsync(LEGACY_WARMUP.intervalSeconds * 1000 - 1);
     expect(run.pings).toHaveLength(2);
     // At +70 s the hold fails: a warning, and again the interval.
     await vi.advanceTimersByTimeAsync(1);
     expect(run.named("warmup_ping_failed")).toMatchObject([{ level: "warn", kind: "hold", error: { message: "endpoint down" } }]);
-    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.intervalSeconds * 1000);
+    await vi.advanceTimersByTimeAsync(LEGACY_WARMUP.intervalSeconds * 1000);
     expect(run.named("warmup_held")).toMatchObject([{ holds: 1 }]);
     expect(run.pings.map((at) => (at - start) / 1000)).toEqual([0, 40, 70, 100]);
   });
@@ -623,7 +663,7 @@ describe("the direction watcher, warm-ups", () => {
     vi.setSystemTime(expected - LEAD);
     await run.watcher.scan();
     // The hold at +40 s is still out when the message is covered; its late 200 is not a cold start.
-    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    await vi.advanceTimersByTimeAsync(LEGACY_WARMUP.holdIntervalSeconds * 1000);
     expect(held.outstanding()).toBe(1);
     run.state.messages = [];
     await run.watcher.scan();
@@ -631,7 +671,7 @@ describe("the direction watcher, warm-ups", () => {
     held.answer(200);
     await vi.advanceTimersByTimeAsync(0);
     expect(run.named("warmup_held")).toEqual([]);
-    expect(run.store.lead(DEFAULT_WARMUP)).toMatchObject({ basis: "default" });
+    expect(run.store.lead(LEGACY_WARMUP)).toMatchObject({ basis: "default" });
     // A new message's first ping, out when that message is covered too, answered 204: only logged.
     run.state.messages = [listed(SENT + 32, "b")];
     vi.setSystemTime(expectedFinalityAt(SENT + 32, facts()) * 1000 - 60_000);
@@ -668,10 +708,10 @@ describe("the direction watcher, warm-ups", () => {
     await run.watcher.scan();
     expect(run.named("warmup_ping_failed")).toMatchObject([{ kind: "start", error: { message: "endpoint down" } }]);
     fail = false;
-    vi.setSystemTime(expected - LEAD + DEFAULT_WARMUP.intervalSeconds * 1000 - 1);
+    vi.setSystemTime(expected - LEAD + LEGACY_WARMUP.intervalSeconds * 1000 - 1);
     await run.watcher.scan();
     expect(run.pings).toHaveLength(1);
-    vi.setSystemTime(expected - LEAD + DEFAULT_WARMUP.intervalSeconds * 1000);
+    vi.setSystemTime(expected - LEAD + LEGACY_WARMUP.intervalSeconds * 1000);
     await run.watcher.scan();
     expect(run.named("warmup_ping")).toMatchObject([{ kind: "repeat", status: 204 }]);
   });
@@ -680,10 +720,10 @@ describe("the direction watcher, warm-ups", () => {
     const run = setup({ messages: [listed(SENT)], ping: async () => 200, warmup: { dailyCapSeconds: 60 } });
     vi.setSystemTime(expected - LEAD);
     await run.watcher.scan();
-    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    await vi.advanceTimersByTimeAsync(LEGACY_WARMUP.holdIntervalSeconds * 1000);
     expect(run.named("warmup_held")).toHaveLength(1);
     // 80 s warm by the next hold: over the cap.
-    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    await vi.advanceTimersByTimeAsync(LEGACY_WARMUP.holdIntervalSeconds * 1000);
     expect(run.named("warmup_wasted")).toMatchObject([{ reason: "cap", holds: 1, warmSeconds: 80 }]);
     // Another message within its lead time: refused, logged once.
     run.state.messages = [listed(SENT + 32, "b")];
@@ -750,7 +790,7 @@ describe("the direction watcher, warm-ups", () => {
     vi.setSystemTime(expected - LEAD);
     await run.watcher.scan();
     await run.watcher.stop();
-    await vi.advanceTimersByTimeAsync(DEFAULT_WARMUP.holdIntervalSeconds * 1000);
+    await vi.advanceTimersByTimeAsync(LEGACY_WARMUP.holdIntervalSeconds * 1000);
     expect(run.pings).toHaveLength(1);
   });
 });
@@ -930,14 +970,14 @@ describe("the direction watcher, with a minimum interval since the last proof (2
     vi.setSystemTime(finalAt(HEAD + 150) - 90_000);
     await run.watcher.scan();
     expect(run.pings).toEqual([]);
-    vi.setSystemTime(due - DEFAULT_WARMUP.defaultLeadSeconds * 1000);
+    vi.setSystemTime(due - LEGACY_WARMUP.defaultLeadSeconds * 1000);
     await run.watcher.scan();
     expect(run.named("warmup_scheduled")).toMatchObject([{ why: "message", dueAt: iso(due), dueInSeconds: 90 }]);
   });
 
   it("long after the last proof, times the warm-up to the message's finality", async () => {
     const run = setup({ messages: [listed(HEAD + 150, "a")], batchRule: WAIT, lastProofAt: LAST - 5 * 3_600_000 });
-    vi.setSystemTime(finalAt(HEAD + 150) - DEFAULT_WARMUP.defaultLeadSeconds * 1000);
+    vi.setSystemTime(finalAt(HEAD + 150) - LEGACY_WARMUP.defaultLeadSeconds * 1000);
     await run.watcher.scan();
     expect(run.named("warmup_scheduled")).toMatchObject([{ why: "message", dueAt: iso(finalAt(HEAD + 150)), dueInSeconds: 90 }]);
   });
