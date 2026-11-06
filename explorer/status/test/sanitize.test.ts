@@ -19,9 +19,10 @@ describe("sanitize", () => {
     const cidV1 = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
     const cidV0 = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG";
     expect(sanitize(`dapp ${cidV1} and ${cidV0}`)).toBe(`dapp ${cidV1} and ${cidV0}`);
+    // 0x and 64 hex may be a private key as well as a hash: only its first and last four digits are shown.
     const hash = "0x" + "ab12".repeat(16);
-    expect(sanitize(`tx ${hash} from 0x${"cd".repeat(20)}`)).toBe(`tx ${hash} from 0x${"cd".repeat(20)}`);
-    expect(sanitize(`file /ipfs/${hash}/x`)).toBe(`file /ipfs/${hash}/x`);
+    expect(sanitize(`tx ${hash} from 0x${"cd".repeat(20)}`)).toBe(`tx 0xab12…ab12 from 0x${"cd".repeat(20)}`);
+    expect(sanitize(`file /ipfs/${hash}/x`)).toBe("file /ipfs/0xab12…ab12/x");
   });
 
   it("still hides keys in URLs, bearer tokens, long hex and long base64 secrets", () => {
@@ -34,5 +35,11 @@ describe("sanitize", () => {
     expect(sanitize(`secret ${"A".repeat(20)}+${"b".repeat(20)} end`)).toBe("secret [redacted] end");
     expect(sanitize("path /home/user/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8/x ok")).toBe("path /home/user/[redacted]/x ok");
     expect(sanitize("path /home/user/token-abc123def456ghi789jkl012mno345pqr/x ok")).toBe("path /home/user/[redacted]/x ok");
+    // A private key has the shape of a hash: never shown whole.
+    const key = "0x" + "9c".repeat(32);
+    expect(sanitize(`signer ${key} failed`)).toBe("signer 0x9c9c…9c9c failed");
+    // A long run of letters with no separators is a key by default (some keys have no digits).
+    expect(sanitize(`key ${"qwertyuiopasdfghjklzxcvbnmqwertyuiop"} end`)).toBe("key [redacted] end");
+    expect(sanitize(`key ${"QwErTyUiOpAsDfGhJkLzXcVbNmQwErTyUiOp"} end`)).toBe("key [redacted] end");
   });
 });

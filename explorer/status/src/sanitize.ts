@@ -4,37 +4,42 @@ import { redactSecrets } from "@zk-bridge/shared/config";
 export const MAXIMUM_DETAIL_LENGTH = 200;
 
 const LONG_TOKEN = /[A-Za-z0-9+/_=-]{32,}/g;
-/** Upper and lower case letters and a digit: the look of base64, not of a path or a name. */
-const MIXED_CASE_WITH_DIGIT = /^(?=.*[A-Z])(?=.*[a-z])(?=.*[0-9])/;
-const SEGMENT_LENGTH = 32;
-/** A hash or an address with its 0x: public on a chain. */
-const PUBLIC_HEX = /^0x[0-9a-f]+$/i;
+/** An address: 0x and 40 hex. Public on a chain, and too short to be a private key. */
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+/** 0x and 64 hex: a hash, a root, or a private key, which look the same. Shown shortened, never whole. */
+const HEX_64 = /^0x[0-9a-fA-F]{64}$/;
 /** A CID: version 1 (base32, "baf...") or version 0 ("Qm...", 46 characters). Public by design. */
 const CID = /^(?:baf[a-z2-7]{40,}|Qm[1-9A-HJ-NP-Za-km-z]{44})$/;
+/** A name: lowercase words of at most 16 letters joined by dashes or underscores, like detect-beacon-roots-and-registry. */
+const WORDS = /^[a-z]{1,16}(?:[-_][a-z0-9]{1,16})+$/i;
+/** A contract or type name: capitalised words of 3 to 16 letters, like BeaconForkGateWithRegistryAndDetection. */
+const CAMEL_WORDS = /^(?:[A-Z][a-z]{2,15}){2,}$/;
+/** Base64's look: +, = or mixed case with a digit. Such a token is hidden whole, even across a slash. */
+const BASE64_LOOK = /[+=]|^(?=.*[A-Z])(?=.*[a-z])(?=.*[0-9])/;
 
 /**
- * Whether a long token looks like a key rather than a word. A word, a mode name, a contract name or a check id has
- * letters, dashes and underscores only. A key has digits (a hex or base64 secret), or base64's `+` and `=`. A hash with
- * 0x and a CID have digits too but are public, so they stay.
+ * What a long token becomes on the public page. A long token is a key unless it has a public shape: an address, a CID,
+ * or a name made of short words. 0x and 64 hex may be a private key as well as a hash, so only its first and last four
+ * digits stay, which tell hashes apart and give nothing away.
  */
-function looksSecret(token: string): boolean {
-  if (PUBLIC_HEX.test(token) || CID.test(token)) return false;
-  return /[0-9+]/.test(token) || token.endsWith("=");
+function shown(token: string): string {
+  if (ADDRESS.test(token) || CID.test(token) || WORDS.test(token) || CAMEL_WORDS.test(token)) return token;
+  if (HEX_64.test(token)) return `${token.slice(0, 6)}…${token.slice(-4)}`;
+  return "[redacted]";
 }
 
-/** Hides the long tokens that look like keys; a slash splits a path into its segments unless the whole is base64. */
+/** Hides the long tokens that are not public shapes; a slash splits a path into its segments. */
 function hideKeys(text: string): string {
   return text.replace(LONG_TOKEN, (token) => {
-    const wholeBase64 = /[+=]/.test(token) || MIXED_CASE_WITH_DIGIT.test(token);
-    if (!token.includes("/") || wholeBase64) return looksSecret(token) ? "[redacted]" : token;
-    return token.split("/").map((part) => (part.length >= SEGMENT_LENGTH && looksSecret(part) ? "[redacted]" : part)).join("/");
+    if (!token.includes("/") || BASE64_LOOK.test(token)) return shown(token);
+    return token.split("/").map((part) => (part.length >= 32 ? shown(part) : part)).join("/");
   });
 }
 
 /**
  * Makes a message safe to store and to show on the public page: no URL (an endpoint can carry a key), none of the
- * secret values the process holds, no token that looks like a key (long hex or base64; mode names, contract names,
- * check ids, CIDs and 0x hashes stay readable), one line, and at most {@link MAXIMUM_DETAIL_LENGTH} characters.
+ * secret values the process holds, no long token unless it has a public shape (addresses, CIDs and names made of short
+ * words stay; 0x and 64 hex is shortened, since a private key looks the same), one line, and at most {@link MAXIMUM_DETAIL_LENGTH} characters.
  */
 export function sanitize(text: string, knownSecrets: readonly string[] = []): string {
   const withoutSecrets = redactSecrets(text, knownSecrets.filter((secret) => secret !== ""));
