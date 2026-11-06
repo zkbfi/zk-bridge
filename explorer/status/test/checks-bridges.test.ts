@@ -60,10 +60,22 @@ describe("gateCheck", () => {
     expect(await gateCheck(none, 11155111).run(none)).toEqual({ state: "ok", detail: "enforcing, no epoch confirmed yet, epoch 10 needs a confirmation before the next send" });
   });
 
-  it("is degraded when the gate does not enforce, and says so for a sealed gate", async () => {
-    const detecting = makeDeps({ client: () => gate({ mode: 1, enforcing: false }) });
-    expect(await gateCheck(detecting, 943).run(detecting)).toEqual({ state: "degraded", detail: "not enforcing (mode detect-beacon-roots), it admits every send" });
+  it("reports a gate in a detection mode as ok: by design it admits sends until the chain gains beacon roots", async () => {
+    const roots = makeDeps({ client: () => gate({ mode: 1, enforcing: false }) });
+    expect(await gateCheck(roots, 943).run(roots)).toEqual({ state: "ok", detail: "detection mode (detect-beacon-roots): admits sends until PulseChain testnet gains beacon roots or a newer opcode, then enforces for good" });
+    const registry = makeDeps({ client: () => gate({ mode: 2, enforcing: false }) });
+    expect(await gateCheck(registry, 943).run(registry)).toEqual({ state: "ok", detail: "detection mode (detect-beacon-roots-and-registry): admits sends until PulseChain testnet gains beacon roots or a newer opcode, then enforces for good" });
+  });
+
+  it("is degraded for an enforcing-mode gate that does not enforce", async () => {
+    const broken = makeDeps({ client: () => gate({ mode: 0, enforcing: false }) });
+    expect(await gateCheck(broken, 943).run(broken)).toEqual({ state: "degraded", detail: "mode enforcing but not enforcing, it admits every send" });
+  });
+
+  it("is down for a sealed gate, which refuses every send for good", async () => {
     const sealed = makeDeps({ client: () => gate({ sealed: true }) });
-    expect(await gateCheck(sealed, 943).run(sealed)).toEqual({ state: "ok", detail: "enforcing and sealed, it asks for no confirmation" });
+    expect(await gateCheck(sealed, 943).run(sealed)).toEqual({ state: "down", detail: "sealed after a fork, it refuses every send and the seal never clears" });
+    const detecting = makeDeps({ client: () => gate({ sealed: true, mode: 1, enforcing: false }) });
+    expect((await gateCheck(detecting, 943).run(detecting)).state).toBe("down");
   });
 });

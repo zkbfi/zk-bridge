@@ -16,7 +16,7 @@ describe("unitCheck", () => {
   });
 
   it("accepts a timer that waits", async () => {
-    expect(await run(show({ LoadState: "loaded", ActiveState: "active", SubState: "waiting" }), { name: "zk-bridge-keepalive.timer", optional: false }).result).toEqual({ state: "ok", detail: "active (waiting)" });
+    expect(await run(show({ LoadState: "loaded", ActiveState: "active", SubState: "waiting" }), { name: "zk-bridge-something.timer", optional: false }).result).toEqual({ state: "ok", detail: "active (waiting)" });
   });
 
   it("is degraded while the unit restarts and down when it is stopped or failed", async () => {
