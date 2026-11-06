@@ -1,5 +1,6 @@
 /* Explore (mockups explore-map.html, explore.html, explore-address-tx.html). Sizes come from the scale in bridge.css. */
-.zb-xsearch { position: sticky; top: 0; z-index: 3; }
+.zb-xsearch { position: sticky; top: 0; z-index: 3; background: var(--zb-page); padding-block: 12px 8px; }
+.zb-xsearch .zb-picker-search { margin: 0 auto; max-width: calc(100% - 32px); width: var(--zb-col-width); }
 .zb-xsearch .zb-icon { width: 20px; height: 20px; }
 .zb-xkinds { background: var(--zb-to); padding-block: 10px; }
 .zb-xkinds .zb-col { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -179,9 +180,9 @@ a.zb-kv.zb-xkv { color: inherit; text-decoration: none; }
 .zb-orb-tip-tok { display: inline-flex; align-items: center; gap: 4px; }
 .zb-orb-stop { cursor: help; outline: none; }
 .zb-orb-stop:focus-visible { stroke: var(--zb-accent); stroke-width: 3; }
-/* The shortcut menu under the empty search box: the one menu surface (.zb-m-surface, bridge.css) hung from the band, as wide
-   as the band, so it has no side borders (they would sit off screen) and scrolls inside when the list is taller than the screen. */
-.zb-m-surface.zb-xmenu { top: 100%; left: 0; right: 0; z-index: 4; max-height: min(70vh, 460px); overflow-y: auto; padding-bottom: 6px; border-width: 0 0 3px; }
+/* The shortcut menu under the empty search box: the one menu surface (.zb-m-surface, bridge.css) hung from the search row, as wide
+   as the screen, so it has no side borders (they would sit off screen) and scrolls inside when the list is taller than the screen. */
+.zb-m-surface.zb-xmenu { top: 100%; left: 0; right: 0; z-index: 4; max-height: min(70vh, 460px); overflow-y: auto; padding-bottom: 6px; border-width: 1px 0; }
 
 /* The paged browse lists (BrowseList.tsx): the filter and sort bar, the note under it, and the pager. They reuse the shared
    pill (.zb-pill) and field (.zb-menu-field) and only lay them out; the surfaces themselves are styled in bridge.css. */

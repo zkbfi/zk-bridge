@@ -18,17 +18,16 @@
 
 /* The sheet: the scrim, the panel and its head */
 .zb-scrim { position: fixed; inset: 0; z-index: var(--zkb-layer-scrim, 40); background: var(--zkb-scrim, rgba(0, 0, 0, 0.55)); }
-.zb-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--zkb-layer-sheet, 41); max-height: 86vh; overflow: auto; background: var(--zkb-sheet-bg, #ffffff); color: var(--zkb-sheet-ink, #1a1a1a); border-top: 3px solid var(--zkb-accent, #d4501e); }
-@media (min-width: 720px) { .zb-sheet { left: 50%; right: auto; width: min(var(--zkb-column-width, 640px), calc(100vw - 32px)); transform: translateX(-50%); bottom: 10vh; border: 3px solid var(--zkb-accent, #d4501e); } }
+.zb-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--zkb-layer-sheet, 41); max-height: 86vh; overflow: auto; background: var(--zkb-sheet-bg, #ffffff); color: var(--zkb-sheet-ink, #1a1a1a); border-top: 1px solid var(--zkb-edge, #d9d9d9); }
+@media (min-width: 720px) { .zb-sheet { left: 50%; right: auto; width: min(var(--zkb-column-width, 640px), calc(100vw - 32px)); transform: translateX(-50%); bottom: 10vh; border: 1px solid var(--zkb-edge, #d9d9d9); } }
 .zb-sheet.zb-sheet-top { display: flex; flex-direction: column; }
 @media (min-width: 720px) { .zb-sheet.zb-sheet-top { top: 12vh; bottom: auto; max-height: 78vh; overflow: hidden; } }
-.zb-sheet-bare { border-top: 0 !important; }
-@media (min-width: 720px) { .zb-sheet-bare { border: 3px solid var(--zkb-sheet-bare-edge, var(--zkb-accent, #d4501e)) !important; } }
 /* The column inside a sheet: as wide as the sheet, with the gutters of the device. */
 .zb-sheet-col { max-width: var(--zkb-column-width, 640px); margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
 .zb-sheet-head { display: flex; align-items: center; padding-block: 14px 8px; }
 .zb-sheet-head h2 { font-size: var(--zkb-text-large, 18px); margin: 0; }
-.zb-close { width: var(--zkb-touch, 44px); height: var(--zkb-touch, 44px); border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--zkb-edge, #d9d9d9); flex: none; }
+.zb-close { width: var(--zkb-touch, 44px); height: var(--zkb-touch, 44px); border-radius: 50%; display: grid; place-items: center; border: 0; flex: none; }
+.zb-close:hover { background: var(--zkb-raised, #f2f2f2); }
 .zb-sheet-icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 
 /* The review: rows and notices */

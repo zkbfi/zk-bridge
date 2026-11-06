@@ -82,8 +82,7 @@ export const Modal = ({ title, onClose, children, width = "40rem", initialFocusR
         color="fg"
         borderWidth="1px"
         borderColor="border"
-        borderRadius={{ base: "0", md: "xl" }}
-        boxShadow="lg"
+        borderRadius="0"
         padding="4"
         _focusVisible={{ outline: "none" }}
       >

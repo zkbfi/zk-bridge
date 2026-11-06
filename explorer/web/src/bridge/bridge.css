@@ -32,7 +32,6 @@
   --zkb-sheet-bg: var(--zb-to);
   --zkb-sheet-ink: var(--zb-to-ink);
   --zkb-accent: var(--zb-accent);
-  --zkb-sheet-bare-edge: var(--zb-from);
   --zkb-muted: var(--zb-muted);
   --zkb-line: var(--zb-line);
   --zkb-warn: var(--zb-warn);
@@ -242,12 +241,12 @@
 /*
  * One menu language (owner: "i am not liking the styling that you are employing for the menus. they are too starkly
  * different. we need to consolidate and make it match the design language"). Every menu, popover and sheet list is
- * drawn from these five parts and nothing else: square surface on the To tone with the 3-unit accent stroke as its
- * border (the sheet's own edge), no radius, no shadow; a row 44 px or more tall with 16 px sides; an uppercase group
+ * drawn from these five parts and nothing else: square surface on the To tone with a 1px tint hairline (the same weight as the
+ * fields on the bridge screen; the dimmed page does the separating), no radius, no shadow; a row 44 px or more tall with 16 px sides; an uppercase group
  * heading; the selected or active row on the raised tone with a 3-unit accent bar that never shifts content; a footer
  * under a hairline. The sheets (search, token picker, settings) get the same surface from @zkb/react's .zb-sheet.
  */
-.zb-m-surface { position: absolute; z-index: 30; min-width: 260px; background: var(--zb-to); color: var(--zb-to-ink); border: 3px solid var(--zb-accent); }
+.zb-m-surface { position: absolute; z-index: 30; min-width: 260px; background: var(--zb-to); color: var(--zb-to-ink); border: 1px solid var(--zb-pill-edge); }
 .zb-m-list { list-style: none; margin: 0; padding: 0; }
 .zb-m-row { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; min-height: var(--zb-touch); padding: 10px 16px; text-align: left; cursor: pointer; }
 .zb-m-row.zb-m-stack { flex-direction: column; align-items: flex-start; gap: 2px; }
@@ -446,12 +445,17 @@
 .zb-token-name { display: flex; flex-direction: column; line-height: 1.25; }
 .zb-token-balance { margin-left: auto; font-variant-numeric: tabular-nums; }
 
-/* Token picker, rounds 4 to 7: the search is a 52 px orange band (no pill, no top border); the close square is the same
-   orange, 52 x 52, set off by a full-height dark rule; tabs are icons only. */
-.zb-picker-search { display: flex; align-items: center; gap: 10px; height: 56px; padding-left: 16px; background: var(--zb-from-bg, var(--zb-from)); color: var(--zb-from-ink); }
+/* The search field (owner: "the input+x button bar ... too border heavy / bold"): a pill, the design language's control
+   shape, on the sheet's own surface, with a 1px tint edge like the From / To fields. The close button is a small round
+   ghost inside the pill's right end: no fill, no divider. */
+.zb-picker-search { display: flex; align-items: center; gap: 10px; height: 48px; margin: 12px 16px 0; padding-left: 16px; padding-right: 4px; background: var(--zb-pill); color: var(--zb-pill-ink); border: 1px solid var(--zb-pill-edge); border-radius: 999px; }
+.zb-picker-search:focus-within { border-color: var(--zb-ink); outline: 1px solid var(--zb-ink); }
+.zb-picker-search > .zb-icon { color: var(--zb-muted); flex: none; }
 .zb-picker-search input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none; color: inherit; font: inherit; font-size: var(--zb-step-0); }
-.zb-picker-search input::placeholder { color: var(--zb-from-muted); }
-.zb .zb-picker-close { width: 56px; height: 56px; flex: none; display: grid; place-items: center; background: var(--zb-from-end, var(--zb-from)); color: var(--zb-from-ink); border-left: 3px solid #121110; }
+.zb-picker-search input::placeholder { color: var(--zb-muted); }
+.zb .zb-picker-close { width: 36px; height: 36px; flex: none; display: grid; place-items: center; background: none; color: var(--zb-muted); border: 0; border-radius: 50%; cursor: pointer; }
+.zb .zb-picker-close:hover { background: var(--zb-raised); color: var(--zb-raised-ink); }
+.zb .zb-picker-close .zb-icon { width: 16px; height: 16px; }
 .zb-tabs [role="tab"] svg, .zb-tabs [role="tab"] .zb-tok-icon { flex: none; }
 .zb-omni { position: relative; display: inline-flex; color: var(--zb-accent-text); cursor: pointer; }
 .zb .zb-link { display: inline-flex; align-items: center; gap: 4px; color: var(--zb-accent-text); font-weight: 600; text-decoration: underline; }
@@ -497,7 +501,7 @@
 .zb .zb-seg [aria-checked="true"] { background: var(--zb-ink); color: var(--zb-page); font-weight: 700; }
 .zb-menu-field { width: 50%; min-width: 0; border: 1.5px solid var(--zb-pill-edge); border-radius: 999px; padding: 5px 12px; background: var(--zb-pill); color: var(--zb-pill-ink); font: inherit; font-size: var(--zb-step--1); }
 
-/* The orange search band is its own focus cue; no outline box under the input. */
+/* The pill is the focus cue (an ink edge, :focus-within above); no outline box under the input. */
 .zb-picker-search input:focus-visible { outline: none; }
 
 /* On phones the token picker rises to just under the header, edge to edge, whatever the number of rows. */
