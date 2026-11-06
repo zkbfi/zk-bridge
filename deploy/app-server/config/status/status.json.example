@@ -22,8 +22,7 @@
     { "name": "zk-bridge-indexer" },
     { "name": "zk-bridge-runner" },
     { "name": "zk-bridge-traffic", "optional": true },
-    { "name": "zk-bridge-ipfs" },
-    { "name": "zk-bridge-keepalive.timer" }
+    { "name": "zk-bridge-ipfs" }
   ],
   "chains": {
     "11155111": {

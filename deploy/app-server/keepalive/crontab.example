@@ -1,3 +1,5 @@
+# RETIRED (2026-11-06): the backend's watcher owns keep-alive now; this unit is disabled on the app server and the status
+# page no longer checks it. Kept for a manual backstop (docs/testnet-run.md, "Keeping the light clients alive").
 # The keep-alive as a cron job, for a machine without the systemd timer (zk-bridge-keepalive.timer is preferred on the
 # app server). Install in the crontab of the user that reads backend.json (zkb_backend): crontab -u zkb_backend -e
 #

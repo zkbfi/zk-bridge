@@ -1,3 +1,5 @@
+# RETIRED 2026-11-06: the backend's watcher keeps both light clients alive. site.yml no longer imports this
+# playbook; running it by hand would install and enable zk-bridge-keepalive.timer again.
 ---
 # Installs and enables the light client keep-alive: the oneshot service and the timer that runs it every three hours
 # (deploy/app-server/keepalive). The timer is enabled and started; the service is never started here (a run is a march

@@ -20,15 +20,19 @@ export const bridgeCheck = (deps: Deps, chainId: number): Spec => ({
   },
 });
 
-/** The gate on a chain: whether it enforces, and the epoch it confirmed last (`readGateStatus` of `@zkb/data`). */
+/** The gate on a chain: whether it enforces, and the epoch it confirmed last. A gate in a detection mode admits sends by design until the chain
+ * gains beacon roots or a newer opcode; only an enforcing-mode gate that does not enforce is degraded, and a sealed one is down (`readGateStatus` of `@zkb/data`). */
 export const gateCheck = (deps: Deps, chainId: number): Spec => ({
   id: `gate-${chainId}`,
   name: `${labelOf(deps, chainId)} gate`,
   section: "bridges",
   async run(run) {
     const status = await readGateStatus({ client: run.client(chainId), gate: sideOf(run, chainId).contracts.gate });
-    if (!status.enforcing) return { state: "degraded", detail: `not enforcing (mode ${status.mode}), it admits every send` };
-    if (status.sealed) return { state: "ok", detail: `enforcing and sealed, it asks for no confirmation` };
+    if (status.sealed) return { state: "down", detail: "sealed after a fork, it refuses every send and the seal never clears" };
+    if (!status.enforcing) {
+      if (status.mode === "enforcing") return { state: "degraded", detail: "mode enforcing but not enforcing, it admits every send" };
+      return { state: "ok", detail: `detection mode (${status.mode}): admits sends until ${labelOf(run, chainId)} gains beacon roots or a newer opcode, then enforces for good` };
+    }
     if (status.confirmedEpoch === status.epoch) return { state: "ok", detail: `enforcing, epoch ${status.epoch} is confirmed` };
     const last = status.confirmedEpoch === null ? "no epoch confirmed yet" : `last confirmed epoch ${status.confirmedEpoch}`;
     return { state: "ok", detail: `enforcing, ${last}, epoch ${status.epoch} needs a confirmation before the next send` };

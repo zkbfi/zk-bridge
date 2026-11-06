@@ -59,6 +59,12 @@ With `ENDPOINTS=public`, the light-client routes of chain 943 print `INFO` and d
 
 ## Keeping the light clients alive
 
+**Current state (2026-11-06): the backend's watcher owns keep-alive.** It sees each finality and requests the proofs that
+the planner calls for (explorer/backend/README.md, "Proving on finality"). The systemd timer
+`zk-bridge-keepalive.timer` (and the cron variant) is retired: it is disabled on the app server, the status page no
+longer checks it, and the "Schedule on the app server" section below is kept as history and as a manual backstop only.
+The march command (`zk-bridge-keepalive.mjs status|march`) still works for a manual check or a forced march.
+
 Owner: "we need to have setup scripts to march the contracts forward to handle this situation."
 
 ### Why a light client strands
@@ -137,7 +143,9 @@ did not move. Each problem prints a line that starts with `ALERT light-client`. 
 `explorer/backend/src/keepalive/` (plan, reads, proof paths; tests in `explorer/backend/test/keepalive-*.test.ts`),
 the command `explorer/backend/bin/zk-bridge-keepalive.mjs status|march` (without arguments it prints its options).
 
-### Schedule on the app server
+### Schedule on the app server (retired)
+
+The timer is retired; see the note at the top of this section. What follows describes how it was installed.
 
 The backend proves on finality by itself (explorer/backend/README.md, "Proving on finality"): a message gets its proof
 seconds after the source chain finalizes it, and a keep-alive the planner calls for starts at the next finality. Check
@@ -568,7 +576,7 @@ Fund 2 Sepolia ETH and 10 tPLS to start, and watch `native-below-reserve` skips.
 
 The owner asked: "where can i and you go to get a gut check of your uptime / the status. explore.zkb.fi?" and then: "yeah, give it a try. might be better as a standalone, non ipfs server though. then we can have checks on each of the services and a centralized (small) db". So the status page is its own service on the app server, `explorer/status` (README there), not part of the explorer on IPFS.
 
-It runs the checks every 60 seconds: the services (indexer local and public, backend local and public, webhook, `next.zkb.fi` and `zkb.fi` with their release sequence, the IPFS gateway with the dapp CID of each channel), the systemd units, each chain's RPC and beacon, both light clients (head age and deadline, through the keep-alive planner), both bridges (`depositsOpen`), both gates, the pipeline (backend `/benchmarks` and `/directions/<dir>/pipeline`, indexer deliveries), the RunPod endpoint (through RunPod's REST API only, never its `/ping` or `/prove`) and the wallet balances. Results go into a SQLite file for 30 days.
+It runs the checks every 60 seconds: the services (indexer local and public, backend local and public, webhook, `next.zkb.fi` and `zkb.fi` with their release sequence, the IPFS gateway with the dapp CID of each channel), the systemd units (the keep-alive timer is not among them: it is retired), each chain's RPC and beacon, both light clients (head age and deadline, through the keep-alive planner), both bridges (`depositsOpen`), both gates (a gate in a detection mode is ok: it admits sends by design until PulseChain gains beacon roots or a newer opcode; an enforcing-mode gate that does not enforce is degraded, a sealed gate is down), the pipeline (backend `/benchmarks` and `/directions/<dir>/pipeline`, indexer deliveries), the RunPod endpoint (through RunPod's REST API only, never its `/ping` or `/prove`) and the wallet balances. Results go into a SQLite file for 30 days.
 
 - Page: `https://status.zkb.fi/`. For you and for me: `curl https://status.zkb.fi/api/summary` (one line: operational, degraded or down, and what fails), `/api/status` (every check), `/api/history?check=<id>&window=24h|7d|30d`.
 - Deploy (after `provision.sh`, which creates the user `zkb_status` and `/etc/zk-bridge/status`): copy `deploy/app-server/config/status/status.json.example` and `status.env.example` to `/etc/zk-bridge/status/` (mode 0640, owner root, group `zkb_status`), fill in the wallet addresses, the thresholds and the endpoints, then `ansible-playbook bots.yml -e commit=<hash> -e bots=status`. DNS: an A record for `status.zkb.fi` to the app server, like the other hosts; Caddy gets the certificate.
