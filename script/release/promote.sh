@@ -13,8 +13,11 @@
 #      production keys (script/release/promote-checks.sh)
 #   3. writes the production version.json (channels.stable, sequence = production + 1) with the same dapp
 #      archive, the new landing archive and the same downloads; refuses if a kept archive differs from staging
-#   4. signs it with the production key from standard input, then verifies it against landing.config.json
-#   5. with PROMOTE_PUBLISH=1, runs publish.sh and publish-pages.sh for zkb.fi (their own settings apply)
+#   4. writes the production releases-log.json: the published stable log (checked against landing.config.json) with
+#      the production sites appended
+#   5. signs version.json and releases-log.json with the production key from standard input, then verifies both
+#      against landing.config.json
+#   6. with PROMOTE_PUBLISH=1, runs publish.sh and publish-pages.sh for zkb.fi (their own settings apply)
 #
 # Keys are explicit, never taken from the releases: the input is verified against the staging key only, the output
 # against the production key only.
@@ -22,6 +25,8 @@
 # Environment:
 #   PROMOTE_VERSION            the production version (default: the staging version without its -next.N suffix)
 #   RELEASE_PREVIOUS_MANIFEST  the production version.json now live (default: fetched from https://zkb.fi/version.json)
+#   RELEASE_REMOTE             the release repository: the published stable log is fetched from its main branch
+#   RELEASE_PREVIOUS_LOG       the stable releases-log.json to append to instead (its signature at <file>.sig)
 #   PROMOTE_PUBLISH=1          also publish (pin, push to main of the release repository, deploy zkb.fi)
 set -euo pipefail
 
@@ -37,6 +42,9 @@ staging="$(cd "$1" && pwd)"
 mkdir -p "$2"
 out="$(cd "$2" && pwd)"
 cli=(node "$repository_root/explorer/release/src/cli.ts")
+# shellcheck source=script/release/channels.sh
+. "$repository_root/script/release/channels.sh"
+production_keys="$(channel_keys_file stable)"
 
 if ! "${cli[@]}" verify "$staging" --public-keys "$repository_root/explorer/landing/landing.next.config.json" </dev/null; then
   echo "the staging release does not verify against the staging key, so nothing is promoted" >&2
@@ -56,6 +64,14 @@ work="$(mktemp -d)"
 cleanup() { git -C "$repository_root" worktree remove --force "$work/source" >/dev/null 2>&1 || true; rm -rf "$work"; }
 trap cleanup EXIT
 
+# The published stable log, checked against the production keys before anything is built.
+channel_previous_log stable "$work" </dev/null
+previous_log=()
+if [ -n "$CHANNEL_PREVIOUS_LOG" ]; then
+  "${cli[@]}" log-check "$CHANNEL_PREVIOUS_LOG" --public-keys "$production_keys" </dev/null
+  previous_log=(--previous-log "$CHANNEL_PREVIOUS_LOG" --public-keys "$production_keys")
+fi
+
 echo "== landing page at $commit, production configuration"
 git -C "$repository_root" worktree add --quiet --detach "$work/source" "$commit" </dev/null
 (cd "$work/source/explorer/landing" && LANDING_CONFIG=landing.config.json LANDING_OUT="$work/landing" node scripts/build.ts) </dev/null
@@ -73,9 +89,11 @@ fi
 echo "== production manifest $version"
 "${cli[@]}" promote "$staging" "$out" --landing "$work/landing.car" --version "$version" \
   --published-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --previous "$previous" </dev/null
-# The only step that reads standard input: the production release key.
+"${cli[@]}" log "$out" "${previous_log[@]+"${previous_log[@]}"}" </dev/null
+# The only step that reads standard input: the production release key. It signs version.json and releases-log.json.
 "${cli[@]}" sign "$out"
-"${cli[@]}" verify "$out" --public-keys "$repository_root/explorer/landing/landing.config.json" </dev/null
+"${cli[@]}" log-check "$out/releases-log.json" --public-keys "$production_keys" --manifest "$out/version.json" </dev/null
+"${cli[@]}" verify "$out" --public-keys "$production_keys" </dev/null
 
 if [ "${PROMOTE_PUBLISH:-}" = "1" ]; then
   # Promotion always publishes to production: the channel is fixed here, never taken from the environment or the release.

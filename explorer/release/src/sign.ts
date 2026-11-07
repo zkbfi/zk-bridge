@@ -1,5 +1,5 @@
 /**
- * Signs `version.json` with the release key.
+ * Signs `version.json`, and the release log `releases-log.json`, with the release key.
  * The private key arrives on standard input at the moment of use and lives only in memory: nothing here writes it.
  */
 import { canonicalManifestBytes, type ReleaseManifest } from "../../landing/src/manifest.ts";
@@ -46,12 +46,21 @@ export function publicKeyOf(privateKey: JsonWebKey): JsonWebKey {
  * @throws SignError when the key cannot sign.
  */
 export async function signManifest(input: { manifest: ReleaseManifest; privateKey: JsonWebKey }): Promise<Uint8Array> {
+  return signBytes({ bytes: canonicalManifestBytes(input.manifest), privateKey: input.privateKey });
+}
+
+/**
+ * Signs exact file bytes with the release key: how `releases-log.json` is signed, by the same key and code as
+ * `version.json`.
+ * @returns the 64-byte Ed25519 signature.
+ * @throws SignError when the key cannot sign.
+ */
+export async function signBytes(input: { bytes: Uint8Array; privateKey: JsonWebKey }): Promise<Uint8Array> {
   let key: CryptoKey;
   try {
     key = await crypto.subtle.importKey("jwk", input.privateKey, { name: "Ed25519" }, false, ["sign"]);
   } catch {
     throw new SignError("the key cannot sign: it is not a private Ed25519 key");
   }
-  const bytes = canonicalManifestBytes(input.manifest);
-  return new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, key, bytes as BufferSource));
+  return new Uint8Array(await crypto.subtle.sign({ name: "Ed25519" }, key, input.bytes as BufferSource));
 }

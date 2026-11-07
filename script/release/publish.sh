@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Publishes a release made by script/release/release.sh: pins the site archives (dapp, landing), then pushes the signed
-# manifest to the release remote. It refuses until both a release remote and a pinning account are configured.
+# manifest and the signed release log to the release remote. It refuses until both a release remote and a pinning account are configured.
 #
 # Usage:   script/release/publish.sh <release-directory>
 #
@@ -24,7 +24,10 @@
 #   RELEASE_PUBLIC_KEYS      the trusted keys to verify against (default: the keys built into that channel's landing
 #                            page). The release's own public-keys.json is not trusted.
 #
-# Order: verify, pin every archive (each pin fails unless the service reports the CID computed here), then push.
+# Order: verify; check that the release's releases-log.json only appends to the log on the channel's branch (same
+# entries byte for byte, chain intact, signatures by the trusted keys, sequence up) and ends with this release; pin
+# every archive (each pin fails unless the service reports the CID computed here); then push. A branch that has
+# releases but no log is refused: the first log comes from script/release/bootstrap-log.sh.
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -60,8 +63,6 @@ const m = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
 console.log(`${m.channels[process.argv[2]]} ${m.sequence}`);
 ' "$release/version.json" "$channel")"
 
-"${cli[@]}" pin "$release" --prefix "$release_version"
-
 checkout="$(mktemp -d)"
 trap 'rm -rf "$checkout"' EXIT
 if ! git clone --quiet --depth 1 --branch "$branch" "$RELEASE_REMOTE" "$checkout" 2>/dev/null; then
@@ -70,8 +71,23 @@ if ! git clone --quiet --depth 1 --branch "$branch" "$RELEASE_REMOTE" "$checkout
   git -C "$checkout" checkout --quiet --orphan "$branch"
   git -C "$checkout" rm --quiet -rf .
 fi
-cp "$release/version.json" "$release/version.json.sig" "$release/public-keys.json" "$release/SHA256SUMS" "$checkout/"
-git -C "$checkout" add version.json version.json.sig public-keys.json SHA256SUMS
+
+# The release log only grows: nothing is pinned or pushed unless the new log extends the published one exactly.
+if [ -f "$checkout/releases-log.json" ]; then
+  "${cli[@]}" log-check "$release/releases-log.json" --public-keys "$keys" --extends "$checkout/releases-log.json" \
+    --manifest "$release/version.json"
+elif [ -f "$checkout/version.json" ]; then
+  echo "the $branch branch has releases but no releases-log.json: make the first log with script/release/bootstrap-log.sh, then build the release again" >&2
+  exit 1
+else
+  "${cli[@]}" log-check "$release/releases-log.json" --public-keys "$keys" --manifest "$release/version.json"
+fi
+
+"${cli[@]}" pin "$release" --prefix "$release_version"
+
+cp "$release/version.json" "$release/version.json.sig" "$release/public-keys.json" "$release/SHA256SUMS" \
+  "$release/releases-log.json" "$release/releases-log.json.sig" "$checkout/"
+git -C "$checkout" add version.json version.json.sig public-keys.json SHA256SUMS releases-log.json releases-log.json.sig
 git -C "$checkout" commit --quiet -m "release $release_version (sequence $sequence, $channel)"
 git -C "$checkout" push --quiet origin "HEAD:refs/heads/$branch"
 echo "published $release_version (sequence $sequence) on $channel"

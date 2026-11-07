@@ -138,6 +138,42 @@ describe("promote", () => {
     expect(parseManifest(await readFile(join(out, "version.json"), "utf8")).channels).toEqual({ stable: "0.1.2" });
   });
 
+  it("refuses an output directory that is not empty, a staging release without a dapp, and a changed download", async () => {
+    const landing = join(await temporaryDirectory(), "landing.car");
+    await packSite(sampleSite, landing);
+    const promote = async (staging: string, out: string) => {
+      const result = io();
+      const code = await run(["promote", staging, out, "--landing", landing, "--version", "0.1.2", "--published-at", "t"], result.value);
+      return { code, err: result.err.join("\n") };
+    };
+    const busy = await temporaryDirectory();
+    await writeTree(busy, { "old.txt": "x" });
+    expect(await promote(await stagingRelease(), busy)).toEqual({ code: 1, err: `${busy} is not empty: a promotion starts from an empty directory` });
+
+    const noDapp = await stagingRelease();
+    const manifest = parseManifest(await readFile(join(noDapp, "version.json"), "utf8"));
+    await writeFile(join(noDapp, "version.json"), JSON.stringify({ ...manifest, releases: manifest.releases.filter((entry) => entry.name !== "dapp") }));
+    expect(await promote(noDapp, await temporaryDirectory())).toEqual({ code: 1, err: "the staging release has no dapp" });
+
+    const changed = await stagingRelease();
+    await writeTree(changed, { "downloads/zk-bridge-terminal-linux-x64": "another terminal" });
+    expect(await promote(changed, await temporaryDirectory())).toEqual({ code: 1, err: "zk-bridge-terminal-linux-x64: the download differs from the staging manifest" });
+  });
+
+  it("promotes a staging release without downloads, and the promoted release appends to the stable release log", async () => {
+    const staging = await stagingRelease();
+    const manifest = parseManifest(await readFile(join(staging, "version.json"), "utf8"));
+    await writeFile(join(staging, "version.json"), JSON.stringify({ ...manifest, downloads: [] }));
+    const { code, out } = await promotedFrom(staging);
+    expect(code).toBe(0);
+    expect(spawnSync("ls", [out], { encoding: "utf8" }).stdout).not.toContain("downloads");
+    const logged = io();
+    expect(await run(["log", out], logged.value)).toBe(0);
+    const log = JSON.parse(await readFile(join(out, "releases-log.json"), "utf8")) as { channel: string; entries: { name: string; channel: string }[] };
+    expect(log.channel).toBe("stable");
+    expect(log.entries.map((entry) => [entry.channel, entry.name])).toEqual([["stable", "dapp"], ["stable", "landing"]]);
+  });
+
   it("refuses a staging release that is not on the next channel", async () => {
     const staging = await stagingRelease();
     const manifest = parseManifest(await readFile(join(staging, "version.json"), "utf8"));

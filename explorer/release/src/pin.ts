@@ -177,7 +177,19 @@ function kuboRoots(text: string): { cid: string; pinError: string }[] | null {
  * (`pin/add` with `name`) and files the archive in MFS at `/releases/<version>/<site>` (`files/mkdir`, then
  * `files/cp /ipfs/<cid>`). An archive filed earlier at that one path is replaced; nothing else is removed or unpinned.
  */
-function kuboAdapter(environment: Record<string, string | undefined>): PinAdapter {
+/** An RPC call to the kubo node: see kuboCaller. */
+type KuboCall = {
+  (path: string, what: string, body: FormData | null, timeout: number): Promise<string>;
+  (path: string, what: string, body: FormData | null, timeout: number, tolerate: string): Promise<string | null>;
+};
+
+/**
+ * The kubo RPC address and a caller for it, from KUBO_API_URL and the optional KUBO_API_AUTH. Each call POSTs, and every
+ * failure names the call and the address, never the credentials. With `tolerate`, an error answer whose message holds
+ * that text resolves to null instead of failing.
+ * @throws PinError when KUBO_API_URL is missing, not http(s), or carries credentials.
+ */
+function kuboCaller(environment: Record<string, string | undefined>): { endpoint: string; call: KuboCall } {
   if (!environment.KUBO_API_URL) throw new PinError("the kubo adapter needs KUBO_API_URL");
   let url: URL;
   try {
@@ -192,13 +204,7 @@ function kuboAdapter(environment: Record<string, string | undefined>): PinAdapte
   const endpoint = url.href.replace(/\/+$/, "");
   const headers: Record<string, string> = environment.KUBO_API_AUTH ? { authorization: environment.KUBO_API_AUTH } : {};
 
-  /**
-   * POSTs one RPC call. Every failure names the call and the address, never the credentials. With `missingOk`, an
-   * answer that says the path does not exist resolves to null instead of failing.
-   */
-  async function call(path: string, what: string, body: FormData | null, timeout: number): Promise<string>;
-  async function call(path: string, what: string, body: FormData | null, timeout: number, missingOk: true): Promise<string | null>;
-  async function call(path: string, what: string, body: FormData | null, timeout: number, missingOk = false): Promise<string | null> {
+  async function call(path: string, what: string, body: FormData | null, timeout: number, tolerate?: string): Promise<string | null> {
     let answer: Response;
     try {
       answer = await fetch(`${endpoint}${path}`, { method: "POST", headers, body, signal: AbortSignal.timeout(timeout) });
@@ -214,11 +220,16 @@ function kuboAdapter(environment: Record<string, string | undefined>): PinAdapte
       } catch {
         // A proxy page or plain text: the status says enough.
       }
-      if (missingOk && message.includes("does not exist")) return null;
+      if (tolerate !== undefined && message.includes(tolerate)) return null;
       throw new PinError(`kubo answered ${answer.status} to ${what}${message}`);
     }
     return text;
   }
+  return { endpoint, call: call as KuboCall };
+}
+
+function kuboAdapter(environment: Record<string, string | undefined>): PinAdapter {
+  const { endpoint, call } = kuboCaller(environment);
 
   return {
     name: "kubo",
@@ -274,7 +285,7 @@ function kuboAdapter(environment: Record<string, string | undefined>): PinAdapte
         null,
         KUBO_LIST_TIMEOUT_MILLISECONDS,
       );
-      const existing = await call(`/api/v0/files/stat?${query({ arg: target })}`, `the lookup of ${target}`, null, KUBO_LIST_TIMEOUT_MILLISECONDS, true);
+      const existing = await call(`/api/v0/files/stat?${query({ arg: target })}`, `the lookup of ${target}`, null, KUBO_LIST_TIMEOUT_MILLISECONDS, "does not exist");
       if (existing !== null) {
         await call(
           `/api/v0/files/rm?${query({ arg: target, recursive: "true" })}`,
@@ -310,4 +321,43 @@ export function pinAdapterFromEnvironment(environment: Record<string, string | u
   const make = Object.hasOwn(ADAPTERS, provider) ? ADAPTERS[provider] : undefined;
   if (!make) throw new PinError(`no pinning adapter named ${provider} (known: ${Object.keys(ADAPTERS).join(", ")})`);
   return make(environment);
+}
+
+/** How long pinning one CID from the network may take before it counts as unavailable. */
+const KUBO_REPIN_TIMEOUT_MILLISECONDS = 600_000;
+
+/** Asks the kubo node about pins by CID, and pins a CID it can fetch from the network. Used by the repin helper. */
+export type KuboPins = {
+  endpoint: string;
+  /** True when the node holds a recursive pin of the CID. */
+  isPinned(cid: string): Promise<boolean>;
+  /** Pins the CID recursively under `name`; the node fetches what it lacks from the network. */
+  pin(cid: string, name: string): Promise<void>;
+};
+
+/**
+ * The pin queries of the kubo node named by KUBO_API_URL (and KUBO_API_AUTH, never printed), as the kubo adapter reaches it.
+ * @throws PinError when KUBO_API_URL is missing, not http(s), or carries credentials.
+ */
+export function kuboPinsFromEnvironment(environment: Record<string, string | undefined>): KuboPins {
+  const { endpoint, call } = kuboCaller(environment);
+  const query = (pairs: Record<string, string>) => new URLSearchParams(pairs).toString();
+  return {
+    endpoint,
+    async isPinned(cid) {
+      const listed = await call(`/api/v0/pin/ls?${query({ arg: cid, type: "recursive" })}`, `the pin list of ${cid}`, null, KUBO_LIST_TIMEOUT_MILLISECONDS, "not pinned");
+      if (listed === null) return false;
+      let keys: unknown;
+      try {
+        keys = (JSON.parse(listed) as { Keys?: unknown }).Keys;
+      } catch {
+        keys = undefined;
+      }
+      if (typeof keys !== "object" || keys === null) throw new PinError(`kubo answered the pin list of ${cid} in an unknown shape`);
+      return (keys as Record<string, { Type?: unknown } | undefined>)[cid]?.Type === "recursive";
+    },
+    async pin(cid, name) {
+      await call(`/api/v0/pin/add?${query({ arg: cid, name, recursive: "true", progress: "false" })}`, `pinning ${cid}`, null, KUBO_REPIN_TIMEOUT_MILLISECONDS);
+    },
+  };
 }

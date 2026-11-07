@@ -13,12 +13,21 @@
 #   3. builds the terminal programs into downloads/ (script/build-terminal.sh)
 #   4. builds both guest programs (light-client.elf, fork-observation.elf) and the prover for this machine
 #      (cargo build --release --no-default-features --features sp1) into downloads/
-#   5. writes version.json, SHA256SUMS, version.json.sig and public-keys.json
-#   6. verifies the directory; the last line is "release verified"
+#   5. writes version.json and SHA256SUMS, then releases-log.json: the channel's published release log with this
+#      release's sites appended (see "The release log" in docs/release.md)
+#   6. signs version.json and releases-log.json, writes public-keys.json
+#   7. verifies the directory; the last line is "release verified"
 #
 # Environment:
 #   RELEASE_VERSION              the release version (default 0.0.0-<short commit>)
 #   RELEASE_PREVIOUS_MANIFEST    the previous version.json, so the sequence goes up (default: none, sequence 1)
+#   RELEASE_REMOTE               the release repository. The published releases-log.json of the channel's branch is
+#                                fetched from it before the build and checked against the channel's trusted keys
+#                                (the landing configuration, never the release). A branch that has releases but no
+#                                log stops the build: make the first log with script/release/bootstrap-log.sh.
+#   RELEASE_PREVIOUS_LOG         a releases-log.json to append to instead (its signature at <file>.sig)
+#                                With neither, the log starts with this release, and publish.sh refuses it when the
+#                                release repository already has a log.
 #   RELEASE_TERMINAL_TARGETS     Bun targets for the terminal, space separated (default: all of build-terminal.sh)
 #   RELEASE_CHANNEL              stable (default) or next. next is the staging channel served at next.zkb.fi: the
 #                                landing page is built from landing.next.config.json (it trusts only the staging key),
@@ -48,6 +57,19 @@ if [ -n "$(ls -A "$release")" ]; then
   exit 1
 fi
 cli=(node "$repository_root/explorer/release/src/cli.ts")
+# shellcheck source=script/release/channels.sh
+. "$repository_root/script/release/channels.sh"
+trusted_keys="$(channel_keys_file "$channel")"
+
+# The published release log comes first, so a missing or broken one stops the build before it starts.
+log_work="$(mktemp -d)"
+trap 'rm -rf "$log_work"' EXIT
+channel_previous_log "$channel" "$log_work" </dev/null
+previous_log=()
+if [ -n "$CHANNEL_PREVIOUS_LOG" ]; then
+  "${cli[@]}" log-check "$CHANNEL_PREVIOUS_LOG" --public-keys "$trusted_keys" </dev/null
+  previous_log=(--previous-log "$CHANNEL_PREVIOUS_LOG" --public-keys "$trusted_keys")
+fi
 
 # The full SHA: a promotion checks it is on origin/main (script/release/promote-checks.sh).
 commit="$(git -C "$repository_root" rev-parse HEAD)"
@@ -81,8 +103,10 @@ previous=()
 if [ -n "${RELEASE_PREVIOUS_MANIFEST:-}" ]; then previous=(--previous "$RELEASE_PREVIOUS_MANIFEST"); fi
 "${cli[@]}" manifest "$release" --version "$version" --commit "$commit" --published-at "$published_at" --channel "$channel" \
   "${previous[@]+"${previous[@]}"}" </dev/null
-# The only step that reads standard input: the release key.
+"${cli[@]}" log "$release" "${previous_log[@]+"${previous_log[@]}"}" </dev/null
+# The only step that reads standard input: the release key. It signs version.json and releases-log.json.
 "${cli[@]}" sign "$release"
 
 echo "== verify"
+"${cli[@]}" log-check "$release/releases-log.json" --public-keys "$release/public-keys.json" --manifest "$release/version.json" </dev/null
 "${cli[@]}" verify "$release" --public-keys "$release/public-keys.json" </dev/null
