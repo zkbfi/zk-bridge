@@ -173,7 +173,7 @@ export const BlockPage = ({ chainId, number }: { readonly chainId: number; reado
   const { pair } = useServices();
   const chain = chainOf(pair, chainId);
   const reader = useChainReader()(chainId);
-  const block = useQuery({ queryKey: ["block", chainId, number.toString()], enabled: reader !== null, queryFn: () => reader!.block(number), retry: 1 });
+  const block = useQuery({ queryKey: ["block", chainId, number.toString()], enabled: reader !== null, queryFn: () => reader!.block(number), retry: 0 });
   const proofs = useProofs().filter((proof) => (proof.chainId === chainId && proof.blockNumber === number) || (proof.chainId !== chainId && proof.executionBlockNumber === number));
   const data = block.data as (Awaited<ReturnType<NonNullable<typeof reader>["block"]>> & { readonly transactions?: readonly unknown[] }) | undefined;
   return (

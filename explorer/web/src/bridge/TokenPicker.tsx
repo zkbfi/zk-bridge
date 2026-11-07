@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
-import { tokenBalance } from "./bridge-model";
+import { isNativeToken, tokenBalance } from "./bridge-model";
 import type { ChainSnapshotResult } from "@terminal/chain/live-reads";
 import type { ChainSide, TokenInfo } from "@terminal/model/types";
 import { useServices } from "../app/services";
@@ -36,8 +36,10 @@ const keyOf = (token: TokenInfo): string => `${token.side}:${token.address.toLow
 const balanceOf = (token: TokenInfo, snapshots: readonly ChainSnapshotResult[]): bigint | null => tokenBalance(token, snapshots);
 
 /**
- * Which rows the picker shows: without a query, only the user's tokens (held now, or used or bridged with zkb.fi
- * before); with a query, every bridgeable token. The tab narrows to a chain.
+ * Which rows the picker shows: without a query, the native coin of each chain, then the user's tokens (held now, or used or
+ * bridged with zkb.fi before); with a query, every bridgeable token. The tab narrows to a chain. When a chain's balances
+ * are unknown (still loading, or the read failed), that chain lists all its bridgeable tokens: hiding them would leave the
+ * user with nothing to pick ("the token is not presented to the user").
  */
 export const pickerRows = (input: {
   readonly tokens: readonly TokenInfo[];
@@ -48,9 +50,11 @@ export const pickerRows = (input: {
   readonly selected: TokenInfo;
 }): readonly TokenInfo[] => {
   const query = input.query.trim().toLowerCase();
+  const known = (side: ChainSide): boolean => input.snapshots.some((result) => result.status === "ok" && result.snapshot.chain.side === side);
   return input.tokens.filter((token) => {
     if (input.tab !== "all" && token.side !== input.tab) return false;
     if (query !== "") return token.symbol.toLowerCase().includes(query) || token.address.toLowerCase().includes(query);
+    if (isNativeToken(token) || !known(token.side)) return true;
     const balance = balanceOf(token, input.snapshots);
     return (balance !== null && balance > 0n) || input.used?.has(keyOf(token)) === true || token === input.selected;
   });

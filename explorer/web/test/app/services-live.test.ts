@@ -1,4 +1,4 @@
-import { toFunctionSelector } from "viem";
+import { decodeFunctionData, encodeFunctionResult, multicall3Abi, toFunctionSelector } from "viem";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
@@ -105,14 +105,20 @@ describe("the endpoints and the head read of the proof panel", () => {
 
   it("reads the head slot from the light client contract of the chain, over the RPC URL of that chain", async () => {
     const calls: { url: string; to: string; data: string }[] = [];
+    // The read is folded into Multicall3 (one aggregate3 call) and sent as a JSON-RPC batch. The stub unpacks both.
+    const head = `0x${(14_100_000).toString(16).padStart(64, "0")}` as const;
     vi.stubGlobal("fetch", async (url: string, init: { body: string }) => {
-      const request = JSON.parse(init.body) as { id: number; params: [{ to: string; data: string }] };
-      calls.push({ url, to: request.params[0].to, data: request.params[0].data });
-      return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: `0x${(14_100_000).toString(16).padStart(64, "0")}` }));
+      const requests = JSON.parse(init.body) as { id: number; params: [{ to: string; data: `0x${string}` }] }[];
+      const answers = requests.map((request) => {
+        const { args } = decodeFunctionData({ abi: multicall3Abi, data: request.params[0].data });
+        for (const call of args[0] as readonly { target: string; callData: string }[]) calls.push({ url, to: call.target, data: call.callData });
+        const result = encodeFunctionResult({ abi: multicall3Abi, functionName: "aggregate3", result: (args[0] as readonly unknown[]).map(() => ({ success: true, returnData: head })) });
+        return { jsonrpc: "2.0", id: request.id, result };
+      });
+      return new Response(JSON.stringify(answers));
     });
     try {
-      const head = await liveServices().readLightClientHead(SECOND_CHAIN);
-      expect(head).toBe(14_100_000n);
+      expect(await liveServices().readLightClientHead(SECOND_CHAIN)).toBe(14_100_000n);
       expect(calls).toHaveLength(1);
       expect(calls[0]?.url).toBe("https://registry.example.org/pls");
       expect(calls[0]?.to.toLowerCase()).toBe(FIXTURE_PAIR.second.contracts.lightClient.toLowerCase());

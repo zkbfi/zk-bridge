@@ -3,9 +3,10 @@
  * One implementation talks to RPC endpoints. The fixture implementation answers from memory, so the dashboard and
  * its tests run with no network.
  */
-import { createPublicClient, defineChain, http, type Address, type Hash } from 'viem'
+import { createPublicClient, type Address, type Hash } from 'viem'
 import type { FlowChainClient } from '../flow/transaction-flow'
 import type { ChainConfig, PairConfig, TokenInfo } from '../model/types'
+import { buildRpcTransport, CLIENT_BATCH, rpcChain } from './rpc-transport'
 import { readChainSnapshot, readRouterAddresses, type ChainSnapshotResult, type ReadClient, type RouterAddressesReading } from './live-reads'
 
 /** The RPC URL of a chain is not set. */
@@ -22,8 +23,11 @@ export interface NativeBalances {
 /** What the chain access needs from the client of one chain: the reads and the transaction flow calls. */
 export type RpcClient = ReadClient & FlowChainClient
 
-/** Creates the client of one chain from its description and its RPC URL. A test passes a fake. */
-export type RpcClientFactory = (chain: ChainConfig, url: string) => RpcClient
+/**
+ * Creates the client of one chain from its description and its RPC URL. A test passes a fake. `balanced` (the default)
+ * spreads reads over the endpoints; `sticky` stays on one endpoint, for the transaction flow (see `rpc-transport.ts`).
+ */
+export type RpcClientFactory = (chain: ChainConfig, url: string, mode?: 'balanced' | 'sticky') => RpcClient
 
 /** What the dashboard needs from the chains. */
 export interface ChainAccess {
@@ -51,17 +55,18 @@ export function createRpcChainAccess(
   environment: Record<string, string | undefined>,
   createClient: RpcClientFactory = createViemClient,
 ): ChainAccess {
-  const clients = new Map<number, RpcClient>()
+  const clients = new Map<string, RpcClient>()
 
-  function clientOf(chain: ChainConfig): RpcClient {
-    const existing = clients.get(chain.chainId)
+  function clientOf(chain: ChainConfig, mode: 'balanced' | 'sticky' = 'balanced'): RpcClient {
+    const clientKey = `${mode}:${chain.chainId}`
+    const existing = clients.get(clientKey)
     if (existing !== undefined) return existing
     const url = environment[chain.rpcEnvironmentVariable]
     if (url === undefined || url === '') {
       throw new MissingRpcError(`Set ${chain.rpcEnvironmentVariable} to the RPC URL of ${chain.name}.`)
     }
-    const created = createClient(chain, url)
-    clients.set(chain.chainId, created)
+    const created = mode === 'balanced' ? createClient(chain, url) : createClient(chain, url, mode)
+    clients.set(clientKey, created)
     return created
   }
 
@@ -107,22 +112,22 @@ export function createRpcChainAccess(
       }
     },
     flowClient(chainId) {
-      return clientOf(chainById(chainId))
+      // One endpoint for a whole transaction sequence: the estimate after an approval must reach the node that saw the receipt.
+      return clientOf(chainById(chainId), 'sticky')
     },
   }
 }
 
-/** The default client factory: a viem public client over HTTP with batched multicall. It opens no connection until a call. */
-function createViemClient(chain: ChainConfig, url: string): RpcClient {
+/**
+ * The default client factory: a viem public client over HTTP. A default valve.city URL has the public RPC behind it, calls
+ * made together share one HTTP request, and reads fold into Multicall3 (see `rpc-transport.ts`). It opens no connection
+ * until a call.
+ */
+function createViemClient(chain: ChainConfig, url: string, mode: 'balanced' | 'sticky' = 'balanced'): RpcClient {
   const client = createPublicClient({
-    chain: defineChain({
-      id: chain.chainId,
-      name: chain.name,
-      nativeCurrency: { name: chain.nativeSymbol, symbol: chain.nativeSymbol, decimals: 18 },
-      rpcUrls: { default: { http: [url] } },
-    }),
-    transport: http(url),
-    batch: { multicall: true },
+    chain: rpcChain({ id: chain.chainId, name: chain.name, symbol: chain.nativeSymbol, rpcUrl: url }),
+    transport: buildRpcTransport(url, { sticky: mode === 'sticky' }),
+    batch: CLIENT_BATCH,
   })
   // The viem client has the methods of both interfaces. Its own types are wider than the two narrow interfaces.
   return client as unknown as RpcClient

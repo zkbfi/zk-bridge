@@ -73,9 +73,51 @@ async function readPosition(
   const [balance, allowance, relayGas] = await Promise.all([
     readBigint(client, { address: token.address, abi: erc20Abi, functionName: 'balanceOf', args: [account] }),
     readBigint(client, { address: token.address, abi: erc20Abi, functionName: 'allowance', args: [account, mediator] }),
-    readRelayGasFacts(client, { mediator, token: token.address }),
+    cachedRelayGasFacts(client, { chain, mediator, token: token.address }),
   ])
   return { token, balance, allowance, relayGas }
+}
+
+/** How long a `unacknowledged` reading is kept. It changes once the first bridge of the token is proven, so it is re-read. */
+const UNACKNOWLEDGED_KEEP_MILLISECONDS = 5 * 60_000
+
+interface CachedFacts {
+  readonly facts: Promise<RelayGasFacts>
+  /** When the entry stops being valid, or Infinity. */
+  readonly until: number
+}
+
+/** The relay gas facts already read, per client. A new client (new RPC settings) starts empty. */
+const relayGasCache = new WeakMap<object, Map<string, CachedFacts>>()
+
+/**
+ * Relay gas facts (`nativeTokenAddress`, `isBridgedTokenDeployAcknowledged`) of a token. They do not change with the
+ * account or with time (a copy stays a copy; a native token stays native; once the mediator acknowledged the deploy it stays
+ * so), but the snapshot is polled every 15 s, so reading them each time was most of the RPC load. They are read once per
+ * client, chain, mediator and token. A token that is native and not yet acknowledged can change, so that reading is kept
+ * for five minutes only. A failed read is not kept.
+ */
+function cachedRelayGasFacts(client: ReadClient, input: { chain: ChainConfig; mediator: Address; token: Address }): Promise<RelayGasFacts> {
+  let entries = relayGasCache.get(client)
+  if (entries === undefined) {
+    entries = new Map()
+    relayGasCache.set(client, entries)
+  }
+  const key = `${input.chain.chainId}:${input.mediator}:${input.token}`.toLowerCase()
+  const known = entries.get(key)
+  if (known !== undefined && known.until > Date.now()) return known.facts
+  const facts = readRelayGasFacts(client, { mediator: input.mediator, token: input.token })
+  const map = entries
+  map.set(key, { facts, until: Infinity })
+  facts.then(
+    (value) => {
+      if (value.kind === 'unacknowledged') map.set(key, { facts, until: Date.now() + UNACKNOWLEDGED_KEEP_MILLISECONDS })
+    },
+    () => {
+      if (map.get(key)?.facts === facts) map.delete(key)
+    },
+  )
+  return facts
 }
 
 async function readBigint(

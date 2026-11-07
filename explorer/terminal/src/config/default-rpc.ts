@@ -5,17 +5,25 @@
  */
 export const DEFAULT_RPC_CHAIN_IDS: readonly number[] = [1, 369, 11155111, 943]
 
-const PUBLIC_RPC: Readonly<Record<number, string>> = {
-  1: 'https://ethereum-rpc.publicnode.com',
-  369: 'https://rpc.pulsechain.com',
-  11155111: 'https://ethereum-sepolia-rpc.publicnode.com',
-  943: 'https://rpc.v4.testnet.pulsechain.com',
+/**
+ * The public RPCs behind the valve.city demo key. Owner (2026-11-07): "we should also use publicnodes as fallback as
+ * well as the main pulsechain.com rpc" and "we should be load balancing across them". All answer `eth_chainId` correctly and
+ * send `access-control-allow-origin: *`, so a browser can call them.
+ */
+const PUBLIC_RPC: Readonly<Record<number, readonly string[]>> = {
+  1: ['https://ethereum-rpc.publicnode.com'],
+  369: ['https://rpc.pulsechain.com', 'https://pulsechain-rpc.publicnode.com'],
+  11155111: ['https://ethereum-sepolia-rpc.publicnode.com'],
+  943: ['https://rpc.v4.testnet.pulsechain.com', 'https://pulsechain-testnet-rpc.publicnode.com'],
 }
 
-/** Every default RPC of a chain in the order to try them: the valve.city demo key, then the public RPC. Empty for a chain with no default. */
+/**
+ * Every default RPC of a chain: the valve.city demo key first, then the public RPCs. Reads are spread across all of them
+ * (see `chain/rpc-transport.ts`). Empty for a chain with no default.
+ */
 export function defaultRpcUrls(chainId: number): readonly string[] {
   if (!DEFAULT_RPC_CHAIN_IDS.includes(chainId)) return []
-  return [`https://one.valve.city/rpc/vk_demo/evm/${chainId}`, PUBLIC_RPC[chainId] as string]
+  return [`https://one.valve.city/rpc/vk_demo/evm/${chainId}`, ...(PUBLIC_RPC[chainId] ?? [])]
 }
 
 /** The first default RPC of a chain (valve.city), or null for a chain with no default. */

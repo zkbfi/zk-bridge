@@ -90,8 +90,11 @@ describe('createRpcChainAccess', () => {
     await access.readSnapshots({ account, tokens: [] })
     await access.nativeBalances([account])
     expect(created).toHaveLength(2)
-    expect(access.flowClient(369)).toBe(created[1]!.client)
-    expect(access.flowClient(1)).toBe(created[0]!.client)
+    // The transaction flow has its own client per chain (sticky to one endpoint), reused for every later call.
+    const flow369 = access.flowClient(369)
+    expect(flow369).not.toBe(created[1]!.client)
+    expect(access.flowClient(369)).toBe(flow369)
+    expect(created).toHaveLength(3)
   })
 
   test('nativeBalances gives the balance of each address on each chain, and null for a chain that fails', async () => {
