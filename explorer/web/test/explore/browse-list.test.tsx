@@ -74,7 +74,18 @@ const go = (hashText: string) =>
     window.location.hash = hashText;
     window.dispatchEvent(new HashChangeEvent("hashchange"));
   });
-const menu = (name: string) => screen.getByRole("combobox", { name }) as HTMLSelectElement;
+/** A pill that opens a menu: its name starts with the filter's label ("Status", or "Status: In flight" once set). */
+const pill = (name: string) => screen.getByRole("button", { name: new RegExp(`^${name}(:|\\d|$)`) });
+/** Opens the pill's menu and picks one row of it. */
+const choose = async (name: string, row: string | RegExp) => {
+  await userEvent.click(pill(name));
+  await userEvent.click(within(screen.getByRole("menu", { name })).getByRole("menuitemradio", { name: row }));
+};
+/** Opens the Filters menu, then one filter's page of it. */
+const openFilter = async (label: string) => {
+  await userEvent.click(pill("Filters"));
+  await userEvent.click(within(screen.getByRole("menu", { name: "Filters" })).getByRole("menuitem", { name: new RegExp(`^${label}`) }));
+};
 const lastRequest = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.at(-1)?.[0] as Record<string, unknown>;
 
 beforeEach(() => window.localStorage.clear());
@@ -125,55 +136,153 @@ describe("the transfers list", () => {
   it("filters by a menu, writes it to the address, and starts again from page 1", async () => {
     open("#/explore/browse/transfers?page=3");
     await screen.findByRole("navigation", { name: "Pages" });
-    await userEvent.selectOptions(menu("Status"), "In flight");
+    await choose("Status", "In flight");
     expect(window.location.hash).toBe("#/explore/browse/transfers?status=inflight");
     go(window.location.hash);
     await waitFor(() => expect(lastRequest(browse.messages)).toMatchObject({ status: "inflight", offset: 0 }));
     expect(await screen.findByRole("heading", { name: /Transfers & messages/ })).toHaveTextContent("1,284 match");
-    expect(menu("Status").value).toBe("inflight");
+    expect(pill("Status")).toHaveTextContent("Status: In flight");
+    // The active filter shows as a removable chip, and the pill closed after the pick, giving focus back to itself.
+    expect(screen.getByRole("button", { name: "Remove filter Status: In flight" })).toBeInTheDocument();
+    expect(screen.queryByRole("menu")).toBeNull();
     // With in-flight rows the oldest first sort is the one that shows what waited longest.
-    expect(within(menu("Sort")).getByRole("option", { name: "Waiting longest first" })).toHaveValue("oldest");
+    await userEvent.click(pill("Sort"));
+    expect(within(screen.getByRole("menu", { name: "Sort" })).getByRole("menuitemradio", { name: "Waiting longest first" })).toBeEnabled();
   });
 
-  it("offers every filter and sort, and holds the amount sorts back until a token is chosen", async () => {
+  it("has no native select anywhere, and offers the filters in sequence: pills for the primary ones, the rest in a Filters menu", async () => {
     open("#/explore/browse/transfers");
     await screen.findByRole("navigation", { name: "Pages" });
-    for (const name of ["Sent from", "Status", "Type", "Token", "Sent", "Sort"]) expect(menu(name)).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Address" })).toBeInTheDocument();
-    const sort = menu("Sort");
-    expect(within(sort).getByRole("option", { name: "Largest amount first (choose a token)" })).toBeDisabled();
-    expect(within(sort).getByRole("option", { name: "Newest first" })).toBeEnabled();
-    const token = within(menu("Token")).getAllByRole("option")[1] as HTMLOptionElement;
-    await userEvent.selectOptions(menu("Token"), token.value);
+    expect(document.querySelector("select")).toBeNull();
+    for (const name of ["Sent from", "Status", "Filters", "Sort"]) expect(pill(name)).toHaveAttribute("aria-haspopup", "menu");
+    // Type, Token, Time and Address wait inside the Filters menu, in that order, each opening its own options.
+    await userEvent.click(pill("Filters"));
+    const rows = within(screen.getByRole("menu", { name: "Filters" })).getAllByRole("menuitem");
+    expect(rows.map((row) => row.textContent?.replace(/Any$/, ""))).toEqual(["Type", "Token", "Time", "Address"]);
+    await userEvent.click(rows[0] as HTMLElement);
+    const options = within(screen.getByRole("menu", { name: "Filters" })).getAllByRole("menuitemradio");
+    expect(options.map((option) => option.textContent)).toEqual(["Transfers and messages", "Transfers", "Messages"]);
+  });
+
+  it("holds the amount sorts back until a token is chosen", async () => {
+    open("#/explore/browse/transfers");
+    await screen.findByRole("navigation", { name: "Pages" });
+    await userEvent.click(pill("Sort"));
+    const sort = within(screen.getByRole("menu", { name: "Sort" }));
+    expect(sort.getByRole("menuitemradio", { name: "Largest amount first (choose a token)" })).toHaveAttribute("aria-disabled", "true");
+    expect(sort.getByRole("menuitemradio", { name: "Newest first" })).toHaveAttribute("aria-checked", "true");
+    await userEvent.click(sort.getByRole("menuitemradio", { name: "Largest amount first (choose a token)" }));
+    expect(window.location.hash).toBe("#/explore/browse/transfers");
+    await userEvent.keyboard("{Escape}");
+    await openFilter("Token");
+    const token = within(screen.getByRole("menu", { name: "Filters" })).getAllByRole("menuitemradio")[1] as HTMLElement;
+    await userEvent.click(token);
     expect(window.location.hash).toContain("token=");
     go(window.location.hash);
-    await waitFor(() => expect(within(menu("Sort")).getByRole("option", { name: "Largest amount first" })).toBeEnabled());
-    await userEvent.selectOptions(menu("Sort"), "amount-high");
+    await userEvent.click(pill("Sort"));
+    expect(within(screen.getByRole("menu", { name: "Sort" })).getByRole("menuitemradio", { name: "Largest amount first" })).not.toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(within(screen.getByRole("menu", { name: "Sort" })).getByRole("menuitemradio", { name: "Largest amount first" }));
     expect(window.location.hash).toContain("sort=amount-high");
+  });
+
+  it("works from the keyboard: Down opens, arrows move, Enter picks, Escape closes and gives focus back to the pill", async () => {
+    open("#/explore/browse/transfers");
+    await screen.findByRole("navigation", { name: "Pages" });
+    const status = pill("Status");
+    status.focus();
+    await userEvent.keyboard("{ArrowDown}");
+    const menu = screen.getByRole("menu", { name: "Status" });
+    expect(within(menu).getByRole("menuitemradio", { name: "Any status" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+    expect(within(menu).getByRole("menuitemradio", { name: "Delivered" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowUp}{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(status).toHaveFocus();
+    expect(window.location.hash).toBe("#/explore/browse/transfers");
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
+    expect(window.location.hash).toBe("#/explore/browse/transfers?status=inflight");
+    expect(status).toHaveFocus();
+    // In the Filters menu Right opens a filter and Left goes back to the list.
+    pill("Filters").focus();
+    await userEvent.keyboard("{ArrowDown}{ArrowRight}");
+    expect(within(screen.getByRole("menu", { name: "Filters" })).getByRole("menuitem", { name: "Filters" })).toBeInTheDocument();
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(within(screen.getByRole("menu", { name: "Filters" })).getByRole("menuitem", { name: /^Type/ })).toBeInTheDocument();
+  });
+
+  it("moves to the first and last row with Home and End, closes on Tab, and closes when focus leaves", async () => {
+    open("#/explore/browse/transfers");
+    await screen.findByRole("navigation", { name: "Pages" });
+    await userEvent.click(pill("Status"));
+    const menu = within(screen.getByRole("menu", { name: "Status" }));
+    await userEvent.keyboard("{End}");
+    expect(menu.getByRole("menuitemradio", { name: "Failed" })).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    expect(menu.getByRole("menuitemradio", { name: "Any status" })).toHaveFocus();
+    await userEvent.keyboard("{Tab}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    await userEvent.click(pill("Sort"));
+    expect(screen.getByRole("menu", { name: "Sort" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("heading", { name: /Transfers & messages/ }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    await userEvent.click(pill("Sort"));
+    await userEvent.click(pill("Sort"));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("types an address start in the Filters menu: Home and End move the caret in the box, and a refused value cannot be applied", async () => {
+    open("#/explore/browse/addresses");
+    await screen.findByRole("navigation", { name: "Pages" }).catch(() => undefined);
+    await openFilter("Starts with");
+    const box = screen.getByRole("textbox", { name: "Starts with" });
+    await userEvent.type(box, "zz");
+    await userEvent.keyboard("{Home}{End}");
+    expect(box).toHaveFocus();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Apply" }));
+    expect(window.location.hash).toBe("#/explore/browse/addresses");
+    expect(screen.getByRole("menu", { name: "Filters" })).toBeInTheDocument();
+  });
+
+  it("shows a filter value the menu does not list (a token this release does not carry) as it was written", async () => {
+    const unknown = `first:0x${"0".repeat(39)}1`;
+    open(`#/explore/browse/transfers?token=${unknown}`);
+    expect(await screen.findByRole("button", { name: `Remove filter Token: ${unknown}` })).toBeInTheDocument();
+  });
+
+  it("shows active filters as chips that remove one at a time, and a counter on the Filters pill", async () => {
+    open("#/explore/browse/transfers?status=delivered&kind=token");
+    const chips = within(await screen.findByRole("list", { name: "Active filters" }));
+    expect(chips.getByRole("button", { name: "Remove filter Status: Delivered" })).toBeInTheDocument();
+    expect(pill("Filters")).toHaveTextContent("Filters1");
+    await userEvent.click(chips.getByRole("button", { name: "Remove filter Type: Transfers" }));
+    expect(window.location.hash).toBe("#/explore/browse/transfers?status=delivered");
   });
 
   it("filters by an address typed in full, and says why a short one is refused", async () => {
     open("#/explore/browse/transfers");
     await screen.findByRole("navigation", { name: "Pages" });
+    await openFilter("Address");
     const box = screen.getByRole("textbox", { name: "Address" });
     await userEvent.type(box, "0x12");
     expect(await screen.findByRole("alert")).toHaveTextContent("An address is 0x followed by 40 hex characters.");
-    await userEvent.tab();
+    await userEvent.type(box, "{Enter}");
     expect(window.location.hash).toBe("#/explore/browse/transfers");
     await userEvent.clear(box);
     await userEvent.type(box, `${ADDRESS}{Enter}`);
     expect(window.location.hash).toBe(`#/explore/browse/transfers?account=${ADDRESS}`);
     go(window.location.hash);
     await waitFor(() => expect(lastRequest(browse.messages)).toMatchObject({ address: ADDRESS }));
+    expect(screen.getByRole("button", { name: /^Remove filter Address: 0x709979…79c8$/ })).toBeInTheDocument();
+    await openFilter("Address");
     expect(screen.getByRole("textbox", { name: "Address" })).toHaveValue(ADDRESS);
     await userEvent.clear(screen.getByRole("textbox", { name: "Address" }));
-    await userEvent.tab();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Apply" }));
     expect(window.location.hash).toBe("#/explore/browse/transfers");
   });
 
   it("clears every filter at once", async () => {
     open("#/explore/browse/transfers?status=delivered&kind=token");
-    await userEvent.click(await screen.findByRole("button", { name: "Clear filters" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Clear all" }));
     expect(window.location.hash).toBe("#/explore/browse/transfers");
   });
 
@@ -250,12 +359,13 @@ describe("the proofs list", () => {
     expect(row).toHaveTextContent("slot 11,521,312 · 12 min ago");
     expect(screen.getByRole("link", { name: /Proof #140/ })).toHaveAttribute("href", `#/explore/proof/${pair.first.chainId}/140`);
     expect(screen.getByRole("heading", { name: /Proofs/ })).toHaveTextContent("221 in total");
-    expect(menu("Posted on")).toBeInTheDocument();
-    await userEvent.selectOptions(menu("Sort"), "slot-high");
+    expect(pill("Posted on")).toBeInTheDocument();
+    await choose("Sort", "Highest slot first");
     expect(window.location.hash).toBe("#/explore/browse/proofs?sort=slot-high");
+    await openFilter("Poster");
     await userEvent.type(screen.getByRole("textbox", { name: "Poster" }), `${ADDRESS}{Enter}`);
     expect(window.location.hash).toContain(`poster=${ADDRESS}`);
-    await userEvent.selectOptions(menu("Posted on"), "second");
+    await choose("Posted on", pair.second.name);
     expect(window.location.hash).toContain("chain=second");
   });
 });
@@ -268,9 +378,10 @@ describe("the tokens list", () => {
     expect(copy).toHaveTextContent("bridged copy · 1 transfer");
     expect(screen.getByRole("link", { name: /3 transfers/ })).toHaveAttribute("href", `#/explore/token/first/${ADDRESS}`);
     expect(screen.getByRole("link", { name: /0x70997970…79c8/ })).toHaveTextContent("native");
-    await userEvent.selectOptions(menu("Kind"), "copy");
+    expect(screen.queryByRole("button", { name: "Filters" })).toBeNull();
+    await choose("Kind", "Bridged copies");
     expect(window.location.hash).toBe("#/explore/browse/tokens?kind=copy");
-    await userEvent.selectOptions(menu("Sort"), "transfers");
+    await choose("Sort", "Most transfers");
     expect(window.location.hash).toContain("sort=transfers");
   });
 });
@@ -282,8 +393,9 @@ describe("the addresses list", () => {
     expect(row).toHaveAttribute("href", `#/explore/address/${ADDRESS}`);
     expect(row).toHaveTextContent("2 sent · 1 received · 3 proofs posted · last yesterday");
     expect(screen.getByRole("link", { name: /0x00000000…00aa/ })).toHaveTextContent("1 proofs posted");
-    await userEvent.selectOptions(menu("Role"), "poster");
+    await choose("Role", "Proof posters");
     expect(window.location.hash).toBe("#/explore/browse/addresses?role=poster");
+    await openFilter("Starts with");
     await userEvent.type(screen.getByRole("textbox", { name: "Starts with" }), "zz{Enter}");
     expect(await screen.findByRole("alert")).toHaveTextContent("Type the start of an address, hex characters only.");
     await userEvent.clear(screen.getByRole("textbox", { name: "Starts with" }));
@@ -337,11 +449,12 @@ describe("the browse tiles", () => {
 });
 
 describe("the browse bar on a phone", () => {
-  it("wraps its fields and stacks the pager under 520 px", async () => {
+  it("wraps its pills and chips and stacks the pager under 520 px", async () => {
     const css = (await import("node:fs")).readFileSync(`${import.meta.dirname}/../../src/explore/explore.css`, "utf8");
     expect(css).toMatch(/\.zb-bbar \{[^}]*flex-wrap: wrap/);
     expect(css).toMatch(/\.zb-bpager \{[^}]*flex-wrap: wrap/);
-    expect(css).toMatch(/@media \(max-width: 520px\) \{[^}]*\.zb-bfld/);
+    expect(css).toMatch(/\.zb-bchips \{[^}]*flex-wrap: wrap/);
+    expect(css).toMatch(/@media \(max-width: 520px\) \{[^}]*\.zb-bpage/);
     fireEvent.resize(window);
   });
 });

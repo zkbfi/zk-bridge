@@ -51,7 +51,18 @@ export type BridgeScreenProps = {
 /** The receiver the fee estimate reads when no wallet is connected. Never sent anywhere. */
 const ESTIMATE_RECEIVER = "0x000000000000000000000000000000000000dEaD";
 
-const short = (address: string): string => `${address.slice(0, 6)}…${address.slice(-4)}`;
+/** An address in full. When the row is too narrow the browser shortens the head with an ellipsis and the last six
+ *  characters stay, so the end of the address, the part people check, is always visible. Selecting or copying it
+ *  gives the whole address. */
+function AddressText({ address }: { address: string }) {
+  const tail = 6;
+  return (
+    <span className="zb-addr zb-mono" title={address} aria-label={address}>
+      <span className="zb-addr-head">{address.slice(0, -tail)}</span>
+      <span className="zb-addr-tail">{address.slice(-tail)}</span>
+    </span>
+  );
+}
 
 /** The tip defaults to a share of the amount (owner: "default is a percent anyway"); the address can change it. */
 const optionsOf = (tip: TipQuery | undefined): DeliveryOptions => ({ ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage", ...tip });
@@ -687,7 +698,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             </button>
           ) : (
             <span>
-              <span className="zb-mono">{short(account)}</span>
+              <AddressText address={account} />
               <Identicon address={account} />
             </span>
           )}
@@ -803,20 +814,29 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
               To <TokenIcon subject={{ chainId: destination.chainId }} symbol={destination.name} size={26} />
             </span>
             {unlocked ? (
-              <input
-                ref={destinationInput}
-                className="zb-dest-input zb-mono"
-                aria-label={`Destination address on ${destination.name}`}
-                aria-invalid={receiverProblem !== null && typedReceiver !== "" ? true : undefined}
-                spellCheck={false}
-                autoComplete="off"
-                placeholder="0x… destination address"
-                value={typedReceiver}
-                onChange={(event) => write({ ...form, receiver: event.target.value })}
-              />
+              <div className="zb-dest-field">
+                <input
+                  ref={destinationInput}
+                  className="zb-dest-input zb-mono"
+                  aria-label={`Destination address on ${destination.name}`}
+                  aria-invalid={receiverProblem !== null && typedReceiver !== "" ? true : undefined}
+                  data-filled={typedReceiver.trim() === "" ? undefined : "true"}
+                  title={typedReceiver.trim() === "" ? undefined : typedReceiver.trim()}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="0x… destination address"
+                  value={typedReceiver}
+                  onChange={(event) => write({ ...form, receiver: event.target.value })}
+                />
+                {typedReceiver.trim() === "" ? null : (
+                  <span className="zb-dest-shown" aria-hidden="true">
+                    <AddressText address={typedReceiver.trim()} />
+                  </span>
+                )}
+              </div>
             ) : (
               <span className="zb-dest-wallet">
-                <span className="zb-mono">{account === null ? "destination wallet" : short(account)}</span>
+                {account === null ? <span className="zb-mono">destination wallet</span> : <AddressText address={account} />}
                 {account === null ? null : <Identicon address={account} />}
               </span>
             )}

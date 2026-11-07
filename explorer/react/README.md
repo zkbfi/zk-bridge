@@ -111,8 +111,8 @@ own roles; a theme switch that changes the host's variables changes the componen
 | `--zkb-sheet-bg` | Background of a sheet | `#ffffff` |
 | `--zkb-sheet-ink` | Text of a sheet | `#1a1a1a` |
 | `--zkb-accent` | The sheet's edge, and the edge of a notice | `#d4501e` |
-| `--zkb-sheet-bare-edge` | The edge of a `bare` sheet on desktop | the accent |
 | `--zkb-scrim` | The dimmed page behind a sheet | `rgba(0, 0, 0, 0.55)` |
+| `--zkb-elev-2` | Shadow of a sheet (elevation level 2; only layering uses shadows) | `none` |
 | `--zkb-edge` | Border of the round close button | `#d9d9d9` |
 | `--zkb-line` | The rule between review rows | `#e3e3e3` |
 | `--zkb-muted` | Labels and sub rows | `#666666` |

@@ -1,7 +1,7 @@
 /*
  * The bridge screen. Colours are custom properties per theme class on <html> (set by src/app/theme.ts).
  * Shapes follow the design language: square panels (no radius), pill controls (radius 999px), one ring radius,
- * heavy dots. No shadows; one gradient (the band in Ember on black); no opacity on the pulse. Spec: docs/superpowers/specs/2026-10-30-dapp-bridge-first-design.md
+ * heavy dots. Shadows only for elevation (--zb-elev-1 menus, --zb-elev-2 sheets and modals; owner decision 2026-11-06); one gradient (the band in Ember on black); no opacity on the pulse. Spec: docs/superpowers/specs/2026-10-30-dapp-bridge-first-design.md
  */
 /* Type and spacing scale (owner: "the baseline should be larger. and large can be achieved on larger screens"). Defined
    once; every size on the bridge screens reads it. Fluid from phones (390) to desktops (1440). */
@@ -32,7 +32,6 @@
   --zkb-sheet-bg: var(--zb-to);
   --zkb-sheet-ink: var(--zb-to-ink);
   --zkb-accent: var(--zb-accent);
-  --zkb-sheet-bare-edge: var(--zb-from);
   --zkb-muted: var(--zb-muted);
   --zkb-line: var(--zb-line);
   --zkb-warn: var(--zb-warn);
@@ -42,6 +41,7 @@
   --zkb-raised-ink: var(--zb-raised-ink);
   --zkb-raised-edge: var(--zb-raised-edge);
   --zkb-column-width: var(--zb-col-width);
+  --zkb-elev-2: var(--zb-elev-2);
   --zkb-touch: var(--zb-touch);
   --zkb-text-micro: var(--zb-step-micro);
   --zkb-text-small: var(--zb-step--1);
@@ -52,6 +52,13 @@
 :root,
 .theme-ember-light {
   /* Ember light: the palette, then every role as one of its colours. Add a colour to the palette only when no existing one will do. */
+  /* Elevation (owner, 2026-11-06: "i think we need more shadows"; layering, never decoration). Level 1: menus and popovers.
+     Level 2: sheets and modals. Light: soft, warm shadows from the palette's ink (#1d1817) and ember-deep (#c24a14). */
+  --zb-elev-1: 0 1px 2px rgb(29 24 23 / 0.08), 0 6px 18px rgb(194 74 20 / 0.12), 0 2px 8px rgb(29 24 23 / 0.06);
+  --zb-elev-2: 0 2px 4px rgb(29 24 23 / 0.08), 0 12px 32px rgb(29 24 23 / 0.14), 0 28px 64px rgb(194 74 20 / 0.16);
+  /* A menu's surface and its chosen row. */
+  --zb-m-bg: var(--zb-to);
+  --zb-m-sel: var(--zb-raised);
   --zb-p-paper: #fff7f4;
   --zb-p-white: #ffffff;
   --zb-p-tint: #ffe3d9;
@@ -106,6 +113,14 @@
 
 .theme-ember-dark {
   /* Ember on black: the palette, then every role as one of its colours. Add a colour to the palette only when no existing one will do. */
+  /* Elevation, dark: a black shadow alone vanishes on the near-black page, so a raised layer also gets a faint light top
+     edge (the palette's text, #f4edea) and a soft ember glow (#eb6834) below it; level 2 is deeper than level 1. */
+  --zb-elev-1: inset 0 1px 0 rgb(244 237 234 / 0.08), 0 0 0 1px rgb(0 0 0 / 0.5), 0 8px 24px rgb(0 0 0 / 0.6), 0 10px 36px rgb(235 104 52 / 0.14);
+  --zb-elev-2: inset 0 1px 0 rgb(244 237 234 / 0.09), 0 0 0 1px rgb(0 0 0 / 0.5), 0 16px 40px rgb(0 0 0 / 0.7), 0 24px 80px rgb(235 104 52 / 0.18);
+  /* In dark a menu is one step lighter than the page around it, so it reads as a layer even where its shadow falls on the
+     list below; its chosen row is one step lighter again. */
+  --zb-m-bg: var(--zb-p-raised);
+  --zb-m-sel: var(--zb-p-edge);
   --zb-p-black: #141110;
   --zb-p-surface: #1d1817;
   --zb-p-raised: #2b2523;
@@ -166,8 +181,14 @@
 
 .theme-mono {
   /* Mono: the palette, then every role as one of its colours. Add a colour to the palette only when no existing one will do. */
+  /* Elevation, mono: as in Ember dark, with a grey glow instead of ember (Mono has no colour). */
+  --zb-elev-1: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 0 0 1px rgb(0 0 0 / 0.6), 0 8px 24px rgb(0 0 0 / 0.7), 0 10px 36px rgb(255 255 255 / 0.06);
+  --zb-elev-2: inset 0 1px 0 rgb(255 255 255 / 0.09), 0 0 0 1px rgb(0 0 0 / 0.6), 0 16px 40px rgb(0 0 0 / 0.8), 0 24px 80px rgb(255 255 255 / 0.08);
+  --zb-m-bg: var(--zb-p-raised);
+  --zb-m-sel: var(--zb-p-raised-2);
   --zb-p-black: #0b0b0b;
   --zb-p-raised: #1e1e1e;
+  --zb-p-raised-2: #2c2c2c;
   --zb-p-text: #efefef;
   --zb-p-grey: #8f8f8f;
   --zb-p-ember: #eb6834;
@@ -242,17 +263,17 @@
 /*
  * One menu language (owner: "i am not liking the styling that you are employing for the menus. they are too starkly
  * different. we need to consolidate and make it match the design language"). Every menu, popover and sheet list is
- * drawn from these five parts and nothing else: square surface on the To tone with the 3-unit accent stroke as its
- * border (the sheet's own edge), no radius, no shadow; a row 44 px or more tall with 16 px sides; an uppercase group
+ * drawn from these five parts and nothing else: square surface on the To tone with a 1px tint hairline (the same weight as the
+ * fields on the bridge screen; the dimmed page does the separating), no radius, and a shadow for elevation only (level 1, --zb-elev-1: it sits above the page; owner 2026-11-06); a row 44 px or more tall with 16 px sides; an uppercase group
  * heading; the selected or active row on the raised tone with a 3-unit accent bar that never shifts content; a footer
  * under a hairline. The sheets (search, token picker, settings) get the same surface from @zkb/react's .zb-sheet.
  */
-.zb-m-surface { position: absolute; z-index: 30; min-width: 260px; background: var(--zb-to); color: var(--zb-to-ink); border: 3px solid var(--zb-accent); }
+.zb-m-surface { position: absolute; z-index: 30; min-width: 260px; background: var(--zb-m-bg); color: var(--zb-to-ink); border: 1px solid var(--zb-pill-edge); box-shadow: var(--zb-elev-1); }
 .zb-m-list { list-style: none; margin: 0; padding: 0; }
 .zb-m-row { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; min-height: var(--zb-touch); padding: 10px 16px; text-align: left; cursor: pointer; }
 .zb-m-row.zb-m-stack { flex-direction: column; align-items: flex-start; gap: 2px; }
 .zb-m-row.zb-m-tall { gap: 14px; min-height: var(--zb-row-h); }
-.zb-m-row[aria-selected="true"], .zb-m-row[aria-checked="true"], .zb-m-row[data-active="true"] { background: var(--zb-raised); color: var(--zb-raised-ink); }
+.zb-m-row[aria-selected="true"], .zb-m-row[aria-checked="true"], .zb-m-row[data-active="true"] { background: var(--zb-m-sel); color: var(--zb-raised-ink); }
 .zb-m-row[aria-selected="true"]::before, .zb-m-row[aria-checked="true"]::before, .zb-m-row[data-active="true"]::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--zb-accent); }
 .zb-m-row[aria-disabled="true"] { color: var(--zb-muted); cursor: not-allowed; }
 .zb-m-head { padding: 14px 16px 6px; font-size: var(--zb-step--1); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--zb-muted); }
@@ -290,10 +311,25 @@
 .zb-joined > :last-child { margin-left: auto; }
 /* The To row: "To" and the chain, then the destination (the wallet when locked, the address field in place when
    unlocked), then the lock, a square 44 px target flush right behind a rule. */
-.zb-dest > .zb-dest-wallet, .zb-dest > .zb-dest-input { flex: 1; min-width: 0; margin-left: 0; justify-content: flex-end; }
-.zb-dest > .zb-dest-input { padding: 6px 12px; background: none; border: 0; color: inherit; font: inherit; font-size: var(--zb-step--1); text-align: right; outline: none; }
-.zb-dest > .zb-dest-input:focus-visible { box-shadow: inset 0 0 0 2px var(--zb-accent); }
-.zb-dest > .zb-dest-input[aria-invalid="true"] { color: var(--zb-bad); }
+.zb-dest > .zb-dest-wallet, .zb-dest > .zb-dest-field { flex: 1; min-width: 0; margin-left: 0; justify-content: flex-end; }
+/* An address shows whole and shortens in the middle only when the row is too narrow: the head takes the ellipsis, the
+   last six characters stay. */
+.zb-addr { display: inline-flex; min-width: 0; max-width: 100%; white-space: nowrap; }
+.zb-addr-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.zb-addr-tail { flex: none; }
+.zb-joined > :last-child:has(.zb-addr) { flex: 0 1 auto; overflow: hidden; }
+.zb-dest > .zb-dest-wallet { overflow: hidden; }
+.zb-joined:has(.zb-addr, .zb-dest-field) > :first-child { flex: none; }
+.zb-dest-field { position: relative; display: flex; align-items: center; }
+.zb-dest-field > .zb-dest-input { width: 100%; min-width: 0; }
+/* Unfocused, the field shows the shortened-in-the-middle copy; the input underneath still holds (and copies) the whole text. */
+.zb-dest-shown { position: absolute; inset: 0 12px; display: flex; align-items: center; justify-content: flex-end; pointer-events: none; min-width: 0; }
+.zb-dest-field:not(:focus-within) > .zb-dest-input[data-filled] { color: transparent; }
+.zb-dest-field:focus-within > .zb-dest-shown { display: none; }
+.zb-dest > .zb-dest-field > .zb-dest-input { padding: 6px 12px; background: none; border: 0; color: inherit; font: inherit; font-size: var(--zb-step--1); text-align: right; outline: none; }
+.zb-dest > .zb-dest-field > .zb-dest-input:focus-visible { box-shadow: inset 0 0 0 2px var(--zb-accent); }
+.zb-dest > .zb-dest-field:focus-within > .zb-dest-input[aria-invalid="true"] { color: var(--zb-bad); }
+.zb-dest-field:not(:focus-within) > .zb-dest-input[aria-invalid="true"] + .zb-dest-shown { color: var(--zb-bad); }
 .zb-dest > .zb-dest-lock-wrap { position: relative; display: flex; padding: 0; margin-left: 0; border-left: 1.5px solid var(--zb-pill-edge); }
 .zb-dest-lock { display: inline-grid; place-items: center; min-width: 48px; min-height: 44px; padding: 0 12px 0 10px; background: none; border: 0; color: inherit; cursor: pointer; }
 .zb-dest-lock .zb-icon { width: 20px; height: 20px; }
@@ -446,12 +482,22 @@
 .zb-token-name { display: flex; flex-direction: column; line-height: 1.25; }
 .zb-token-balance { margin-left: auto; font-variant-numeric: tabular-nums; }
 
-/* Token picker, rounds 4 to 7: the search is a 52 px orange band (no pill, no top border); the close square is the same
-   orange, 52 x 52, set off by a full-height dark rule; tabs are icons only. */
-.zb-picker-search { display: flex; align-items: center; gap: 10px; height: 56px; padding-left: 16px; background: var(--zb-from-bg, var(--zb-from)); color: var(--zb-from-ink); }
+/* The search band (owner, 2026-11-06: "i still do like the streaked input+close button ... revisit the dividing line between
+   the two and ... keep them centered / at least the content of them contained instead of spread across the whole page").
+   The band is the full-width orange (the Ember gradient on black); its content, .zb-picker-in, is a centred column as wide
+   as the dapp's main column, so on desktop it stops widening and on phones it fills the width inside the 16px gutters.
+   Icon, input, a quiet divider (a 1px tint of the band's own ink, inset 14px top and bottom, instead of the old heavy black
+   rule) and the x, which is centred in its own 56 x 56 area on both axes. */
+.zb-picker-search { background: var(--zb-from-bg, var(--zb-from)); color: var(--zb-from-ink); }
+.zb-picker-search:focus-within { box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--zb-from-ink) 55%, transparent); }
+.zb-picker-in { display: flex; align-items: center; gap: 10px; height: 56px; max-width: var(--zb-col-width); margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(0px, env(safe-area-inset-right)); position: relative; }
+.zb-picker-in > .zb-icon { flex: none; }
 .zb-picker-search input { flex: 1; min-width: 0; height: 100%; background: none; border: 0; outline: none; color: inherit; font: inherit; font-size: var(--zb-step-0); }
 .zb-picker-search input::placeholder { color: var(--zb-from-muted); }
-.zb .zb-picker-close { width: 56px; height: 56px; flex: none; display: grid; place-items: center; background: var(--zb-from-end, var(--zb-from)); color: var(--zb-from-ink); border-left: 3px solid #121110; }
+.zb .zb-picker-close { position: relative; width: 56px; height: 56px; flex: none; display: grid; place-items: center; background: none; color: inherit; border: 0; cursor: pointer; }
+.zb .zb-picker-close::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 1px; background: color-mix(in srgb, var(--zb-from-ink) 32%, transparent); }
+.zb .zb-picker-close:hover { background: color-mix(in srgb, var(--zb-from-ink) 10%, transparent); }
+.zb .zb-picker-close .zb-icon { display: block; width: 18px; height: 18px; }
 .zb-tabs [role="tab"] svg, .zb-tabs [role="tab"] .zb-tok-icon { flex: none; }
 .zb-omni { position: relative; display: inline-flex; color: var(--zb-accent-text); cursor: pointer; }
 .zb .zb-link { display: inline-flex; align-items: center; gap: 4px; color: var(--zb-accent-text); font-weight: 600; text-decoration: underline; }
@@ -497,7 +543,7 @@
 .zb .zb-seg [aria-checked="true"] { background: var(--zb-ink); color: var(--zb-page); font-weight: 700; }
 .zb-menu-field { width: 50%; min-width: 0; border: 1.5px solid var(--zb-pill-edge); border-radius: 999px; padding: 5px 12px; background: var(--zb-pill); color: var(--zb-pill-ink); font: inherit; font-size: var(--zb-step--1); }
 
-/* The orange search band is its own focus cue; no outline box under the input. */
+/* The band is the focus cue (an ink line under it, :focus-within above); no outline box under the input. */
 .zb-picker-search input:focus-visible { outline: none; }
 
 /* On phones the token picker rises to just under the header, edge to edge, whatever the number of rows. */

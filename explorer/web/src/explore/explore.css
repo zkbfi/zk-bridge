@@ -1,4 +1,7 @@
 /* Explore (mockups explore-map.html, explore.html, explore-address-tx.html). Sizes come from the scale in bridge.css. */
+/* The streaked search band is back (owner: "i still do like the streaked input+close button"): the band's colour spans the
+   whole width, its content (.zb-picker-in: icon, input, divider, x) sits in the dapp's main column and stops widening on
+   desktop; on phones it fills the width inside the normal 16px gutters. The shortcut menu hangs from that column. */
 .zb-xsearch { position: sticky; top: 0; z-index: 3; }
 .zb-xsearch .zb-icon { width: 20px; height: 20px; }
 .zb-xkinds { background: var(--zb-to); padding-block: 10px; }
@@ -179,18 +182,50 @@ a.zb-kv.zb-xkv { color: inherit; text-decoration: none; }
 .zb-orb-tip-tok { display: inline-flex; align-items: center; gap: 4px; }
 .zb-orb-stop { cursor: help; outline: none; }
 .zb-orb-stop:focus-visible { stroke: var(--zb-accent); stroke-width: 3; }
-/* The shortcut menu under the empty search box: the one menu surface (.zb-m-surface, bridge.css) hung from the band, as wide
-   as the band, so it has no side borders (they would sit off screen) and scrolls inside when the list is taller than the screen. */
-.zb-m-surface.zb-xmenu { top: 100%; left: 0; right: 0; z-index: 4; max-height: min(70vh, 460px); overflow-y: auto; padding-bottom: 6px; border-width: 0 0 3px; }
+/* The shortcut menu under the empty search box: the one menu surface (.zb-m-surface, bridge.css) at elevation 1, hung from the
+   band's content column (centred, as wide as the main column less its gutters) and scrolling inside when the list is taller than the screen. */
+.zb-m-surface.zb-xmenu { top: 100%; left: 50%; transform: translateX(-50%); width: min(calc(var(--zb-col-width) - 32px), calc(100% - 32px)); z-index: 4; max-height: min(70vh, 460px); overflow-y: auto; padding-bottom: 6px; }
 
-/* The paged browse lists (BrowseList.tsx): the filter and sort bar, the note under it, and the pager. They reuse the shared
-   pill (.zb-pill) and field (.zb-menu-field) and only lay them out; the surfaces themselves are styled in bridge.css. */
-.zb-bbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 12px; padding: 4px 0 12px; }
-.zb-bfld { display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: var(--zb-step-micro); color: var(--zb-muted); }
-.zb-bfld .zb-menu-field { width: auto; max-width: 100%; min-height: var(--zb-touch); }
-.zb-bfld-text { flex: 1 1 240px; }
-.zb-bfld-text .zb-menu-field { width: 100%; }
-.zb-bfld-err { color: var(--zb-accent-text); }
+/* The paged browse lists (BrowseList.tsx, FilterMenus.tsx): one compact bar of pills (primary filters, Filters, then Sort at
+   the right), chips for what is active, the note under it, and the pager. Every choice is a pill trigger plus the one menu
+   surface (bridge.css), never a native select. A trigger's chevron is a flex item centred on the pill's axis like the
+   search band's x. */
+.zb-bbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 4px 0 10px; }
+.zb-bsort { margin-left: auto; }
+.zb-mwrap { position: relative; min-width: 0; }
+.zb-mtrig { max-width: 100%; padding-inline: 14px 12px; gap: 8px; }
+.zb-mtrig-t { overflow: hidden; text-overflow: ellipsis; }
+.zb-mtrig .zb-chev { display: block; width: 12px; height: 12px; margin: 0; flex: none; }
+.zb-mtrig[data-set="true"] { border-color: var(--zb-accent); }
+.zb-mtrig[aria-expanded="true"] { border-color: var(--zb-ink); }
+.zb-mtrig-n { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; background: var(--zb-accent); color: var(--zb-p-ink, #1d1817); font-size: var(--zb-step-micro); line-height: 1; }
+.zb-m-surface.zb-bmenu { top: calc(100% + 6px); left: 0; z-index: 6; min-width: 240px; max-width: min(340px, calc(100vw - 32px)); max-height: min(60vh, 420px); overflow-y: auto; padding-bottom: 6px; }
+.zb-mwrap[data-align="end"] > .zb-bmenu { left: auto; right: 0; }
+.zb-m-surface.zb-bmenu:focus-visible { outline: none; }
+.zb-m-back { color: var(--zb-muted); border-bottom: 1px solid var(--zb-line); }
+.zb-m-back .zb-chev, .zb-m-row .zb-chev { display: block; flex: none; }
+.zb-m-row .zb-chev { margin-left: 4px; }
+.zb-m-entry { display: flex; flex-direction: column; gap: 8px; padding: 4px 16px 10px; }
+.zb-m-entry .zb-menu-field { width: 100%; min-height: var(--zb-touch); }
+.zb-m-apply { align-self: flex-start; justify-content: center; }
+.zb-m-apply[aria-disabled="true"] { opacity: .5; }
+.zb-bfld-err { color: var(--zb-accent-text); font-size: var(--zb-step-micro); }
+.zb-bchips { list-style: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0; padding: 0 0 10px; }
+.zb .zb-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 2px 8px 2px 12px; border: 1.5px solid var(--zb-pill-edge); border-radius: 999px; background: var(--zb-pill); color: var(--zb-pill-ink); font-size: var(--zb-step-micro); font-weight: 600; max-width: 100%; }
+.zb .zb-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zb .zb-chip .zb-icon { width: 12px; height: 12px; display: block; color: var(--zb-muted); }
+.zb .zb-chip:hover { border-color: var(--zb-ink); }
+.zb .zb-bclear { background: none; border: 0; padding: 4px 6px; font-size: var(--zb-step-micro); min-height: 32px; }
+/* On phones a menu is as wide as the bar (the gutters keep it on screen) and hangs from the bar rather than its own pill, so
+   a pill near the right edge never pushes its menu off screen; Sort drops to its own line, left-aligned with the pills. */
+@media (max-width: 720px) {
+  .zb-bbar { position: relative; }
+  .zb-mwrap { position: static; }
+  .zb-m-surface.zb-bmenu, .zb-mwrap[data-align="end"] > .zb-bmenu { top: calc(100% - 4px); left: 0; right: 0; max-width: none; }
+}
+@media (max-width: 520px) {
+  .zb-bsort { margin-left: 0; }
+}
 .zb-bnote { padding: 0 0 8px; }
 .zb-bnote .zb-link { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
 .zb-bpager { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; padding: 18px 0 4px; }
@@ -198,7 +233,5 @@ a.zb-kv.zb-xkv { color: inherit; text-decoration: none; }
 .zb-bpager .zb-pill[aria-disabled="true"] { opacity: .4; }
 .zb-bpage { padding: 0 6px; font-size: var(--zb-step--1); font-variant-numeric: tabular-nums; white-space: nowrap; }
 @media (max-width: 520px) {
-  .zb-bfld:not(.zb-bfld-text) { flex: 1 1 calc(50% - 12px); }
-  .zb-bfld:not(.zb-bfld-text) .zb-menu-field { width: 100%; }
   .zb-bpage { flex-basis: 100%; text-align: center; order: -1; }
 }
