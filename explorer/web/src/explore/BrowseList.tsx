@@ -5,7 +5,7 @@
  * that arrive meanwhile do not shift the pages; "Refresh" takes a new one.
  */
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import type { PairConfig } from "@terminal/model/types";
 import { BROWSE_PAGE_SIZE, type BrowseClient, type BrowsePage, type BrowseMessage, type BrowseProof, type BrowseToken, type BrowseAddress } from "@zk-bridge/shared";
 import { formatRoute, type ExplorePage } from "../app/route";
@@ -19,6 +19,7 @@ import { chainNamer } from "./ExploreScreen";
 import { statusWord } from "./explore-model";
 import { formatListState, LIST_SPECS, pageCount, parseListState, requestOf, viewKey, withFilter, withPage, withSort, type ListKind, type ListState } from "./browse-model";
 import { RouteIcons, shortHex, XGroup, XRow } from "./parts";
+import { ChoicePill, FilterChips, FiltersPill, valueLabel, type Choice, type FilterDef, type MenuFilter, type TextFilter } from "./FilterMenus";
 
 const TITLES: Readonly<Record<ListKind, string>> = { transfers: "Transfers & messages", proofs: "Proofs", tokens: "Tokens", addresses: "Addresses" };
 const NOUNS: Readonly<Record<ListKind, string>> = { transfers: "transfers and messages", proofs: "light-client updates", tokens: "tokens", addresses: "addresses" };
@@ -42,43 +43,7 @@ const go = (target: string): void => {
   window.location.hash = target;
 };
 
-type Option = { readonly value: string; readonly label: string; readonly disabled?: boolean };
-
-const Menu = ({ label, value, options, onChange }: { readonly label: string; readonly value: string; readonly options: readonly Option[]; readonly onChange: (value: string) => void }) => (
-  <label className="zb-bfld">
-    <span>{label}</span>
-    <select className="zb-menu-field" value={value} onChange={(event) => onChange(event.target.value)}>
-      {options.map((option) => (
-        <option key={option.value} value={option.value} disabled={option.disabled}>
-          {option.label}
-        </option>
-      ))}
-    </select>
-  </label>
-);
-
-/** A box that applies on Enter or when it loses focus, and says why a value is refused. */
-const TextFilter = ({ label, value, placeholder, accepts, why, onApply }: { readonly label: string; readonly value: string; readonly placeholder: string; readonly accepts: RegExp; readonly why: string; readonly onApply: (value: string | null) => void }) => {
-  const [text, setText] = useState(value);
-  const [shown, setShown] = useState(value);
-  if (shown !== value) {
-    setShown(value);
-    setText(value);
-  }
-  const trimmed = text.trim();
-  const refused = trimmed !== "" && !accepts.test(trimmed);
-  const apply = (event?: FormEvent): void => {
-    event?.preventDefault();
-    if (!refused && trimmed !== value) onApply(trimmed === "" ? null : trimmed);
-  };
-  return (
-    <form className="zb-bfld zb-bfld-text" onSubmit={apply}>
-      <span>{label}</span>
-      <input className="zb-menu-field" type="text" aria-label={label} placeholder={placeholder} spellCheck={false} autoComplete="off" value={text} aria-invalid={refused} onChange={(event) => setText(event.target.value)} onBlur={() => apply()} />
-      {refused ? <small className="zb-bfld-err" role="alert">{why}</small> : null}
-    </form>
-  );
-};
+type Option = Choice;
 
 const FULL_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const ADDRESS_START = /^(0x)?[0-9a-fA-F]{1,40}$/;
@@ -96,54 +61,34 @@ const sortLabels: Readonly<Record<string, string>> = {
   recent: "Most recent activity",
 };
 
-const controlsOf = (kind: ListKind, state: ListState, pair: PairConfig, tokens: readonly { readonly side: "first" | "second"; readonly address: string; readonly symbol: string }[], change: (next: ListState) => void): ReactNode => {
+/**
+ * The filters of a list in the order they are offered (owner, 2026-11-06: "too cluttered. needs organization / sequential
+ * presentation of options"): `primary` are the pills on the bar, `more` are what the Filters menu lists, in this order.
+ * Every one is a menu or a typed box inside a menu: there is no native select.
+ */
+const filtersOf = (kind: ListKind, pair: PairConfig, tokens: readonly { readonly side: "first" | "second"; readonly address: string; readonly symbol: string }[]): { readonly primary: readonly FilterDef[]; readonly more: readonly FilterDef[] } => {
   const names = chainNamer(pair);
-  const side = (label: string, key: string) => (
-    <Menu
-      key={key}
-      label={label}
-      value={state.filters[key] ?? ""}
-      options={[{ value: "", label: "Both chains" }, { value: "first", label: names(pair.first.chainId) }, { value: "second", label: names(pair.second.chainId) }]}
-      onChange={(value) => change(withFilter(state, key, value))}
-    />
-  );
-  const menu = (label: string, key: string, any: string, options: readonly Option[]) => (
-    <Menu key={key} label={label} value={state.filters[key] ?? ""} options={[{ value: "", label: any }, ...options]} onChange={(value) => change(withFilter(state, key, value))} />
-  );
+  const side = (label: string, key: string, any = "Both chains"): MenuFilter => ({ kind: "menu", key, label, any, options: [{ value: "first", label: names(pair.first.chainId) }, { value: "second", label: names(pair.second.chainId) }] });
+  const menu = (label: string, key: string, any: string, options: readonly Option[]): MenuFilter => ({ kind: "menu", key, label, any, options });
+  const text = (label: string, key: string, placeholder: string, accepts: RegExp, why: string): TextFilter => ({ kind: "text", key, label, placeholder, accepts, why });
+  const address = (label: string, key: string, placeholder: string) => text(label, key, placeholder, FULL_ADDRESS, "An address is 0x followed by 40 hex characters.");
   if (kind === "transfers") {
-    return (
-      <>
-        {side("Sent from", "from")}
-        {menu("Status", "status", "Any status", [{ value: "inflight", label: "In flight" }, { value: "delivered", label: "Delivered" }, { value: "failed", label: "Failed" }])}
-        {menu("Type", "kind", "Transfers and messages", [{ value: "token", label: "Transfers" }, { value: "message", label: "Messages" }])}
-        {menu("Token", "token", "Any token", tokens.map((token) => ({ value: `${token.side}:${token.address}`, label: `${token.symbol} on ${names(token.side === "first" ? pair.first.chainId : pair.second.chainId)}` })))}
-        {menu("Sent", "since", "Any time", [{ value: "1h", label: "Last hour" }, { value: "24h", label: "Last 24 hours" }, { value: "7d", label: "Last 7 days" }])}
-        <TextFilter label="Address" value={state.filters.account ?? ""} placeholder="0x… sender, recipient or executor" accepts={FULL_ADDRESS} why="An address is 0x followed by 40 hex characters." onApply={(value) => change(withFilter(state, "account", value))} />
-      </>
-    );
+    return {
+      primary: [side("Sent from", "from"), menu("Status", "status", "Any status", [{ value: "inflight", label: "In flight" }, { value: "delivered", label: "Delivered" }, { value: "failed", label: "Failed" }])],
+      more: [
+        menu("Type", "kind", "Transfers and messages", [{ value: "token", label: "Transfers" }, { value: "message", label: "Messages" }]),
+        menu("Token", "token", "Any token", tokens.map((token) => ({ value: `${token.side}:${token.address}`, label: `${token.symbol} on ${names(token.side === "first" ? pair.first.chainId : pair.second.chainId)}` }))),
+        menu("Time", "since", "Any time", [{ value: "1h", label: "Last hour" }, { value: "24h", label: "Last 24 hours" }, { value: "7d", label: "Last 7 days" }]),
+        address("Address", "account", "0x… sender, recipient or executor"),
+      ],
+    };
   }
-  if (kind === "proofs") {
-    return (
-      <>
-        {side("Posted on", "chain")}
-        <TextFilter label="Poster" value={state.filters.poster ?? ""} placeholder="0x… who posted it" accepts={FULL_ADDRESS} why="An address is 0x followed by 40 hex characters." onApply={(value) => change(withFilter(state, "poster", value))} />
-      </>
-    );
-  }
-  if (kind === "tokens") {
-    return (
-      <>
-        {side("Chain", "chain")}
-        {menu("Kind", "kind", "Native and bridged copies", [{ value: "native", label: "Native" }, { value: "copy", label: "Bridged copies" }])}
-      </>
-    );
-  }
-  return (
-    <>
-      {menu("Role", "role", "Any role", [{ value: "sender", label: "Senders" }, { value: "recipient", label: "Receivers" }, { value: "poster", label: "Proof posters" }])}
-      <TextFilter label="Starts with" value={state.filters.q ?? ""} placeholder="0x…" accepts={ADDRESS_START} why="Type the start of an address, hex characters only." onApply={(value) => change(withFilter(state, "q", value))} />
-    </>
-  );
+  if (kind === "proofs") return { primary: [side("Posted on", "chain")], more: [address("Poster", "poster", "0x… who posted it")] };
+  if (kind === "tokens") return { primary: [side("Chain", "chain"), menu("Kind", "kind", "Native and bridged copies", [{ value: "native", label: "Native" }, { value: "copy", label: "Bridged copies" }])], more: [] };
+  return {
+    primary: [menu("Role", "role", "Any role", [{ value: "sender", label: "Senders" }, { value: "recipient", label: "Receivers" }, { value: "poster", label: "Proof posters" }])],
+    more: [text("Starts with", "q", "0x…", ADDRESS_START, "Type the start of an address, hex characters only.")],
+  };
 };
 
 const sortOptionsOf = (kind: ListKind, state: ListState): readonly Option[] =>
@@ -250,6 +195,7 @@ export const BrowseList = ({ kind, query }: { readonly kind: ListKind; readonly 
     placeholderData: keepPreviousData,
     retry: 1,
   });
+  const filters = filtersOf(kind, pair, tokens);
   const filtered = Object.keys(state.filters).length > 0;
   const fetched = result.data;
   const total = fetched?.page.total ?? null;
@@ -264,14 +210,19 @@ export const BrowseList = ({ kind, query }: { readonly kind: ListKind; readonly 
     <div className="zb-col zb-xpage">
       <XGroup title={TITLES[kind]} right={total === null ? "…" : `${total.toLocaleString("en-US")} ${filtered ? "match" : "in total"}`} />
       <div className="zb-bbar" role="group" aria-label="Filters and sort">
-        {controlsOf(kind, state, pair, tokens, change)}
-        <Menu label="Sort" value={state.sort} options={sortOptionsOf(kind, state)} onChange={(value) => change(withSort(state, value))} />
-        {filtered ? (
-          <button type="button" className="zb-pill" onClick={() => change({ ...state, filters: {}, page: 1 })}>
-            Clear filters
-          </button>
-        ) : null}
+        {filters.primary.map((def) => (
+          <ChoicePill key={def.key} label={def.label} value={state.filters[def.key] ?? ""} any={(def as MenuFilter).any} options={(def as MenuFilter).options} onPick={(value) => change(withFilter(state, def.key, value))} />
+        ))}
+        {filters.more.length > 0 ? <FiltersPill defs={filters.more} filters={state.filters} onApply={(key, value) => change(withFilter(state, key, value))} /> : null}
+        <div className="zb-bsort">
+          <ChoicePill label="Sort" value={state.sort} any="" options={sortOptionsOf(kind, state)} onPick={(value) => change(withSort(state, value))} align="end" alwaysShowValue />
+        </div>
       </div>
+      <FilterChips
+        chips={[...filters.primary, ...filters.more].flatMap((def) => (state.filters[def.key] === undefined ? [] : [{ key: def.key, label: def.label, text: valueLabel(def, state.filters[def.key]) as string }]))}
+        onRemove={(key) => change(withFilter(state, key, null))}
+        onClear={() => change({ ...state, filters: {}, page: 1 })}
+      />
       {fetched === undefined && result.isError ? (
         <p className="zb-small" role="alert">
           The indexer did not answer ({result.error instanceof Error ? result.error.message : "unknown error"}). Your filters are kept.{" "}

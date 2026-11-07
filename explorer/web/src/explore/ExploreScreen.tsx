@@ -118,30 +118,34 @@ const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
     <div className="zb-explore">
       <div className="zb-xsearch" role="search" onBlur={leave}>
         <div className="zb-picker-search">
-          <SearchIcon />
-          <input
-            type="search"
-            role="combobox"
-            aria-label="Search Explore"
-            aria-expanded={menuOpen}
-            aria-controls={menuOpen ? listId : undefined}
-            aria-autocomplete="list"
-            aria-activedescendant={menuOpen && active !== null ? optionId(active) : undefined}
-            placeholder="Tx, message, address, token, slot, block, proof…"
-            spellCheck={false}
-            autoComplete="off"
-            value={text}
-            onChange={(event) => {
-              setOpen(true);
-              set(event.target.value);
-            }}
-            onFocus={() => setOpen(true)}
-            onClick={() => setOpen(true)}
-            onKeyDown={onKeyDown}
-          />
-          <button type="button" className="zb-picker-close" aria-label="Clear the search" onClick={() => set("")}>
-            ×
-          </button>
+          <div className="zb-picker-in">
+            <SearchIcon />
+            <input
+              type="search"
+              role="combobox"
+              aria-label="Search Explore"
+              aria-expanded={menuOpen}
+              aria-controls={menuOpen ? listId : undefined}
+              aria-autocomplete="list"
+              aria-activedescendant={menuOpen && active !== null ? optionId(active) : undefined}
+              placeholder="Tx, message, address, token, slot, block, proof…"
+              spellCheck={false}
+              autoComplete="off"
+              value={text}
+              onChange={(event) => {
+                setOpen(true);
+                set(event.target.value);
+              }}
+              onFocus={() => setOpen(true)}
+              onClick={() => setOpen(true)}
+              onKeyDown={onKeyDown}
+            />
+            <button type="button" className="zb-picker-close" aria-label="Clear the search" onClick={() => set("")}>
+              <svg viewBox="0 0 12 12" className="zb-icon" aria-hidden="true" focusable="false">
+                <path d="M3 3l6 6M9 3 3 9" />
+              </svg>
+            </button>
+          </div>
         </div>
         {menuOpen ? (
           <div id={listId} role="listbox" aria-label="Shortcuts" className="zb-m-surface zb-xmenu">

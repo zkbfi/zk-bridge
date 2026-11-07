@@ -131,13 +131,15 @@ export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () =>
   return (
     <Sheet label="Choose a token" showTitle={false} bare onClose={onClose}>
       <div className="zb-picker-search" onKeyDown={onKey}>
-        <SearchIcon />
-        <input aria-label="Search tokens" role="combobox" aria-expanded="true" aria-controls="zb-token-list" placeholder="Search" spellCheck={false} autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} />
-        <button type="button" className="zb-picker-close" aria-label="Close" onClick={onClose}>
-          <svg viewBox="0 0 12 12" className="zb-icon" aria-hidden="true" focusable="false">
-            <path d="M3 3l6 6M9 3 3 9" />
-          </svg>
-        </button>
+        <div className="zb-picker-in">
+          <SearchIcon />
+          <input aria-label="Search tokens" role="combobox" aria-expanded="true" aria-controls="zb-token-list" placeholder="Search" spellCheck={false} autoComplete="off" value={query} onChange={(event) => { setQuery(event.target.value); setActive(0); }} />
+          <button type="button" className="zb-picker-close" aria-label="Close" onClick={onClose}>
+            <svg viewBox="0 0 12 12" className="zb-icon" aria-hidden="true" focusable="false">
+              <path d="M3 3l6 6M9 3 3 9" />
+            </svg>
+          </button>
+        </div>
       </div>
       <div className="zb-picker">
         <div className="zb-tabs" role="tablist" aria-label="Chain">

@@ -35,8 +35,10 @@ The look comes from the zkb.fi mark, so the app and the logo read as one thing.
 ## Anti-goals (a failure even if it works)
 
 - Any shape outside the design language: rounded-rectangle panels or cards, a second curve radius, gradients,
-  shadows as decoration. The owner rejected "another curve to the design language".
-- Native `<select>` elements anywhere on the bridge screen. Menus are custom (pill trigger, square popover).
+  shadows as decoration (shadows for layering are allowed: see "Owner decision 2026-11-06: layering" below). The owner
+  rejected "another curve to the design language".
+- Native `<select>` elements anywhere in the dapp (the bridge screen and the Explore browse lists). Menus are custom
+  (pill trigger, square popover). Owner, 2026-11-06: "i must stress that you must not use select tags. only menu."
 - Explorer clutter on the first screen: tables, filter bars, light-client heads, summary stats.
 - Mixed stroke weights that read as a "jumbled mess" (owner's words about the logo; same standard here).
 
@@ -50,6 +52,38 @@ Everything is one of five shapes, all from the mark:
 4. The pill (the Sync pulse): the only rounded rectangle. Buttons, token chips, the pair menu trigger, the destination
    toggle, wallet chip, and the thing in flight.
 5. The 50.4° diagonal (z and k arm, parallel): available for direction marks; optional.
+
+### Owner decision 2026-11-06: layering
+
+Owner feedback on the second UI round, verbatim: "everything except for the 2 ui components looks really good. and i think
+we need to revisit the filters. too cluttered. needs orgnaization / sequential presentation of options. i must stress that
+you must not use select tags. only menu. and your chevron must be centered like the x is. thought that the thin gray border
+was a good touch for the modal, but it might work even better if we already have layering in the rest of the repo.
+basically, i think we need more shadows. i also, still do like the streaked input+close button. i think that you just need
+to revisit the dividing line between the two and somehow keep them centered / at least the content of them contained
+instead of spread across the whole page (which it will be on mobile but needs to stop widening on desktop)"
+
+What this settles:
+
+- **Shadows are wanted, for layering.** They mark elevation only: a surface that sits above the page. Level 1
+  (`--zb-elev-1`): menus and popovers (direction menu, delivery menu, Explore shortcut menu, browse filter menus). Level 2
+  (`--zb-elev-2`): sheets and modals (token picker, cmd+K palette, settings, review, `ui/Modal`). Never decoration on
+  in-page panels, rows, pills or cards. The 1px hairline border on modals and sheets stays (the owner liked it); the shadow
+  sits under it. Light themes use soft, warm shadows tinted from the palette's ink and ember. A black shadow alone vanishes
+  on the near-black page (owner, on the dark filter menu: "fix the dark shadow first"), so in dark themes a raised layer
+  is also one step lighter than the page (`--zb-m-bg`, its chosen row `--zb-m-sel` one step lighter again) and gets a
+  faint light top edge plus a soft glow (ember in Ember on black, grey in Mono). The tokens live in `bridge.css`.
+- **Owner, after round 2, 2026-11-06:** "overall it looks really good as a square streak". The band and its surfaces stay
+  square.
+- **No `<select>`, only menus.** Every choice in the browse filters is the pill trigger plus the menu surface. A trigger's
+  chevron is centred on the pill's vertical axis exactly like the search band's x.
+- **Filters are sequential, not a wall.** One compact row: the primary filters as pills, a Filters pill that opens a menu
+  listing the rest in a fixed order (each opens its options in turn), a Sort pill at the right; active filters appear as
+  removable chips under the row with Clear all.
+- **The streaked search band is back.** Full-width orange band, input then a quiet divider then the x, with the content
+  (icon, input, divider, x) held in a centred container as wide as the dapp's main column, so it stops widening on desktop;
+  on phones it fills the width inside the normal 16px gutters. The divider is a thin tint of the band colour, inset top and
+  bottom, not the old heavy black rule.
 
 ## Themes (decided with the owner)
 

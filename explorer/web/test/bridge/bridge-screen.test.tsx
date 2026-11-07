@@ -86,7 +86,8 @@ describe("the token picker", () => {
     expect(within(picker).queryByRole("heading")).toBeNull();
     const search = within(picker).getByRole("combobox", { name: "Search tokens" });
     const band = search.parentElement!;
-    expect(band.className).toBe("zb-picker-search");
+    expect(band.className).toBe("zb-picker-in");
+    expect(band.parentElement).toHaveClass("zb-picker-search");
     expect(band.lastElementChild).toHaveAccessibleName("Close");
     expect(band.lastElementChild?.textContent).toBe("");
     const tabs = within(picker).getAllByRole("tab");

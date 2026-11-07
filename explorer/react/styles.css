@@ -18,7 +18,7 @@
 
 /* The sheet: the scrim, the panel and its head */
 .zb-scrim { position: fixed; inset: 0; z-index: var(--zkb-layer-scrim, 40); background: var(--zkb-scrim, rgba(0, 0, 0, 0.55)); }
-.zb-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--zkb-layer-sheet, 41); max-height: 86vh; overflow: auto; background: var(--zkb-sheet-bg, #ffffff); color: var(--zkb-sheet-ink, #1a1a1a); border-top: 1px solid var(--zkb-edge, #d9d9d9); }
+.zb-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--zkb-layer-sheet, 41); max-height: 86vh; overflow: auto; background: var(--zkb-sheet-bg, #ffffff); color: var(--zkb-sheet-ink, #1a1a1a); border-top: 1px solid var(--zkb-edge, #d9d9d9); box-shadow: var(--zkb-elev-2, none); }
 @media (min-width: 720px) { .zb-sheet { left: 50%; right: auto; width: min(var(--zkb-column-width, 640px), calc(100vw - 32px)); transform: translateX(-50%); bottom: 10vh; border: 1px solid var(--zkb-edge, #d9d9d9); } }
 .zb-sheet.zb-sheet-top { display: flex; flex-direction: column; }
 @media (min-width: 720px) { .zb-sheet.zb-sheet-top { top: 12vh; bottom: auto; max-height: 78vh; overflow: hidden; } }
