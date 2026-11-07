@@ -13,6 +13,8 @@ signed release on IPFS is the source of truth. Everything else is a mirror of it
 | `version.json.sig` | The 64-byte Ed25519 signature of `version.json`. |
 | `public-keys.json` | The public half of the key that signed. For reference only: a check trusts the keys built into the landing page, never this file. |
 | `SHA256SUMS` | Every archive and download, in the format `sha256sum --check` reads. |
+| `releases-log.json` | The release log of the channel: every site ever published on it, with its CID, this release's sites last. Only ever appended to. See "The release log". |
+| `releases-log.json.sig` | The 64-byte Ed25519 signature of `releases-log.json`, by the same key and code as `version.json.sig`. |
 
 The landing page fetches `version.json` and its signature and checks them in the browser with the keys built into the
 page (`explorer/landing/landing.config.json`). It refuses a `sequence` lower than one it has seen.
@@ -35,7 +37,9 @@ block against its content address, root CID) and each download, and it serves ea
 fails there, because a gateway serves it under a prefix.
 
 Settings: `RELEASE_VERSION` (default `0.0.0-<short commit>`), `RELEASE_PREVIOUS_MANIFEST` (the last `version.json`, so the
-sequence goes up), `RELEASE_TERMINAL_TARGETS`. `RELEASE_SKIP_PROVER=1` builds no prover and no guest program, and
+sequence goes up), `RELEASE_TERMINAL_TARGETS`, `RELEASE_REMOTE` (the release repository: the channel's published
+`releases-log.json` is fetched from it before the build, see "The release log"; `RELEASE_PREVIOUS_LOG` names a log file
+instead). `RELEASE_SKIP_PROVER=1` builds no prover and no guest program, and
 `version.json` then lists none; use it only for a test run on a machine without Docker and `cargo prove`. A real
 release builds both guest programs in the pinned Docker image (`light-client/scripts/program-keys.sh`).
 
@@ -134,8 +138,9 @@ the same address plus `/#/docs`.
 
 It exits 1 with `no release remote or pinning account is configured` until both `RELEASE_REMOTE` (the git repository
 that holds `version.json`) and `RELEASE_PIN_PROVIDER` are set. Then it verifies the release against the keys built into
-the landing page (or `RELEASE_PUBLIC_KEYS`), pins the three archives, and pushes `version.json`, its signature,
-`public-keys.json` and `SHA256SUMS` to the release remote.
+the landing page (or `RELEASE_PUBLIC_KEYS`), checks that the release's `releases-log.json` only appends to the log on
+the channel's branch (see "The release log"), pins the archives, and pushes `version.json`, its signature,
+`public-keys.json`, `SHA256SUMS` and the release log with its signature to the release remote.
 
 The pinning step is an adapter chosen by `RELEASE_PIN_PROVIDER` (`explorer/release/src/pin.ts`). Each adapter uploads
 an archive and fails unless the service reports the same CID that was computed here. There are two adapters.
@@ -230,7 +235,8 @@ Make and publish a staging release:
 ```sh
 set -a; . script/release/release.env; set +a
 <password-manager command that prints the staging key> | RELEASE_CHANNEL=next RELEASE_VERSION=0.1.2-next.1 \
-  RELEASE_PREVIOUS_MANIFEST=<the version.json now on next.zkb.fi> script/release/release.sh "$(mktemp -d)"
+  RELEASE_PREVIOUS_MANIFEST=<the version.json now on next.zkb.fi> RELEASE_REMOTE=<release repository> \
+  script/release/release.sh "$(mktemp -d)"
 RELEASE_CHANNEL=next RELEASE_REMOTE=<release repository> RELEASE_GIT_NAME=<name> RELEASE_GIT_EMAIL=<email> \
   RELEASE_PIN_PROVIDER=kubo KUBO_API_URL=http://127.0.0.1:5001 script/release/publish.sh <release-directory>
 RELEASE_CHANNEL=next RELEASE_PAGES_LANDING=zkb-fi-next RELEASE_LANDING_DOMAINS=next.zkb.fi \
@@ -243,7 +249,8 @@ The archives are pinned on the kubo node under their version, as production ones
 ## Promotion: next to zkb.fi
 
 ```sh
-<password-manager command that prints the production key> | PROMOTE_PUBLISH=1 \
+<password-manager command that prints the production key> | PROMOTE_PUBLISH=1 RELEASE_REMOTE=<release repository> \
+  RELEASE_GIT_NAME=<name> RELEASE_GIT_EMAIL=<email> RELEASE_PIN_PROVIDER=kubo KUBO_API_URL=http://127.0.0.1:5001 \
   script/release/promote.sh <staging-release-directory> "$(mktemp -d)"
 ```
 
@@ -257,6 +264,114 @@ operator's `landing.config.json`, and no staging key (`script/release/promote-ch
 commit, with the production configuration), and writes a production `version.json` (`channels.stable`, sequence =
 the live production sequence + 1, version = the staging version without `-next.N`, or `PROMOTE_VERSION`) that keeps the
 dapp archive byte for byte: production serves the exact content address that was tried on staging, already
-pinned. It refuses if a kept archive differs from what the staging manifest names. It signs with the production key,
-verifies against the production key, and with `PROMOTE_PUBLISH=1` runs `publish.sh` and `publish-pages.sh` with the
+pinned. It refuses if a kept archive differs from what the staging manifest names. It appends the production sites to
+the stable release log (fetched from the `main` branch of `RELEASE_REMOTE`, or `RELEASE_PREVIOUS_LOG`, and checked
+against the production key before anything is built), signs `version.json` and the log with the production key,
+verifies both against the production key, and with `PROMOTE_PUBLISH=1` runs `publish.sh` and `publish-pages.sh` with the
 channel fixed to stable. Upload the downloads to the GitHub release of the production version as for any release.
+
+## The release log
+
+`version.json` names only the current release. When an old pin went missing (the dapp of 0.1.2-next.4), no published
+list named its CID. `releases-log.json` fixes that: one signed file per
+channel that lists every site ever published on it, with its content address, so any release can always be found and
+pinned again.
+
+**What it holds.** `{"schema":1,"channel":"next","entries":[…]}`, written as the exact bytes the key signs (keys
+sorted, no spaces, the same rule as `version.json`). One entry per published site, oldest first:
+
+| Field | What it is |
+| --- | --- |
+| `channel`, `version`, `sequence` | The release the site belongs to (the `sequence` of its `version.json`). |
+| `name`, `cid`, `archiveSha256` | The site (`dapp`, `landing`, or `docs` for releases before the docs moved into the dapp), its CID and the SHA-256 of its archive. |
+| `commit`, `publishedAt` | The source commit and the time, as `version.json` names them. |
+| `previous` | The SHA-256 (hex) of the canonical bytes of the entry before it; `null` for the first entry. |
+
+**Rules** (`explorer/release/src/release-log.ts`). Every entry is on the log's channel. Each `previous` is the hash of
+the entry before it, so a history rewritten anywhere no longer chains to a copy someone kept earlier, signature or not.
+Entries of one release are adjacent, share its version and name each site once; sequences go up from one release to the
+next. A new log must hold the published log's entries byte for byte, in place, and add at least one release with a
+higher sequence. A log that reorders, edits, removes, breaks the chain, carries a signature of another key or does not
+raise the sequence is refused.
+
+**Keys.** The log of each channel is signed by that channel's key: the staging key for `next`, the production key for
+`stable`. It is always checked against the keys in the channel's landing configuration (`landing.next.config.json`,
+`landing.config.json`), never against keys that come with a release or the repository.
+
+**Where it lives.** In the release repository next to `version.json` (branch `next` for next, `main` for stable), and
+served next to `version.json` by the landing mirror: `publish-pages.sh` puts `releases-log.json` and its signature in
+the deployed site, so they are at `https://next.zkb.fi/releases-log.json` and `https://zkb.fi/releases-log.json` from
+that channel's next deploy. The log is not inside the landing archive: the landing CID is one of its entries.
+
+**How each step uses it.**
+
+- `release.sh` fetches the channel's published log from `RELEASE_REMOTE` first (or reads `RELEASE_PREVIOUS_LOG` and its
+  `.sig`), and checks it against the channel's trusted keys before anything is built. It stops when the channel's
+  branch has releases but no log yet (make the first log, below). After `version.json` it writes the new log (the
+  published one plus this release's sites); the signing step signs both files with the one key read from standard
+  input; the last check confirms the log ends with this release. With neither `RELEASE_REMOTE` nor
+  `RELEASE_PREVIOUS_LOG` the log starts with this release, which is right only for a test run or a new channel:
+  `publish.sh` refuses it when the repository already has a log.
+- `publish.sh` clones the channel's branch, then refuses before pinning or pushing unless the new log extends the
+  branch's log exactly (`log-check --extends`) and ends with this release. A branch that has releases but no log is
+  refused. A branch that does not exist yet takes any valid log.
+- `promote.sh` appends the production sites to the stable log the same way (from the `main` branch of `RELEASE_REMOTE`,
+  or `RELEASE_PREVIOUS_LOG`).
+- `verify` checks the log whenever a release directory holds one: signature, rules, and that its last entries are the
+  sites of `version.json`.
+
+Check a log yourself (its signature is read from `<file>.sig`):
+
+```sh
+curl -fsSO https://next.zkb.fi/releases-log.json && curl -fsSO https://next.zkb.fi/releases-log.json.sig
+node explorer/release/src/cli.ts log-check releases-log.json --public-keys explorer/landing/landing.next.config.json
+# that a newer copy only appends to an older one you kept:
+node explorer/release/src/cli.ts log-check releases-log.json --public-keys explorer/landing/landing.next.config.json \
+  --extends <older copy>/releases-log.json
+```
+
+### The first log of a channel: `script/release/bootstrap-log.sh`
+
+Made once per channel, before the next release of that channel (until then `release.sh` and `publish.sh` stop with a
+pointer here). It clones the channel's branch with its full history, reads every signed `version.json` ever pushed,
+checks each signature against the channel's trusted keys, and logs their sites in sequence order. A commit without a
+valid signature, on another channel or repeating a taken sequence is listed as skipped; a sequence no commit holds is
+listed as a gap. Nothing is invented and nothing is re-pinned. The key arrives on standard input and is read only by
+the signing step.
+
+```sh
+# next (staging key)
+<password-manager command that prints the staging key> | RELEASE_CHANNEL=next \
+  RELEASE_REMOTE=<release repository> RELEASE_GIT_NAME=<name> RELEASE_GIT_EMAIL=<email> BOOTSTRAP_PUBLISH=1 \
+  script/release/bootstrap-log.sh "$(mktemp -d)"
+# stable (production key)
+<password-manager command that prints the production key> | RELEASE_CHANNEL=stable \
+  RELEASE_REMOTE=<release repository> RELEASE_GIT_NAME=<name> RELEASE_GIT_EMAIL=<email> BOOTSTRAP_PUBLISH=1 \
+  script/release/bootstrap-log.sh "$(mktemp -d)"
+```
+
+Without `BOOTSTRAP_PUBLISH=1` it only writes and checks the signed log in the output directory; look at it, then run
+again with it. With it, the script commits `releases-log.json` and its signature to the branch and pushes, never
+forced: if the branch moved meanwhile the push fails, and a branch that already holds a log is refused.
+
+### Pinning every release again: `script/release/repin-from-log.sh`
+
+Reads a channel's log, checks it against the channel's trusted keys, and asks the kubo node about every CID it lists
+(each CID once). A dry run by default: it prints each CID as `pinned` or `MISSING` and pins nothing.
+
+```sh
+ssh -N -L 5001:127.0.0.1:5001 zkbfi-app &
+RELEASE_CHANNEL=next KUBO_API_URL=http://127.0.0.1:5001 script/release/repin-from-log.sh
+# then, to pin what is missing:
+REPIN_APPLY=1 RELEASE_CHANNEL=next KUBO_API_URL=http://127.0.0.1:5001 script/release/repin-from-log.sh
+```
+
+- The log comes from the file given as the argument (its signature at `<file>.sig`), else from the channel's branch of
+  `RELEASE_REMOTE`, else from the channel's site (`https://next.zkb.fi/releases-log.json` or
+  `https://zkb.fi/releases-log.json`).
+- `KUBO_API_AUTH`, when the node needs it, is read from the environment only, sent as the `Authorization` header, and
+  never passed on a command line or printed, as for the kubo pin adapter.
+- With `REPIN_APPLY=1`, each missing CID is pinned with `pin/add` under the name `zkbfi-<site>-<version>` (the latest
+  release that lists it). The node fetches the content from the network; a CID no reachable peer holds fails after a
+  timeout, is reported as `FAILED`, and the script exits 1. Re-pinning does not file the archive under
+  `/releases/<version>/` in MFS; the log is the index.

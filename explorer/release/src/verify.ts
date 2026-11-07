@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { canonicalManifestBytes, parseManifest, verifyManifestSignature, type ReleaseManifest } from "../../landing/src/manifest.ts";
 import { readArchive } from "./car.ts";
+import { checkSignedLog, LOG_LAYOUT, manifestProblems } from "./release-log.ts";
 import { parseSha256Sums, sha256Bytes } from "./checksums.ts";
 import { siteLoadProblems } from "./site.ts";
 
@@ -63,6 +64,19 @@ async function archiveProblems(directory: string, manifest: ReleaseManifest): Pr
   return problems;
 }
 
+/**
+ * Checks the release log when the directory holds one: its signature against the given keys, its format and rules
+ * (release-log.ts), and that its last entries are the sites of version.json. A directory made before the log existed
+ * has none; publish.sh requires it (`log-check`).
+ */
+async function logProblems(directory: string, manifest: ReleaseManifest, publicKeys: readonly JsonWebKey[]): Promise<string[]> {
+  const logBytes = await readOrNull(join(directory, LOG_LAYOUT.log));
+  if (logBytes === null) return [];
+  const checked = await checkSignedLog({ logBytes, signature: await readOrNull(join(directory, LOG_LAYOUT.signature)), publicKeys });
+  if (!checked.ok) return checked.problems;
+  return manifestProblems(checked.log, manifest).map((problem) => `${LOG_LAYOUT.log}: ${problem}`);
+}
+
 async function downloadProblems(directory: string, manifest: ReleaseManifest): Promise<string[]> {
   const problems: string[] = [];
   for (const entry of manifest.downloads) {
@@ -100,7 +114,8 @@ async function sumsProblems(directory: string, manifest: ReleaseManifest): Promi
 
 /**
  * Checks a release directory: the signature of `version.json` against the given keys, its canonical form, all three
- * sites, each archive (hash, content addresses, root, loading under `/ipfs/<cid>/`), each download, and `SHA256SUMS`.
+ * sites, each archive (hash, content addresses, root, loading under `/ipfs/<cid>/`), each download, `SHA256SUMS`, and
+ * the release log when there is one.
  * @returns ok, or every problem found, one line each.
  */
 export async function verifyRelease(
@@ -132,5 +147,6 @@ export async function verifyRelease(
   problems.push(...(await archiveProblems(directory, manifest)));
   problems.push(...(await downloadProblems(directory, manifest)));
   problems.push(...(await sumsProblems(directory, manifest)));
+  problems.push(...(await logProblems(directory, manifest, publicKeys)));
   return problems.length === 0 ? { ok: true } : { ok: false, problems };
 }

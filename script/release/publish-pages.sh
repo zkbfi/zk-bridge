@@ -3,7 +3,8 @@
 # assets only (no code): new projects are no longer classic Pages projects, and wrangler 4 creates a Worker for them.
 # Only the landing page goes to Pages. The dapp (docs included, at #/docs) is published on IPFS only.
 # The signed release on IPFS is the source of truth: the mirror is the landing archive of that release, unpacked,
-# plus version.json and its signature, so the page checks the same signed manifest wherever it is loaded.
+# plus version.json and its signature, so the page checks the same signed manifest wherever it is loaded, and the
+# signed release log (releases-log.json and its signature) next to them.
 #
 # Usage:   script/release/publish-pages.sh <release-directory>
 #
@@ -49,6 +50,12 @@ site="$(mktemp -d)"
 trap 'rm -rf "$site"' EXIT
 "${cli[@]}" unpack "$release/archives/landing.car" "$site" >/dev/null
 cp "$release/version.json" "$release/version.json.sig" "$site/"
+# The release log is served next to version.json (<site>/releases-log.json), so every release stays findable.
+if [ -f "$release/releases-log.json" ]; then
+  cp "$release/releases-log.json" "$release/releases-log.json.sig" "$site/"
+else
+  echo "the release has no releases-log.json: the mirror serves none" >&2
+fi
 # The configuration lives outside the site, so it is never published.
 config_dir="$(mktemp -d)"
 trap 'rm -rf "$site" "$config_dir"' EXIT

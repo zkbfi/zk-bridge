@@ -1,7 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach } from "vitest";
+import { canonicalManifestBytes, type ReleaseEntry, type ReleaseManifest } from "../../landing/src/manifest.ts";
+import { signManifest } from "../src/sign.ts";
 
 const made: string[] = [];
 
@@ -45,3 +48,39 @@ export async function throwawayKey(): Promise<{ privateKey: JsonWebKey; publicKe
 export async function* streamOf(...chunks: string[]): AsyncGenerator<Uint8Array> {
   for (const chunk of chunks) yield new TextEncoder().encode(chunk);
 }
+
+/** A manifest of one release, for log tests: `sequence`, version `0.1.<sequence>`, on `channel`, made-up CIDs. */
+export function manifestOf(sequence: number, channel = "next", sites: ReleaseEntry["name"][] = ["dapp", "landing"]): ReleaseManifest {
+  const version = `0.1.${sequence}`;
+  return {
+    schema: 1,
+    sequence,
+    channels: { [channel]: version },
+    releases: sites.map((name) => ({
+      name,
+      version,
+      commit: "c".repeat(40),
+      cid: `bafy${name}${String(sequence).padStart(8, "0")}`,
+      archiveSha256: (name === "dapp" ? "a" : "b").repeat(56) + String(sequence).padStart(8, "0"),
+      publishedAt: `2026-11-0${Math.min(sequence, 9)}T00:00:00Z`,
+    })),
+    downloads: [],
+  };
+}
+
+const identity = { GIT_AUTHOR_NAME: "test", GIT_AUTHOR_EMAIL: "test@example.org", GIT_COMMITTER_NAME: "test", GIT_COMMITTER_EMAIL: "test@example.org" };
+
+/** Runs git in `directory` with a test identity. */
+export function git(directory: string, ...args: string[]): string {
+  return execFileSync("git", ["-c", "commit.gpgsign=false", "-C", directory, ...args], { env: { ...process.env, ...identity }, encoding: "utf8" });
+}
+
+/** Commits a signed version.json (and its signature unless `signature` is null) to the repository. */
+export async function commitRelease(directory: string, manifest: ReleaseManifest, privateKey: JsonWebKey | null): Promise<void> {
+  await writeFile(join(directory, "version.json"), canonicalManifestBytes(manifest));
+  if (privateKey === null) await rm(join(directory, "version.json.sig"), { force: true });
+  else await writeFile(join(directory, "version.json.sig"), await signManifest({ manifest, privateKey }));
+  git(directory, "add", "-A");
+  git(directory, "commit", "--quiet", "-m", `release sequence ${manifest.sequence}`);
+}
+
