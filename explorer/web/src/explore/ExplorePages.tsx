@@ -5,15 +5,12 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { formatRoute, type ExplorePage } from "../app/route";
-import { useFeed, useTokens } from "../app/queries";
 import { useServices } from "../app/services";
-import { relativeTime } from "../bridge/activity-model";
-import { amountText, chainsFor } from "../bridge/bridge-model";
-import { Num } from "../bridge/Num";
 import { TokenIcon } from "../bridge/TokenIcon";
 import { chainNamer } from "./ExploreScreen";
-import { statusWord } from "./explore-model";
-import { RouteIcons, shortHex, XGroup, XRow } from "./parts";
+import { shortHex, XGroup, XRow } from "./parts";
+import { BrowseList } from "./BrowseList";
+import { isListKind } from "./browse-model";
 import { AddressPage, TransactionPage } from "./TxAddressPages";
 import { BlockPage, ContractPage, CostsPage, GatePage, ProofPage, ReleasePage, SlotPage, TokenPage } from "./OtherPages";
 import type { Address, Hex } from "viem";
@@ -22,7 +19,7 @@ const href = (page: ExplorePage): string => formatRoute({ name: "explore", page 
 
 /** One Explore page. */
 export const ExplorePageView = ({ page }: { readonly page: ExplorePage }) => {
-  if (page.kind === "browse") return <BrowsePage kind={page.id} />;
+  if (page.kind === "browse") return isListKind(page.id) ? <BrowseList kind={page.id} query={page.query} /> : <BrowsePage kind={page.id} />;
   if (page.kind === "tx" && page.chainId !== undefined) return <TransactionPage chainId={page.chainId} hash={page.id.toLowerCase() as Hex} />;
   if (page.kind === "address") return <AddressPage address={page.id as Address} />;
   if (page.kind === "proof" && page.chainId !== undefined) return <ProofPage chainId={page.chainId} number={Number(page.id)} />;
@@ -35,57 +32,13 @@ export const ExplorePageView = ({ page }: { readonly page: ExplorePage }) => {
   return <CostsPage />;
 };
 
+/** The short lists that never page: the contracts of the pair and the gates. */
 const BrowsePage = ({ kind }: { readonly kind: string }) => {
-  const { pair, explore, now } = useServices();
+  const { pair, explore } = useServices();
   const names = chainNamer(pair);
-  const proofs = useQuery({ queryKey: ["explore", "proofs"], queryFn: () => explore.proofs() }).data ?? [];
-  const gates = useQuery({ queryKey: ["explore", "gates"], queryFn: () => explore.gates() }).data ?? [];
-  const feed = useFeed(pair.id, {}, 100).data?.items ?? [];
-  const tokens = useTokens(pair.id).data ?? [];
-  const otherOf = (chainId: number): number => (chainId === pair.first.chainId ? pair.second.chainId : pair.first.chainId);
-  const titles: Record<string, string> = { transfers: "Transfers & messages", proofs: "Proofs", tokens: "Tokens", addresses: "Addresses", contracts: "Contracts", gates: "Gates & escrow", releases: "Releases" };
+  const gates = useQuery({ queryKey: ["explore", "gates"], queryFn: () => explore.gates(), enabled: kind === "gates" }).data ?? [];
+  const titles: Record<string, string> = { contracts: "Contracts", gates: "Gates & escrow", releases: "Releases" };
   const rows = (() => {
-    if (kind === "proofs") {
-      return proofs.map((proof) => (
-        <XRow
-          key={`${proof.chainId}-${proof.number}`}
-          href={href({ kind: "proof", chainId: proof.chainId, id: String(proof.number) })}
-          icon={<RouteIcons from={otherOf(proof.chainId)} to={proof.chainId} names={names} />}
-          title={`Proof #${proof.number}`}
-          sub={`slot ${proof.slot.toLocaleString("en-US")} · ${relativeTime(proof.timestamp, now())}`}
-          status="posted"
-        />
-      ));
-    }
-    if (kind === "transfers") {
-      return feed.map((item) => {
-        const { source, destination } = chainsFor(pair, item.direction);
-        return (
-          <XRow
-            key={item.id}
-            href={href({ kind: "tx", chainId: source.chainId, id: item.sourceTransactionHash })}
-            title={item.token === null || item.amount === null ? `Message ${shortHex(item.id)}` : <><Num text={amountText(item.amount, item.token.decimals)} /> {item.token.symbol}</>}
-            sub={<RouteIcons from={source.chainId} to={destination.chainId} names={names} />}
-            status={statusWord(item.status)}
-          />
-        );
-      });
-    }
-    if (kind === "tokens") {
-      return tokens.map((token) => {
-        const chain = token.side === "first" ? pair.first : pair.second;
-        return <XRow key={`${token.side}:${token.address}`} href={href({ kind: "token", id: `${token.side}:${token.address}` })} icon={<TokenIcon subject={{ chainId: chain.chainId, address: token.address }} badgeChainId={chain.chainId} symbol={token.symbol} isBridgedCopy={token.isBridgedCopy} size={28} decorative />} title={token.symbol} sub={shortHex(token.address)} />;
-      });
-    }
-    if (kind === "addresses") {
-      const seen = new Map<string, string>();
-      for (const proof of proofs) seen.set(proof.poster.toLowerCase(), "poster");
-      for (const item of feed) {
-        if (!seen.has(item.sender.toLowerCase())) seen.set(item.sender.toLowerCase(), "sender");
-        if (!seen.has(item.recipient.toLowerCase())) seen.set(item.recipient.toLowerCase(), "receiver");
-      }
-      return [...seen].map(([address, role]) => <XRow key={address} href={href({ kind: "address", id: address })} title={<span className="zb-mono">{shortHex(address)}</span>} sub={role} />);
-    }
     if (kind === "contracts") {
       return [pair.first, pair.second].flatMap((chain) =>
         (Object.entries(chain.contracts) as [string, string | null][])

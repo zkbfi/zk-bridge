@@ -200,6 +200,36 @@ describe("GET /benchmarks (2026-11-01)", () => {
   });
 });
 
+describe("GET /warmup/summary (2026-11-06)", () => {
+  it("answers the daily totals with the assumptions, and never a host or a key", async () => {
+    const run = setup();
+    const store = createWarmupStore(run.storage);
+    const start = run.context.now() - 3_600_000;
+    const used = store.openSession({ direction: "first-to-second", why: "message", dueAt: start + 60_000, leadSeconds: 60, at: start });
+    store.markReady(used, start + 30_000);
+    store.endSession(used, "used", start + 70_000, 60);
+    const wasted = store.openSession({ direction: "first-to-second", why: "message", dueAt: start + 600_000, leadSeconds: 60, at: start + 100_000 });
+    store.endSession(wasted, "unusable", start + 110_000, 60);
+    const answer = await run.get("/warmup/summary");
+    expect(answer.status).toBe(200);
+    expect(answer.body).toMatchObject({
+      days: 7,
+      assumptions: { idleTimeoutSeconds: 60, gpuUsdPerHour: 2.25 },
+      total: { sessions: 2, used: 1, wasted: 1, billedSeconds: 200, wastedSeconds: 70, idleBeforeDueSeconds: 30 },
+    });
+    expect((answer.body.byDay as unknown[]).length).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(answer.body)).not.toMatch(/https?:|key|token/i);
+    expect((await run.get("/warmup/summary?days=1")).body).toMatchObject({ days: 1 });
+  });
+
+  it("refuses a number of days it does not know, and limits the reads", async () => {
+    const run = setup();
+    for (const days of ["0", "31", "x", "1.5", "-1"]) expect((await run.get(`/warmup/summary?days=${days}`)).status).toBe(400);
+    for (let index = 0; index < READS_PER_CALLER_PER_MINUTE; index += 1) await run.get("/warmup/summary");
+    expect((await run.get("/warmup/summary")).status).toBe(429);
+  });
+});
+
 describe("the routes in the backend", () => {
   it("are served by the requests module, cross-origin, with the indexer of the configuration", async () => {
     const backend = makeBackend({ config: makeConfig({ indexerUrl: "http://127.0.0.1:9/" }) });
@@ -235,7 +265,7 @@ describe("a warm worker at a time", () => {
     expect(workerWarmAt(backend.storage, "first-to-second", 100)).toBe(false);
     store.markReady(id, 50);
     expect(workerWarmAt(backend.storage, "first-to-second", 100)).toBe(true);
-    store.endSession(id, "used", 80);
+    store.endSession(id, "used", 80, 60);
     expect(workerWarmAt(backend.storage, "first-to-second", 100)).toBe(false);
     expect(workerWarmAt(backend.storage, "first-to-second", 70)).toBe(true);
   });

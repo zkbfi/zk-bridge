@@ -1,3 +1,11 @@
+---
+title: "Settings, search and Explore"
+summary: "Make the app yours: pick a theme, use your own RPC endpoint and beacon endpoint for each chain, swap any service the app reads, and find anything in the bridge from one search."
+audience: [user, integrator]
+chains: all
+verified_release: 0.1.0
+---
+
 # Settings, search and Explore
 
 Make the app yours: pick a theme, use your own RPC endpoint and beacon endpoint for each chain, swap any service the app reads, and find anything in the bridge from one search.
@@ -20,14 +28,14 @@ The actions include Bridge tokens, Send a message, Connect or disconnect the wal
 Explore is the screen to the right of Bridge. It shows the whole bridge, not only your transfers.
 
 - **Search band.** Takes any identifier: a transaction hash, a message ID, an address, a token symbol, a slot, a block, a proof number or a release. It says what it recognised and groups the matches by kind.
-- **Browse.** One row per kind, each with its count: transfers and messages, proofs, tokens, addresses, contracts, gates and escrow, costs, and releases.
+- **Browse.** One tile per kind, each with its all-time count from the indexer (not the latest few): transfers and messages (with how many are in flight), proofs, tokens, addresses, contracts, gates and escrow, costs, and releases.
 - **The live map.** The two chains joined by a ring, with each transfer in flight moving along its direction.
 - **The numbers.** Transfers in the last 24 hours, the median time and more. A number the data cannot give yet shows "—", with the reason on hover.
 - **Light clients.** Each chain's light client and the slot it has verified up to.
 - **Latest transfers**, with **All** to see every one.
 - **Services.** Each service the app reads, with a live check.
 
-Every kind has its own page, and every value on a page links onward. A message page tells one transfer's whole story: who sent it, what arrived, the fee with its parts, and each step with its time, its cost and a link to the transaction on the chain's explorer. Dollar values show where the token has a price; the testnets have none.
+Every kind has its own page, and every value on a page links onward. The pages for transfers and messages, proofs, tokens and addresses are lists of 50 rows with the total in the header. Filter them with the menus (for transfers: the chain it was sent from, status, transfer or message, token, time, or an address), sort them (newest, oldest, or by amount once a token is chosen; for proofs by slot; for tokens by symbol or transfers; for addresses by activity), and move with First, Previous, Next and Last under "Page x of y". The filters, the sort and the page are in the address, so a link opens the same rows and Back returns to the one before. While you page through a list it keeps one snapshot, so new transfers do not shift the pages; "refresh" takes a new one. A message page tells one transfer's whole story: who sent it, what arrived, the fee with its parts, and each step with its time, its cost and a link to the transaction on the chain's explorer. Dollar values show where the token has a price; the testnets have none.
 
 ## Activity
 

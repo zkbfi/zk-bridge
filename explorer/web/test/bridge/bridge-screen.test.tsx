@@ -20,7 +20,12 @@ describe("the bridge screen", () => {
     renderBridge();
     const from = await screen.findByRole("button", { name: `From ${FIXTURE_PAIR.first.name}. Change the route` });
     expect(within(from).getByRole("img", { name: FIXTURE_PAIR.first.name })).toBeInTheDocument();
-    expect(screen.getAllByText(/0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}/).length).toBeGreaterThan(0);
+    // The whole 42-character address is in the row (text, title and accessible name); the browser shortens it only for lack of room.
+    const full = screen.getAllByTitle(/^0x[0-9a-fA-F]{40}$/)[0]!;
+    expect(full.textContent).toMatch(/^0x[0-9a-fA-F]{40}$/);
+    expect(full).toHaveAttribute("title", full.textContent);
+    expect(full).toHaveAttribute("aria-label", full.textContent);
+    expect(full.textContent).not.toContain("…");
   });
 
   it("puts the balance and MAX on the right, and MAX fills the amount and writes the address", async () => {
@@ -86,7 +91,8 @@ describe("the token picker", () => {
     expect(within(picker).queryByRole("heading")).toBeNull();
     const search = within(picker).getByRole("combobox", { name: "Search tokens" });
     const band = search.parentElement!;
-    expect(band.className).toBe("zb-picker-search");
+    expect(band.className).toBe("zb-picker-in");
+    expect(band.parentElement).toHaveClass("zb-picker-search");
     expect(band.lastElementChild).toHaveAccessibleName("Close");
     expect(band.lastElementChild?.textContent).toBe("");
     const tabs = within(picker).getAllByRole("tab");

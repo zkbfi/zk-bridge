@@ -7,7 +7,7 @@ import { BrandMark } from "@web/ui/BrandMark";
 import { DocsMarkdown } from "./DocsMarkdown";
 import { DocsSearch } from "./DocsSearch";
 import type { DocsResult } from "./docs-search";
-import { routeOf, SECTION_TITLES, SECTIONS, type DocsSitePage } from "./pages";
+import { markdownPathOf, routeOf, SECTION_TITLES, SECTIONS, type DocsSitePage } from "./pages";
 import { pageIdMatchesSlug } from "@web/docs/slug";
 
 /** Props of {@link DocsSite}. */
@@ -79,6 +79,9 @@ const Home = ({ pages }: { readonly pages: readonly DocsSitePage[] }) => {
           </section>
         ))}
         {groups.length === 0 ? <p className="zd-p">No pages are published yet.</p> : null}
+        <p className="zd-p zd-machine">
+          For assistants and tools: <a href="llms.txt">llms.txt</a> lists every page as Markdown, and <a href="llms-full.txt">llms-full.txt</a> holds them all in one file.
+        </p>
       </div>
     </>
   );
@@ -156,6 +159,11 @@ const Article = ({ page, before, after }: { readonly page: DocsSitePage; readonl
       ) : null}
       <div className="zd-layout">
         <article className="zd-article" aria-labelledby="page-title">
+          <p className="zd-source">
+            <a href={markdownPathOf(page.id)} type="text/markdown">
+              View as Markdown
+            </a>
+          </p>
           <DocsMarkdown blocks={page.blocks} />
           {before === null && after === null ? null : (
             <nav className="zd-pager" aria-label="Previous and next page">

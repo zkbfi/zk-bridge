@@ -71,7 +71,7 @@ export const TransactionPage = ({ chainId, hash }: { readonly chainId: number; r
   const { pair, explore: source } = useServices();
   const names = chainNamer(pair);
   const reader = useChainReader()(chainId);
-  const read = useQuery({ queryKey: ["tx", chainId, hash], enabled: reader !== null, queryFn: () => reader!.transaction(hash), retry: 1 });
+  const read = useQuery({ queryKey: ["tx", chainId, hash], enabled: reader !== null, queryFn: () => reader!.transaction(hash), retry: 0 });
   const proofs = useQuery({ queryKey: ["explore", "proofs"], queryFn: () => source.proofs() }).data ?? [];
   const feed = useFeed(pair.id, {}, 100).data?.items ?? [];
   const [raw, setRaw] = useState(false);

@@ -1,7 +1,8 @@
 import { useMemo, type ReactNode } from "react";
 import { rpcTransport } from "../app/rpc-transport";
 import { createConfig, injected, useConnect, useConnection, useConnectors, useDisconnect, useSendTransaction, useSwitchChain, WagmiProvider, type Config } from "wagmi";
-import { defineChain, type Chain } from "viem";
+import type { Chain } from "viem";
+import { rpcChain } from "@terminal/chain/rpc-transport";
 import type { PairConfig } from "@terminal/model/types";
 import { WalletContext, type WalletPort, type WalletStatus, type WalletTransaction } from "./wallet-port";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
@@ -16,12 +17,7 @@ import { defaultRpcUrl } from "@terminal/config/default-rpc";
  */
 export const createWalletConfig = (pair: PairConfig, rpcUrls: Readonly<Record<number, string>>): Config => {
   const chains = [pair.first, pair.second].map((chain): Chain =>
-    defineChain({
-      id: chain.chainId,
-      name: chain.name,
-      nativeCurrency: { name: chain.nativeSymbol, symbol: chain.nativeSymbol, decimals: 18 },
-      rpcUrls: { default: { http: [rpcUrls[chain.chainId] ?? defaultRpcUrl(chain.chainId) ?? "http://127.0.0.1:8545"] } },
-    }),
+    rpcChain({ id: chain.chainId, name: chain.name, symbol: chain.nativeSymbol, rpcUrl: rpcUrls[chain.chainId] ?? defaultRpcUrl(chain.chainId) ?? "http://127.0.0.1:8545" }),
   );
   const [first, second] = chains as [Chain, Chain];
   return createConfig({

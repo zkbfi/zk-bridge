@@ -58,30 +58,32 @@ export const CommandPalette = ({ recent, walletConnected, onSelect, onClose, doc
   return (
     <Sheet label="Search and jump" showTitle={false} bare top onClose={onClose}>
       <div className="zb-picker-search">
-        <SearchIcon />
-        <input
-          ref={inputReference}
-          role="combobox"
-          aria-label="Search views, pairs, tokens, transfers, transactions, addresses, blocks, proofs, actions and docs"
-          aria-expanded="true"
-          aria-controls={listId}
-          aria-autocomplete="list"
-          aria-activedescendant={active === null ? undefined : optionId(active)}
-          placeholder="Search anything"
-          autoComplete="off"
-          spellCheck={false}
-          value={query}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setHighlight(0);
-          }}
-          onKeyDown={onKeyDown}
-        />
-        <button type="button" className="zb-picker-close" aria-label="Close" onClick={onClose}>
-          <svg viewBox="0 0 12 12" className="zb-icon" aria-hidden="true" focusable="false">
-            <path d="M3 3l6 6M9 3 3 9" />
-          </svg>
-        </button>
+        <div className="zb-picker-in">
+          <SearchIcon />
+          <input
+            ref={inputReference}
+            role="combobox"
+            aria-label="Search views, pairs, tokens, transfers, transactions, addresses, blocks, proofs, actions and docs"
+            aria-expanded="true"
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={active === null ? undefined : optionId(active)}
+            placeholder="Search anything"
+            autoComplete="off"
+            spellCheck={false}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setHighlight(0);
+            }}
+            onKeyDown={onKeyDown}
+          />
+          <button type="button" className="zb-picker-close" aria-label="Close" onClick={onClose}>
+            <svg viewBox="0 0 12 12" className="zb-icon" aria-hidden="true" focusable="false">
+              <path d="M3 3l6 6M9 3 3 9" />
+            </svg>
+          </button>
+        </div>
       </div>
       <div className="zb-picker zb-palette">
         <div id={listId} role="listbox" aria-label="Results" className="zb-palette-list">

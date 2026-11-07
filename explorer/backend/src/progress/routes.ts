@@ -1,6 +1,6 @@
 /**
  * The read routes of the pipeline: `GET /progress/:messageId`, `GET /directions/:direction/pipeline` and
- * `GET /benchmarks`. They answer from the backend database, the watcher's latest decision and the chain indexer, and
+ * `GET /benchmarks` and `GET /warmup/summary`. They answer from the backend database, the watcher's latest decision and the chain indexer, and
  * never name an endpoint, a key or a path. Each caller may read {@link READS_PER_CALLER_PER_MINUTE} times a minute.
  */
 import type { Context, Hono } from "hono";
@@ -10,6 +10,7 @@ import { findActiveJob, findLatestJob, getJob, listJobsSince, type PlannedJob } 
 import { getTiming, listTimings, recentTimings, statOf } from "../requests/timings.ts";
 import type { Storage } from "../storage.ts";
 import { decisionBoardOf } from "../watch/decisions.ts";
+import { createWarmupStore } from "../watch/warmup-store.ts";
 import { buildBenchmarks, parseWindow, WINDOW_LIMITS, type Benchmarks } from "./benchmarks.ts";
 import { createIndexerReads, type IndexedHead, type IndexerReads } from "./indexer.ts";
 import { buildPipeline, knownProofs } from "./pipeline.ts";
@@ -187,5 +188,36 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     const refused = limited(request);
     if (refused !== null) return refused;
     return request.json(await benchmarks(window, seconds));
+  });
+
+  /**
+   * What the warm-up of the remote prover cost, per UTC day by the day a session started: sessions, used and wasted,
+   * the billed GPU seconds estimated (to the endpoint's idle timeout after the end), the cost at the configured price,
+   * and the seconds a worker sat ready before the due time. `days`: 1 to 30, default 7.
+   */
+  app.get("/warmup/summary", (request) => {
+    const text = request.req.query("days") ?? "7";
+    const days = /^\d+$/.test(text) ? Number(text) : 0;
+    if (days < 1 || days > 30) return request.json({ error: "days is a whole number from 1 to 30" }, 400);
+    const refused = limited(request);
+    if (refused !== null) return refused;
+    const { idleTimeoutSeconds, gpuUsdPerHour, dailyCapSeconds } = context.config.watch.warmup;
+    const byDay = createWarmupStore(storage).summary(now() - days * 86_400_000, { idleTimeoutSeconds, gpuUsdPerHour });
+    const sum = (pick: (day: (typeof byDay)[number]) => number) => Math.round(byDay.reduce((total, day) => total + pick(day), 0) * 10_000) / 10_000;
+    return request.json({
+      days,
+      assumptions: { idleTimeoutSeconds, gpuUsdPerHour, dailyCapSeconds },
+      total: {
+        sessions: sum((day) => day.sessions),
+        used: sum((day) => day.used),
+        wasted: sum((day) => day.wasted),
+        billedSeconds: sum((day) => day.billedSeconds),
+        wastedSeconds: sum((day) => day.wastedSeconds),
+        idleBeforeDueSeconds: sum((day) => day.idleBeforeDueSeconds),
+        estimatedCostUsd: sum((day) => day.estimatedCostUsd),
+        wastedCostUsd: sum((day) => day.wastedCostUsd),
+      },
+      byDay,
+    });
   });
 }

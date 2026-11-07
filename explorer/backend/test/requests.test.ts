@@ -8,6 +8,9 @@ import { DEFAULT_WARMUP } from "../src/watch/warmup.ts";
 import { createWarmupStore } from "../src/watch/warmup-store.ts";
 import { makeBackend, makeClock, memoryLogger, makeConfig, makeProofPackage, postFrom, controllableProver, fakeProofNeed } from "./support.ts";
 
+/** The settings before 2026-11-06 (p90, no margin, 90 s grace): the scenarios of these tests rest on them. */
+const LEGACY_WARMUP = { ...DEFAULT_WARMUP, leadP: 0.9, leadMarginSeconds: 0, minLeadSeconds: 30, graceSeconds: 90 };
+
 const countJobs = (storage: ReturnType<typeof makeBackend>["storage"]) =>
   (storage.database.prepare("SELECT count(*) AS total FROM jobs").get() as { total: number }).total;
 
@@ -151,7 +154,7 @@ describe("job life", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const events = backend.log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(events.filter((event) => event.event === "warmup_observed")).toMatchObject([{ direction: "first-to-second", source: "job", seconds: 61.5 }]);
-    expect(createWarmupStore(backend.storage).lead(DEFAULT_WARMUP)).toMatchObject({ seconds: 62, basis: "observed" });
+    expect(createWarmupStore(backend.storage).lead(LEGACY_WARMUP)).toMatchObject({ seconds: 62, basis: "observed" });
   });
 
   it("keeps the prover's timings of every proof (2026-11-01)", async () => {
@@ -177,7 +180,7 @@ describe("job life", () => {
     const events = backend.log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(events.filter((event) => event.event === "warmup_missed")).toMatchObject([{ level: "warn", direction: "first-to-second", waitWorkerSeconds: 20 }]);
     expect(events.filter((event) => event.event === "warmup_observed")).toEqual([]);
-    expect(store.lead(DEFAULT_WARMUP)).toMatchObject({ basis: "default" });
+    expect(store.lead(LEGACY_WARMUP)).toMatchObject({ basis: "default" });
   });
 
   it("a failure to note the proof never fails the job", async () => {
@@ -549,5 +552,36 @@ describe("claiming a job", () => {
     await service.settled();
     expect(prover.calls).toEqual([]);
     expect(storage.database.prepare("SELECT status FROM jobs").get()).toEqual({ status: "failed" });
+  });
+});
+
+describe("admitAfterSeconds", () => {
+  const build = () => {
+    const storage = openStorage(":memory:");
+    const clock = makeClock();
+    const prover = controllableProver();
+    const limits = { ...DEFAULT_RATE_LIMITS, jobsPerDirectionPerDay: 2 };
+    const service = createRequestService({ storage, proverForJob: () => prover.binary, readProofNeed: fakeProofNeed().read, now: clock.now, limits, proverTimeoutMilliseconds: 1_800_000, logger: memoryLogger().logger });
+    const submit = () => service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "user", caller: "a" });
+    return { service, clock, prover, submit };
+  };
+
+  it("is 0 with no job, the retry wait after a failed job, the spacing after another, and the budget wait once the day is spent", async () => {
+    const { service, clock, prover, submit } = build();
+    expect(service.admitAfterSeconds("first-to-second")).toBe(0);
+    await submit();
+    prover.failAll(new Error("boom"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(service.admitAfterSeconds("first-to-second")).toBe(DEFAULT_RATE_LIMITS.secondsBeforeRetryAfterFailure);
+    clock.advance(30_000);
+    expect(service.admitAfterSeconds("first-to-second")).toBe(DEFAULT_RATE_LIMITS.secondsBeforeRetryAfterFailure - 30);
+    clock.advance(30_000);
+    expect(service.admitAfterSeconds("first-to-second")).toBe(0);
+    await submit();
+    prover.settleAll({ kind: "proof", proofPackage: makeProofPackage(10, 42) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Two costly jobs in the day: the third waits until the first is a day old.
+    expect(service.admitAfterSeconds("first-to-second")).toBeGreaterThan(DEFAULT_RATE_LIMITS.secondsBetweenJobsPerDirection);
+    expect(service.admitAfterSeconds("second-to-first")).toBe(0);
   });
 });

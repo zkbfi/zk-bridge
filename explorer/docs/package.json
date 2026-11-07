@@ -10,7 +10,8 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "gate": "../../script/check-docs-public.sh"
+    "gate": "../../script/check-docs-public.sh",
+    "check:machine": "node scripts/check-machine-docs.ts"
   },
   "dependencies": {
     "react": "19.3.0",

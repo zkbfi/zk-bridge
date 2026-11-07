@@ -17,13 +17,15 @@ const decimal = z.string().regex(/^\d+(\.\d+)?$/, "must be a decimal number such
 
 const unitSchema = z.object({ name: z.string().regex(/^[A-Za-z0-9@_.:-]+$/), optional: z.boolean().default(false) }).strict();
 
+/** Units that the server no longer runs: the backend's watcher owns the keep-alive now. A file that still lists one is not checked for it. */
+const RETIRED_UNITS: ReadonlySet<string> = new Set(["zk-bridge-keepalive.timer", "zk-bridge-keepalive.service"]);
+
 const DEFAULT_UNITS = [
   { name: "zk-bridge-backend", optional: false },
   { name: "zk-bridge-indexer", optional: false },
   { name: "zk-bridge-runner", optional: false },
   { name: "zk-bridge-traffic", optional: true },
   { name: "zk-bridge-ipfs", optional: false },
-  { name: "zk-bridge-keepalive.timer", optional: false },
 ];
 
 const DEFAULT_SERVICES = {
@@ -71,7 +73,7 @@ export const statusConfigSchema = z
       })
       .strict()
       .default(DEFAULT_SERVICES),
-    units: z.array(unitSchema).default(DEFAULT_UNITS),
+    units: z.array(unitSchema).default(DEFAULT_UNITS).transform((units) => units.filter((unit) => !RETIRED_UNITS.has(unit.name))),
     /** The endpoints of each chain of the pair, by chain identifier. */
     chains: z.record(
       z.string().regex(/^\d+$/),

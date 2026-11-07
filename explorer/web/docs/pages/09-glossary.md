@@ -1,3 +1,11 @@
+---
+title: "Glossary"
+summary: "Every term the app and these docs use, in alphabetical order."
+audience: [user, deliverer, operator, integrator]
+chains: all
+verified_release: 0.1.0
+---
+
 # Glossary
 
 Every term the app and these docs use, in alphabetical order.

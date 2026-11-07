@@ -1,3 +1,11 @@
+---
+title: "Safety"
+summary: "Know exactly what you trust when you bridge, what the contracts cannot do, and how the app protects you before you sign."
+audience: [user, operator]
+chains: all
+verified_release: 0.1.0
+---
+
 # Safety
 
 Know exactly what you trust when you bridge, what the contracts cannot do, and how the app protects you before you sign.

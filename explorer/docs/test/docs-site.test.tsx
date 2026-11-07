@@ -205,4 +205,16 @@ describe("in the dapp", () => {
     show();
     expect(screen.getByRole("link", { name: "Open the bridge" })).toHaveAttribute("href", "#/");
   });
+
+  it("the front page points assistants at llms.txt and llms-full.txt, with links relative to the page", () => {
+    show();
+    expect(screen.getByRole("link", { name: "llms.txt" })).toHaveAttribute("href", "llms.txt");
+    expect(screen.getByRole("link", { name: "llms-full.txt" })).toHaveAttribute("href", "llms-full.txt");
+  });
+
+  it("each page links its Markdown source, relative to the page so it works at every gateway form", () => {
+    show();
+    goTo("#/docs/how-the-bridge-works");
+    expect(screen.getByRole("link", { name: "View as Markdown" })).toHaveAttribute("href", "docs/how-the-bridge-works.md");
+  });
 });

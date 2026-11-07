@@ -61,6 +61,10 @@ describe("watchedDirections", () => {
     expect(() => makeConfig({ watch: { warmup: { leadP: 0 } } })).toThrow(BackendConfigError);
     expect(() => makeConfig({ watch: { warmup: { leadP: 1.5 } } })).toThrow(BackendConfigError);
     expect(() => makeConfig({ watch: { warmup: { minLeadSeconds: 700 } } })).toThrow(/minLeadSeconds must not be above maxLeadSeconds/);
+    // The lead (p75 plus 5 s), the grace and the cost estimate are configurable.
+    expect(makeConfig({}).watch.warmup).toMatchObject({ leadP: 0.75, leadMarginSeconds: 5, graceSeconds: 45, idleTimeoutSeconds: 60, gpuUsdPerHour: 2.25 });
+    expect(makeConfig({ watch: { warmup: { leadMarginSeconds: 0, idleTimeoutSeconds: 5, gpuUsdPerHour: 1 } } }).watch.warmup).toMatchObject({ leadMarginSeconds: 0, idleTimeoutSeconds: 5, gpuUsdPerHour: 1 });
+    expect(() => makeConfig({ watch: { warmup: { gpuUsdPerHour: -1 } } })).toThrow(BackendConfigError);
     // The fixed lead time of before 2026-11-01 still loads, and does nothing.
     expect(makeConfig({ watch: { warmup: { leadSeconds: 45 } } }).watch.warmup.leadSeconds).toBe(45);
   });

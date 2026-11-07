@@ -35,5 +35,5 @@
 - name: Move the bots
   ansible.builtin.import_playbook: bots.yml
 
-- name: Install the keep-alive timer
-  ansible.builtin.import_playbook: keepalive.yml
+# The keep-alive timer is retired: the backend's watcher keeps both light clients alive (docs/testnet-run.md).
+# keepalive.yml stays for reference and must not run in a full deploy, or it would enable the timer again.

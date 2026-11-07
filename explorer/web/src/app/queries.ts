@@ -67,6 +67,8 @@ export const useSnapshots = (account: Address | null, pairId: string) => {
     queryFn: () => chainAccess.readSnapshots({ account: account as Address, tokens: tokens.data ?? [] }),
     enabled: account !== null && tokens.data !== undefined,
     refetchInterval: POLL_MILLISECONDS,
+    // The RPC transport already retries; the next poll is the retry after that. Retrying here too multiplied the requests.
+    retry: 0,
   });
 };
 

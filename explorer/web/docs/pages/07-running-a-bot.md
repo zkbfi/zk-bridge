@@ -1,3 +1,11 @@
+---
+title: "Running a delivery bot or prover"
+summary: "Run a delivery bot or a prover and earn the fees that transfers pay."
+audience: [deliverer, operator]
+chains: all
+verified_release: 0.1.0
+---
+
 # Running a delivery bot or prover
 
 Run a delivery bot or a prover and earn the fees that transfers pay.

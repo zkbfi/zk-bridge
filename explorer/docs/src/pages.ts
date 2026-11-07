@@ -8,6 +8,9 @@
 import { parseMarkdown, type Block, type Inline } from "@web/docs/markdown";
 import { slugOfPageId } from "@web/docs/slug";
 import publicOperatorPages from "virtual:public-operator-pages";
+import docsFacts from "virtual:docs-facts";
+import { splitFrontMatter } from "../machine/front-matter";
+import { resolvePlaceholders } from "../machine/placeholders";
 
 /** Which set of files a page comes from. */
 export type DocsSiteGroup = "help" | "operator";
@@ -38,6 +41,8 @@ export type DocsSiteHeading = { readonly id: string; readonly text: string; read
 export type DocsSitePage = {
   /** The identifier of the page, such as `help/fees-explained` or `audit/known-issues`. Its address uses the slug (see `slugOfPageId`). */
   readonly id: string;
+  /** The address part of the page, and of its Markdown file `docs/<slug>.md` (see `markdownPathOf`). */
+  readonly slug: string;
   readonly group: DocsSiteGroup;
   /** The group of the front page that lists it. Operator pages are about running the bridge. */
   readonly section: DocsSiteSection;
@@ -72,7 +77,6 @@ type SourcePage = {
   readonly blocks: readonly Block[];
 };
 
-const ORDER_PREFIX = /^\d+-/;
 const UNPUBLISHED_FOLDER = "superpowers/";
 
 /**
@@ -106,17 +110,23 @@ const titleOf = (blocks: readonly Block[], fallback: string): string => {
   return title !== undefined && title.kind === "heading" ? title.text : fallback;
 };
 
+/** The published Markdown file of a page, relative to the root of the dapp, so it works at every gateway form. */
+export const markdownPathOf = (id: string): string => `docs/${slugOfPageId(id)}.md`;
+
+/** The text of a file below its front matter, which the machine-readable files carry and the page does not show. */
+const bodyOf = (source: string): string => splitFrontMatter(source).body;
+
 const readUserPage = ([key, source]: readonly [string, string]): SourcePage & { readonly order: number } => {
   const file = key.split("/").pop() as string;
   const match = /^(\d+)-(.+)\.md$/.exec(file);
   if (match === null) throw new Error(`The help file "${key}" needs a name like 01-getting-started.md.`);
-  const blocks = parseMarkdown(source);
+  const blocks = parseMarkdown(bodyOf(source));
   return { order: Number(match[1]), id: `help/${match[2]}`, group: "help", path: `help/${file}`, title: titleOf(blocks, match[2] as string), blocks };
 };
 
 const readOperatorPage = ([key, source]: readonly [string, string]): SourcePage => {
   const path = placeBelowDocs(key);
-  const blocks = parseMarkdown(source);
+  const blocks = parseMarkdown(bodyOf(source));
   return { id: path.replace(/\.md$/, ""), group: "operator", path, title: titleOf(blocks, path), blocks };
 };
 
@@ -272,7 +282,7 @@ export const collectPages = (input: DocsSiteInput): DocsSitePage[] => {
     );
     const section: DocsSiteSection = page.group === "operator" ? "run" : (HELP_SECTIONS[page.id.slice("help/".length)] ?? "use");
     const minutes = Math.max(1, Math.round(wordCount(page.blocks) / 200));
-    return { id: page.id, group: page.group, section, title: page.title, description: describePage(page.blocks), minutes, blocks, headings };
+    return { id: page.id, slug: slugOfPageId(page.id), group: page.group, section, title: page.title, description: describePage(page.blocks), minutes, blocks, headings };
   });
 };
 
@@ -292,10 +302,14 @@ export const findUnresolvedLinks = (input: DocsSiteInput): UnresolvedLink[] => {
 };
 
 /** The pages of the real files, read when the site is built. */
+const withFacts = (pages: Readonly<Record<string, string>>): Record<string, string> =>
+  Object.fromEntries(Object.entries(pages).map(([key, source]) => [key, resolvePlaceholders(source, docsFacts, key)]));
+
 export const SITE_INPUT: DocsSiteInput = {
-  userPages: import.meta.glob("../../web/docs/pages/*.md", { query: "?raw", import: "default", eager: true }) as Record<string, string>,
+  // A placeholder such as {{contracts.943.bridge}} is filled from the deployment files (machine/facts.ts), as in the Markdown files.
+  userPages: withFacts(import.meta.glob("../../web/docs/pages/*.md", { query: "?raw", import: "default", eager: true }) as Record<string, string>),
   // Only the files named in public-pages.json; the plugin in public-pages.ts reads them, and refuses any other docs/ import.
-  operatorPages: publicOperatorPages,
+  operatorPages: withFacts(publicOperatorPages),
 };
 
 /** Every page of the site, in reading order. */

@@ -16,6 +16,7 @@ export type QueryCall = {
   /** The values that reached the `where` clause, in order. */
   whereValues: unknown[];
   limit: number | null;
+  offset: number | null;
   grouped: boolean;
   ordered: boolean;
 };
@@ -50,7 +51,7 @@ const valuesOf = (node: unknown): unknown[] => {
 };
 
 const startQuery = (fields: Record<string, unknown> | undefined) => {
-  const call: QueryCall = { fields, table: undefined, joins: [], whereValues: [], limit: null, grouped: false, ordered: false };
+  const call: QueryCall = { fields, table: undefined, joins: [], whereValues: [], limit: null, offset: null, grouped: false, ordered: false };
   calls.push(call);
   const builder = {
     from: (table: unknown) => {
@@ -79,6 +80,10 @@ const startQuery = (fields: Record<string, unknown> | undefined) => {
     },
     limit: (count: number) => {
       call.limit = count;
+      return builder;
+    },
+    offset: (count: number) => {
+      call.offset = count;
       return builder;
     },
     then: (resolve: (rows: unknown[]) => unknown, reject: (reason: unknown) => unknown) => {

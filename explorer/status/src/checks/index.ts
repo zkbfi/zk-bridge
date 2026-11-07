@@ -2,7 +2,7 @@ import type { Deps } from "../deps.ts";
 import type { CheckDefinition, CheckSpec } from "../types.ts";
 import { beaconCheck, lightClientCheck, rpcCheck } from "./chains.ts";
 import { bridgeCheck, gateCheck } from "./bridges.ts";
-import { benchmarksCheck, indexerFeedCheck, pipelineCheck } from "./pipeline.ts";
+import { benchmarksCheck, indexerFeedCheck, pipelineCheck, warmupCheck } from "./pipeline.ts";
 import { runpodCheck } from "./prover.ts";
 import { backendLocalCheck, backendPublicCheck, gatewayCheck, indexerReadyCheck, siteCheck, webhookCheck } from "./services.ts";
 import { unitCheck } from "./units.ts";
@@ -28,6 +28,7 @@ export function buildChecks(deps: Deps): CheckDefinition[] {
     lightClientCheck(deps, "second-to-first"),
     ...sides.flatMap((side) => [bridgeCheck(deps, side.chainId), gateCheck(deps, side.chainId)]),
     benchmarksCheck(deps, services.backendLocal),
+    warmupCheck(services.backendLocal),
     pipelineCheck(deps, services.backendLocal, "first-to-second"),
     pipelineCheck(deps, services.backendLocal, "second-to-first"),
     indexerFeedCheck(deps, services.indexerLocal),

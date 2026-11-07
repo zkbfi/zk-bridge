@@ -46,6 +46,27 @@ export const benchmarksCheck = (deps: Deps, backendBase: string): Spec => ({
   },
 });
 
+/**
+ * What the GPU warm-ups of the last 24 hours cost: `GET /warmup/summary?days=1`. The money is an estimate from the
+ * billed seconds at the configured price. Always ok when the route answers: a wasted warm-up is a cost, not an outage.
+ */
+export const warmupCheck = (backendBase: string): Spec => ({
+  id: "pipeline-warmup",
+  name: "Prover warm-ups (24 h)",
+  section: "pipeline",
+  async run(run) {
+    const answer = await get(run, `${backendBase}/warmup/summary?days=1`);
+    if (answer.status !== 200) return { state: "down", detail: `answered ${answer.status} on /warmup/summary` };
+    const total = record(record(json(answer))?.total);
+    if (total === null) return { state: "down", detail: "answered something that is not the warm-up summary" };
+    const sessions = number(total.sessions) ?? 0;
+    if (sessions === 0) return { state: "ok", detail: "no warm-up in 24 h" };
+    const dollars = (value: unknown) => `$${(number(value) ?? 0).toFixed(2)}`;
+    const wasted = number(total.wasted) ?? 0;
+    return { state: "ok", detail: `${count(sessions, "warm-up")} in 24 h, ${number(total.used) ?? 0} used and ${wasted} wasted; about ${dollars(total.estimatedCostUsd)} of GPU time, ${dollars(total.wastedCostUsd)} of it wasted (${duration(number(total.wastedSeconds) ?? 0)})` };
+  },
+});
+
 /** One direction of the proof pipeline: the job that runs, the newest job, the proofs held and the batch that waits. */
 export const pipelineCheck = (deps: Deps, backendBase: string, direction: ProofDirection): Spec => {
   const text = directions(deps).find((entry) => entry.direction === direction)?.text as string;

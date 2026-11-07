@@ -61,7 +61,8 @@ CREATE TABLE IF NOT EXISTS warmup_sessions (
   started_at INTEGER NOT NULL,
   ready_at INTEGER,
   ended_at INTEGER,
-  outcome TEXT
+  outcome TEXT,
+  billed_seconds REAL
 );
 CREATE INDEX IF NOT EXISTS warmup_sessions_by_time ON warmup_sessions (started_at);
 CREATE TABLE IF NOT EXISTS job_timings (
@@ -100,6 +101,8 @@ function migrate(database: DatabaseSync): void {
     database.exec("ALTER TABLE jobs ADD COLUMN planned_start_slot TEXT");
     database.exec("ALTER TABLE jobs ADD COLUMN planned_new_slot TEXT");
   }
+  const sessionColumns = database.prepare("PRAGMA table_info(warmup_sessions)").all() as Array<{ name: string }>;
+  if (!sessionColumns.some((column) => column.name === "billed_seconds")) database.exec("ALTER TABLE warmup_sessions ADD COLUMN billed_seconds REAL");
   database.exec("CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_per_target ON jobs (direction, planned_start_slot, planned_new_slot) WHERE planned_start_slot IS NOT NULL");
 }
 

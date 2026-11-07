@@ -4,7 +4,7 @@ The backend is one open-source service with four modules. Each module can run al
 
 | Module | What it does | Routes |
 | --- | --- | --- |
-| `requests` | Takes proof requests from dapp pages and runs one proving job per direction, and shows where each transfer is in the pipeline. | `POST /requests`, `GET /requests/:id`, `GET /directions/:direction`, `GET /progress/:messageId`, `GET /directions/:direction/pipeline`, `GET /benchmarks` |
+| `requests` | Takes proof requests from dapp pages and runs one proving job per direction, and shows where each transfer is in the pipeline. | `POST /requests`, `GET /requests/:id`, `GET /directions/:direction`, `GET /progress/:messageId`, `GET /directions/:direction/pipeline`, `GET /benchmarks`, `GET /warmup/summary` |
 | `webhook` | Receives the proof package from the prover, checks it, and posts it to the msgboard. | `POST /webhook/jobs/:jobId` |
 | `msgboard-indexer` | Keeps the latest valid proof of each direction. | `GET /proofs/latest/:direction` |
 | `archive` | Builds and keeps evidence for messages that are sent and not yet delivered. | `GET /evidence/:messageId` |
@@ -187,13 +187,20 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
   job starts while one runs.
 - **Warm-up.** The backend wakes the remote prover (`GET <first endpoint>/ping`, with that endpoint's key if it has one) a learned
   lead time before a proof is expected, and keeps the worker warm until the job starts.
-  - *When a proof is expected:* at the expected finality of each sent message (the start of epoch e + 3, plus one
-    slot); with a minimum interval, once per batch, when the batch is expected to pay or else when the interval since
-    the last proof ends (never before the batch's first finality), worked out again as messages arrive; nothing while
-    no message waits; and when the source's finality crosses into a new sync-committee period and so makes a handoff due (about
-    two epochs after the border, not when the clock crosses it). A keep-alive of the age rule gets no warm-up.
-  - *Lead time:* the p90 (`warmup.leadP`) of the last 20 (`leadObservations`) observed times to a ready worker,
-    clamped to 30 to 600 s; 90 s until there is one. Observations, kept in the `warmup_observations` table: the time
+  - *When a proof is expected:* the first moment at which the real decision (`decideProof`) would say due, asked for
+    the future. One function, `warmupPlan` (`src/watch/decide.ts`), collects the moments that can change the answer
+    (now, the expected finality of each waiting message, the end of the minimum interval and the moment the batch is
+    expected to pay, the finality that crosses into a new sync-committee period, and the moment the request service
+    admits a new job) and calls `decideProof` at each with the finalized slot expected then. So the warm-up applies the
+    same rules as the proof: the finality and the signatures, the minimum interval since the last proof, the
+    profitability rule (fees that cannot be valued never pay early), a proof we hold, the retry wait after a failed
+    job and the spacing and the daily budget of jobs (`RequestService.admitAfterSeconds`), a finality a job started
+    for already (no second warm-up for it) and the one keep-alive per period. Where `decideProof` would not prove,
+    there is no warm-up. A keep-alive of the age rule gets none.
+  - *Lead time:* the p75 (`warmup.leadP`) of the last 20 (`leadObservations`) observed times to a ready worker plus
+    5 s (`leadMarginSeconds`), clamped to 20 to 600 s; 90 s until there is one. The p90 and no margin (before
+    2026-11-06) left the worker ready 25 s before the due time on average; `scripts/warmup-replay.sh` replays the stored
+    sessions with other settings (see "Measuring the warm-up"). Observations, kept in the `warmup_observations` table: the time
     from a session's first ping to its first ready answer (200), when that took 5 s or more (a faster one found a
     worker that was up already); the time a ping waited before it timed out (a cold start at least that long); and
     `wait_worker_ms` of a job that met a cold worker (`not_ready_count` above 0) while no warm-up ran.
@@ -201,10 +208,14 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
     waits up to `pingTimeoutSeconds` (300 s), because the load-balancing endpoint holds it while a worker starts. Until
     a worker answers ready, the ping repeats every 30 s after an answer. Once ready, a ping 40 s after the last ready
     answer (`holdIntervalSeconds`, under the endpoint's 60 s idle timeout) keeps the worker; a ping to a warm worker
-    answers at once. A hold not answered ready, or failed, is followed by the next no sooner than 30 s later. The session ends when the job starts (`warmup_used`), when the message is delivered or covered,
-    when the due time is past by 90 s (`graceSeconds`), or when the daily cap is spent (each `warmup_wasted`). A ping
-    that times out ends the session, and no new one starts for 5 minutes. Sessions are kept in `warmup_sessions`; a
-    restart ends the ones left open.
+    answers at once. A hold not answered ready, or failed, is followed by the next no sooner than 30 s later. The
+    session ends when the job starts (`warmup_used`), when the message is delivered or covered, when the plan has no
+    proof within the lead time and a ping interval (`unusable`: the decision says not due, for example the minimum
+    interval or the retry wait: ended at once, and a new session starts when the proof is within the lead time), when
+    the due time is past by 45 s (`graceSeconds`), or when the daily cap is spent (each `warmup_wasted`). A ping
+    that times out ends the session, and no new one starts for 5 minutes. Sessions are kept in `warmup_sessions`, with
+    the billed time estimated at their end (from the start to the end plus `idleTimeoutSeconds`); a restart ends the
+    ones left open.
   - *Cost cap:* at most `dailyCapSeconds` (1 hour) of sessions in any 24 hours, both directions together. Over it, no
     session starts (`warmup_capped`, once per target) and a warm one stops at its next hold.
   - *Not done:* the backend never changes the endpoint's `workersMin`; the server holds no RunPod management key.
@@ -220,7 +231,7 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
   for the warm-up: `warmup_scheduled` (why, `dueAt`, `leadSeconds`, `leadBasis` default or observed), `warmup_ping`
   (a non-ready answer: the status only; the address and the key never appear), `warmup_ready` (`readySeconds`, `cold`),
   `warmup_held` (`holds`, `secondsToDue`), `warmup_used` (`warmSeconds`, `readyBeforeDueSeconds`), `warmup_wasted`
-  (`reason` covered, grace or cap, `warmSeconds`), `warmup_capped`, `warmup_ping_timeout`, `warmup_ping_failed`, and
+  (`reason` covered, unusable, grace or cap, `warmSeconds`), `warmup_capped`, `warmup_ping_timeout`, `warmup_ping_failed`, and
   from a finished job `warmup_observed` (a cold start learned from `wait_worker_ms`) or `warmup_missed` (a job met a
   cold worker although a warm-up ran). The sum of `warmSeconds` is what the warm-ups cost.
 
@@ -239,10 +250,11 @@ Settings, all optional (`watch` in the configuration file):
 | `profitMargin` | 1.0 | A batch proves early when its fees reach the cost times this. |
 | `pairs` | none | Overrides per pair and per direction: `{ "sepolia-pls943": { "minIntervalSeconds": 3600, "directions": { "first-to-second": { "minIntervalSeconds": 1800 } } } }`. A direction's field beats its pair's, a pair's beats the global one. Unknown pair names and directions are refused. |
 | `warmup.enabled` | `true` | `false` sends no ping. |
-| `warmup.leadP`, `leadObservations` | 0.9, 20 | The quantile of the newest observations that the lead time takes. |
-| `warmup.defaultLeadSeconds`, `minLeadSeconds`, `maxLeadSeconds` | 90, 30, 600 | The lead time without observations, and its bounds. |
+| `warmup.leadP`, `leadObservations`, `leadMarginSeconds` | 0.75, 20, 5 | The quantile of the newest observations that the lead time takes, and the seconds added to it. A higher quantile or margin spares the proof a wait and costs idle GPU time. |
+| `warmup.defaultLeadSeconds`, `minLeadSeconds`, `maxLeadSeconds` | 90, 20, 600 | The lead time without observations, and its bounds. |
 | `warmup.holdIntervalSeconds` | 40 | The ping that keeps a warm worker, after its last ready answer. Below the endpoint's idle timeout. |
-| `warmup.intervalSeconds`, `graceSeconds`, `minGapSeconds` | 30, 90, 300 | Ping again while no worker is ready; end after the due time; the pause after a timed-out ping. |
+| `warmup.intervalSeconds`, `graceSeconds`, `minGapSeconds` | 30, 45, 300 | Ping again while no worker is ready; end after the due time; the pause after a timed-out ping. |
+| `warmup.idleTimeoutSeconds`, `gpuUsdPerHour` | 60, 2.25 | The endpoint's idle timeout (billed after the last request) and the GPU price, for the cost estimate of `/warmup/summary`. |
 | `warmup.dailyCapSeconds` | 3600 | The most warm-up seconds in any 24 hours, both directions together. |
 | `warmup.pingTimeoutSeconds` | 300 | How long one ping may wait for a cold worker. |
 | `warmup.leadSeconds` | none | The fixed lead time of before 2026-11-01. Still accepted; it does nothing and the start log warns (`config_ignored`). |
@@ -380,6 +392,32 @@ null. `latestProof` is the proof that reaches furthest among the msgboard indexe
 that did not fail. `head` is null when the indexer cannot be read. `decision` carries the `why` and `detail` of
 `proof_due` / `proof_not_due`, and for a due proof `trigger`, `batchSize`, `feesUsd`, `costUsd` and `outcome`
 (`job-started`, `job-active`, `keep-alive-this-period`, `duplicate`, `nothing-to-prove`, `rate-limited`, `cannot-check`).
+
+### `GET /warmup/summary?days=7`
+
+What the warm-ups of the remote prover cost, per UTC day (by the day a session started). `days` is a whole number from 1
+to 30 (default 7); anything else is a 400. It names no host and no key.
+
+```json
+{
+  "days": 7, "assumptions": { "idleTimeoutSeconds": 60, "gpuUsdPerHour": 2.25, "dailyCapSeconds": 3600 },
+  "total": { "sessions": 31, "used": 26, "wasted": 5, "billedSeconds": 3100, "wastedSeconds": 420, "idleBeforeDueSeconds": 380, "estimatedCostUsd": 1.94, "wastedCostUsd": 0.26 },
+  "byDay": [ { "day": "2026-11-06", "sessions": 5, "used": 4, "wasted": 1, "billedSeconds": 510, "wastedSeconds": 80, "idleBeforeDueSeconds": 60, "estimatedCostUsd": 0.3188, "wastedCostUsd": 0.05 } ]
+}
+```
+
+`billedSeconds` is the estimate from each session's start to its end plus the endpoint's idle timeout (a worker is billed
+until the timeout after its last request; a session that a restart ended has no idle part); `wastedSeconds` counts the
+sessions that did not end `used`. `idleBeforeDueSeconds` is how long a worker sat ready before the due time in used
+sessions: the lead that was longer than it needed to be. The status page shows the last 24 hours (`Prover warm-ups`).
+
+#### Measuring the warm-up
+
+`scripts/warmup-replay.sh /path/to/backend.sqlite [hours] ["p:margin ..."]` (needs `sqlite3`, only reads) prints the
+sessions of the window by outcome with the GPU time they held, and replays the `used` ones with other lead settings from
+the stored observations: the average seconds a ready worker idles before the due time, the average seconds a proof waits
+for a worker still starting, and the share of proofs that wait. Run it on the server after a change of `leadP` or
+`leadMarginSeconds`; the row `recorded` is what ran.
 
 ### `GET /benchmarks?window=24h`
 

@@ -8,28 +8,30 @@ describe("leadFrom", () => {
     expect(leadFrom([], config)).toEqual({ seconds: 90, basis: "default", observations: 0 });
   });
 
-  it("is the p90 (nearest rank) of the observations", () => {
-    // Ten observations: the ninth smallest.
+  it("is the p75 (nearest rank) of the observations plus the margin", () => {
+    // Ten observations: the eighth smallest, and five seconds.
     expect(leadFrom([31, 35, 40, 45, 50, 55, 60, 65, 70, 300], config)).toEqual({ seconds: 70, basis: "observed", observations: 10 });
-    // One observation is its own p90; a fraction rounds up.
-    expect(leadFrom([44.2], config)).toEqual({ seconds: 45, basis: "observed", observations: 1 });
-    expect(leadFrom([40, 50], { ...config, leadP: 0.5 })).toMatchObject({ seconds: 40 });
+    // One observation is its own p75; a fraction rounds up.
+    expect(leadFrom([44.2], config)).toEqual({ seconds: 50, basis: "observed", observations: 1 });
+    expect(leadFrom([40, 50], { ...config, leadP: 0.5, leadMarginSeconds: 0 })).toMatchObject({ seconds: 40 });
+    // The quantile is configurable: the p90 of the same ten is the ninth.
+    expect(leadFrom([31, 35, 40, 45, 50, 55, 60, 65, 70, 300], { ...config, leadP: 0.9 })).toMatchObject({ seconds: 75 });
   });
 
   it("reads only the newest observations", () => {
     // The newest first: twenty short starts hide the old 400 s image pull.
     const observations = [...Array<number>(20).fill(30), 400];
-    expect(leadFrom(observations, config)).toEqual({ seconds: 30, basis: "observed", observations: 20 });
-    expect(leadFrom(observations, { ...config, leadObservations: 21 })).toMatchObject({ seconds: 30 });
-    expect(leadFrom([400, ...Array<number>(20).fill(30)], config)).toMatchObject({ seconds: 30 });
-    // Three slow starts of twenty reach the p90.
-    expect(leadFrom([400, 400, 400, ...Array<number>(17).fill(30)], config)).toMatchObject({ seconds: 400 });
+    expect(leadFrom(observations, config)).toEqual({ seconds: 35, basis: "observed", observations: 20 });
+    expect(leadFrom(observations, { ...config, leadObservations: 21 })).toMatchObject({ seconds: 35 });
+    expect(leadFrom([400, ...Array<number>(20).fill(30)], config)).toMatchObject({ seconds: 35 });
+    // Six slow starts of twenty reach the p75.
+    expect(leadFrom([400, 400, 400, 400, 400, 400, ...Array<number>(14).fill(30)], config)).toMatchObject({ seconds: 405 });
   });
 
   it("is clamped to the minimum and the maximum, and so is the default", () => {
-    expect(leadFrom([2, 3, 4], config)).toMatchObject({ seconds: 30 });
+    expect(leadFrom([2, 3, 4], config)).toMatchObject({ seconds: 20 });
     expect(leadFrom([900], config)).toMatchObject({ seconds: 600 });
-    expect(leadFrom([], { ...config, defaultLeadSeconds: 10 })).toMatchObject({ seconds: 30, basis: "default" });
+    expect(leadFrom([], { ...config, defaultLeadSeconds: 10 })).toMatchObject({ seconds: 20, basis: "default" });
     expect(leadFrom([], { ...config, defaultLeadSeconds: 1000 })).toMatchObject({ seconds: 600, basis: "default" });
   });
 });
@@ -77,8 +79,8 @@ describe("warmupStep", () => {
     expect(step({ session: warm, nowSeconds: target.at - 60 + config.holdIntervalSeconds - 1 })).toEqual({ kind: "none" });
     expect(step({ session: warm, nowSeconds: target.at - 60 + config.holdIntervalSeconds })).toEqual({ kind: "hold" });
     expect(step({ session: warm, nowSeconds: target.at - 60 + config.holdIntervalSeconds, pingOutstanding: true })).toEqual({ kind: "none" });
-    expect(step({ session: { ...warm, lastReadyAt: target.at + 40, lastPingAt: target.at + 40 }, nowSeconds: target.at + config.graceSeconds })).toEqual({ kind: "hold" });
-    expect(step({ session: { ...warm, lastReadyAt: target.at + 40 }, nowSeconds: target.at + config.graceSeconds + 1 })).toEqual({ kind: "end", reason: "grace" });
+    expect(step({ session: { ...warm, lastReadyAt: target.at + 5, lastPingAt: target.at + 5 }, nowSeconds: target.at + config.graceSeconds })).toEqual({ kind: "hold" });
+    expect(step({ session: { ...warm, lastReadyAt: target.at + 5 }, nowSeconds: target.at + config.graceSeconds + 1 })).toEqual({ kind: "end", reason: "grace" });
   });
 
   it("after a hold that was not answered ready, waits the interval before the next one: no ping storm", () => {
@@ -100,6 +102,20 @@ describe("warmupStep", () => {
     // One key of several still waiting keeps it.
     const both: WarmupSession = { ...warm, target: { ...target, keys: ["m1", "m2"] } };
     expect(step({ session: both, live: new Set(["m2"]) })).toEqual({ kind: "none" });
+  });
+
+  it("ends a session at once when no proof is forecast: the decision says not due (minimum interval, retry wait), no hold to the grace", () => {
+    expect(step({ session: warm, targets: [] })).toEqual({ kind: "end", reason: "unusable" });
+    expect(step({ session: warming, targets: [] })).toEqual({ kind: "end", reason: "unusable" });
+    // Past the due time, inside the grace: the real proof was refused, so the worker is released now.
+    expect(step({ session: warm, targets: [], nowSeconds: target.at + 1 })).toEqual({ kind: "end", reason: "unusable" });
+  });
+
+  it("ends a session whose proof moved further off than the lead time and a ping interval; keeps one still inside it", () => {
+    const now = target.at - 60;
+    const later = (seconds: number): WarmupTarget => ({ ...target, at: now + seconds });
+    expect(step({ session: warm, nowSeconds: now, targets: [later(lead + config.intervalSeconds)] })).toEqual({ kind: "none" });
+    expect(step({ session: warm, nowSeconds: now, targets: [later(lead + config.intervalSeconds + 1)] })).toEqual({ kind: "end", reason: "unusable" });
   });
 
   it("ends a warm session at its next hold once the daily cap is spent", () => {
