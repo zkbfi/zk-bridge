@@ -20,7 +20,12 @@ describe("the bridge screen", () => {
     renderBridge();
     const from = await screen.findByRole("button", { name: `From ${FIXTURE_PAIR.first.name}. Change the route` });
     expect(within(from).getByRole("img", { name: FIXTURE_PAIR.first.name })).toBeInTheDocument();
-    expect(screen.getAllByText(/0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}/).length).toBeGreaterThan(0);
+    // The whole 42-character address is in the row (text, title and accessible name); the browser shortens it only for lack of room.
+    const full = screen.getAllByTitle(/^0x[0-9a-fA-F]{40}$/)[0]!;
+    expect(full.textContent).toMatch(/^0x[0-9a-fA-F]{40}$/);
+    expect(full).toHaveAttribute("title", full.textContent);
+    expect(full).toHaveAttribute("aria-label", full.textContent);
+    expect(full.textContent).not.toContain("…");
   });
 
   it("puts the balance and MAX on the right, and MAX fills the amount and writes the address", async () => {

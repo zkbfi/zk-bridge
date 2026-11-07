@@ -82,7 +82,9 @@ describe("the destination row", () => {
     );
     const { rerender } = render(ui(first), { wrapper: walletWrapper({ wallet: first }) });
     await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
-    expect(document.querySelector(".zb-dest-wallet")?.textContent).toMatch(new RegExp(`^${(first.account ?? "").slice(0, 6)}`, "i"));
+    expect(document.querySelector(".zb-dest-wallet")?.textContent).toBe(first.account);
+    expect(document.querySelector(".zb-dest-wallet .zb-addr")).toHaveAttribute("title", first.account);
+    expect(document.querySelector(".zb-joined:not(.zb-dest) .zb-addr")?.textContent).toBe(first.account);
     rerender(ui(second));
     await waitFor(() => expect(document.querySelector(".zb-dest-wallet")?.textContent).toMatch(/^0x1111/));
     await userEvent.click(lock());
