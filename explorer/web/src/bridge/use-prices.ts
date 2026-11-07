@@ -5,7 +5,8 @@
  */
 import { useMemo } from "react";
 import { rpcTransport } from "../app/rpc-transport";
-import { createPublicClient, defineChain } from "viem";
+import { createPublicClient } from "viem";
+import { CLIENT_BATCH, rpcChain } from "@terminal/chain/rpc-transport";
 import type { ContractCaller } from "@zk-bridge/shared";
 import { PRICE_NOTE, samplePrices, usePrices as usePricesFrom, type PriceSource } from "@zkb/react";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
@@ -15,17 +16,11 @@ import { poolReaderOver, type PoolReader } from "./price-oracle";
 
 export { PRICE_NOTE, samplePrices };
 
-const PULSECHAIN = defineChain({
-  id: 369,
-  name: "PulseChain",
-  nativeCurrency: { name: "Pulse", symbol: "PLS", decimals: 18 },
-  rpcUrls: { default: { http: [] } },
-  contracts: { multicall3: { address: "0xcA11bde05977b3631167028862bE2a173976CA11" } },
-});
+const PULSECHAIN = rpcChain({ id: 369, name: "PulseChain", symbol: "PLS" });
 
 /** A pool reader over a PulseChain RPC at its latest block; reads are batched into multicall calls and all pinned there. */
 export const poolReaderFor = async (rpcUrl: string): Promise<PoolReader> => {
-  const client = createPublicClient({ chain: PULSECHAIN, transport: rpcTransport(rpcUrl), batch: { multicall: true } });
+  const client = createPublicClient({ chain: PULSECHAIN, transport: rpcTransport(rpcUrl), batch: CLIENT_BATCH });
   const block = await client.getBlockNumber();
   return poolReaderOver(client as unknown as ContractCaller, block);
 };
