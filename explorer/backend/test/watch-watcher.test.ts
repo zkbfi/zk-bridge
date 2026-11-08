@@ -1156,6 +1156,8 @@ describe("the direction watcher reports its decisions (2026-11-01)", () => {
         why: "min-interval",
         detail: expect.stringContaining("1 message waits"),
         batch: { messages: 1, feesUsd: null, costUsd: null, unknownWhy: "no prices in this test", oldestFinalAt: finalAt(HEAD + 100), startAt: LAST + 3_600_000, startWhy: "interval", dueAt: LAST + 3_600_000, lastProofAt: LAST },
+        // The head's period stores the next committee, so it strands when the period after that starts.
+        deadline: { at: (GENESIS + (Math.floor(HEAD / PERIOD) + 2) * PERIOD * SLOT) * 1000, period: Math.floor(HEAD / PERIOD) + 2, headPeriod: Math.floor(HEAD / PERIOD), lastKnownPeriod: Math.floor(HEAD / PERIOD) + 1 },
       },
     ]);
   });

@@ -3,14 +3,16 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Hex } from "viem";
 import { z } from "zod";
 import { PROOF_DIRECTIONS, tryDecodeProofMessage } from "@zk-bridge/shared";
-import { evidenceRecord, lightClientRecord } from "./records";
+import { evidenceRecord, handoffRecord, lightClientRecord } from "./records";
+import { logArchive } from "./runtime";
 import { emptyTally, type ProofArchive, type UpsertTally } from "./store";
 
 /**
  * The proofs of the backend (explorer/backend): the proof the msgboard indexer keeps (`proofs`), the proofs the prover
  * sent back for jobs (`webhook_proofs`, posted to the board or still held), and the delivery evidence of messages
  * (`evidence`). A held proof exists nowhere else, and the backend drops a held proof whose job ended and evidence whose
- * message was delivered, so the archive takes a copy of each. Two ways in: the backend's private route
+ * message was delivered, so the archive takes a copy of each. The backend also captures the handoff update of every
+ * sync-committee period of each source chain (`handoff_updates`), which the archive keeps for good. Two ways in: the backend's private route
  * `GET /archive/proofs` (polled by the indexer) and a snapshot of its SQLite file (the export and import scripts).
  */
 
@@ -24,6 +26,8 @@ export const backendRowsSchema = z.object({
     .array(z.object({ jobId: z.string(), direction, payload: hex, storedAt: z.number(), postedAt: z.number().nullable(), messageHash: hex.nullable() }))
     .default([]),
   evidence: z.array(z.object({ messageId: hex, direction, body: z.string(), storedAt: z.number() })).default([]),
+  /** The handoff updates the backend stored in the last 7 days (older ones come in with the nightly snapshot). */
+  handoffs: z.array(z.object({ chainId: z.number().int(), period: z.number().int(), record: z.string(), storedAt: z.number() })).default([]),
 });
 export type BackendRows = z.infer<typeof backendRowsSchema>;
 
@@ -57,6 +61,17 @@ export async function ingestBackendRows(archive: ProofArchive, pairName: string,
   for (const row of rows.evidence) {
     const record = evidenceRecord({ messageId: row.messageId, pair: pairName, direction: row.direction, body: row.body, storedAt: row.storedAt, source: "backend" });
     tally[await archive.putEvidence(record)] += 1;
+  }
+  for (const row of rows.handoffs) {
+    const checked = handoffRecord({ chainId: row.chainId, period: row.period, record: row.record, storedAt: row.storedAt, source: "backend" });
+    if (!checked.ok) {
+      tally.invalid += 1;
+      logArchive("warn", "proof_archive_handoff_refused", { chainId: row.chainId, period: row.period, reason: checked.reason });
+      continue;
+    }
+    const outcome = await archive.putHandoff(checked.record);
+    tally[outcome] += 1;
+    if (outcome === "conflict") logArchive("warn", "proof_archive_conflict", { table: "handoff_updates", chainId: row.chainId, period: row.period });
   }
   return tally;
 }
@@ -106,7 +121,16 @@ export function readBackendSnapshot(path: string): { rows: BackendRows; skipped:
           storedAt: row.stored_at,
         }))
       : [];
-    const parsed = backendRowsSchema.safeParse({ board, held, evidence });
+    type Handoff = { chain_id: number; period: number; record: string; stored_at: number };
+    const handoffs = tableExists(database, "handoff_updates")
+      ? (database.prepare("SELECT chain_id, period, record, stored_at FROM handoff_updates ORDER BY chain_id, period").all() as Handoff[]).map((row) => ({
+          chainId: row.chain_id,
+          period: row.period,
+          record: row.record,
+          storedAt: row.stored_at,
+        }))
+      : [];
+    const parsed = backendRowsSchema.safeParse({ board, held, evidence, handoffs });
     if (!parsed.success) throw new Error(`the backend file holds rows of an unknown shape: ${parsed.error.issues[0]?.path.join(".")}`);
     return { rows: parsed.data, skipped };
   } finally {

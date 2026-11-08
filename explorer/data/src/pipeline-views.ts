@@ -110,6 +110,12 @@ export const directionPipelineSchema = z
      * of this direction's light client to open, `proofDue` when a proof started for it. Absent from an older backend.
      */
     deposits: z.object({ open: z.boolean().nullable(), remoteHasHead: z.boolean().nullable(), waiting: z.boolean(), proofDue: z.boolean() }).passthrough().nullable().optional(),
+    /**
+     * When the destination light client strands if no proof lands: `at` (ms since 1970), `hoursLeft` (negative once
+     * passed), `period` (the sync-committee period it would strand in), and the head the backend read. Absent from an
+     * older backend; null when the watcher has not read the light client yet.
+     */
+    deadline: z.object({ at: z.number(), hoursLeft: z.number(), period: z.number(), headSlot: z.number(), headPeriod: z.number() }).passthrough().nullable().optional(),
   })
   .passthrough();
 

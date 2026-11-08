@@ -279,6 +279,16 @@ pub struct SourceConfig {
     /// Every header is still checked against the block hash, so none is trusted.
     #[serde(default)]
     pub header_rpc_urls: Vec<String>,
+    /// More beacon APIs of the source chain, asked in order for the committee handoff update of a period that
+    /// `beacon_url` does not give and the states cannot build (`/eth/v1/beacon/light_client/updates`). They are also
+    /// asked for states after `state_urls`. A light client that missed a period border moves only with these updates.
+    #[serde(default)]
+    pub handoff_urls: Vec<String>,
+    /// The handoff archive (docs/proof-archive.md): base URLs that serve `<base>/<chain id>/<period>.json`, the record
+    /// of the handoff update of each period that the backend captured. Asked last, in order, for a handoff update and for
+    /// the committees of a store whose head state no node serves. Nothing in a record is trusted.
+    #[serde(default)]
+    pub handoff_archive_urls: Vec<String>,
 }
 
 /// The destination side of a route: the chain with the light client that the proofs update.
@@ -666,6 +676,20 @@ fn validate_route(name: &str, route: &RouteConfig) -> Result<()> {
             "every source.state_urls entry must start with http:// or https://".into(),
         ));
     }
+    if source.handoff_urls.iter().any(|url| !is_http_url(url)) {
+        return Err(context(
+            "every source.handoff_urls entry must start with http:// or https://".into(),
+        ));
+    }
+    if source
+        .handoff_archive_urls
+        .iter()
+        .any(|url| !is_http_url(url))
+    {
+        return Err(context(
+            "every source.handoff_archive_urls entry must start with http:// or https://".into(),
+        ));
+    }
     if !is_http_url(&destination.rpc_url) {
         return Err(context(
             "destination.rpc_url must start with http:// or https://".into(),
@@ -948,6 +972,16 @@ light_client = \"0x2222222222222222222222222222222222222222\"
                 "beacon_url = \"https://beacon.example.org\"\nheader_rpc_urls = [\"https://headers.example.org\", \"headers.example.net\"]",
                 "every source.header_rpc_urls entry must start with",
             ),
+            (
+                "beacon_url = \"https://beacon.example.org\"",
+                "beacon_url = \"https://beacon.example.org\"\nhandoff_urls = [\"handoffs.example.net\"]",
+                "every source.handoff_urls entry must start with",
+            ),
+            (
+                "beacon_url = \"https://beacon.example.org\"",
+                "beacon_url = \"https://beacon.example.org\"\nhandoff_archive_urls = [\"archive.example.net\"]",
+                "every source.handoff_archive_urls entry must start with",
+            ),
         ];
         for (from, to, expected) in cases {
             let error = Config::load(&SAMPLE.replace(from, to), &no_environment)
@@ -958,6 +992,31 @@ light_client = \"0x2222222222222222222222222222222222222222\"
                 "expected `{expected}` in `{error}`"
             );
         }
+    }
+
+    /// Claim: a source may name handoff URLs and handoff archive URLs; both are optional and empty by default.
+    /// Why it matters: a light client that missed a period border moves only with the handoff update of each period.
+    #[test]
+    fn a_source_may_name_handoff_sources() {
+        let plain = Config::load(SAMPLE, &no_environment).unwrap();
+        let (_, route) = plain.route(None).unwrap();
+        assert!(
+            route.source.handoff_urls.is_empty() && route.source.handoff_archive_urls.is_empty()
+        );
+        let with = SAMPLE.replace(
+            "beacon_url = \"https://beacon.example.org\"",
+            "beacon_url = \"https://beacon.example.org\"\nhandoff_urls = [\"https://more.example.org\"]\nhandoff_archive_urls = [\"http://127.0.0.1:8787/archive/handoffs\"]",
+        );
+        let loaded = Config::load(&with, &no_environment).unwrap();
+        let (_, route) = loaded.route(None).unwrap();
+        assert_eq!(
+            route.source.handoff_urls,
+            vec!["https://more.example.org".to_string()]
+        );
+        assert_eq!(
+            route.source.handoff_archive_urls,
+            vec!["http://127.0.0.1:8787/archive/handoffs".to_string()]
+        );
     }
 
     /// Claim: a source may name state URLs and a state cache directory; both are optional and empty by default.

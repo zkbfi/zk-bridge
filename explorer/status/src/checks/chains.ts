@@ -1,7 +1,8 @@
 import { secondsPerSlot } from "@zkb/data";
 import type { ProofDirection } from "@zk-bridge/shared";
+import { deadlineOf, formatHours } from "../../../backend/src/keepalive/plan.ts";
 import { inspect, type Reads, type Target } from "../../../backend/src/keepalive/march.ts";
-import { fetchJsonGet, readHistory, readLightClient, readSource } from "../../../backend/src/keepalive/sources.ts";
+import { fetchJsonGet, handoffSources, readHistoryFrom, readLightClient, readSource } from "../../../backend/src/keepalive/sources.ts";
 import { labelOf, type Deps } from "../deps.ts";
 import { duration } from "../format.ts";
 import type { CheckSpec } from "../types.ts";
@@ -71,7 +72,20 @@ export const lightClientCheck = (deps: Deps, direction: ProofDirection): Spec =>
       const reads: Reads = {
         lightClient: (t) => readLightClient(run.client(t.destinationChainId) as Parameters<typeof readLightClient>[0], t.lightClient),
         source: () => readSource(get, source.beaconUrl as string),
-        history: (_t, periods, slotsPerPeriod) => readHistory(get, source.beaconUrl as string, periods, slotsPerPeriod),
+        // Every source the prover asks for a missed period: the beacon node, then the handoff archive of the backend and
+        // of the indexer. Stranded only when none has it.
+        history: (_t, periods, slotsPerPeriod) =>
+          readHistoryFrom(
+            handoffSources(get, {
+              chainId: source.chainId,
+              beaconUrl: source.beaconUrl as string,
+              stateUrls: [],
+              handoffUrls: [],
+              archiveUrls: [`${run.config.services.backendLocal.replace(/\/+$/, "")}/archive/handoffs`, `${run.config.services.indexerLocal.replace(/\/+$/, "")}/api/proofs/handoffs`],
+            }),
+            periods,
+            slotsPerPeriod,
+          ),
       };
       const { assessment } = await inspect(target, reads, run.config.lightClients, run.now() / 1000);
       const head = `head ${duration(assessment.headAgeSeconds)} old`;
@@ -81,6 +95,34 @@ export const lightClientCheck = (deps: Deps, direction: ProofDirection): Spec =>
       }
       const detail = `${head}, must update within ${duration(assessment.secondsUntilDeadline)}`;
       return { state: assessment.verdict === "fresh" ? "ok" : "degraded", detail };
+    },
+  };
+};
+
+/**
+ * How long until a light client strands, from the chain alone: no beacon node and no backend are asked, so the check
+ * still works when either is down. Ok above `deadlineDegradedSeconds`, degraded at or under it, down at or under
+ * `deadlineDownSeconds` and once the deadline passed.
+ */
+export const lightClientDeadlineCheck = (deps: Deps, direction: ProofDirection): Spec => {
+  const [first, second] = deps.pair.sides;
+  const [source, destination] = direction === "first-to-second" ? [first, second] : [second, first];
+  const label = labelOf(deps, destination.chainId);
+  return {
+    id: `lightclient-deadline-${direction}`,
+    name: `${label} light client deadline`,
+    section: "chains",
+    async run(run) {
+      const facts = await readLightClient(run.client(destination.chainId) as Parameters<typeof readLightClient>[0], destination.contracts.lightClient);
+      const deadline = deadlineOf(facts, run.now() / 1000);
+      const { deadlineDegradedSeconds, deadlineDownSeconds } = run.config.lightClients;
+      const where = `head slot ${deadline.headSlot}, period ${deadline.headPeriod}`;
+      const prefix = `${label} checks ${labelOf(run, source.chainId)}`;
+      if (deadline.secondsLeft <= 0) {
+        return { state: "down", detail: `${prefix}: stranded ${formatHours(-deadline.secondsLeft)} ago unless handoff updates move it (${where}, stranded in period ${deadline.strandPeriod})` };
+      }
+      const state = deadline.secondsLeft <= deadlineDownSeconds ? "down" : deadline.secondsLeft <= deadlineDegradedSeconds ? "degraded" : "ok";
+      return { state, detail: `${prefix}: ${formatHours(deadline.secondsLeft)} until stranded (${where}, strands in period ${deadline.strandPeriod})` };
     },
   };
 };

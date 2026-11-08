@@ -75,6 +75,43 @@ describe("main", () => {
     expect(lines.join("\n")).not.toContain("hunter2-key-a");
   });
 
+  it("posts to the alert webhook when a light client deadline is down, without leaking the URL", async () => {
+    const hook = "https://hooks.example.org/T0/hook-secret";
+    const posts: string[] = [];
+    const lines: string[] = [];
+    const stop = new AbortController();
+    let port = 0;
+    // The chain answers a head, a period of 8192 slots and a genesis in 1970: the deadline long passed.
+    const client = {
+      getBlockNumber: async () => 1n,
+      getBlock: async () => { throw new Error("no chain"); },
+      readContract: async ({ functionName }: { functionName: string }) => ({ head: 100n, slotsPerPeriod: 8192n, genesisTime: 0n, secondsPerSlot: 12n, syncCommittees: "0x" + "00".repeat(32) })[functionName],
+    } as unknown as ChainClient;
+    const exit = main(["--config", files({ alerts: { webhookUrl: "env:HOOK" } })], { ...environment, HOOK: hook }, {
+      stopSignal: stop.signal,
+      write: (line) => lines.push(line),
+      fetch: (async (url: string, init?: RequestInit) => {
+        if (url === hook) {
+          posts.push(String(init?.body));
+          if (posts.length === 1) throw new Error(`connect to ${hook} failed`);
+          return new Response("", { status: 500 });
+        }
+        return new Response("", { status: 503 });
+      }) as unknown as typeof fetch,
+      exec: async () => "",
+      client: () => client,
+      onListening: (value) => (port = value),
+    });
+    await expect.poll(() => port).toBeGreaterThan(0);
+    await expect.poll(() => posts.length, { timeout: 5000 }).toBeGreaterThanOrEqual(2);
+    stop.abort();
+    expect(await exit).toBe(0);
+    expect(posts[0]).toContain("light client deadline");
+    expect(lines.some((line) => line.includes("alert_failed"))).toBe(true);
+    expect(lines.join("\n")).not.toContain("hook-secret");
+    expect(posts.join("")).not.toContain("hook-secret");
+  });
+
   it("stops at once when the signal has already fired", async () => {
     const stop = new AbortController();
     stop.abort();

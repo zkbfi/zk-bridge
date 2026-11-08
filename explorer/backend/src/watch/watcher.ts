@@ -6,7 +6,7 @@
  */
 import type { Hex } from "viem";
 import type { ProofDirection } from "@zk-bridge/shared";
-import { neededHandoffPeriods, type LightClientFacts, type Policy, type SourceHistory } from "../keepalive/plan.ts";
+import { deadlineOf, neededHandoffPeriods, type LightClientFacts, type Policy, type SourceHistory } from "../keepalive/plan.ts";
 import type { Logger } from "../logger.ts";
 import { pendingFrom, type HeldProof } from "../requests/held-proofs.ts";
 import type { Job } from "../requests/jobs.ts";
@@ -103,6 +103,12 @@ export interface DirectionWatcher {
 
 /** A warm-up session that runs. */
 type ActiveSession = Exclude<WarmupSession, { phase: "idle" }>;
+
+/** The deadline of a decision, as the pipeline wire shows it. */
+function deadlineWire(facts: LightClientFacts, nowSeconds: number): NonNullable<WatchDecision["deadline"]> {
+  const deadline = deadlineOf(facts, nowSeconds);
+  return { at: deadline.deadlineSeconds * 1000, period: deadline.strandPeriod, headPeriod: deadline.headPeriod, lastKnownPeriod: deadline.lastKnownPeriod };
+}
 
 /** A time as ISO text, for the log. */
 const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
@@ -270,6 +276,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       why: decision.why,
       detail: decision.detail,
       ...(deposits === null ? {} : { deposits }),
+      deadline: deadlineWire(facts, nowSeconds),
     };
     const note = (extra: Partial<WatchDecision>): void => input.onDecision?.({ ...base, ...extra });
     const noteOutcome = (outcome: DecisionOutcome): void => note({ ...dueFacts, outcome });

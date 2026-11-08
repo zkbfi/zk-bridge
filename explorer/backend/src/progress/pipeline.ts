@@ -80,6 +80,12 @@ export type Pipeline = {
    * made a proof due, or no watcher runs).
    */
   readonly deposits: { readonly open: boolean | null; readonly remoteHasHead: boolean | null; readonly waiting: boolean; readonly proofDue: boolean } | null;
+  /**
+   * When the destination light client strands if no proof lands, from the watcher's latest decision: `at` (ms since
+   * 1970), `hoursLeft` (negative once passed), `period` (the period it would strand in) and the head it read. From then
+   * on only handoff updates (a beacon node or the handoff archive) can move it. Null without a decision that read it.
+   */
+  readonly deadline: { readonly at: number; readonly hoursLeft: number; readonly period: number; readonly headSlot: number; readonly headPeriod: number } | null;
 };
 
 const tableExists = (storage: Storage, name: string): boolean =>
@@ -178,5 +184,9 @@ export function buildPipeline(input: {
       decision?.deposits === undefined
         ? null
         : { ...decision.deposits, waiting: decision.deposits.open === false, proofDue: decision.due && decision.why === "deposits-locked" },
+    deadline:
+      decision?.deadline === undefined
+        ? null
+        : { at: decision.deadline.at, hoursLeft: Math.round((decision.deadline.at - now) / 36_000) / 100, period: decision.deadline.period, headSlot: decision.headSlot, headPeriod: decision.deadline.headPeriod },
   };
 }

@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readdir, readFile, stat, writeFile, open } from "node:fs/promises";
 import { hostname } from "node:os";
+import { isDeepStrictEqual } from "node:util";
 import { join, relative, sep } from "node:path";
 import { createInterface } from "node:readline";
 import type { Hex } from "viem";
 import { openingStorageKey, proofCacheEntrySchema, verifyAccountProof } from "@zk-bridge/shared/prover";
-import { evidenceRecordSchema, lightClientProofRecordSchema, lightClientRecordConsistent, storageProofRecordSchema, type StorageProofRecord } from "./records";
+import { evidenceRecordSchema, handoffRecord, handoffRecordSchema, lightClientProofRecordSchema, lightClientRecordConsistent, storageProofRecordSchema, type HandoffRecord, type StorageProofRecord } from "./records";
 import { emptyTally, type ProofArchive } from "./store";
 import type { IngestTally } from "./backend-rows";
 
@@ -16,7 +17,7 @@ import type { IngestTally } from "./backend-rows";
  */
 
 /** The tables of the archive part, as their file names (without `.ndjson`). */
-export const ARCHIVE_FILES = ["storage_proofs", "light_client_proofs", "message_evidence", "conflicts"] as const;
+export const ARCHIVE_FILES = ["storage_proofs", "light_client_proofs", "message_evidence", "handoff_updates", "conflicts"] as const;
 
 /** Writes every row of the archive into `<bundle>/archive/<table>.ndjson`. Returns the rows per file. */
 export async function exportArchive(archive: ProofArchive, bundle: string): Promise<Record<string, number>> {
@@ -58,15 +59,24 @@ export async function* recordsOf(path: string): AsyncGenerator<unknown> {
 }
 
 /** The records to import, one stream per table (lines of a bundle file, or the record files of the mirror). */
-export type RecordSources = { readonly storage: AsyncIterable<unknown>; readonly lightClient: AsyncIterable<unknown>; readonly evidence: AsyncIterable<unknown> };
+export type RecordSources = { readonly storage: AsyncIterable<unknown>; readonly lightClient: AsyncIterable<unknown>; readonly evidence: AsyncIterable<unknown>; readonly handoffs: AsyncIterable<unknown> };
+
+/** A handoff update from a file, or null: it must parse, pass the checks of its text, and carry the hash and slots of its text. */
+function checkedHandoff(raw: unknown): HandoffRecord | null {
+  const parsed = handoffRecordSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  const checked = handoffRecord(parsed.data);
+  return checked.ok && isDeepStrictEqual(checked.record, parsed.data) ? parsed.data : null;
+}
 
 /**
  * Upserts records. A record that does not parse, or a light client record whose slots and hash do not match its proof,
- * or evidence whose hash does not match its body, is counted as invalid and skipped.
+ * or evidence whose hash does not match its body, or a handoff update that fails its checks, is counted as invalid and
+ * skipped.
  */
-export async function importRecords(archive: ProofArchive, sources: RecordSources): Promise<Record<"storage_proofs" | "light_client_proofs" | "message_evidence", IngestTally>> {
+export async function importRecords(archive: ProofArchive, sources: RecordSources): Promise<Record<"storage_proofs" | "light_client_proofs" | "message_evidence" | "handoff_updates", IngestTally>> {
   const fresh = (): IngestTally => ({ ...emptyTally(), invalid: 0 });
-  const result = { storage_proofs: fresh(), light_client_proofs: fresh(), message_evidence: fresh() };
+  const result = { storage_proofs: fresh(), light_client_proofs: fresh(), message_evidence: fresh(), handoff_updates: fresh() };
   for await (const raw of sources.storage) {
     const parsed = storageProofRecordSchema.safeParse(raw);
     if (!parsed.success) result.storage_proofs.invalid += 1;
@@ -82,16 +92,22 @@ export async function importRecords(archive: ProofArchive, sources: RecordSource
     if (!parsed.success || `0x${createHash("sha256").update(parsed.data.body).digest("hex")}` !== parsed.data.bodyHash.toLowerCase()) result.message_evidence.invalid += 1;
     else result.message_evidence[await archive.putEvidence(parsed.data)] += 1;
   }
+  for await (const raw of sources.handoffs) {
+    const record = checkedHandoff(raw);
+    if (record === null) result.handoff_updates.invalid += 1;
+    else result.handoff_updates[await archive.putHandoff(record)] += 1;
+  }
   return result;
 }
 
 /** Upserts the archive files of a bundle (see {@link importRecords}). The conflicts file is a report and is not read. */
-export function importArchive(archive: ProofArchive, bundle: string): Promise<Record<"storage_proofs" | "light_client_proofs" | "message_evidence", IngestTally>> {
+export function importArchive(archive: ProofArchive, bundle: string): Promise<Record<"storage_proofs" | "light_client_proofs" | "message_evidence" | "handoff_updates", IngestTally>> {
   const directory = join(bundle, "archive");
   return importRecords(archive, {
     storage: recordsOf(join(directory, "storage_proofs.ndjson")),
     lightClient: recordsOf(join(directory, "light_client_proofs.ndjson")),
     evidence: recordsOf(join(directory, "message_evidence.ndjson")),
+    handoffs: recordsOf(join(directory, "handoff_updates.ndjson")),
   });
 }
 

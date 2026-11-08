@@ -24,6 +24,7 @@ import { DEFAULT_GAS_LEVEL, type CostInput } from "@zk-bridge/shared";
 import { usePrices } from "../bridge/use-prices";
 import { durationText, exploreNumbers, lightClientCards, statusWord } from "./explore-model";
 import { ExplorePageView } from "./ExplorePages";
+import { StrandingLine } from "../stranding/StrandingLine";
 import { InFlightOrbits } from "./InFlightOrbits";
 import { dayStartOf, orbitTracks, proofCoversWith, type ProofReach } from "./orbit-model";
 import { readLatestProof } from "../views/proof-panel-model";
@@ -456,6 +457,7 @@ const LightClients = ({ data }: { readonly data: ExploreData }) => {
             {card.verifiedSlot === null ? "Nothing verified yet" : `Verified up to slot ${card.verifiedSlot.toLocaleString("en-US")}`}
             <span className="zb-xlc-lag">{card.lastUpdateAt === null ? "never updated" : `updated ${relativeTime(card.lastUpdateAt, data.now)}`}</span>
           </span>
+          <StrandingLine chainId={card.holderChainId} wrap={(line) => <span className="zb-xlc-row zb-small">{line}</span>} />
         </a>
       ))}
     </div>

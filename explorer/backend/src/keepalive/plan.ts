@@ -39,12 +39,14 @@ export type SourceFacts = {
  * Whether the source node can give the committee handoff updates that a catch-up needs.
  *
  * - `serves`: it gave the update of every needed period.
- * - `missing`: it lacks `period` (the route answers 404, as on chain 943, or the node pruned it).
+ * - `missing`: no source has `period`: the beacon node lacks it (the route answers 404, as on chain 943, or the node
+ *   pruned it), and so do the states, the handoff URLs and the handoff archive when they are asked.
  * - `not-needed`: no handoff is needed, so nobody asked.
  */
 export type SourceHistory =
   | { readonly kind: "serves" }
-  | { readonly kind: "missing"; readonly period: number }
+  /** `tried`: each source asked and what it answered, by host, when several were asked. */
+  | { readonly kind: "missing"; readonly period: number; readonly tried?: readonly string[] }
   | { readonly kind: "not-needed" };
 
 /** When the planner calls for action. */
@@ -186,10 +188,12 @@ export function assess(input: {
       };
     }
     const missing = history.kind === "missing" ? history.period : (handoffPeriods[0] as number);
+    const tried = history.kind === "missing" && history.tried !== undefined && history.tried.length > 0 ? history.tried : null;
+    const nobody = tried === null ? "the source node gives no handoff update" : "no source has the handoff update";
     return {
       ...base,
       verdict: "stranded",
-      reason: `the light client stores committees up to period ${lastKnownPeriod}, the source signs in period ${currentPeriod}, and the source node gives no handoff update for period ${missing}: no proof can move it`,
+      reason: `the light client stores committees up to period ${lastKnownPeriod}, the source signs in period ${currentPeriod}, and ${nobody} for period ${missing}: no proof can move it${tried === null ? "" : `. Tried: ${tried.join("; ")}`}`,
     };
   }
   if (!moves) return { ...base, verdict: "fresh", reason: "the head is the newest finalized header" };
@@ -203,6 +207,32 @@ export function assess(input: {
     return { ...base, verdict: "needs-keep-alive", reason: `the head is ${formatHours(base.headAgeSeconds)} old, past the keep-alive age of ${formatHours(policy.keepAliveSeconds)}` };
   }
   return { ...base, verdict: "fresh", reason: `the head is ${formatHours(base.headAgeSeconds)} old and the deadline is ${formatHours(base.secondsUntilDeadline)} away` };
+}
+
+/**
+ * When a light client strands if no proof lands: the first second of the period after the last committee it stores.
+ * From then on its own committees verify no new update, and only handoff updates (from a beacon node or the handoff
+ * archive) can move it. Pure: the facts of the contract are enough, no beacon node is asked.
+ */
+export type Deadline = {
+  readonly headSlot: number;
+  readonly headPeriod: number;
+  /** The highest period whose committee the light client stores. */
+  readonly lastKnownPeriod: number;
+  /** The period it strands in: `lastKnownPeriod + 1`. */
+  readonly strandPeriod: number;
+  /** Seconds since 1970. */
+  readonly deadlineSeconds: number;
+  /** Negative once the deadline passed. */
+  readonly secondsLeft: number;
+};
+
+/** The {@link Deadline} of a light client at `nowSeconds`. */
+export function deadlineOf(facts: LightClientFacts, nowSeconds: number): Deadline {
+  const headPeriod = periodOf(facts.headSlot, facts.slotsPerPeriod);
+  const lastKnownPeriod = headPeriod + (facts.nextCommitteeKnown ? 1 : 0);
+  const deadlineSeconds = facts.genesisTime + (lastKnownPeriod + 1) * facts.slotsPerPeriod * facts.secondsPerSlot;
+  return { headSlot: facts.headSlot, headPeriod, lastKnownPeriod, strandPeriod: lastKnownPeriod + 1, deadlineSeconds, secondsLeft: deadlineSeconds - nowSeconds };
 }
 
 /** Hours with one decimal, such as `12.5 h`. */

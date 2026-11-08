@@ -2,6 +2,8 @@ import { useEffect, useRef, type KeyboardEvent } from "react";
 import type { Direction } from "@terminal/model/types";
 import { usePairHealth } from "../app/queries";
 import { useServices } from "../app/services";
+import { strandingMenuNote } from "../stranding/stranding";
+import { useMinuteClock, useStrandingDeadlines } from "../stranding/use-stranding";
 import { Chevron } from "./icons";
 import { TokenIcon } from "./TokenIcon";
 
@@ -34,7 +36,9 @@ export type DirectionMenuProps = {
  * @param props The current route and the handlers.
  */
 export const DirectionMenu = ({ current, onPick, onClose }: DirectionMenuProps) => {
-  const { knownPairs } = useServices();
+  const { knownPairs, pair: servedPair } = useServices();
+  const deadlines = useStrandingDeadlines();
+  const now = useMinuteClock();
   const health = usePairHealth().data ?? [];
   /** Why a route cannot be used now, or null: no deployment, or the gate on its source chain is closed. */
   const blockedReason = (pairId: string, configured: boolean, from: Chain, side: "first" | "second"): string | null => {
@@ -97,7 +101,7 @@ export const DirectionMenu = ({ current, onPick, onClose }: DirectionMenuProps) 
                 <span>
                   {from.name} → {to.name}
                 </span>
-                <span className="zb-m-sub zb-m-aside">{reason}</span>
+                <span className="zb-m-sub zb-m-aside">{reason ?? (pair.id === servedPair.id ? strandingMenuNote(deadlines[dir], now) : null)}</span>
               </button>
             );
           })}

@@ -93,9 +93,26 @@ export const statusConfigSchema = z
         .strict(),
     ),
     lightClients: z
-      .object({ keepAliveSeconds: positiveInteger.default(43_200), marginSeconds: positiveInteger.default(21_600) })
+      .object({
+        keepAliveSeconds: positiveInteger.default(43_200),
+        marginSeconds: positiveInteger.default(21_600),
+        /** The deadline check (`lightclient-deadline-<direction>`) is degraded when the time until stranding is at most this. */
+        deadlineDegradedSeconds: positiveInteger.default(43_200),
+        /** ... and down when it is at most this (or passed). */
+        deadlineDownSeconds: positiveInteger.default(21_600),
+      })
       .strict()
-      .default({ keepAliveSeconds: 43_200, marginSeconds: 21_600 }),
+      .default({ keepAliveSeconds: 43_200, marginSeconds: 21_600, deadlineDegradedSeconds: 43_200, deadlineDownSeconds: 21_600 }),
+    /** Optional operator notification. Absent means off. */
+    alerts: z
+      .object({
+        /** `env:NAME` or a literal URL; a POST with a JSON body goes there when a listed check enters down. */
+        webhookUrl: reference,
+        /** Check ids to watch. Default: every `lightclient-deadline-*` check. */
+        checks: z.array(z.string().min(1)).optional(),
+      })
+      .strict()
+      .optional(),
     pipeline: z
       .object({
         /** A transfer that waits longer than this for its delivery is degraded; three times this is down. */
@@ -169,7 +186,7 @@ export function loadStatusPair(config: StatusConfig, deployment: unknown, enviro
   return pair;
 }
 
-/** Every secret value the process holds: the endpoints, which can carry a key, and the RunPod key. */
+/** Every secret value the process holds: the endpoints, which can carry a key, the RunPod key and the alert webhook URL. */
 export function secretValues(config: StatusConfig, environment: Readonly<Record<string, string | undefined>>): string[] {
   const values: string[] = [];
   for (const chain of Object.values(config.chains)) {
@@ -177,5 +194,6 @@ export function secretValues(config: StatusConfig, environment: Readonly<Record<
     if (chain.beaconUrl !== undefined) values.push(resolveReference(chain.beaconUrl, environment));
   }
   if (config.runpod !== undefined) values.push(resolveReference(config.runpod.apiKey, environment));
+  if (config.alerts !== undefined) values.push(resolveReference(config.alerts.webhookUrl, environment));
   return values;
 }

@@ -41,6 +41,11 @@ export type PairSide = {
    * raw header. Every header is checked against its block hash. Empty when none is configured.
    */
   readonly headerRpcUrls?: readonly string[];
+  /**
+   * More beacon APIs that the prover asks, in order, for the committee handoff update of a period that `beaconUrl` does
+   * not give (and, after `stateUrls`, for states). Absent when none is configured.
+   */
+  readonly handoffUrls?: readonly string[];
   /** The first block to index: the block before the deployment. */
   readonly startBlock: number;
   /** Seconds after which a send counts as waiting for finality. */
@@ -131,6 +136,12 @@ export const stateUrlsVariableName = (chainId: number): string => `EXPLORER_STAT
 export const headerRpcVariableName = (chainId: number): string => `EXPLORER_HEADER_RPC_URL_${chainId}`;
 
 /**
+ * The variable that holds the handoff URLs of a chain: a comma separated list of beacon API base URLs asked for the
+ * committee handoff update of a period the beacon endpoint lacks.
+ */
+export const handoffUrlsVariableName = (chainId: number): string => `EXPLORER_HANDOFF_URLS_${chainId}`;
+
+/**
  * Reads a comma separated list of state URLs. Blank entries are skipped.
  *
  * @throws When an entry is not an http or https URL. The message names the variable.
@@ -212,6 +223,8 @@ const buildSide = (
   const beaconUrl = options.environment[beaconVariableName(definition.chainId)];
   const stateVariable = stateUrlsVariableName(definition.chainId);
   const headerVariable = headerRpcVariableName(definition.chainId);
+  const handoffVariable = handoffUrlsVariableName(definition.chainId);
+  const handoffUrls = parseStateUrls(options.environment[handoffVariable], handoffVariable);
   return {
     name: definition.name,
     chainId: definition.chainId,
@@ -219,6 +232,7 @@ const buildSide = (
     beaconUrl: beaconUrl === undefined || beaconUrl === "" ? null : beaconUrl,
     stateUrls: parseStateUrls(options.environment[stateVariable], stateVariable),
     headerRpcUrls: parseStateUrls(options.environment[headerVariable], headerVariable),
+    ...(handoffUrls.length === 0 ? {} : { handoffUrls }),
     startBlock: section.start_block,
     finalitySeconds: finalityOf(options.environment, definition.chainId),
     contracts: {

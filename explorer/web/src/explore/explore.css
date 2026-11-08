@@ -48,6 +48,7 @@
 .zb-xlc-row { display: flex; align-items: center; gap: 10px; }
 .zb-xlc-lag { margin-left: auto; white-space: nowrap; }
 .zb-warn-text { color: var(--zb-warn); }
+.zb-bad-text { color: var(--zb-bad); }
 .zb-xlc-bar { display: block; position: relative; height: 4px; margin: 10px 0 8px; background: var(--zb-track-ahead); }
 .zb-xlc-bar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--zb-accent); }
 .zb-xsvc { display: flex; align-items: center; gap: 10px; min-height: 48px; border-top: 1px solid var(--zb-line); }

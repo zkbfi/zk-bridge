@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { beaconCheck, lightClientCheck, rpcCheck } from "../src/checks/chains.ts";
+import { beaconCheck, lightClientCheck, lightClientDeadlineCheck, rpcCheck } from "../src/checks/chains.ts";
 import type { ChainClient } from "../src/deps.ts";
-import { addr, fakeFetch, makeDeps, pair } from "./support.ts";
+import { parseStatusConfig } from "../src/config.ts";
+import { addr, config as baseConfig, fakeFetch, makeDeps, pair } from "./support.ts";
 
 const NOW = 1_800_000_000;
 const sepolia = pair.sides[0];
@@ -67,7 +68,7 @@ describe("lightClientCheck", () => {
   const SECONDS = 12;
   const committee = (known: boolean) => (known ? "0x" + "11".repeat(32) : "0x" + "00".repeat(32));
   /** A light client on `pulse` that follows `sepolia`, with a head `ageOfHead` seconds old. `updates` are the handoff slots the source serves (null: it serves none). */
-  function setup(options: { headSlot: number; known: boolean; finalizedSlot: number; ageOfHead: number; updates?: number[] }) {
+  function setup(options: { headSlot: number; known: boolean; finalizedSlot: number; ageOfHead: number; updates?: number[]; archived?: number[] }) {
     const genesis = NOW - options.ageOfHead - options.headSlot * SECONDS;
     const pulseClient = {
       getBlockNumber: async () => 100n,
@@ -81,6 +82,15 @@ describe("lightClientCheck", () => {
         "https://beacon-a.example.org/key-a/eth/v1/beacon/light_client/updates": options.updates
           ? { body: options.updates.map((slot) => ({ data: { attested_header: { beacon: { slot: String(slot) } } } })) }
           : { status: 404 },
+        ...Object.fromEntries(
+          Array.from({ length: 4 }, (_, index) => 8 + index).flatMap((period) => {
+            const answer = options.archived?.includes(period) ? { body: { format: "zkb-handoff-update/1", chainId: 11155111, period } } : { status: 404 };
+            return [
+              [`http://127.0.0.1:8787/archive/handoffs/11155111/${period}.json`, answer],
+              [`http://127.0.0.1:42069/api/proofs/handoffs/11155111/${period}.json`, { status: 404 }],
+            ];
+          }),
+        ),
       },
       c,
     );
@@ -121,8 +131,90 @@ describe("lightClientCheck", () => {
     expect(outcome.detail).toContain("no proof can move it");
   });
 
+  it("is not stranded when the backend's handoff archive has the period the beacon node lacks (2026-11-07)", async () => {
+    const deps = setup({ headSlot: 9 * PERIOD + 10, known: false, finalizedSlot: 10 * PERIOD + 50, ageOfHead: 40 * 3600, archived: [9] });
+    const outcome = await check.run(deps);
+    expect(outcome.state).toBe("down");
+    expect(outcome.detail).toMatch(/needs handoff steps/);
+    expect(outcome.detail).not.toContain("stranded");
+  });
+
+  it("names every source it tried when it is stranded", async () => {
+    const deps = setup({ headSlot: 9 * PERIOD + 10, known: false, finalizedSlot: 10 * PERIOD + 50, ageOfHead: 40 * 3600 });
+    const outcome = await check.run(deps);
+    expect(outcome.detail).toContain("127.0.0.1:8787 (handoff archive): period 9: answered 404");
+  });
+
   it("explains a missing beacon endpoint", async () => {
     const without = makeDeps({ pair: { ...pair, sides: [{ ...sepolia, beaconUrl: null }, pulse] as const } });
     await expect(lightClientCheck(without, "first-to-second").run(without)).rejects.toThrow("no beacon endpoint for Sepolia");
+  });
+});
+
+describe("lightClientDeadlineCheck", () => {
+  const PERIOD = 8192;
+  const SECONDS = 12;
+  const HEAD = 15 * PERIOD + 100;
+  /** A light client on the destination chain whose deadline is `secondsLeft` away (the next committee is known: it strands in period 17). */
+  function setup(secondsLeft: number, overrides: Parameters<typeof makeDeps>[0] = {}) {
+    const genesis = NOW - 17 * PERIOD * SECONDS + secondsLeft;
+    const calls: string[] = [];
+    const client = {
+      getBlockNumber: async () => 100n,
+      readContract: async ({ functionName }: { functionName: string }) => {
+        calls.push(functionName);
+        return ({ head: BigInt(HEAD), slotsPerPeriod: BigInt(PERIOD), genesisTime: BigInt(genesis), secondsPerSlot: BigInt(SECONDS), syncCommittees: "0x" + "11".repeat(32) })[functionName];
+      },
+    } as unknown as ChainClient;
+    return { deps: makeDeps({ clock: { now: NOW * 1000 }, client: () => client, ...overrides }), calls };
+  }
+  const check = lightClientDeadlineCheck(makeDeps(), "first-to-second");
+
+  it("is named after the destination chain, in section chains", () => {
+    expect(check.id).toBe("lightclient-deadline-first-to-second");
+    expect(check.name).toBe("PulseChain testnet light client deadline");
+    expect(check.section).toBe("chains");
+    const back = lightClientDeadlineCheck(makeDeps(), "second-to-first");
+    expect(back.id).toBe("lightclient-deadline-second-to-first");
+    expect(back.name).toBe("Sepolia light client deadline");
+  });
+
+  it("is ok above the degraded threshold, with the owner's wording, and reads the chain only", async () => {
+    const { deps, calls } = setup(Math.round(20.4 * 3600));
+    expect(await check.run(deps)).toEqual({ state: "ok", detail: `PulseChain testnet checks Sepolia: 20.4 h until stranded (head slot ${HEAD}, period 15, strands in period 17)` });
+    expect(calls).toContain("head");
+    const { deps: back } = setup(Math.round(20.4 * 3600));
+    expect((await lightClientDeadlineCheck(back, "second-to-first").run(back)).detail.startsWith("Sepolia checks PulseChain testnet: 20.4 h")).toBe(true);
+  });
+
+  it("is degraded at the degraded threshold and just under it", async () => {
+    const at = setup(43_200);
+    expect((await check.run(at.deps)).state).toBe("degraded");
+    const under = setup(Math.round(10 * 3600));
+    expect(await check.run(under.deps)).toMatchObject({ state: "degraded", detail: expect.stringContaining("10.0 h until stranded") });
+    expect((await check.run(setup(43_201).deps)).state).toBe("ok");
+  });
+
+  it("is down at the down threshold and under it", async () => {
+    expect((await check.run(setup(21_601).deps)).state).toBe("degraded");
+    expect(await check.run(setup(21_600).deps)).toMatchObject({ state: "down", detail: expect.stringContaining("6.0 h until stranded") });
+    expect((await check.run(setup(Math.round(5.2 * 3600)).deps)).detail).toBe(`PulseChain testnet checks Sepolia: 5.2 h until stranded (head slot ${HEAD}, period 15, strands in period 17)`);
+  });
+
+  it("is down and says how long ago it stranded once the deadline passed", async () => {
+    const { deps } = setup(-Math.round(3.1 * 3600));
+    expect(await check.run(deps)).toEqual({
+      state: "down",
+      detail: `PulseChain testnet checks Sepolia: stranded 3.1 h ago unless handoff updates move it (head slot ${HEAD}, period 15, stranded in period 17)`,
+    });
+    expect((await check.run(setup(0).deps)).state).toBe("down");
+  });
+
+  it("uses the thresholds of the configuration", async () => {
+    const custom = parseStatusConfig(JSON.stringify({ ...JSON.parse(JSON.stringify(baseConfig)), lightClients: { deadlineDegradedSeconds: 7200, deadlineDownSeconds: 3600 } }));
+    expect(custom.lightClients).toMatchObject({ deadlineDegradedSeconds: 7200, deadlineDownSeconds: 3600 });
+    expect((await check.run(setup(10_000, { config: custom }).deps)).state).toBe("ok");
+    expect((await check.run(setup(5000, { config: custom }).deps)).state).toBe("degraded");
+    expect((await check.run(setup(3000, { config: custom }).deps)).state).toBe("down");
   });
 });

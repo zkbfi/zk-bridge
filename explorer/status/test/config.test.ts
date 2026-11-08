@@ -29,7 +29,8 @@ describe("parseStatusConfig", () => {
     expect(config.services.indexerLocal).toBe("http://127.0.0.1:42069");
     expect(config.units.map((unit) => unit.name)).not.toContain("zk-bridge-keepalive.timer");
     expect(config.units.find((unit) => unit.name === "zk-bridge-traffic")?.optional).toBe(true);
-    expect(config.lightClients).toEqual({ keepAliveSeconds: 43200, marginSeconds: 21600 });
+    expect(config.lightClients).toEqual({ keepAliveSeconds: 43200, marginSeconds: 21600, deadlineDegradedSeconds: 43200, deadlineDownSeconds: 21600 })
+    expect(config.alerts).toBeUndefined();
   });
 
   it("drops the retired keep-alive timer from a file that still lists it", () => {
@@ -79,5 +80,13 @@ describe("loadStatusPair and secretValues", () => {
     const values = secretValues(config, environment);
     expect(values).toEqual(expect.arrayContaining([environment.RPC_A, environment.BEACON_A, "rp_secret_value", "https://rpc.example.org/key"]));
     expect(secretValues(parseStatusConfig(JSON.stringify({ ...base, runpod: undefined })), environment)).not.toContain("rp_secret_value");
+  });
+
+  it("adds the alert webhook URL, from a reference or a literal, to the secrets", () => {
+    const alerting = parseStatusConfig(JSON.stringify({ ...base, alerts: { webhookUrl: "env:HOOK", checks: ["rpc-943"] } }));
+    expect(alerting.alerts).toEqual({ webhookUrl: "env:HOOK", checks: ["rpc-943"] });
+    expect(secretValues(alerting, { ...environment, HOOK: "https://hooks.example.org/T0/secret" })).toContain("https://hooks.example.org/T0/secret");
+    expect(secretValues(parseStatusConfig(JSON.stringify({ ...base, alerts: { webhookUrl: "https://hooks.example.org/lit" } })), environment)).toContain("https://hooks.example.org/lit");
+    expect(() => secretValues(alerting, environment)).toThrow(/HOOK/);
   });
 });

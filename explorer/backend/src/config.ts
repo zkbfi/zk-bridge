@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, beaconVariableName, headerRpcVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
+import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, beaconVariableName, headerRpcVariableName, handoffUrlsVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
 import { SINGLE_ENDPOINT_LABEL, endpointKeyVariables, remoteEndpointListSchema, type ProverSecret, type RemoteEndpoint } from "@zk-bridge/shared/prover";
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
 import { DEFAULT_WARMUP, holdIntervalFor } from "./watch/warmup.ts";
@@ -125,6 +125,31 @@ export const backendConfigSchema = z
      * block hash. Optional. They can carry a key; the logger removes them like the other endpoints.
      */
     headerRpcUrls: z.record(z.string().regex(/^\d+$/), z.array(z.url({ protocol: /^https?$/ }))).default({}),
+    /**
+     * More beacon APIs of each chain, asked in order for the committee handoff update of a period that the beacon
+     * endpoint and the states cannot give (and for states, after `stateUrls`). A light client that missed a period border
+     * moves only with these updates. Optional. They can carry a key; the logger removes them like the other endpoints.
+     */
+    handoffUrls: z.record(z.string().regex(/^\d+$/), z.array(z.url({ protocol: /^https?$/ }))).default({}),
+    /**
+     * More base URLs of the handoff archive (`<base>/<chainId>/<period>.json`), asked after this backend's own table and
+     * the chain indexer's (`<indexerUrl>/api/proofs/handoffs`), such as a published IPFS tree
+     * (`https://<gateway>/ipfs/<cid>/handoff-updates`). Nothing in a record is trusted: the proof checks it.
+     */
+    handoffArchiveUrls: z.array(z.url({ protocol: /^https?$/ })).default([]),
+    /**
+     * The archive module asks the prover for the handoff update of every period of each source chain once the period
+     * ended (`zk-bridge-prover handoff-update`), keeps it for good in `handoff_updates`, and serves it to the prover, the
+     * indexer and the proof archive. `backfillPeriods`: how many ended periods it looks back (it tries the missing ones).
+     */
+    handoffCapture: z
+      .object({
+        enabled: z.boolean().default(true),
+        backfillPeriods: z.number().int().min(1).max(64).default(8),
+        intervalSeconds: z.number().int().min(60).default(600),
+      })
+      .strict()
+      .default({ enabled: true, backfillPeriods: 8, intervalSeconds: 600 }),
     /** The msgboard node (`ws://`, `wss://`, `http://` or `https://`). Needed by the webhook and the msgboard indexer. It can carry a key. */
     msgboardUrl: z.string().regex(/^(wss?|https?):\/\/\S+$/, "must be a ws, wss, http or https address").optional(),
     /**
@@ -321,6 +346,8 @@ export function loadBackendPair(config: BackendConfig, deployment: unknown): Pai
     if (stateUrls !== undefined) environment[stateUrlsVariableName(chainId)] = stateUrls.join(",");
     const headerRpcUrls = config.headerRpcUrls[String(chainId)];
     if (headerRpcUrls !== undefined) environment[headerRpcVariableName(chainId)] = headerRpcUrls.join(",");
+    const handoffUrls = config.handoffUrls[String(chainId)];
+    if (handoffUrls !== undefined) environment[handoffUrlsVariableName(chainId)] = handoffUrls.join(",");
   }
   return loadPair({ pairName: config.pair, environment, deployment });
 }
@@ -330,8 +357,8 @@ export function loadBackendPair(config: BackendConfig, deployment: unknown): Pai
  * The logger removes these, and the secret parts of each, from every line.
  */
 export function endpointValues(config: BackendConfig, pair: Pair | null): string[] {
-  const fromPair = (pair?.sides ?? []).flatMap((side) => [side.rpcUrl, side.beaconUrl ?? "", ...(side.stateUrls ?? []), ...(side.headerRpcUrls ?? [])]);
-  return [...Object.values(config.rpcUrls), ...Object.values(config.beaconUrls), ...Object.values(config.stateUrls).flat(), ...Object.values(config.headerRpcUrls).flat(), config.msgboardUrl ?? "", ...remoteEndpoints(config).map((endpoint) => endpoint.url), config.indexerUrl ?? "", ...fromPair].filter((value) => value !== "");
+  const fromPair = (pair?.sides ?? []).flatMap((side) => [side.rpcUrl, side.beaconUrl ?? "", ...(side.stateUrls ?? []), ...(side.headerRpcUrls ?? []), ...(side.handoffUrls ?? [])]);
+  return [...Object.values(config.rpcUrls), ...Object.values(config.beaconUrls), ...Object.values(config.stateUrls).flat(), ...Object.values(config.headerRpcUrls).flat(), ...Object.values(config.handoffUrls).flat(), ...config.handoffArchiveUrls, config.msgboardUrl ?? "", ...remoteEndpoints(config).map((endpoint) => endpoint.url), config.indexerUrl ?? "", ...fromPair].filter((value) => value !== "");
 }
 
 /** The shortest path segment that counts as a key. Shorter segments, such as `rpc` or `evm`, are plain words. */
@@ -347,4 +374,16 @@ export function endpointSecrets(config: BackendConfig, pair: Pair | null): strin
     return [...urlSecrets(url), ...segments.filter((segment) => segment.length >= MINIMUM_KEY_SEGMENT)];
   });
   return [...new Set(pieces)];
+}
+
+/**
+ * The base URLs of the handoff archive that a prover run by this backend asks, in order: this backend's own table
+ * (`GET /archive/handoffs/<chainId>/<period>.json` on its listen address), the chain indexer's read route, then
+ * `handoffArchiveUrls`.
+ */
+export function handoffArchiveBases(config: BackendConfig): string[] {
+  const host = config.listen.host === "0.0.0.0" || config.listen.host === "::" ? "127.0.0.1" : config.listen.host;
+  const own = `http://${host.includes(":") ? `[${host}]` : host}:${config.listen.port}/archive/handoffs`;
+  const indexer = config.indexerUrl === undefined ? [] : [`${config.indexerUrl.replace(/\/+$/, "")}/api/proofs/handoffs`];
+  return [own, ...indexer, ...config.handoffArchiveUrls];
 }

@@ -1,4 +1,5 @@
 import type { Storage } from "../storage.ts";
+import { recentHandoffs } from "./handoffs.ts";
 
 /**
  * The proofs and evidence this backend holds, for the proof archive of the explorer indexer (explorer/indexer,
@@ -14,13 +15,15 @@ export type ProofRows = {
   readonly board: Array<{ direction: string; payload: string; storedAt: number }>;
   readonly held: Array<{ jobId: string; direction: string; payload: string; storedAt: number; postedAt: number | null; messageHash: string | null }>;
   readonly evidence: Array<{ messageId: string; direction: string; body: string; storedAt: number }>;
+  /** The handoff records stored since the cut-off of the call (`archive/handoffs.ts`); older ones come through the nightly snapshot. */
+  readonly handoffs: Array<{ chainId: number; period: number; record: string; storedAt: number }>;
 };
 
 const tableExists = (storage: Storage, name: string): boolean =>
   storage.database.prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
 
 /** Reads the rows. A board row whose body is not the stored JSON is left out. */
-export function readProofRows(storage: Storage): ProofRows {
+export function readProofRows(storage: Storage, handoffsSince = 0): ProofRows {
   type Board = { direction: string; body: string; stored_at: number };
   const board = (storage.database.prepare("SELECT direction, body, stored_at FROM proofs ORDER BY direction").all() as Board[]).flatMap((row) => {
     try {
@@ -48,5 +51,5 @@ export function readProofRows(storage: Storage): ProofRows {
     body: row.body,
     storedAt: row.stored_at,
   }));
-  return { board, held, evidence };
+  return { board, held, evidence, handoffs: recentHandoffs(storage, handoffsSince) };
 }

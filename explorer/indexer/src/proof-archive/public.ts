@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { evidenceRecordSchema, lightClientProofRecordSchema, storageProofRecordSchema, type EvidenceRecord, type LightClientProofRecord, type StorageProofRecord } from "./records";
+import { evidenceRecordSchema, handoffRecord, handoffRecordSchema, lightClientProofRecordSchema, storageProofRecordSchema, type EvidenceRecord, type LightClientProofRecord, type StorageProofRecord } from "./records";
 import { listFiles, recordsOf } from "./bundle";
 import { mergedMirrorRecords, mirrorRecords } from "./mirror";
 import type { ProofArchive } from "./store";
@@ -23,9 +23,9 @@ export type PublicSource =
   | { readonly kind: "bundle"; readonly bundle: string }
   | { readonly kind: "mirror"; readonly mirror: string };
 
-const MIRROR_DIRECTORY = { storage_proofs: "storage-proofs", light_client_proofs: "light-client-proofs", message_evidence: "evidence" } as const;
+const MIRROR_DIRECTORY = { storage_proofs: "storage-proofs", light_client_proofs: "light-client-proofs", message_evidence: "evidence", handoff_updates: "handoff-updates" } as const;
 
-async function* rowsOf(source: PublicSource, table: "storage_proofs" | "light_client_proofs" | "message_evidence"): AsyncGenerator<unknown> {
+async function* rowsOf(source: PublicSource, table: "storage_proofs" | "light_client_proofs" | "message_evidence" | "handoff_updates"): AsyncGenerator<unknown> {
   if (source.kind === "archive") {
     for await (const page of source.archive.pages(table)) yield* page;
   } else if (source.kind === "bundle") {
@@ -80,6 +80,12 @@ light-client-proofs/<pair>/<direction>/<start slot>-<new slot>-<proof hash>.json
 evidence/<pair>/<direction>/<message id>-<sha256 of the file>.json
   The delivery evidence of a message, byte for byte as it was built. The name holds the SHA-256 of the file.
 
+handoff-updates/<chain id>/<period>.json
+  The handoff update of one sync-committee period of a source chain: a complete light client update that carries the
+  committee of the next period, as a prover needs it to move a light client over that period. A prover reads the update
+  of period N of chain C at <this tree>/handoff-updates/C/N.json. Nobody has to trust the file: the zk proof checks the
+  committee signatures, and a wrong update gives no valid proof.
+
 beacon-states/<chain id>/<slot>-<state root>.ssz (and .summary)
   Beacon states that a prover verified and kept, as SSZ. Check: hash_tree_root of the state equals the root in the name.
 `;
@@ -113,8 +119,8 @@ export function publicEvidence(record: EvidenceRecord) {
 }
 
 /** Writes the public tree of the records into `out` (which should be empty). Returns the files per kind. */
-export async function exportPublicTree(source: PublicSource, out: string): Promise<Record<"storageProofs" | "lightClientProofs" | "evidence", number>> {
-  const counts = { storageProofs: 0, lightClientProofs: 0, evidence: 0 };
+export async function exportPublicTree(source: PublicSource, out: string): Promise<Record<"storageProofs" | "lightClientProofs" | "evidence" | "handoffUpdates", number>> {
+  const counts = { storageProofs: 0, lightClientProofs: 0, evidence: 0, handoffUpdates: 0 };
   await mkdir(out, { recursive: true });
   await put(out, "README.txt", PUBLIC_README);
 
@@ -157,6 +163,14 @@ export async function exportPublicTree(source: PublicSource, out: string): Promi
     await put(out, `evidence/${record.pair}/${record.direction}/${record.messageId.toLowerCase()}-${record.bodyHash.slice(2).toLowerCase()}.json`, record.body);
     counts.evidence += 1;
   }
+
+  for await (const raw of rowsOf(source, "handoff_updates")) {
+    const parsed = handoffRecordSchema.safeParse(raw);
+    if (!parsed.success || !handoffRecord(parsed.data).ok) throw new Error("a handoff update record does not parse");
+    // The file is the record text exactly as the backend stored it.
+    await put(out, `handoff-updates/${parsed.data.chainId}/${parsed.data.period}.json`, parsed.data.record);
+    counts.handoffUpdates += 1;
+  }
   return counts;
 }
 
@@ -168,6 +182,7 @@ const ALLOWED_PATHS = [
   new RegExp(`^storage-proofs/\\d+/0x[0-9a-f]{40}/\\d+-${HASH}\\.json$`),
   new RegExp(`^light-client-proofs/[a-z0-9-]+/${DIRECTION}/\\d+-\\d+-${HASH}\\.json$`),
   new RegExp(`^evidence/[a-z0-9-]+/${DIRECTION}/${HASH}-[0-9a-f]{64}\\.json$`),
+  /^handoff-updates\/\d+\/\d+\.json$/,
   /^beacon-states\/\d+\/\d{12}-0x[0-9a-f]{64}\.(ssz|summary)$/,
 ];
 
@@ -212,6 +227,21 @@ function scanJson(value: unknown, problems: string[]): void {
       else scanJson(item, problems);
     }
   }
+}
+
+/**
+ * A handoff update holds only hex, numbers and fixed key names. Its `format` tag is a fixed 20 character word that the
+ * general rule would take for a key, so it must be exactly the tag; the rest is scanned as usual. The record must also
+ * be valid for the chain and period its path names.
+ */
+function scanHandoff(file: string, text: string, problems: string[]): void {
+  const match = /^handoff-updates\/(\d+)\/(\d+)\.json$/.exec(file) as RegExpExecArray;
+  if (!handoffRecord({ chainId: Number(match[1]), period: Number(match[2]), record: text, storedAt: null, source: "public" }).ok) {
+    problems.push("is not a valid handoff update for its path");
+    return;
+  }
+  const { format: _format, ...rest } = JSON.parse(text) as Record<string, unknown>;
+  scanJson(rest, problems);
 }
 
 /**
@@ -267,6 +297,8 @@ export async function checkPublicTree(root: string): Promise<PublicProblem[]> {
       } catch {
         found.push("is not JSON");
       }
+    } else if (file.startsWith("handoff-updates/")) {
+      scanHandoff(file, text, found);
     } else if (file.endsWith(".json")) {
       try {
         scanJson(JSON.parse(text), found);

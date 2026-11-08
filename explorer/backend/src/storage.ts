@@ -89,6 +89,16 @@ CREATE TABLE IF NOT EXISTS job_timings (
   grind_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS job_timings_by_proved ON job_timings (proved_at);
+CREATE TABLE IF NOT EXISTS handoff_updates (
+  chain_id INTEGER NOT NULL,
+  period INTEGER NOT NULL,
+  record TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  attested_slot INTEGER NOT NULL,
+  finalized_slot INTEGER NOT NULL,
+  stored_at INTEGER NOT NULL,
+  PRIMARY KEY (chain_id, period)
+);
 `;
 
 /**

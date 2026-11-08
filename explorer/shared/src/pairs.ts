@@ -12,6 +12,7 @@ export {
   beaconVariableName,
   stateUrlsVariableName,
   headerRpcVariableName,
+  handoffUrlsVariableName,
   parseStateUrls,
   finalityVariableName,
   type LoadPairOptions,

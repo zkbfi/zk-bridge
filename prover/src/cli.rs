@@ -9,6 +9,7 @@
 //! 0 or 1.
 
 use crate::beacon::branch_store::DirectoryBranchStore;
+use crate::beacon::handoff_archive::{host_of, record_json, ArchiveClient};
 use crate::beacon::http::{HttpBeaconSource, RpcExecutionHeaders};
 use crate::beacon::state_store::DirectoryStateStore;
 use crate::beacon::StoredHead;
@@ -93,6 +94,15 @@ pub enum Command {
     /// light client) and the destination chain (the block and the storage of the remote light client), checks the proof
     /// natively as the contract does, and prints it only when it verifies. It sends nothing.
     OpeningProof(OpeningProofArguments),
+    /// Print the complete committee handoff update of one sync committee period, as one JSON record.
+    ///
+    /// The record is what the handoff archive keeps (docs/proof-archive.md): the update that is attested and signed in the
+    /// period and proves the committee of the next one, with the branch of `genesis_validators_root` and the execution
+    /// header of a compact finalized header attached. The update comes from `light_client/updates` of `source.beacon_url`,
+    /// else it is assembled from blocks and states (the main node, `source.state_urls`, `source.handoff_urls`), else
+    /// from `light_client/updates` of each `source.handoff_urls` entry. The archive itself is never asked. Run it once the
+    /// period has ended. Exit code 1 names every source tried.
+    HandoffUpdate(HandoffUpdateArguments),
     /// Write the deployment file that the explorer reads (`chain_a` and `chain_b` sections), and print a summary.
     ///
     /// The addresses come from `--chain-a` and `--chain-b` pairs, from Foundry broadcast files, or from both (a pair
@@ -121,6 +131,18 @@ pub struct DeploymentFileArguments {
     /// A `key=value` pair for the section `chain_b`. The keys are those of `--chain-a`.
     #[arg(long)]
     pub chain_b: Vec<String>,
+}
+
+/// The arguments of `handoff-update`.
+#[derive(Debug, Args)]
+pub struct HandoffUpdateArguments {
+    /// The route of the configuration whose source chain the period belongs to. It may be left out when the file has
+    /// exactly one route.
+    #[arg(long)]
+    pub route: Option<String>,
+    /// The sync committee period.
+    #[arg(long)]
+    pub period: u64,
 }
 
 /// The arguments of `opening-proof`.
@@ -247,6 +269,11 @@ struct ProvePlan {
     state_urls: Vec<String>,
     /// The state cache directory and the chain id of the source.
     state_cache: Option<(String, u64)>,
+    /// `source.handoff_urls` and `source.handoff_archive_urls` of the route.
+    handoff_urls: Vec<String>,
+    handoff_archive_urls: Vec<String>,
+    /// The chain id of the source, which the paths of the handoff archive name (0 without a route).
+    source_chain_id: u64,
     chain: ChainKind,
     destination: Option<DestinationConfig>,
     starting_point: StartingPoint,
@@ -288,20 +315,24 @@ fn plan_prove(config: &Config, arguments: &ProveArguments) -> Result<ProvePlan> 
                 )
             }
         };
-    let (state_urls, state_cache) = match &arguments.beacon_url {
-        Some(_) => (Vec::new(), None),
-        None => {
-            let (_, route) = config.route(arguments.route.as_deref())?;
-            (
-                route.source.state_urls.clone(),
-                route
-                    .source
-                    .state_cache_dir
-                    .clone()
-                    .map(|directory| (directory, route.source.chain_id)),
-            )
-        }
-    };
+    let (state_urls, state_cache, handoff_urls, handoff_archive_urls, source_chain_id) =
+        match &arguments.beacon_url {
+            Some(_) => (Vec::new(), None, Vec::new(), Vec::new(), 0),
+            None => {
+                let (_, route) = config.route(arguments.route.as_deref())?;
+                (
+                    route.source.state_urls.clone(),
+                    route
+                        .source
+                        .state_cache_dir
+                        .clone()
+                        .map(|directory| (directory, route.source.chain_id)),
+                    route.source.handoff_urls.clone(),
+                    route.source.handoff_archive_urls.clone(),
+                    route.source.chain_id,
+                )
+            }
+        };
     let starting_point = match (arguments.head_slot, &arguments.head_root) {
         (Some(slot), Some(root)) => StartingPoint::Explicit {
             head: StoredHead {
@@ -335,6 +366,9 @@ fn plan_prove(config: &Config, arguments: &ProveArguments) -> Result<ProvePlan> 
         branch_store_dir,
         state_urls,
         state_cache,
+        handoff_urls,
+        handoff_archive_urls,
+        source_chain_id,
         chain,
         destination,
         starting_point,
@@ -397,7 +431,47 @@ pub fn build_prover(
 }
 
 fn beacon_source(chain: ChainKind, url: &str) -> HttpBeaconSource {
-    HttpBeaconSource::new(chain, Box::new(HttpClient::new(url)))
+    HttpBeaconSource::new(chain, Box::new(HttpClient::new(url))).with_host(host_of(url))
+}
+
+/// Clients on URLs, each named by its host for messages.
+fn named_clients(urls: &[String]) -> Vec<ArchiveClient> {
+    urls.iter()
+        .map(|url| ArchiveClient {
+            host: host_of(url),
+            client: Box::new(HttpClient::new(url)),
+        })
+        .collect()
+}
+
+/// The beacon source of a route with every source it names: the execution headers, the branch store, the state URLs
+/// (then the handoff URLs) for states, the state cache, the handoff URLs for handoff updates and, when `with_archive`,
+/// the handoff archive.
+#[allow(clippy::too_many_arguments)]
+fn full_beacon_source(
+    chain: ChainKind,
+    beacon_url: &str,
+    rpc_url: Option<&str>,
+    branch_store_dir: Option<&str>,
+    state_urls: &[String],
+    state_cache: Option<&(String, u64)>,
+    handoff_urls: &[String],
+    archive: Option<(u64, &[String])>,
+) -> HttpBeaconSource {
+    let state_sources: Vec<String> = state_urls.iter().chain(handoff_urls).cloned().collect();
+    let source = with_state_sources(
+        with_branch_store(
+            with_execution_headers(beacon_source(chain, beacon_url), rpc_url),
+            branch_store_dir,
+        ),
+        &state_sources,
+        state_cache,
+    )
+    .with_handoff_clients(named_clients(handoff_urls));
+    match archive {
+        Some((chain_id, urls)) => source.with_handoff_archive(chain_id, named_clients(urls)),
+        None => source,
+    }
 }
 
 /// Gives the source an execution header source when the run has a source RPC URL.
@@ -538,16 +612,15 @@ fn run_prove(
             ("start_head_slot", start.head.slot.to_string()),
         ],
     );
-    let source = with_state_sources(
-        with_branch_store(
-            with_execution_headers(
-                beacon_source(plan.chain, &plan.beacon_url),
-                plan.source_rpc_url.as_deref(),
-            ),
-            plan.branch_store_dir.as_deref(),
-        ),
+    let source = full_beacon_source(
+        plan.chain,
+        &plan.beacon_url,
+        plan.source_rpc_url.as_deref(),
+        plan.branch_store_dir.as_deref(),
         &plan.state_urls,
         plan.state_cache.as_ref(),
+        &plan.handoff_urls,
+        Some((plan.source_chain_id, &plan.handoff_archive_urls)),
     );
     match produce_logged(&source, prover.as_ref(), &request, &logger)? {
         Production::UpToDate { head_slot } => {
@@ -791,6 +864,52 @@ fn run_opening_proof(
     Ok(0)
 }
 
+/// Prints the record of the handoff update of one period (see [`crate::beacon::handoff_archive`]).
+///
+/// # Errors
+/// `Error::Beacon` naming every source tried, the errors of [`HttpBeaconSource::complete_handoff`], and the route errors.
+fn run_handoff_update(
+    config: &Config,
+    arguments: &HandoffUpdateArguments,
+    out: &mut dyn std::io::Write,
+) -> Result<i32> {
+    let (_, route) = config.route(arguments.route.as_deref())?;
+    let source = &route.source;
+    let chain = source.chain_kind()?;
+    let state_cache = source
+        .state_cache_dir
+        .clone()
+        .map(|directory| (directory, source.chain_id));
+    let beacon = full_beacon_source(
+        chain,
+        &source.beacon_url,
+        source.rpc_url.as_deref(),
+        source.branch_store_dir.as_deref(),
+        &source.state_urls,
+        state_cache.as_ref(),
+        &source.handoff_urls,
+        None,
+    );
+    let update = beacon.complete_handoff(arguments.period)?;
+    let record = record_json(chain, source.chain_id, arguments.period, &update)?;
+    Logger::standard().info(
+        "handoff_update_built",
+        &[
+            ("period", arguments.period.to_string()),
+            (
+                "attested_slot",
+                update.attested_header.beacon.slot.to_string(),
+            ),
+            (
+                "finalized_slot",
+                update.finalized_header.beacon.slot.to_string(),
+            ),
+        ],
+    );
+    write_json(out, &record)?;
+    Ok(0)
+}
+
 /// Writes the deployment file and prints a summary of it.
 ///
 /// # Errors
@@ -889,6 +1008,7 @@ pub fn run(
         Command::Evidence(evidence) => run_evidence(&config, evidence, out),
         Command::Checkpoint(checkpoint) => run_checkpoint(Some(&config), checkpoint, out),
         Command::OpeningProof(opening) => run_opening_proof(&config, opening, out),
+        Command::HandoffUpdate(handoff) => run_handoff_update(&config, handoff, out),
         Command::DeploymentFile(_) => unreachable!("deployment-file returned above"),
         Command::Verify(_) => unreachable!("verify returned above"),
     }

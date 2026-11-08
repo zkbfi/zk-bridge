@@ -4,7 +4,7 @@
 import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { createPublicClient, http } from "viem";
-import { beaconVariableName, loadPair, redactSecrets, rpcVariableName, type Pair, type ProofDirection } from "@zk-bridge/shared";
+import { beaconVariableName, handoffUrlsVariableName, loadPair, redactSecrets, rpcVariableName, stateUrlsVariableName, type Pair, type ProofDirection } from "@zk-bridge/shared";
 import { createBackendClient } from "@zk-bridge/shared/backend-client";
 import { fetchJsonResponse } from "@zk-bridge/shared";
 import { postJsonResponse } from "@zk-bridge/shared/msgboard-http";
@@ -12,15 +12,28 @@ import { parseArguments, USAGE, type CliOptions } from "../src/keepalive/cli.ts"
 import { describeInspection, inspect, marchOne, summarize, type MarchResult, type Reads, type Runtime, type Target } from "../src/keepalive/march.ts";
 import { backendPath, localPath, type RunResult } from "../src/keepalive/paths.ts";
 import { DEFAULT_POLICY, EXIT_READ_FAILED, VERDICT_EXIT_CODES, worseExitCode, type Policy } from "../src/keepalive/plan.ts";
-import { fetchJsonGet, readHistory, readLightClient, readSource } from "../src/keepalive/sources.ts";
+import { fetchJsonGet, handoffSources, readHistoryFrom, readLightClient, readSource } from "../src/keepalive/sources.ts";
 
 type BackendFile = {
   pair?: string;
   deploymentFile?: string;
   rpcUrls?: Record<string, string>;
   beaconUrls?: Record<string, string>;
+  stateUrls?: Record<string, string[]>;
+  handoffUrls?: Record<string, string[]>;
+  handoffArchiveUrls?: string[];
+  indexerUrl?: string;
+  listen?: { host?: string; port?: number };
   limits?: { keepAliveSeconds?: number };
 };
+
+/** The handoff archive the backend of the file serves and reads (`handoffArchiveBases` in src/config.ts), for a planner outside it. */
+function archiveBasesOf(file: BackendFile): string[] {
+  const host = file.listen?.host === undefined || file.listen.host === "0.0.0.0" || file.listen.host === "::" ? "127.0.0.1" : file.listen.host;
+  const own = file.listen === undefined ? [] : [`http://${host.includes(":") ? `[${host}]` : host}:${file.listen.port ?? 8787}/archive/handoffs`];
+  const indexer = file.indexerUrl === undefined ? [] : [`${file.indexerUrl.replace(/\/+$/, "")}/api/proofs/handoffs`];
+  return [...own, ...indexer, ...(file.handoffArchiveUrls ?? [])];
+}
 
 // Secrets (an RPC URL with a key in it) go to the child through its environment, never its arguments: the arguments of a
 // running process are readable by every user of the machine (ps, /proc/<pid>/cmdline).
@@ -56,11 +69,16 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const endpoints: Record<string, string | undefined> = { ...environment };
   for (const [chainId, url] of Object.entries(file.rpcUrls ?? {})) endpoints[rpcVariableName(Number(chainId))] ??= url;
   for (const [chainId, url] of Object.entries(file.beaconUrls ?? {})) endpoints[beaconVariableName(Number(chainId))] ??= url;
+  for (const [chainId, urls] of Object.entries(file.stateUrls ?? {})) endpoints[stateUrlsVariableName(Number(chainId))] ??= urls.join(",");
+  for (const [chainId, urls] of Object.entries(file.handoffUrls ?? {})) endpoints[handoffUrlsVariableName(Number(chainId))] ??= urls.join(",");
+  const archiveUrls = archiveBasesOf(file);
   const pair: Pair = loadPair({ pairName: options.pair ?? file.pair ?? "sepolia-pls943", environment: endpoints, deployment: JSON.parse(readFileSync(deploymentPath, "utf8")) });
   for (const side of pair.sides) {
     secrets.push(side.rpcUrl);
     if (side.beaconUrl !== null) secrets.push(side.beaconUrl);
+    secrets.push(...(side.stateUrls ?? []), ...(side.handoffUrls ?? []));
   }
+  secrets.push(...archiveUrls);
   const policy: Policy = {
     keepAliveSeconds: options.keepAliveHours !== undefined ? options.keepAliveHours * 3600 : (file.limits?.keepAliveSeconds ?? DEFAULT_POLICY.keepAliveSeconds),
     marginSeconds: options.marginHours * 3600,
@@ -83,7 +101,12 @@ export async function main(argv: readonly string[], environment: NodeJS.ProcessE
   const reads: Reads = {
     lightClient: (target) => readLightClient(clients.get(target.destinationChainId) as ReturnType<typeof createPublicClient>, target.lightClient),
     source: (target) => readSource(get, beaconOf(target)),
-    history: (target, periods, slotsPerPeriod) => readHistory(get, beaconOf(target), periods, slotsPerPeriod),
+    // Every source the prover would ask, in its order; stranded only when none has the period (src/keepalive/sources.ts).
+    history: (target, periods, slotsPerPeriod) => {
+      const source = sideOfTarget(target)[0];
+      const sources = handoffSources(get, { chainId: source.chainId, beaconUrl: beaconOf(target), stateUrls: source.stateUrls ?? [], handoffUrls: source.handoffUrls ?? [], archiveUrls });
+      return readHistoryFrom(sources, periods, slotsPerPeriod);
+    },
   };
   const runtime: Runtime = {
     now: () => Math.floor(Date.now() / 1000),

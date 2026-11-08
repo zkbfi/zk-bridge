@@ -1,5 +1,5 @@
 import { MIGRATION } from "./schema";
-import type { EvidenceRecord, LightClientProofRecord, StorageProofRecord } from "./records";
+import type { EvidenceRecord, HandoffRecord, LightClientProofRecord, StorageProofRecord } from "./records";
 
 /** The SQL that the archive needs: a `pg` pool and PGlite both fit. */
 export interface SqlExecutor {
@@ -72,6 +72,14 @@ const EVIDENCE: TableSpec = {
   meta: [column("source", "source", "text")],
 };
 
+const HANDOFF: TableSpec = {
+  table: "proof_archive.handoff_updates",
+  key: [column("chain_id", "chainId", "integer"), column("period", "period", "integer")],
+  compare: [column("sha256", "sha256", "text"), column("attested_slot", "attestedSlot", "bigint"), column("finalized_slot", "finalizedSlot", "bigint"), column("record", "record", "text")],
+  fill: [],
+  meta: [column("stored_at", "storedAt", "bigint"), column("source", "source", "text")],
+};
+
 /** A value as a parameter: JSON for jsonb, a decimal string for bigint, lower case for hex keys. */
 function parameterOf(spec: Column, value: unknown): unknown {
   if (value === null || value === undefined) return null;
@@ -109,13 +117,19 @@ export interface ProofArchive {
   /** The newest proofs of a direction, newest start first; from one start slot when given. */
   lightClientProofs(input: { readonly direction: string; readonly startSlot?: bigint; readonly limit: number }): Promise<LightClientProofRecord[]>;
   evidence(messageId: string): Promise<EvidenceRecord[]>;
+  /** The handoff update of a sync-committee period of a source chain. A different one is a conflict; the first stays. */
+  putHandoff(record: HandoffRecord): Promise<UpsertOutcome>;
+  /** The periods that have a handoff update for a chain, ascending. */
+  handoffPeriods(chainId: number): Promise<number[]>;
+  /** The handoff update of one period, or null. */
+  handoff(chainId: number, period: number): Promise<HandoffRecord | null>;
   /** Row counts of each table. */
-  counts(): Promise<Record<"storageProofs" | "lightClientProofs" | "evidence" | "conflicts", number>>;
+  counts(): Promise<Record<"storageProofs" | "lightClientProofs" | "evidence" | "handoffUpdates" | "conflicts", number>>;
   /** Every row of a table, in key order, one page at a time. */
-  pages(table: "storage_proofs" | "light_client_proofs" | "message_evidence" | "conflicts", pageSize?: number): AsyncGenerator<unknown[]>;
+  pages(table: "storage_proofs" | "light_client_proofs" | "message_evidence" | "handoff_updates" | "conflicts", pageSize?: number): AsyncGenerator<unknown[]>;
 }
 
-const SPECS = { storage_proofs: STORAGE, light_client_proofs: LIGHT_CLIENT, message_evidence: EVIDENCE } as const;
+const SPECS = { storage_proofs: STORAGE, light_client_proofs: LIGHT_CLIENT, message_evidence: EVIDENCE, handoff_updates: HANDOFF } as const;
 
 /** Builds the archive over a database. Call `migrate` once before the rest. */
 export function createProofArchive(sql: SqlExecutor): ProofArchive {
@@ -187,6 +201,12 @@ export function createProofArchive(sql: SqlExecutor): ProofArchive {
     storage_proofs: (row: Record<string, unknown>) => storageOf(row),
     light_client_proofs: (row: Record<string, unknown>) => row,
     message_evidence: (row: Record<string, unknown>) => ({ ...row, storedAt: row.storedAt === null ? null : Number(row.storedAt) }),
+    handoff_updates: (row: Record<string, unknown>) => ({
+      ...row,
+      attestedSlot: Number(row.attestedSlot),
+      finalizedSlot: Number(row.finalizedSlot),
+      storedAt: row.storedAt === null ? null : Number(row.storedAt),
+    }),
   };
 
   return {
@@ -216,13 +236,22 @@ export function createProofArchive(sql: SqlExecutor): ProofArchive {
       const rows = await sql.query(`SELECT ${selectAll(EVIDENCE)} FROM ${EVIDENCE.table} WHERE message_id = $1 ORDER BY body_hash`, [messageId.toLowerCase()]);
       return rows.rows.map((row) => ofTable.message_evidence(row) as EvidenceRecord);
     },
+    putHandoff: (record) => upsert(HANDOFF, record, record.source),
+    async handoffPeriods(chainId) {
+      const rows = await sql.query<{ period: number }>(`SELECT period FROM ${HANDOFF.table} WHERE chain_id = $1 ORDER BY period`, [chainId]);
+      return rows.rows.map((row) => row.period);
+    },
+    async handoff(chainId, period) {
+      const rows = await sql.query(`SELECT ${selectAll(HANDOFF)} FROM ${HANDOFF.table} WHERE chain_id = $1 AND period = $2`, [chainId, period]);
+      return rows.rows.length === 0 ? null : (ofTable.handoff_updates(rows.rows[0] as Record<string, unknown>) as HandoffRecord);
+    },
     async counts() {
       const rows = await sql.query<Record<string, string>>(
         "SELECT (SELECT count(*) FROM proof_archive.storage_proofs)::text AS storage, (SELECT count(*) FROM proof_archive.light_client_proofs)::text AS light, " +
-          "(SELECT count(*) FROM proof_archive.message_evidence)::text AS evidence, (SELECT count(*) FROM proof_archive.conflicts)::text AS conflicts",
+          "(SELECT count(*) FROM proof_archive.message_evidence)::text AS evidence, (SELECT count(*) FROM proof_archive.handoff_updates)::text AS handoff, (SELECT count(*) FROM proof_archive.conflicts)::text AS conflicts",
       );
       const row = rows.rows[0] as Record<string, string>;
-      return { storageProofs: Number(row.storage), lightClientProofs: Number(row.light), evidence: Number(row.evidence), conflicts: Number(row.conflicts) };
+      return { storageProofs: Number(row.storage), lightClientProofs: Number(row.light), evidence: Number(row.evidence), handoffUpdates: Number(row.handoff), conflicts: Number(row.conflicts) };
     },
     async *pages(table, pageSize = 500) {
       const select =
