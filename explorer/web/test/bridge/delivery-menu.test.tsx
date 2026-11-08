@@ -5,10 +5,11 @@ import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
 import { deliverySummary } from "../../src/bridge/DeliveryMenu";
 import { connectedWallet, renderWithWallet } from "../app/support";
+import { USDC_QUERY, tokenQuery } from "./token-link";
 
 beforeEach(() => {
   window.localStorage.clear();
-  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=0.01`);
+  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}&bridge.amount=0.01`);
 });
 
 const FACTS = { destination: "PulseChain", feeShareText: "0.39%", worstCaseText: "$0.60", fixedText: "0.50 USDC", feeAmountText: "$0.39", worstCaseShareText: "0.6%" };
@@ -63,7 +64,7 @@ describe("deliverySummary's short text is hard numbers, never a placeholder or a
 });
 
 const menuOpen = async (query = "bridge.amount=500") => {
-  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
+  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${tokenQuery(query)}`);
   renderWithWallet(<Shell />, { wallet: connectedWallet() });
   await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
   await userEvent.click(screen.getByRole("button", { name: /^Delivery settings/ }));
@@ -129,7 +130,7 @@ describe("the delivery settings menu", () => {
   });
 
   it("drives a gas-based fee from its factor on the gas cost", async () => {
-    const menu = await menuOpen("dir=second-to-first&bridge.amount=1000&tip.price=3000");
+    const menu = await menuOpen(`dir=second-to-first&bridge.amount=1000&tip.price=3000`);
     await userEvent.click(within(menu).getByRole("radio", { name: "Gas-based" }));
     await waitFor(() => expect(within(menu).getByRole("slider", { name: "Fee on gas" })).toBeInTheDocument());
     await typeExact(menu, "Fee on gas", "1");

@@ -4,6 +4,7 @@ import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import type { PriceMap, PriceState } from "@zkb/react";
 import { Shell } from "../../src/app/Shell";
 import { disconnectedWallet, renderWithWallet } from "../app/support";
+import { USDC_QUERY } from "./token-link";
 
 /** What the mocked price layer answers; each test sets it. */
 const answer: { data: PriceMap | undefined; states: Map<string, PriceState> } = { data: undefined, states: new Map() };
@@ -23,7 +24,7 @@ beforeEach(() => {
 
 const output = () => document.querySelector(".zb-amount-out")!;
 const open = (amount: string, extra = "") => {
-  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=${amount}${extra}`);
+  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}&bridge.amount=${amount}${extra}`);
   renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
 };
 /** Answers every key with one state, whatever the screen asks about. */

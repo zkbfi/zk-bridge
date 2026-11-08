@@ -111,7 +111,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const { configuration, connection } = useServices();
   const known = useTokens(pair.id).data ?? [];
   const [customTokens, setCustomTokens] = useState<readonly TokenInfo[]>([]);
-  // The native coins come last: the default is the first bridged token, else the native coin (wrap route).
+  // The native coins come last in the list; the default token is still the source chain's gas token (tokenFor).
   const tokens = useMemo(() => [...known, ...customTokens, ...nativeTokensOf(pair)], [known, customTokens, pair]);
   const rpcFor = (chainId: number): string | null => connection?.resolved().rpcUrls[chainId]?.value ?? configuration.rpcUrls[chainId] ?? defaultRpcUrl(chainId);
   const resolveCustom = useCallback(

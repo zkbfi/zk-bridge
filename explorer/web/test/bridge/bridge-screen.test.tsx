@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
 import { connectedWallet, disconnectedWallet, renderWithWallet } from "../app/support";
+import { USDC_QUERY } from "./token-link";
 
 beforeEach(() => {
   window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}`);
@@ -38,12 +39,20 @@ describe("the bridge screen", () => {
   });
 
   it("shows the output with the input token's icon and the destination badge, and says what it arrives as", async () => {
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}`);
     renderBridge();
     await userEvent.type(await within(fromBand()).findByRole("textbox", { name: /Amount to send/ }), "1");
     const out = toBand();
     await waitFor(() => expect(out.querySelector("[data-badge]")).not.toBeNull());
     expect(out.querySelector("[data-badge]")?.getAttribute("data-badge")).toBe(String(FIXTURE_PAIR.second.chainId));
     expect(within(out).getByText(/arrives as/)).toHaveTextContent("arrives as zUSDC");
+  });
+
+  it("opens on the gas token of the source chain, and says what it arrives as", async () => {
+    renderBridge();
+    await userEvent.type(await within(fromBand()).findByRole("textbox", { name: /Amount to send/ }), "1");
+    expect(await within(fromBand()).findByRole("button", { name: /^Token: ETH/ })).toBeInTheDocument();
+    await waitFor(() => expect(within(toBand()).getByText(/arrives as/)).toHaveTextContent(/arrives as zETH/));
   });
 
   it("flips the direction and keeps the amount", async () => {

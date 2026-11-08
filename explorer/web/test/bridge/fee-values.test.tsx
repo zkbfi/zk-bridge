@@ -5,6 +5,7 @@ import { routerCallbackGas , MAX_CALL_GAS } from "@zk-bridge/shared";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
 import { connectedWallet, renderWithWallet } from "../app/support";
+import { tokenQuery } from "./token-link";
 
 // The owner (quote 90): every fee value is a slider with a recommended tick, an exact input and a reset; the delivery
 // menu and the tip drawer edit the same value.
@@ -14,7 +15,7 @@ beforeEach(() => {
 });
 
 const at = async (query: string) => {
-  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
+  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${tokenQuery(query)}`);
   renderWithWallet(<Shell />, { wallet: connectedWallet() });
   await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
 };
@@ -52,7 +53,7 @@ describe("the fee values", () => {
   });
 
   it("moves a gas-based factor with its slider, refuses a bad one, and resets it", async () => {
-    await at("dir=second-to-first&bridge.amount=1000&tip.mode=gas-multiplier&tip.price=3000");
+    await at(`dir=second-to-first&bridge.amount=1000&tip.mode=gas-multiplier&tip.price=3000`);
     const scope = await menu();
     fireEvent.change(within(scope).getByRole("slider", { name: "Fee on gas" }), { target: { value: "3" } });
     await waitFor(() => expect(window.location.hash).toMatch(/tip\.gas=3(&|$)/));

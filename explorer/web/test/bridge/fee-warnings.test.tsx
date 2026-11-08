@@ -4,6 +4,7 @@ import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
 import { samplePrices } from "../../src/bridge/use-prices";
 import { connectedWallet, renderWithWallet } from "../app/support";
+import { tokenQuery } from "./token-link";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -11,7 +12,7 @@ beforeEach(() => {
 
 /** The pill and its detail once the fee is known. */
 const pillAt = async (query: string) => {
-  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
+  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${tokenQuery(query)}`);
   renderWithWallet(<Shell />, { wallet: connectedWallet() });
   await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
   const pill = screen.getAllByRole("button").find((button) => button.classList.contains("zb-go"))!;
@@ -21,7 +22,7 @@ const pillAt = async (query: string) => {
 describe("the fee warnings on the Bridge pill, at the sample prices", () => {
   it("warns a small transfer may not be delivered in a timely manner when the cost is above the cap's share, with the numbers", async () => {
     // PulseChain → Ethereum: about $7.59 to deliver and prove on Ethereum, against 1% of $5.
-    const { label, detail } = await pillAt("dir=second-to-first&bridge.amount=5");
+    const { label, detail } = await pillAt(`dir=second-to-first&bridge.amount=5`);
     expect(label).toBe("Small transfer · may not be delivered in a timely manner");
     expect(detail).toBe("Delivery costs about $7.59, more than the 1% ($0.05) you allow. A bot may wait for cheaper gas: raise the cap in the tip drawer, or deliver it yourself.");
   });
@@ -37,7 +38,7 @@ describe("the fee warnings on the Bridge pill, at the sample prices", () => {
   });
 
   it("shows the low fee with its numbers when the cap holds the fee under twice the cost", async () => {
-    const { label, detail } = await pillAt("dir=second-to-first&bridge.amount=1000");
+    const { label, detail } = await pillAt(`dir=second-to-first&bridge.amount=1000`);
     expect(label).toBe("Tip too low · may not be delivered");
     expect(detail).toMatch(/^The fee \(\$10\.00\) is under twice what delivering and proving it should cost \(\$7\.59 now\)/);
   });

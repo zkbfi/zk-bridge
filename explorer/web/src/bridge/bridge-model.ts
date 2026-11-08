@@ -66,7 +66,7 @@ export const nativeTokensOf = (pair: PairConfig): readonly TokenInfo[] =>
     .map((chain) => ({ address: NATIVE_ADDRESS, symbol: chain.nativeSymbol, decimals: 18, side: chain.side, counterpart: null }));
 
 /**
- * The token a choice names, when it is a token of the given side; else the side's first token (the default).
+ * The token a choice names, when it is a token of the given side; else the side's gas token (the default), else its first token.
  *
  * @param choice The form's token value, or undefined.
  * @param tokens Every token of the pair.
@@ -74,7 +74,9 @@ export const nativeTokensOf = (pair: PairConfig): readonly TokenInfo[] =>
  */
 export const tokenFor = (choice: string | undefined, tokens: readonly TokenInfo[], side: ChainSide): TokenInfo | null => {
   const named = tokens.find((token) => choiceOf(token) === choice && token.side === side);
-  return named ?? tokens.find((token) => token.side === side) ?? null;
+  // The default is the gas token of the chain the transfer leaves from (owner, 2026-11-08: "option A, each direction's
+  // gas token"): ETH out of Ethereum, PLS out of PulseChain. Without a wrap route, the first token of that side.
+  return named ?? tokens.find((token) => token.side === side && isNativeToken(token)) ?? tokens.find((token) => token.side === side) ?? null;
 };
 
 /**

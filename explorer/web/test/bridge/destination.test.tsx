@@ -6,6 +6,7 @@ import { Shell } from "../../src/app/Shell";
 import { destinationProblem, LOCK_TIPS } from "../../src/bridge/destination";
 import { WalletContext } from "../../src/wallet/wallet-port";
 import { connectedWallet, renderWithWallet, walletWrapper } from "../app/support";
+import { USDC_QUERY } from "./token-link";
 
 // The owner (quotes 96–97): the To row is locked to the connected wallet by default; unlocked, its right part is the
 // address field in place, and the address floats free of the wallet.
@@ -17,7 +18,7 @@ beforeEach(() => {
 });
 
 const at = async (query: string) => {
-  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
+  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}&${query}`);
   renderWithWallet(<Shell />, { wallet: connectedWallet() });
   await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
 };
@@ -72,7 +73,7 @@ describe("the destination row", () => {
   });
 
   it("a locked row follows the connected wallet; an unlocked one keeps the typed address when the wallet changes", async () => {
-    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=500`);
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}&bridge.amount=500`);
     const first = connectedWallet();
     const second = connectedWallet({ account: "0x1111111111111111111111111111111111111111" });
     const ui = (wallet: typeof first) => (

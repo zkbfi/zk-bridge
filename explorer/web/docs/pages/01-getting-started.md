@@ -39,7 +39,7 @@ The app opens on the Bridge screen.
 
 1. Tap **Connect wallet** and choose your wallet.
 2. Tap the chain beside **From** to choose the direction, for example Ethereum → PulseChain. The round button between the two halves of the screen swaps the direction.
-3. Tap the token to choose another. Search finds any token the bridge knows, and a token address you paste.
+3. The token starts as the gas token of the chain you send from: ETH out of Ethereum, PLS out of PulseChain. Tap the token to choose another. Search finds any token the bridge knows, and a token address you paste.
 4. Type the amount. Under it you see its value in dollars, your balance and **MAX**.
 5. Read the delivery control under the amount: who delivers, the fee, your gas level and the time to arrival. The page Fees explained covers each part.
 6. Check the **To** row. It is locked to your wallet. To send to another address, tap the lock and type the address in its place.

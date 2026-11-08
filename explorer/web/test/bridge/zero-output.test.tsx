@@ -1,13 +1,14 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { StrictMode } from "react";
 import { beforeEach, describe, expect, it } from "vitest";
-import { FIXTURE_PAIR } from "@terminal/data/fixtures";
+import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
 import { parseLocation, resolvePair } from "../../src/app/route";
 import type { Services } from "../../src/app/services";
-import { nativeTokensOf, tokenFor } from "../../src/bridge/bridge-model";
+import { choiceOf, nativeTokensOf, tokenFor } from "../../src/bridge/bridge-model";
 import { buildTestServices } from "../render";
 import { disconnectedWallet, renderWithWallet } from "../app/support";
+import { USDC_QUERY } from "./token-link";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -39,7 +40,7 @@ describe("the owner's link, #/bridge/eth-pls?bridge.amount=1, with no wallet", (
   });
 
   it("estimates the fee without a wallet: the output is the amount less the fee, and the fee line is filled", async () => {
-    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=1`);
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}&bridge.amount=1`);
     const { container } = renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
     await within(await screen.findByRole("region", { name: /^You send/ })).findByRole("button", { name: /^Token:/ });
     // At the sample prices 1 USDC is $1: the default fee wants twice the $0.025 proof cost, and the 1% cap holds it at $0.01.
@@ -49,7 +50,7 @@ describe("the owner's link, #/bridge/eth-pls?bridge.amount=1, with no wallet", (
   });
 
   it("shows the amount with 'fee unknown' when the estimate cannot be read, never 0", async () => {
-    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=1`);
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}&bridge.amount=1`);
     renderWithWallet(<Shell />, {
       wallet: disconnectedWallet(),
       services: servicesWith({
@@ -64,13 +65,54 @@ describe("the owner's link, #/bridge/eth-pls?bridge.amount=1, with no wallet", (
 });
 
 describe("the default token", () => {
-  it("is the first known token, else the native coin where the wrap route exists, else nothing", () => {
+  const withTokens = [...FIXTURE_TOKENS, ...nativeTokensOf(FIXTURE_PAIR)];
+
+  it("is the gas token of the side the transfer leaves from: ETH out of the first chain, PLS out of the second", () => {
+    expect(tokenFor(undefined, withTokens, "first")?.symbol).toBe("ETH");
+    expect(tokenFor(undefined, withTokens, "second")?.symbol).toBe("PLS");
+    // The native coins come last in the list, so this is not the first token of the side.
+    expect(withTokens.find((token) => token.side === "first")?.symbol).not.toBe("ETH");
+  });
+
+  it("is the first token of the side when the pair has no wrap route", () => {
+    const noWrap = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, wrappedNative: null } } };
+    const list = [...FIXTURE_TOKENS, ...nativeTokensOf(noWrap)];
+    expect(tokenFor(undefined, list, "first")).toBe(FIXTURE_TOKENS.find((token) => token.side === "first"));
+    expect(tokenFor(undefined, list, "second")?.symbol).toBe("PLS");
+  });
+
+  it("is nothing when the side has no token at all", () => {
+    expect(tokenFor(undefined, [], "first")).toBeNull();
+  });
+
+  it("gives way to a token the form names", () => {
+    const usdc = FIXTURE_TOKENS.find((token) => token.side === "first")!;
+    expect(tokenFor(choiceOf(usdc), withTokens, "first")).toBe(usdc);
+    expect(tokenFor("first:native", withTokens, "first")?.symbol).toBe("ETH");
+  });
+
+  it("lists the native coins of the pair, one per wrap route", () => {
     const natives = nativeTokensOf(FIXTURE_PAIR);
     expect(natives.map((token) => `${token.side}:${token.symbol}`)).toEqual(["first:ETH", "second:PLS"]);
-    expect(tokenFor(undefined, natives, "second")?.symbol).toBe("PLS");
-    expect(tokenFor("first:native", natives, "first")?.symbol).toBe("ETH");
     const noWrap = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, wrappedNative: null } } };
     expect(nativeTokensOf(noWrap).map((token) => token.symbol)).toEqual(["PLS"]);
+  });
+
+  it("opens the Bridge screen on ETH when sending from the first chain, even though bridged tokens exist", async () => {
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}`);
+    renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
+    expect(await within(await screen.findByRole("region", { name: /^You send/ })).findByRole("button", { name: /^Token: ETH/ })).toBeInTheDocument();
+  });
+
+  it("opens on PLS when the link sends from the second chain, and on the named token when the link names one", async () => {
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?dir=second-to-first`);
+    const first = renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
+    expect(await within(await screen.findByRole("region", { name: /^You send/ })).findByRole("button", { name: /^Token: PLS/ })).toBeInTheDocument();
+    first.unmount();
+    const usdc = FIXTURE_TOKENS.find((token) => token.side === "first")!;
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.token=${encodeURIComponent(choiceOf(usdc))}`);
+    renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
+    expect(await within(await screen.findByRole("region", { name: /^You send/ })).findByRole("button", { name: new RegExp(`^Token: ${usdc.symbol}`) })).toBeInTheDocument();
   });
 });
 
