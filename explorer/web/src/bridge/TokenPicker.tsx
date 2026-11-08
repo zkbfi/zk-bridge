@@ -56,7 +56,7 @@ export const pickerRows = (input: {
     if (query !== "") return token.symbol.toLowerCase().includes(query) || token.address.toLowerCase().includes(query);
     if (isNativeToken(token) || !known(token.side)) return true;
     const balance = balanceOf(token, input.snapshots);
-    return (balance !== null && balance > 0n) || input.used?.has(keyOf(token)) === true || token === input.selected;
+    return (balance !== null && balance > 0n) || input.used?.has(keyOf(token)) === true || keyOf(token) === keyOf(input.selected);
   });
 };
 
@@ -81,7 +81,7 @@ const BridgeGlyph = () => (
  * The token picker (owner, rounds 3 to 7). On phones it rises from the bottom edge, full width; on desktop it is a
  * centred modal. The search is a 52 px orange band like the amount band, no pill and no top border, with a 52×52
  * close square of the same orange set off by a dark rule on its left. Tabs: an "all chains" icon, then each chain's
- * icon (no names). Rows: the token icon with its ORIGIN chain's badge, the symbol, the unit price under it, and the
+ * icon (no names); it opens on the sending chain's tab. Rows: the token icon with its ORIGIN chain's badge, the symbol, the unit price under it, and the
  * balance on the right. An Omnibridge copy carries a bridge icon whose tooltip explains the double-wrap risk and links
  * to the native token. The selected row is lit with a left accent bar that never shifts content. No helper copy.
  *
@@ -90,7 +90,10 @@ const BridgeGlyph = () => (
 export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () => null, omnibridgeNativeOf = () => null, resolveCustom, onPick, onClose }: TokenPickerProps) => {
   const { pair } = useServices();
   const [query, setQuery] = useState("");
-  const [tab, setTab] = useState<Tab>("all");
+  // The picker opens on the chain the transfer leaves from, so every row offered is a token of the current direction
+  // (rc17: after a flip to PulseChain the list still offered Sepolia's SepETH). The "all chains" tab lists both chains,
+  // each row badged with its own chain; picking a row of the other chain sends from that chain instead.
+  const [tab, setTab] = useState<Tab>(selected.side);
   const [focused, setFocused] = useState<string | null>(null);
   const [tip, setTip] = useState<string | null>(null);
   const [custom, setCustom] = useState<TokenInfo | "loading" | "none" | null>(null);
@@ -165,7 +168,7 @@ export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () =>
                 key={key}
                 role="option"
                 className="zb-m-row zb-m-tall"
-                aria-selected={token === selected}
+                aria-selected={key === keyOf(selected)}
                 data-active={index === active || focused === key}
                 onClick={() => onPick(token)}
                 onMouseEnter={() => setActive(index)}

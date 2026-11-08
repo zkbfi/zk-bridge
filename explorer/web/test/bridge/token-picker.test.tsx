@@ -46,10 +46,41 @@ describe("pickerRows", () => {
   });
 });
 
+describe("the sending chain", () => {
+  // rc17: after a flip from Sepolia's native coin to PulseChain, the picker still offered SepETH for the new direction.
+  const coins = nativeTokensOf(FIXTURE_PAIR);
+  const eth = coins.find((coin) => coin.side === "first")!;
+  const pls = coins.find((coin) => coin.side === "second")!;
+  const symbols = (): readonly string[] => screen.getAllByRole("option").map((option) => option.querySelector("b")?.textContent ?? "");
+
+  it("opens on the sending chain's tab, so every row offered is a token of the current direction", () => {
+    renderWithWallet(<TokenPicker tokens={[USDC, NATIVE, ...coins]} selected={pls} snapshots={[]} onPick={vi.fn()} onClose={vi.fn()} />, { wallet: connectedWallet() });
+    expect(screen.getByRole("tab", { selected: true })).toHaveAttribute("aria-label", FIXTURE_PAIR.second.name);
+    expect(symbols()).toEqual(["WETH", pls.symbol]);
+    expect(screen.getByRole("option", { selected: true }).querySelector("b")?.textContent).toBe(pls.symbol);
+  });
+
+  it("the all-chains tab lists both chains, each row for its own chain, and only the sending chain's token is selected", async () => {
+    const onPick = vi.fn();
+    renderWithWallet(<TokenPicker tokens={[USDC, NATIVE, ...coins]} selected={pls} snapshots={[]} onPick={onPick} onClose={vi.fn()} />, { wallet: connectedWallet() });
+    await userEvent.click(screen.getByRole("tab", { name: "All chains" }));
+    expect(screen.getAllByRole("option", { selected: true })).toHaveLength(1);
+    expect(symbols()).toEqual(expect.arrayContaining([eth.symbol, pls.symbol]));
+    await userEvent.click(screen.getAllByRole("option").find((option) => option.querySelector("b")?.textContent === eth.symbol)!);
+    expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ side: "first", symbol: eth.symbol }));
+  });
+
+  it("keeps the selected token listed by its chain and address, not only by identity", () => {
+    const copy = { ...USDC };
+    const rows = pickerRows({ tokens: [USDC, NATIVE], snapshots: [okSnapshot("first"), okSnapshot("second")], query: "", tab: "all", selected: copy });
+    expect(rows.map((row) => row.symbol)).toEqual(["USDC"]);
+  });
+});
+
 describe("the Omnibridge mark", () => {
   it("is a bridge icon after the symbol whose tooltip explains the double wrap and jumps to the native token", async () => {
     renderWithWallet(
-      <TokenPicker tokens={[USDC, NATIVE, OMNI]} selected={USDC} snapshots={[]} used={new Set(["second:0x2000000000000000000000000000000000000002"])} omnibridgeNativeOf={(candidate) => (candidate === OMNI ? NATIVE : null)} onPick={vi.fn()} onClose={vi.fn()} />,
+      <TokenPicker tokens={[USDC, NATIVE, OMNI]} selected={NATIVE} snapshots={[]} used={new Set(["second:0x2000000000000000000000000000000000000002"])} omnibridgeNativeOf={(candidate) => (candidate === OMNI ? NATIVE : null)} onPick={vi.fn()} onClose={vi.fn()} />,
       { wallet: connectedWallet() },
     );
     const mark = screen.getByRole("button", { name: "Came over the Omnibridge" });
