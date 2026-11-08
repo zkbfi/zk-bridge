@@ -24,6 +24,9 @@ import { ActionsContext } from "./actions-context";
 import { resolvePair } from "./route";
 import { bridgeLinkedFields, formatLocation, linkNamesNativeOldWay, formatRoute, linkedFields, NO_OVERLAY, parseLocation, resolveHome, routeTitle, type BridgeQuery, type Overlay, type PageLocation, type Route } from "./route";
 import { useServices } from "./services";
+import { Footer } from "./Footer";
+import { releaseInfo } from "./release-version";
+import { SOCIAL_LINKS } from "./social-links";
 import { SettingsDialog } from "./SettingsDialog";
 import { SourceBadge } from "./SourceBadge";
 import { useThemeChoice } from "./theme";
@@ -248,13 +251,14 @@ export const Shell = () => {
 
   return (
     <ActionsContext.Provider value={actionsPort}>
-      <Box className="zb" minHeight="100vh" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
+      <Box className="zb" onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         <Header
           page={route.name === "message" ? "Explore" : routeTitle(route)}
           homeHref={formatRoute({ name: "bridge", pairId: pair.id, dir: "first-to-second" })}
           screenHref={(screen) => (screen === "Bridge" ? formatRoute({ name: "bridge", pairId: pair.id, dir: "first-to-second" }) : `#/${screen.toLowerCase()}`)}
           onSearch={openPalette}
         />
+        <div className="zb-body">
         {route.name === "activity" ? (
           <div key="activity" className={slideClass}>
             <ActivityScreen />
@@ -307,6 +311,8 @@ export const Shell = () => {
           <Box marginTop="3">{renderRoute(route, navigate, update)}</Box>
         </Box>
         )}
+        </div>
+        <Footer release={releaseInfo(import.meta.env.VITE_ZKB_VERSION, configuration.dataMode === "fixture")} links={SOCIAL_LINKS} />
         {paletteOpen ? <CommandPalette recent={recent} walletConnected={wallet.status === "connected"} onSelect={select} onClose={() => setPaletteOpen(false)} /> : null}
         {dialog === null ? null : (
           <ActionDialog

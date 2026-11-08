@@ -78,7 +78,7 @@ version="${RELEASE_VERSION:-0.0.0-${commit:0:7}}"
 mkdir -p "$release/archives" "$release/downloads"
 
 echo "== sites"
-(cd "$repository_root/explorer" && pnpm --filter @zk-bridge/web build) </dev/null
+(cd "$repository_root/explorer" && VITE_ZKB_VERSION="$version" pnpm --filter @zk-bridge/web build) </dev/null
 (cd "$repository_root/explorer/landing" && LANDING_CONFIG="$landing_config" node scripts/build.ts) </dev/null
 "${cli[@]}" pack "$repository_root/explorer/web/dist" "$release/archives/dapp.car" </dev/null
 "${cli[@]}" pack "$repository_root/explorer/landing/dist" "$release/archives/landing.car" </dev/null

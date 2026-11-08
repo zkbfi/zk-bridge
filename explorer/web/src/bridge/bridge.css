@@ -239,10 +239,23 @@
 
 .zb {
   min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
   background: var(--zb-page);
   color: var(--zb-ink);
   font: var(--zb-step-0)/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+/* Sticky footer: the body takes the spare height, so the footer sits at the bottom of a short page and below a long one. */
+.zb-body { flex: 1 0 auto; }
+.zb-footer { flex: none; margin-top: 32px; border-top: 1px solid var(--zb-pill-edge); color: var(--zb-muted); font-size: var(--zb-step--1); }
+.zb-footer-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 52px; padding-block: 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+.zb-footer a { color: inherit; text-decoration: none; }
+.zb-footer a:hover { color: var(--zb-ink); text-decoration: underline; }
+.zb-footer-version { font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.zb-footer-links { display: flex; align-items: center; gap: 4px; list-style: none; margin: 0; padding: 0; }
+.zb-footer-links a { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 999px; }
+.zb-footer-links a:hover { background: var(--zb-m-sel); text-decoration: none; }
 :where(.zb) * { box-sizing: border-box; }
 :where(.zb) button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 .zb button:disabled { cursor: not-allowed; }
