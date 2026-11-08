@@ -4,7 +4,7 @@
 # Only the landing page goes to Pages. The dapp (docs included, at #/docs) is published on IPFS only.
 # The signed release on IPFS is the source of truth: the mirror is the landing archive of that release, unpacked,
 # plus version.json and its signature, so the page checks the same signed manifest wherever it is loaded, and the
-# signed release log (releases-log.json and its signature) next to them.
+# signed release log (releases-log.json and its signature) next to them, and llms.txt, llm.txt and llms-full.txt.
 #
 # Usage:   script/release/publish-pages.sh <release-directory>
 #
@@ -56,6 +56,8 @@ if [ -f "$release/releases-log.json" ]; then
 else
   echo "the release has no releases-log.json: the mirror serves none" >&2
 fi
+# llms.txt (llmstxt.org), llm.txt and llms-full.txt, written from the verified version.json: they name the CID of the dapp.
+node "$repository_root/explorer/docs/scripts/build-landing-llms.ts" "$release" "$RELEASE_CHANNEL" "$site"
 # The configuration lives outside the site, so it is never published.
 config_dir="$(mktemp -d)"
 trap 'rm -rf "$site" "$config_dir"' EXIT
