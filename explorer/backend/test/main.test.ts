@@ -36,16 +36,15 @@ function workspace(): string {
 }
 
 describe("configuration", () => {
-  it("applies the defaults of the brief: 10 requests a minute, 120 seconds, 60 seconds, the forwarded header off", () => {
+  it("applies the defaults: 10 requests a minute, 60 seconds after a failure, a $5 GPU budget, the forwarded header off", () => {
     const config = makeConfig();
     expect(config.limits).toEqual({
       requestsPerCallerPerMinute: 10,
       requestsPerUnknownCallerPerMinute: 2,
       globalRequestsPerMinute: 120,
       requestRetentionHours: 24,
-      secondsBetweenJobsPerDirection: 120,
       secondsBeforeRetryAfterFailure: 60,
-      jobsPerDirectionPerDay: 96,
+      gpuBudgetUsdPerDirectionPerDay: 5,
       keepAliveSeconds: 43_200,
       pendingProofStaleSeconds: 600,
     });

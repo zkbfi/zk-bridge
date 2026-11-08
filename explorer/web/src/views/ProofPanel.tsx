@@ -6,6 +6,7 @@ import { proofStartProblem } from "@zk-bridge/shared";
 import { TransactionDialog } from "../actions/TransactionDialog";
 import { useHeads } from "../app/queries";
 import { useServices } from "../app/services";
+import { proofRequestView, type ProofRequestView } from "../bridge/proof-request";
 import type { MessageDetail } from "../data/message-detail";
 import type { WebStep } from "../tx/bridge-steps";
 import { DataRow, Mono, Notice, Panel } from "../ui/primitives";
@@ -32,18 +33,17 @@ import {
 const POLL_MILLISECONDS = 15_000;
 const REQUEST_POLL_MILLISECONDS = 5_000;
 
-/** What the request button did. */
+/** What the request button did: the words for the answer, and the request to follow when the backend took it. */
 type RequestState =
   | { readonly kind: "idle" }
   | { readonly kind: "sending" }
-  | { readonly kind: "accepted"; readonly requestId: string }
-  | { readonly kind: "rate-limited"; readonly retryAfterSeconds: number }
-  | { readonly kind: "nothing-to-prove" }
-  | { readonly kind: "cannot-check"; readonly retryAfterSeconds: number }
-  | { readonly kind: "failed" };
+  | { readonly kind: "answered"; readonly view: ProofRequestView; readonly requestId: string | null };
 
 /** What the post button did. */
 type PostState = { readonly kind: "idle" } | { readonly kind: "checking" } | { readonly kind: "blocked"; readonly reason: string };
+
+/** The notice of each kind of answer. */
+const NOTICE_TONE = { ok: "info", wait: "warning", error: "error" } as const;
 
 const WhyOff = ({ availability, id }: { readonly availability: Availability; readonly id: string }) =>
   availability.enabled ? null : (
@@ -91,7 +91,7 @@ export const ProofPanel = ({ detail }: { readonly detail: MessageDetail }) => {
   const [reviewSteps, setReviewSteps] = useState<readonly WebStep[] | null>(null);
   const [skipped, setSkipped] = useState<readonly string[]>([]);
 
-  const requestId = requestState.kind === "accepted" ? requestState.requestId : null;
+  const requestId = requestState.kind === "answered" ? requestState.requestId : null;
   const requestStatus = useQuery({
     queryKey: ["request-status", requestId],
     queryFn: () => (client as NonNullable<typeof client>).requestStatus(requestId as string),
@@ -106,14 +106,8 @@ export const ProofPanel = ({ detail }: { readonly detail: MessageDetail }) => {
   const requestProof = async (): Promise<void> => {
     // The button is off while there is no backend, while a request is sending and once one is accepted.
     setRequestState({ kind: "sending" });
-    try {
-      const answer = await (client as NonNullable<typeof client>).requestProof({ pair: pair.id, direction, reason: "message", messageId: detail.id as Hex });
-      if (!("refused" in answer)) setRequestState({ kind: "accepted", requestId: answer.requestId });
-      else if (answer.refused === "nothing-to-prove") setRequestState({ kind: "nothing-to-prove" });
-      else setRequestState({ kind: answer.refused, retryAfterSeconds: answer.retryAfterSeconds });
-    } catch {
-      setRequestState({ kind: "failed" });
-    }
+    const answer = await (client as NonNullable<typeof client>).requestProof({ pair: pair.id, direction, reason: "message", messageId: detail.id as Hex }).catch(() => null);
+    setRequestState({ kind: "answered", view: proofRequestView(answer, { destinationName: pair[destinationSide].name, now: Date.now() }), requestId: answer !== null && !("refused" in answer) ? answer.requestId : null });
   };
 
   const postUpdate = async (): Promise<void> => {
@@ -185,7 +179,7 @@ export const ProofPanel = ({ detail }: { readonly detail: MessageDetail }) => {
 
         <Flex gap="4" flexWrap="wrap" alignItems="flex-start">
           <Stack gap="1" maxWidth="18rem">
-            <Button size="sm" variant="outline" disabled={!requestAvailability.enabled || requestState.kind === "sending" || requestState.kind === "accepted"} aria-describedby="why-request-off" onClick={() => void requestProof()}>
+            <Button size="sm" variant="outline" disabled={!requestAvailability.enabled || requestState.kind === "sending" || requestId !== null} aria-describedby="why-request-off" onClick={() => void requestProof()}>
               Request a proof
             </Button>
             <WhyOff availability={requestAvailability} id="why-request-off" />
@@ -199,17 +193,10 @@ export const ProofPanel = ({ detail }: { readonly detail: MessageDetail }) => {
         </Flex>
 
         {requestState.kind === "sending" ? <Text fontSize="sm">Sending the request…</Text> : null}
-        {requestState.kind === "failed" ? <Notice tone="error">The backend did not accept the request. Try again later.</Notice> : null}
-        {requestState.kind === "rate-limited" ? <Notice tone="warning">The backend limits requests. Try again in {requestState.retryAfterSeconds} seconds.</Notice> : null}
-        {requestState.kind === "nothing-to-prove" ? (
-          <Notice tone="info">The backend sees no message waiting for a proof, so it starts no proving run. Its chain indexer may not have seen this message as final yet.</Notice>
-        ) : null}
-        {requestState.kind === "cannot-check" ? (
-          <Notice tone="warning">The backend could not check whether a proof is needed. Try again in {requestState.retryAfterSeconds} seconds.</Notice>
-        ) : null}
-        {requestState.kind === "accepted" ? (
+        {requestState.kind === "answered" ? <Notice tone={NOTICE_TONE[requestState.view.tone]}>{requestState.view.text}</Notice> : null}
+        {requestId !== null ? (
           <Box data-testid="request-status">
-            <DataRow label="Request"><Mono>{requestState.requestId}</Mono></DataRow>
+            <DataRow label="Request"><Mono>{requestId}</Mono></DataRow>
             {requestStatus.data === undefined && requestStatus.error === null ? <Text fontSize="sm" color="fg.muted">Asking for the status…</Text> : null}
             {requestStatus.data === undefined ? null : (
               <>

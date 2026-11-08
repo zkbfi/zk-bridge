@@ -112,6 +112,35 @@ export function recentCostlyJobs(storage: Storage, direction: ProofDirection, si
   return { count: row.total, oldest: row.oldest };
 }
 
+/**
+ * The newest finalized slot a job of the direction proves to, or null for none: the slot the prover reported, else the
+ * one planned for it. A failed job is left out (it proved nothing; the retry wait after a failure applies instead).
+ * A new job must be for a newer finality: one job per finality and direction.
+ */
+export function lastJobTargetSlot(storage: Storage, direction: ProofDirection): number | null {
+  const row = storage.database
+    .prepare("SELECT max(max(coalesce(CAST(new_slot AS INTEGER), -1), coalesce(CAST(planned_new_slot AS INTEGER), -1))) AS slot FROM jobs WHERE direction = ? AND status <> 'failed'")
+    .get(direction) as { slot: number | null };
+  return row.slot === null || row.slot < 0 ? null : row.slot;
+}
+
+/**
+ * The worker seconds of each job of the direction whose proof came back after `since`: the request on the worker
+ * (`worker_total_ms`, else `remote_ms`, else from the job's start to its proof) and, for a job that met a cold worker,
+ * its wait for the worker. They price the GPU budget.
+ */
+export function recentJobSeconds(storage: Storage, direction: ProofDirection, since: number): Array<{ provedAt: number; seconds: number }> {
+  type Row = { proved_at: number; started_at: number | null; worker_total_ms: number | null; remote_ms: number | null; wait_worker_ms: number | null; not_ready_count: number | null };
+  const rows = storage.database
+    .prepare("SELECT proved_at, started_at, worker_total_ms, remote_ms, wait_worker_ms, not_ready_count FROM job_timings WHERE direction = ? AND proved_at > ?")
+    .all(direction, since) as Row[];
+  return rows.map((row) => {
+    const request = row.worker_total_ms ?? row.remote_ms ?? row.proved_at - (row.started_at ?? row.proved_at);
+    const startUp = (row.not_ready_count ?? 0) > 0 ? (row.wait_worker_ms ?? 0) : 0;
+    return { provedAt: row.proved_at, seconds: (request + startUp) / 1000 };
+  });
+}
+
 /** A job with the slots the watcher planned for it (null for a request from outside). */
 export type PlannedJob = Job & { readonly plannedStartSlot: string | null; readonly plannedNewSlot: string | null };
 

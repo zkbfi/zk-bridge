@@ -53,7 +53,7 @@ describe("the proofs the backend has, with where they are (2026-11-01)", () => {
 
 describe("the pipeline of a direction (2026-11-01)", () => {
   it("an idle direction: nothing waits, nothing runs", () => {
-    expect(buildPipeline(base)).toEqual({ direction: "first-to-second", now: NOW, batch: null, job: null, latestJob: null, latestProof: null, head: null, decision: null });
+    expect(buildPipeline(base)).toEqual({ direction: "first-to-second", now: NOW, batch: null, job: null, latestJob: null, latestProof: null, head: null, decision: null, deposits: null });
   });
 
   it("a batch that waits, with its count, trigger, expected time and fallback (the wire keeps max-wait and fallbackAt)", () => {
@@ -83,5 +83,19 @@ describe("the pipeline of a direction (2026-11-01)", () => {
     const bare = buildPipeline({ ...base, activeJob: job({ status: "queued" }), head: { chainId: 369, trackedChainId: 1, storedHeadSlot: null } });
     expect(bare.job).not.toHaveProperty("eta");
     expect(bare.head).toEqual({ slot: null, finalizedSlot: null, lastUpdateAt: null, lagSeconds: null });
+  });
+});
+
+describe("the pipeline, while the destination bridge waits for deposits to open (2026-11-07)", () => {
+  const decided = (overrides: Partial<WatchDecision>): WatchDecision => ({ at: 1, finalizedSlot: 10, headSlot: 5, genesisTime: 0, secondsPerSlot: 12, due: false, why: "nothing-due", detail: "d", ...overrides });
+
+  it("shows that the direction waits for deposits and that a proof is due for it", () => {
+    const due = buildPipeline({ ...base, decision: decided({ due: true, why: "deposits-locked", deposits: { open: false, remoteHasHead: true } }) });
+    expect(due.deposits).toEqual({ open: false, remoteHasHead: true, waiting: true, proofDue: true });
+    expect(due.decision?.why).toBe("deposits-locked");
+    // Locked, but the source light client has no head yet: it waits, and no proof is due for it.
+    expect(buildPipeline({ ...base, decision: decided({ deposits: { open: false, remoteHasHead: false } }) }).deposits).toEqual({ open: false, remoteHasHead: false, waiting: true, proofDue: false });
+    expect(buildPipeline({ ...base, decision: decided({ deposits: { open: true, remoteHasHead: null } }) }).deposits).toEqual({ open: true, remoteHasHead: null, waiting: false, proofDue: false });
+    expect(buildPipeline({ ...base, decision: decided({}) }).deposits).toBeNull();
   });
 });

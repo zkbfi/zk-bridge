@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { DEFAULT_POLICY, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
 import { USD, WAD } from "@zk-bridge/shared";
 import type { BatchRule, Economics } from "../src/watch/batch.ts";
-import { MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE, decideProof, expectedFinalityAt, handoffKey, slotAtTime, warmupPlan, type WaitingMessage } from "../src/watch/decide.ts";
+import { DEPOSITS_LOCKED_RETRY_SECONDS, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE, decideProof, urgentReasons, expectedFinalityAt, handoffKey, slotAtTime, warmupPlan, type WaitingMessage } from "../src/watch/decide.ts";
 
 // A PulseChain-like clock: 10 s slots, 32 slots per epoch, 8192 slots per period, genesis at 0 for easy numbers.
 const PERIOD = 8192;
@@ -423,5 +423,84 @@ describe("warmupPlan with a minimum interval", () => {
     expect(due.targets).toEqual([{ at: at(NOW_SLOT), why: "message", keys: [hex("a")] }]);
     expect(warmupPlan({ ...base, messages: [], batch: { rule: WAIT, economics: { kind: "unknown", why: "x" }, lastProofAt: at(NOW_SLOT) - 5 * 3600 } })).toEqual({ targets: [], live: new Set() });
     expect(warmupPlan({ ...base, messages: [], batch: { rule: WAIT, economics: { kind: "unknown", why: "x" }, lastProofAt: null } })).toEqual({ targets: [], live: new Set() });
+  });
+});
+
+describe("urgent reasons: a proof before the minimum interval ends (2026-11-07)", () => {
+  // Owner: "3600 is fine for a minimum, but we should have code in place that can say, oh, yes, we should create a
+  // proof for this situation - especially when we are waiting for deposits to be enabled".
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
+  const unknown: Economics = { kind: "unknown", why: "testnet tokens have no price" };
+  const now = at(NOW_SLOT);
+  const locked = { open: false, remoteHasHead: true } as const;
+  const hex = (digit: string) => `0x${digit.repeat(64)}`;
+
+  describe("urgentReasons", () => {
+    it("deposits-locked: the destination bridge is locked and the light client on the source holds a head", () => {
+      expect(urgentReasons({ nowSeconds: now, deposits: locked })).toEqual(["deposits-locked"]);
+      expect(urgentReasons({ nowSeconds: now, deposits: locked, lastProofAt: null })).toEqual(["deposits-locked"]);
+      expect(urgentReasons({ nowSeconds: now, deposits: locked, lastProofAt: now - DEPOSITS_LOCKED_RETRY_SECONDS })).toEqual(["deposits-locked"]);
+    });
+
+    it("deposits-locked waits 10 minutes after the last proof while the bridge stays locked (an opening that failed waits for a newer head)", () => {
+      expect(DEPOSITS_LOCKED_RETRY_SECONDS).toBe(600);
+      expect(urgentReasons({ nowSeconds: now, deposits: locked, lastProofAt: now - DEPOSITS_LOCKED_RETRY_SECONDS + 1 })).toEqual([]);
+    });
+
+    it("deposits-locked does not apply to an open bridge, an unknown one, or while the source light client has no head", () => {
+      expect(urgentReasons({ nowSeconds: now })).toEqual([]);
+      expect(urgentReasons({ nowSeconds: now, deposits: { open: true, remoteHasHead: true } })).toEqual([]);
+      expect(urgentReasons({ nowSeconds: now, deposits: { open: null, remoteHasHead: true } })).toEqual([]);
+      // The opening proves a state of S in which the light client on S holds a head: without one, an update cannot open D.
+      expect(urgentReasons({ nowSeconds: now, deposits: { open: false, remoteHasHead: false } })).toEqual([]);
+      expect(urgentReasons({ nowSeconds: now, deposits: { open: false, remoteHasHead: null } })).toEqual([]);
+    });
+
+    it("requested: a user asked through POST /requests", () => {
+      expect(urgentReasons({ nowSeconds: now, requested: true })).toEqual(["requested"]);
+      expect(urgentReasons({ nowSeconds: now, requested: false })).toEqual([]);
+      expect(urgentReasons({ nowSeconds: now, requested: true, deposits: locked })).toEqual(["deposits-locked", "requested"]);
+    });
+  });
+
+  describe("decideProof", () => {
+    it("proves for locked deposits at the first new finality, with no waiting message and the last proof ten minutes ago", () => {
+      const decision = decide({ urgent: { deposits: locked, lastProofAt: now - 600 } });
+      expect(decision).toMatchObject({ due: true, why: "deposits-locked", messageIds: [] });
+      expect(decision).not.toHaveProperty("riders");
+      expect(decision.detail).toBe("deposits-locked: the bridge on the destination chain reports deposits closed and the light client on the source chain holds a head; an update of this light client lets the runner open them (the last proof started 600 s ago; the minimum interval does not hold it back)");
+      expect(decide({ urgent: { deposits: locked, lastProofAt: null } }).detail).toContain("(the direction has no proof yet;");
+    });
+
+    it("proves for locked deposits inside the minimum interval of 3600 s, and the waiting messages ride along", () => {
+      const ready = message(FINALIZED - 5, "a");
+      const batch = { rule: WAIT, economics: unknown, lastProofAt: now - 900 };
+      // Without the urgent facts the batch waits for the hour.
+      expect(decide({ messages: [ready], batch })).toMatchObject({ due: false, why: "min-interval" });
+      const decision = decide({ messages: [ready, message(FINALIZED - 4, "b")], batch, urgent: { deposits: locked, lastProofAt: now - 900 } });
+      expect(decision).toMatchObject({ due: true, why: "deposits-locked", messageIds: [hex("a"), hex("b")], riders: 2 });
+      expect(decision.detail).toMatch(/; 2 waiting messages ride along$/);
+      expect(decide({ messages: [ready], batch, urgent: { deposits: locked, lastProofAt: now - 900 } }).detail).toMatch(/; 1 waiting message rides along$/);
+    });
+
+    it("an open bridge, or a locked one proved for within ten minutes, changes nothing", () => {
+      expect(decide({ urgent: { deposits: { open: true, remoteHasHead: true }, lastProofAt: now - 600 } })).toMatchObject({ due: false, why: "nothing-due" });
+      expect(decide({ urgent: { deposits: locked, lastProofAt: now - 300 } })).toMatchObject({ due: false, why: "nothing-due" });
+    });
+
+    it("still needs a newer finality, enough signatures and no pending proof from the head", () => {
+      const urgent = { deposits: locked, lastProofAt: null };
+      expect(decide({ urgent, finalizedSlot: HEAD })).toMatchObject({ due: false, why: "not-newer" });
+      expect(decide({ urgent, participants: MIN_PARTICIPANTS - 1 })).toMatchObject({ due: false, why: "insufficient-signatures" });
+      expect(decide({ urgent, pendingProof: { startSlot: HEAD, newSlot: FINALIZED - 3 } })).toMatchObject({ due: false, why: "proof-pending" });
+      // A stale pending proof no longer holds it back, and is named.
+      expect(decide({ urgent, pendingProof: { startSlot: HEAD, newSlot: FINALIZED - 3, since: 0 }, pendingStaleSeconds: 600 })).toMatchObject({ due: true, why: "deposits-locked", stalePending: { startSlot: HEAD } });
+    });
+
+    it("a keep-alive that is due comes first: its proof serves the opening too", () => {
+      const head = 100 * PERIOD + 10;
+      const nowSlot = head + 13 * 360;
+      expect(decide({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64, urgent: { deposits: locked, lastProofAt: null } })).toMatchObject({ due: true, why: "keep-alive" });
+    });
   });
 });

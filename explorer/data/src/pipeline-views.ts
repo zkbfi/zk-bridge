@@ -100,6 +100,11 @@ export const directionPipelineSchema = z
     head: z.object({ slot: z.number().nullable(), finalizedSlot: z.number().nullable(), lastUpdateAt: z.number().nullable(), lagSeconds: z.number().nullable() }).passthrough().nullable(),
     /** The watcher's latest decision, as the backend logs it (`why`, `detail`, and for a batch its facts). */
     decision: z.object({ at: z.number(), finalizedSlot: z.number(), due: z.boolean(), why: z.string(), detail: z.string() }).passthrough().nullable(),
+    /**
+     * The destination bridge's deposits as the latest decision read them: `waiting` while the bridge waits for an update
+     * of this direction's light client to open, `proofDue` when a proof started for it. Absent from an older backend.
+     */
+    deposits: z.object({ open: z.boolean().nullable(), remoteHasHead: z.boolean().nullable(), waiting: z.boolean(), proofDue: z.boolean() }).passthrough().nullable().optional(),
   })
   .passthrough();
 

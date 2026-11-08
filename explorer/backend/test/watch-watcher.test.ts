@@ -4,7 +4,7 @@ import { DEFAULT_POLICY, type LightClientFacts, type SourceHistory } from "../sr
 import { insertJob, lastProofStartedAt, type Job } from "../src/requests/jobs.ts";
 import type { ProofRequest, SubmitResult } from "../src/requests/service.ts";
 import { openStorage, type Storage } from "../src/storage.ts";
-import { MIN_PARTICIPANTS, expectedFinalityAt } from "../src/watch/decide.ts";
+import { MIN_PARTICIPANTS, expectedFinalityAt, type DepositsFacts } from "../src/watch/decide.ts";
 import { DEFAULT_WARMUP, type WarmupConfig } from "../src/watch/warmup.ts";
 import { createWarmupStore } from "../src/watch/warmup-store.ts";
 import type { FinalityObservation } from "../src/watch/feed.ts";
@@ -66,6 +66,8 @@ function setup(
     storage?: Storage;
     /** A proof job of the direction already started at this time (milliseconds since 1970). */
     lastProofAt?: number;
+    /** The deposits of the destination bridge; absent: the deposit rule is off. */
+    deposits?: () => Promise<DepositsFacts>;
   } = {},
 ) {
   const decisions: WatchDecision[] = [];
@@ -84,7 +86,7 @@ function setup(
   };
   const submitted: ProofRequest[] = [];
   const pings: number[] = [];
-  const reads = { facts: 0, messages: 0, history: 0, economics: 0 };
+  const reads = { facts: 0, messages: 0, history: 0, economics: 0, deposits: 0 };
   let jobs = 0;
   const watcher = createDirectionWatcher({
     pairName: "sepolia-pls943",
@@ -110,6 +112,14 @@ function setup(
     // The jobs table, as the module reads it: each started job below is a row in it.
     readLastProofAt: () => lastProofStartedAt(storage, "first-to-second"),
     readAdmitAfterSeconds: () => state.admitAfter,
+    ...(options.deposits === undefined
+      ? {}
+      : {
+          readDeposits: async () => {
+            reads.deposits += 1;
+            return (options.deposits as () => Promise<DepositsFacts>)();
+          },
+        }),
     readEconomics: async () => {
       reads.economics += 1;
       const economics = options.economics ?? { kind: "unknown", why: "no prices in this test" };
@@ -344,7 +354,7 @@ describe("the direction watcher, when a read or the service refuses", () => {
   });
 
   it("asks again a few times when the indexer does not show the need yet", async () => {
-    const run = setup({ messages: [listed(HEAD + 100)], submit: () => ({ refused: "nothing-to-prove" }) });
+    const run = setup({ messages: [listed(HEAD + 100)], submit: () => ({ refused: "nothing-to-prove", why: "no-need" }) });
     run.watcher.observe(observation(HEAD + 128));
     await run.watcher.settled();
     await vi.advanceTimersByTimeAsync(REFUSED_RETRY_SECONDS * 1000 * (REFUSED_RETRIES + 2));
@@ -1197,5 +1207,70 @@ describe("the direction watcher reports its decisions (2026-11-01)", () => {
     await run.watcher.settled();
     expect(run.decisions).toMatchObject([{ due: false, why: "insufficient-signatures" }]);
     expect(run.decisions[0]).not.toHaveProperty("batch");
+  });
+});
+
+describe("the direction watcher, while the destination bridge waits for deposits to open (2026-11-07)", () => {
+  // Owner: "if the contract needs to be pushed forward in order to accept deposits, then, if a user requests a proof then
+  // it should be given one if the finality is new".
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n };
+  const locked = async (): Promise<DepositsFacts> => ({ open: false, remoteHasHead: true });
+
+  it("proves at the first new finality under the 3600 s rule, with no waiting message, and says why", async () => {
+    const run = setup({ batchRule: WAIT, deposits: locked, recordDecisions: true, lastProofAt: slotStart(HEAD + 200) - 15 * 60_000 });
+    const reading = observation(HEAD + 128);
+    arrive(reading);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    expect(run.submitted).toMatchObject([{ reason: "finality", caller: "watch", urgent: "deposits-locked", target: { startSlot: HEAD, newSlot: HEAD + 128 } }]);
+    expect(run.submitted[0]).not.toHaveProperty("messageId");
+    expect(run.named("proof_due")).toMatchObject([{ why: "deposits-locked" }]);
+    expect(run.decisions.at(-1)).toMatchObject({ due: true, why: "deposits-locked", deposits: { open: false, remoteHasHead: true }, outcome: "job-started" });
+  });
+
+  it("reads the deposits only when nothing else makes a proof due, and records them on the decision", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a")], deposits: locked, recordDecisions: true });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    // A message proof is due anyway (no interval): no chain read.
+    expect(run.reads.deposits).toBe(0);
+    expect(run.submitted).toMatchObject([{ messageId: id("a") }]);
+    expect(run.decisions.at(-1)).not.toHaveProperty("deposits");
+  });
+
+  it("an open bridge proves nothing, and the decision shows it", async () => {
+    const run = setup({ batchRule: WAIT, deposits: async () => ({ open: true, remoteHasHead: null }), recordDecisions: true });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([]);
+    expect(run.decisions.at(-1)).toMatchObject({ due: false, why: "nothing-due", deposits: { open: true, remoteHasHead: null } });
+  });
+
+  it("a failed read of the deposits is logged once, holds nothing back, and is forgotten once a read works", async () => {
+    let fail = true;
+    const run = setup({
+      batchRule: WAIT,
+      recordDecisions: true,
+      deposits: async () => {
+        if (fail) throw new Error("rpc down");
+        return { open: false, remoteHasHead: true };
+      },
+    });
+    for (const slot of [HEAD + 128, HEAD + 160]) {
+      run.watcher.observe(observation(slot));
+      await run.watcher.settled();
+    }
+    expect(run.submitted).toEqual([]);
+    expect(run.named("watch_deposits_read_failed")).toHaveLength(1);
+    expect(run.decisions.at(-1)).toMatchObject({ deposits: { open: null, remoteHasHead: null } });
+    fail = false;
+    run.watcher.observe(observation(HEAD + 192));
+    await run.watcher.settled();
+    expect(run.submitted).toMatchObject([{ urgent: "deposits-locked" }]);
+    fail = true;
+    run.state.active = null;
+    run.watcher.observe(observation(HEAD + 224));
+    await run.watcher.settled();
+    expect(run.named("watch_deposits_read_failed")).toHaveLength(2);
   });
 });

@@ -96,9 +96,12 @@ export const backendConfigSchema = z
         requestsPerUnknownCallerPerMinute: positiveInteger.default(DEFAULT_RATE_LIMITS.requestsPerUnknownCallerPerMinute),
         globalRequestsPerMinute: positiveInteger.default(DEFAULT_RATE_LIMITS.globalRequestsPerMinute),
         requestRetentionHours: positiveInteger.default(DEFAULT_RATE_LIMITS.requestRetentionHours),
-        secondsBetweenJobsPerDirection: positiveInteger.default(DEFAULT_RATE_LIMITS.secondsBetweenJobsPerDirection),
+        /** Deprecated and ignored: one job per new finality replaced it. Accepted so that older files load. */
+        secondsBetweenJobsPerDirection: positiveInteger.optional(),
         secondsBeforeRetryAfterFailure: positiveInteger.default(DEFAULT_RATE_LIMITS.secondsBeforeRetryAfterFailure),
-        jobsPerDirectionPerDay: positiveInteger.default(DEFAULT_RATE_LIMITS.jobsPerDirectionPerDay),
+        /** Absent: the epochs per day of the direction's source chain (225 or 270). */
+        jobsPerDirectionPerDay: positiveInteger.optional(),
+        gpuBudgetUsdPerDirectionPerDay: z.number().min(0).max(100_000).default(DEFAULT_RATE_LIMITS.gpuBudgetUsdPerDirectionPerDay),
         keepAliveSeconds: positiveInteger.default(DEFAULT_RATE_LIMITS.keepAliveSeconds),
         pendingProofStaleSeconds: positiveInteger.default(DEFAULT_RATE_LIMITS.pendingProofStaleSeconds),
       })

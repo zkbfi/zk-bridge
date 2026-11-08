@@ -133,8 +133,9 @@ stores by then, then the newest update) and makes one proof at a time. With `--v
 comes from the chain as it is, so a second run, or a run after a crash, picks up where the chain stands.
 
 The backend's limits apply to every request: it starts a paid job only when its indexer sees a waiting message or a
-head older than `limits.keepAliveSeconds`, at most one job per direction every `secondsBetweenJobsPerDirection`, and
-`jobsPerDirectionPerDay` in total; a request for a direction with an active job joins that job. The march waits out a
+head older than `limits.keepAliveSeconds`, at most one job per direction and new finality, within the daily
+backstop `jobsPerDirectionPerDay` (default: the source chain's epochs per day) and the direction's 24 h GPU budget
+`gpuBudgetUsdPerDirectionPerDay` (a keep-alive goes past the budget); a request for a direction with an active job joins that job. The march waits out a
 limit of up to `--max-retry-wait-seconds` (300) and otherwise defers to the next run. A `nothing-to-prove` refusal
 near the deadline (only possible for a light client without a stored next committee) is an alert: use `--via local`.
 
@@ -166,7 +167,7 @@ systemctl list-units --failed 'zk-bridge-keepalive*'                      # a ru
 A run that exits non-zero leaves the unit failed; `OnFailure=` in the unit can point at a mail or webhook unit.
 `deploy/app-server/keepalive/crontab.example` does the same with cron and `flock`. At most one request per direction
 every three hours reaches the backend, and it pays for a proof only when the head is 12 hours old: about two proofs per
-direction per day, far below `jobsPerDirectionPerDay`.
+direction per day, far below the daily backstop.
 
 ### State on 2026-10-31
 

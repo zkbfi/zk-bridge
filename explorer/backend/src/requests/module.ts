@@ -1,7 +1,11 @@
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
-import { PROOF_DIRECTIONS, type ProofDirection } from "@zk-bridge/shared";
+import { PROOF_DIRECTIONS, secondsPerSlot, type ProofDirection } from "@zk-bridge/shared";
+import { figuresOf } from "../billing.ts";
+import { decisionBoardOf } from "../watch/decisions.ts";
+import { SLOTS_PER_EPOCH } from "../watch/decide.ts";
+import { epochsPerDay } from "./rate-limit.ts";
 import type { BackendModuleContext } from "../module.ts";
 import { UNKNOWN_CALLER, callerKey } from "./caller.ts";
 import { findActiveJob, findLatestJob, getJob, getRequest, type Job } from "./jobs.ts";
@@ -48,6 +52,19 @@ function serviceFor(context: BackendModuleContext): RequestService {
     limits: context.config.limits,
     proverTimeoutMilliseconds: context.config.prover.timeoutSeconds * 1000,
     logger: context.logger,
+    // The newest finality the watcher handled: a request proves to it, once per finality and direction.
+    finality: (direction) => {
+      const decision = decisionBoardOf(context).latest(direction);
+      if (decision === null) return null;
+      return { finalizedSlot: decision.finalizedSlot, headSlot: decision.headSlot, nextAt: decision.at + SLOTS_PER_EPOCH * decision.secondsPerSlot * 1000 };
+    },
+    jobsPerDayOf: (direction) => epochsPerDay(secondsPerSlot(sourceChainOf(context, direction))),
+    // The rate RunPod billed over the last 7 days; the configured price while it cannot be read.
+    readUsdPerHour: async () => {
+      const fallback = context.config.watch.warmup.gpuUsdPerHour;
+      if (context.billing === undefined) return fallback;
+      return figuresOf(await context.billing.read(), context.now()).effectiveUsdPerHour ?? fallback;
+    },
     // The timings of every proof are kept for `GET /benchmarks` and the estimates of `GET /progress`. A job that met a
     // cold worker also tells the warm-up how long a cold start takes.
     onProved: (event) => {
@@ -59,6 +76,12 @@ function serviceFor(context: BackendModuleContext): RequestService {
   });
   services.set(context, created);
   return created;
+}
+
+/** The chain whose finality a direction proves: the first side of the pair for `first-to-second`. */
+function sourceChainOf(context: BackendModuleContext, direction: ProofDirection): number {
+  const [first, second] = context.pair.sides;
+  return (direction === "first-to-second" ? first : second).chainId;
 }
 
 type SocketBindings = { incoming?: { socket?: { remoteAddress?: string } } };
@@ -111,9 +134,12 @@ export function register(app: Hono, context: BackendModuleContext): void {
       if (!("refused" in result)) return request.json(result, 202);
       // The chains need no proof now: no message waits for a head and the head is fresh. Asking again changes nothing.
       // A request from outside never names a target, so it never meets "duplicate"; both mean that asking again changes nothing.
-      if (!("retryAfterSeconds" in result)) return request.json({ error: result.refused }, 409);
+      // `why` (no-need or proof-pending) tells the two apart; JSON leaves it out when absent.
+      if (!("retryAfterSeconds" in result)) return request.json({ error: result.refused, why: (result as { readonly why?: string }).why }, 409);
       request.header("Retry-After", String(result.retryAfterSeconds));
-      return request.json({ error: result.refused, retryAfterSeconds: result.retryAfterSeconds }, result.refused === "cannot-check" ? 503 : 429);
+      // `why` and `detail` (a rate limit only): which limit, in words a page can show. JSON leaves them out when absent.
+      const { why, detail } = result as { readonly why?: string; readonly detail?: string };
+      return request.json({ error: result.refused, retryAfterSeconds: result.retryAfterSeconds, why, detail }, result.refused === "cannot-check" ? 503 : 429);
     },
   );
 
@@ -139,6 +165,9 @@ export function register(app: Hono, context: BackendModuleContext): void {
  */
 export async function start(context: BackendModuleContext): Promise<() => Promise<void>> {
   const service = serviceFor(context);
+  if (context.config.limits.secondsBetweenJobsPerDirection !== undefined) {
+    context.logger.warn("config_deprecated", { key: "limits.secondsBetweenJobsPerDirection", detail: "ignored: a job starts once per new finality of the source chain and direction; remove the key" });
+  }
   service.prune();
   service.recover();
   const timer = setInterval(() => service.prune(), PRUNE_INTERVAL_MILLISECONDS);

@@ -45,6 +45,13 @@ export type Pipeline = {
   /** The destination light client, from the chain indexer; null when it cannot be read. */
   readonly head: { readonly slot: number | null; readonly finalizedSlot: number | null; readonly lastUpdateAt: number | null; readonly lagSeconds: number | null } | null;
   readonly decision: WatchDecision | null;
+  /**
+   * The deposits of the bridge on the destination chain, as the watcher's latest decision read them: `waiting` while
+   * the bridge waits for an update of this direction's light client to open deposits, and `proofDue` when that decision
+   * started a proof for it (`why` "deposits-locked"). Null when the latest decision did not read them (another reason
+   * made a proof due, or no watcher runs).
+   */
+  readonly deposits: { readonly open: boolean | null; readonly remoteHasHead: boolean | null; readonly waiting: boolean; readonly proofDue: boolean } | null;
 };
 
 const tableExists = (storage: Storage, name: string): boolean =>
@@ -137,5 +144,9 @@ export function buildPipeline(input: {
             lagSeconds: head.lagSeconds ?? null,
           },
     decision,
+    deposits:
+      decision?.deposits === undefined
+        ? null
+        : { ...decision.deposits, waiting: decision.deposits.open === false, proofDue: decision.due && decision.why === "deposits-locked" },
   };
 }

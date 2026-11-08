@@ -104,7 +104,7 @@ describe("startWatch", () => {
 
   it("a finality event over the stream starts the proving job within the same turn, with the latency logged", async () => {
     const run = setup();
-    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient } });
+    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true } });
     await flush();
     expect(run.named("watch_started")).toMatchObject([{ directions: ["first-to-second"], sse: true, warmup: true, lead: { seconds: 90, basis: "default" } }]);
     expect(run.named("config_ignored")).toEqual([]);
@@ -138,7 +138,7 @@ describe("startWatch", () => {
   it("falls back to the poll when the node refuses the stream, and still starts the job", async () => {
     const run = setup();
     run.beacon.streamAnswers({ status: 501 });
-    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient } });
+    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true } });
     await flush();
     expect(run.named("watch_sse_failed")).toHaveLength(1);
     const sent = HEAD + 100;
@@ -159,7 +159,7 @@ describe("startWatch", () => {
     const run = setup();
     const sent = HEAD + 300;
     run.beacon.set(FEED, { items: [{ messageId: `0x${"ab".repeat(32)}`, sent: { timestamp: GENESIS + sent * SLOT } }] });
-    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient } });
+    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true } });
     const expected = ((Math.floor(sent / 32) + 3) * 32 + 1) * SLOT + GENESIS;
     vi.setSystemTime((expected - 60) * 1000);
     await vi.advanceTimersByTimeAsync(15_000);
@@ -173,7 +173,7 @@ describe("startWatch", () => {
   it("ends the sessions a stopped backend left open, and says that a fixed lead time is ignored", async () => {
     const run = setup({ leadSeconds: 45 });
     createWarmupStore(run.context.storage).openSession({ direction: "first-to-second", why: "message", dueAt: 0, leadSeconds: 90, at: Date.now() - 10_000 });
-    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient } });
+    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true } });
     expect(run.named("warmup_sessions_closed")).toMatchObject([{ count: 1 }]);
     expect(run.named("config_ignored")).toMatchObject([{ level: "warn", key: "watch.warmup.leadSeconds" }]);
     // Ended at the start: it stops counting against the daily cap.
@@ -185,7 +185,7 @@ describe("startWatch", () => {
     const run = setup();
     const behind = { ...lightClient, headSlot: HEAD - 3 * PERIOD };
     run.beacon.set(FINALITY, finalityUpdate(HEAD + 64, 500));
-    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => behind } });
+    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => behind, readDepositsOpen: async () => true } });
     await flush();
     expect(run.beacon.requests.some((path) => path.startsWith("/eth/v1/beacon/light_client/updates?start_period="))).toBe(true);
     // The fake node serves no updates: the light client is stranded, and the watch says so.
@@ -205,11 +205,11 @@ describe("startWatch", () => {
 
   it("without a ping or with warm-ups off, sends no warm-ups", async () => {
     const run = setup({ warmup: false });
-    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient } });
+    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true } });
     expect(run.named("watch_started")).toMatchObject([{ warmup: false }]);
     await stop();
     const { pingProver: _unused, ...withoutPing } = run.context;
-    const again = await startWatch({ context: { ...withoutPing, config: makeConfig({ indexerUrl: "http://indexer.test", watch: { directions: ["first-to-second"] } }) }, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient } });
+    const again = await startWatch({ context: { ...withoutPing, config: makeConfig({ indexerUrl: "http://indexer.test", watch: { directions: ["first-to-second"] } }) }, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true } });
     expect(run.named("watch_started")[1]).toMatchObject({ warmup: false });
     await again();
   });
@@ -217,7 +217,7 @@ describe("startWatch", () => {
   it("reports a bad indexer answer as a failed read", async () => {
     const run = setup();
     run.beacon.set(FEED, { nothing: true });
-    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient } });
+    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true } });
     await flush();
     expect(run.named("watch_read_failed")[0]).toMatchObject({ error: { message: "the chain indexer sent the feed in an unknown shape" } });
     run.beacon.set(FEED, {}, 502);
@@ -248,7 +248,7 @@ describe("startWatch", () => {
     insertJob(run.context.storage, { id: "earlier", direction: "first-to-second", now: Date.now() });
     run.context.storage.database.prepare("UPDATE jobs SET status = 'on-chain', new_slot = '1'").run();
     const lastProofAt = Date.now();
-    const stop = await startWatch({ context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, chainClient: () => chain } });
+    const stop = await startWatch({ context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true, chainClient: () => chain } });
     await flush();
     expect(run.named("config_deprecated")).toMatchObject([{ level: "warn", key: "watch.pairs.eth-pls.maxWaitSeconds" }]);
     expect(run.named("watch_started")).toMatchObject([{ batch: { "first-to-second": { minIntervalSeconds: 600, lookaheadSeconds: 384, profitMargin: 1 } } }]);
@@ -287,6 +287,32 @@ describe("startWatch", () => {
     await run.service.settled();
   });
 
+  it("reads depositsOpen() of the destination bridge on chain, and proves for a locked bridge with no message waiting (2026-11-07)", async () => {
+    const run = setup();
+    const calls: Array<{ address: string; functionName: string }> = [];
+    const chain = {
+      getBlockNumber: async () => 1n,
+      getBlock: async () => ({ baseFeePerGas: 1n }),
+      readContract: async (call: { address: string; functionName: string }) => {
+        calls.push({ address: call.address, functionName: call.functionName });
+        return false;
+      },
+    };
+    const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, chainClient: () => chain } });
+    await flush();
+    const finalized = HEAD + 128;
+    vi.setSystemTime(slotStart(finalized + 65));
+    run.beacon.latest().send("light_client_finality_update", finalityUpdate(finalized, 500, finalized + 65));
+    await flush();
+    // The bridge on the destination (chain 369) of first-to-second: its opening needs an update of this light client.
+    expect(calls).toEqual([{ address: PAIR.sides[1].contracts.bridge, functionName: "depositsOpen" }]);
+    expect(run.named("proof_due")).toMatchObject([{ why: "deposits-locked" }]);
+    expect(run.named("job_started")).toMatchObject([{ why: "waiting-message", urgent: ["deposits-locked"] }]);
+    await stop();
+    run.backend.prover.settleAll({ kind: "up-to-date" });
+    await run.service.settled();
+  });
+
   it("a pair without PulseChain reads no prices", async () => {
     const run = setup();
     const testnet = { ...PAIR, sides: [PAIR.sides[0], { ...PAIR.sides[1], chainId: 943 }] as const };
@@ -295,7 +321,7 @@ describe("startWatch", () => {
       asked.push(side.chainId);
       return { getBlockNumber: async () => 1n, getBlock: async () => ({ baseFeePerGas: 1n }), readContract: async () => null };
     };
-    const stop = await startWatch({ context: { ...run.context, pair: testnet }, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, chainClient } });
+    const stop = await startWatch({ context: { ...run.context, pair: testnet }, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true, chainClient } });
     // Only the destination of the watched direction, for its base fee.
     expect(asked).toEqual([943]);
     await stop();
@@ -331,10 +357,10 @@ describe("the request service, for the watcher", () => {
       logger: backend.log.logger,
     });
     const base = { pair: "eth-pls", direction: "first-to-second" as const, caller: "203.0.113.9" };
-    expect(await service.submit({ ...base, reason: "user" })).toEqual({ refused: "nothing-to-prove" });
+    expect(await service.submit({ ...base, reason: "user" })).toEqual({ refused: "nothing-to-prove", why: "no-need" });
     proofNeed.answer({ needed: true, why: "waiting-message" });
     // A user request inside the reuse window gets the cached answer; the watcher's request does not.
-    expect(await service.submit({ ...base, caller: "203.0.113.10", reason: "user" })).toEqual({ refused: "nothing-to-prove" });
+    expect(await service.submit({ ...base, caller: "203.0.113.10", reason: "user" })).toEqual({ refused: "nothing-to-prove", why: "no-need" });
     backend.clock.advance(1_500);
     const started = await service.submit({ ...base, caller: "watch", reason: "finality", since: backend.clock.now() - 1_200 });
     expect(started).toMatchObject({ jobId: expect.any(String) });
@@ -360,9 +386,9 @@ describe("the request service, for the watcher", () => {
       logger: backend.log.logger,
     });
     const base = { pair: "eth-pls", direction: "second-to-first" as const };
-    expect(await service.submit({ ...base, caller: "203.0.113.9", reason: "keep-alive", plannedHandoff: true })).toEqual({ refused: "nothing-to-prove" });
+    expect(await service.submit({ ...base, caller: "203.0.113.9", reason: "keep-alive", plannedHandoff: true })).toEqual({ refused: "nothing-to-prove", why: "no-need" });
     // A keep-alive of the age rule comes without the flag and meets the indexer's rule like any request.
-    expect(await service.submit({ ...base, caller: "watch", reason: "finality" })).toEqual({ refused: "nothing-to-prove" });
+    expect(await service.submit({ ...base, caller: "watch", reason: "finality" })).toEqual({ refused: "nothing-to-prove", why: "no-need" });
     const started = await service.submit({ ...base, caller: "watch", reason: "finality", plannedHandoff: true });
     expect(started).toMatchObject({ jobId: expect.any(String) });
     const line = backend.log.lines.map((entry) => JSON.parse(entry) as Record<string, unknown>).find((entry) => entry.event === "job_started");

@@ -9,12 +9,14 @@ export const PROOF_NEED_TIMEOUT_MILLISECONDS = 5_000;
  * the chain indexer shows that the chains need one.
  *
  * - `waiting-message`: a message of the direction is old enough to be final, and no stored head covers it.
+ * - `deposits-locked`: never from the indexer. The watcher read that the destination bridge waits for an update of this
+ *   light client to open deposits (`ProofRequest.urgent`).
  * - `keep-alive`: the light client of the destination holds no head, or a head older than the keep-alive time. A light
  *   client that falls more than one sync committee period behind can never move again.
  */
 export type ProofNeed =
   /** `headSlot`: the head the light client stores, as the indexer read it, or null when unknown. */
-  | { readonly needed: true; readonly why: "waiting-message" | "keep-alive"; readonly headSlot?: number | null }
+  | { readonly needed: true; readonly why: "waiting-message" | "keep-alive" | "deposits-locked"; readonly headSlot?: number | null }
   | { readonly needed: false };
 
 /**

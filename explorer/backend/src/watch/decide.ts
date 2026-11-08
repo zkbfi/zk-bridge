@@ -39,6 +39,73 @@ export type BatchFacts = {
   readonly costUsd: string | null;
 };
 
+/**
+ * What the destination bridge of a direction says about its deposits, and whether an update of the direction's light
+ * client can open them.
+ *
+ * The mapping (as `explorer/bots/src/runner/opener.ts` does it): the direction S to D proves blocks of S to the light
+ * client on D. The bridge on D names that light client as its own and the light client on S as its remote one.
+ * `openDeposits` on D proves that the light client on D stored a block of S in whose state the light client on S already
+ * held a head. So the bridge on D (the destination of this direction) opens only after an update of this direction's
+ * light client, made from a finality of S after the light client on S got a head (the other direction's first update).
+ */
+export type DepositsFacts = {
+  /** `depositsOpen()` of the bridge on the destination chain of the direction, or null when it could not be read. */
+  readonly open: boolean | null;
+  /** Whether the light client on the source chain (the other direction's) holds a head, or null when unknown. */
+  readonly remoteHasHead: boolean | null;
+};
+
+/**
+ * A situation in which a proof starts before the minimum interval since the direction's last proof
+ * (`watch.minIntervalSeconds`) ends. Every other check still applies: a finality newer than the covered head, enough
+ * signatures, no pending proof from the head, and the request service's gates and caps.
+ *
+ * - `deposits-locked`: the bridge on the destination chain reports `depositsOpen() == false` and the light client on
+ *   the source chain holds a head, so an update of this direction's light client lets the runner open deposits. It
+ *   proves at the first finality that is new, and again at most every {@link DEPOSITS_LOCKED_RETRY_SECONDS} while the
+ *   bridge stays locked (an opening that failed waits for a newer head).
+ * - `requested`: a user asked through `POST /requests`. That path never comes through {@link decideProof}: the request
+ *   service starts the job itself (the indexer must show a need) and applies no batch rule, so the interval never holds
+ *   it back. It is listed here so that every reason to prove before the interval is in one place, and the service logs it.
+ *
+ * Owner, 2026-11-07: "3600 is fine for a minimum, but we should have code in place that can say, oh, yes, we should
+ * create a proof for this situation - especially when we are waiting for deposits to be enabled".
+ */
+export type UrgentReason = "deposits-locked" | "requested";
+
+/** The urgent reasons the watcher's decision can return (a request never comes through it). */
+export type WatchUrgentReason = Exclude<UrgentReason, "requested">;
+
+/** While the destination bridge stays locked, a further `deposits-locked` proof waits this long after the last proof. */
+export const DEPOSITS_LOCKED_RETRY_SECONDS = 600;
+
+/** Input of {@link urgentReasons}. Times in seconds since 1970. */
+export type UrgentInput = {
+  readonly nowSeconds: number;
+  /** The destination bridge's deposits. Absent: not known, and no deposit rule applies. */
+  readonly deposits?: DepositsFacts;
+  /** When the direction's last proof job started, or null for none. */
+  readonly lastProofAt?: number | null;
+  /** Whether a user asked for the proof (`POST /requests`). */
+  readonly requested?: boolean;
+};
+
+/** One rule: when it applies. Add a situation by adding a rule. */
+const URGENT_RULES: ReadonlyArray<{ readonly reason: UrgentReason; readonly applies: (input: UrgentInput) => boolean }> = [
+  {
+    reason: "deposits-locked",
+    applies: ({ deposits, lastProofAt, nowSeconds }) =>
+      deposits?.open === false && deposits.remoteHasHead === true && (lastProofAt === undefined || lastProofAt === null || nowSeconds - lastProofAt >= DEPOSITS_LOCKED_RETRY_SECONDS),
+  },
+  { reason: "requested", applies: ({ requested }) => requested === true },
+];
+
+/** The urgent reasons that apply now, in the order of the rules. Empty: the minimum interval holds. */
+export function urgentReasons(input: UrgentInput): UrgentReason[] {
+  return URGENT_RULES.filter((rule) => rule.applies(input)).map((rule) => rule.reason);
+}
+
 /** Why a proof is due, or why not. `stalePending`: a pending proof waited past its time and no longer holds the proof back. */
 export type ProofDecision =
   | ({ readonly due: true; readonly why: "message"; readonly messageIds: readonly Hex[]; readonly detail: string; readonly stalePending?: PendingProof } & Partial<BatchFacts>)
@@ -48,6 +115,11 @@ export type ProofDecision =
    * `riders`: waiting messages the batch rule held back, which the proof covers too.
    */
   | { readonly due: true; readonly why: "keep-alive"; readonly handoff: boolean; readonly detail: string; readonly riders?: number; readonly stalePending?: PendingProof }
+  /**
+   * An urgent reason ({@link urgentReasons}) proves before the minimum interval ends. `messageIds`: the final waiting
+   * messages, which the proof covers too (`riders` counts them).
+   */
+  | { readonly due: true; readonly why: WatchUrgentReason; readonly messageIds: readonly Hex[]; readonly detail: string; readonly riders?: number; readonly stalePending?: PendingProof }
   | {
       readonly due: false;
       readonly why: "not-newer" | "insufficient-signatures" | "stranded" | "wait-for-finality" | "proof-pending" | "nothing-due" | "min-interval";
@@ -79,7 +151,18 @@ export type DecisionInput = {
    * since 1970, null for none). Without it, or with no minimum interval, a message proves at once.
    */
   readonly batch?: { readonly rule: BatchRule; readonly economics: Economics; readonly lastProofAt: number | null };
+  /**
+   * The facts of the urgent reasons the watcher reads: the destination bridge's deposits, and when the direction's last
+   * proof job started (seconds since 1970, null for none). Absent: none applies.
+   */
+  readonly urgent?: { readonly deposits: DepositsFacts; readonly lastProofAt: number | null };
 };
+
+/** What an urgent proof achieves, for the log. */
+function urgentDetail(reason: WatchUrgentReason, lastProofAt: number | null, nowSeconds: number): string {
+  const last = lastProofAt === null ? "the direction has no proof yet" : `the last proof started ${Math.round(nowSeconds - lastProofAt)} s ago`;
+  return `${reason}: the bridge on the destination chain reports deposits closed and the light client on the source chain holds a head; an update of this light client lets the runner open them (${last}; the minimum interval does not hold it back)`;
+}
 
 /** A proof pending on the board still applies only while the light client head is the one it starts from. */
 function applicable(pendingProof: PendingProof | null, facts: LightClientFacts): PendingProof | null {
@@ -165,7 +248,8 @@ function waitingDetail(plan: Extract<BatchPlan, { due: false }>, rule: BatchRule
  * batch is due ({@link planBatch}: it pays, or the last proof started `minIntervalSeconds` ago), or the keep-alive
  * planner calls for a proof that can make progress ({@link keepAliveProgress}). A handoff or a keep-alive of the age
  * rule never waits for the interval: the waiting messages ride along. With no waiting message, only a keep-alive can
- * be due, however long ago the last proof was.
+ * be due, however long ago the last proof was, or an urgent reason ({@link urgentReasons}: the destination bridge waits
+ * for deposits to open). An urgent reason proves before the interval ends too, after a keep-alive that is due.
  *
  * A proof we have that starts at the head and can still land holds every new proof back, until it waited longer than
  * `pendingStaleSeconds`: it covers what it reaches, and a second proof from the same head would be paid for twice.
@@ -191,6 +275,13 @@ export function decideProof(input: DecisionInput): ProofDecision {
   }
   const stale = pending.proof === null ? {} : { stalePending: pending.proof };
   const call = keepAliveCall(assessment, facts, policy);
+  // The watcher reads no request, so only a watch reason can apply here.
+  const urgentInput = input.urgent;
+  const urgent = urgentInput === undefined ? [] : (urgentReasons({ nowSeconds, deposits: urgentInput.deposits, lastProofAt: urgentInput.lastProofAt }) as WatchUrgentReason[]);
+  const urgentDecision = (reason: WatchUrgentReason): ProofDecision => {
+    const ride = ready.length === 0 ? "" : `; ${ready.length} waiting ${ready.length === 1 ? "message rides" : "messages ride"} along`;
+    return { due: true, why: reason, messageIds: ready.map((message) => message.messageId), detail: `${urgentDetail(reason, (urgentInput as NonNullable<typeof urgentInput>).lastProofAt, nowSeconds)}${ride}`, ...(ready.length === 0 ? {} : { riders: ready.length }), ...stale };
+  };
   if (ready.length > 0) {
     const batch = input.batch;
     if (batch === undefined || batch.rule.minIntervalSeconds === 0) {
@@ -210,11 +301,14 @@ export function decideProof(input: DecisionInput): ProofDecision {
     }
     // Liveness first: a handoff or an old head proves now, and the waiting messages ride along.
     if (call !== null) return { due: true, why: "keep-alive", handoff: call === "handoff", detail: `${assessment.reason}; ${ready.length} waiting ${ready.length === 1 ? "message rides" : "messages ride"} along`, riders: ready.length, ...stale };
+    // Then a situation that needs a proof now: the messages ride along.
+    if (urgent.length > 0) return urgentDecision(urgent[0] as WatchUrgentReason);
     return { due: false, why: "min-interval", detail: waitingDetail(plan, batch.rule), plan };
   }
+  if (call !== null) return { due: true, why: "keep-alive", handoff: call === "handoff", detail: assessment.reason, ...stale };
+  if (urgent.length > 0) return urgentDecision(urgent[0] as WatchUrgentReason);
   if (!keepAliveDue(assessment)) return { due: false, why: "nothing-due", detail: assessment.reason };
-  if (call === null) return { due: false, why: "nothing-due", detail: noProgressDetail(assessment, facts, policy, nowSeconds) };
-  return { due: true, why: "keep-alive", handoff: call === "handoff", detail: assessment.reason, ...stale };
+  return { due: false, why: "nothing-due", detail: noProgressDetail(assessment, facts, policy, nowSeconds) };
 }
 
 /** The beacon slot of an execution block time (a block after the merge carries its slot's start time). */
@@ -252,7 +346,7 @@ export type WarmupPlan = { readonly targets: readonly WarmupTarget[]; readonly l
 export const handoffKey = (headSlot: number) => `handoff:${headSlot}`;
 
 /** Input of {@link warmupPlan}. */
-export type WarmupPlanInput = Omit<DecisionInput, "participants" | "minParticipants"> & {
+export type WarmupPlanInput = Omit<DecisionInput, "participants" | "minParticipants" | "urgent"> & {
   /** How far ahead a handoff finality is looked for (the lead time). */
   readonly horizonSeconds: number;
   /** The participation of the newest finality, null when unknown (nothing is due now then); absent assumes the threshold. Later finalities assume the threshold. */
@@ -357,7 +451,8 @@ export function warmupPlan(input: WarmupPlanInput): WarmupPlan {
     }
     const handoff = handoffAt.has(moment) ? [handoffKey(facts.headSlot)] : [];
     const keys = decision.why === "message" ? [...decision.messageIds, ...handoff] : [handoffKey(facts.headSlot)];
-    return { targets: [{ at: moment, why: decision.why, keys }], live };
+    // The warm-up asks decideProof without the urgent facts: an urgent proof starts cold (about a minute more).
+    return { targets: [{ at: moment, why: decision.why === "message" ? "message" : "keep-alive", keys }], live };
   }
   return { targets: [], live };
 }
