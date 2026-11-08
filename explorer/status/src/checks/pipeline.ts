@@ -51,15 +51,36 @@ export const BALANCE_WARNING_DAYS = 14;
 /** RunPod figures older than this many seconds are said to be old. */
 const BILLING_STALE_SECONDS = 1800;
 
-const dollars = (value: unknown) => `$${(number(value) ?? 0).toFixed(2)}`;
+const dollars = (value: number) => `$${value.toFixed(2)}`;
 const balanceDollars = (value: number) => `$${value >= 10 ? Math.round(value) : value.toFixed(2)}`;
 
+/** The unaccounted time is flagged (the check is degraded) when it is more than this share of the bill of 24 hours. */
+export const UNACCOUNTED_WARNING_SHARE = 0.25;
+/** The most characters of the detail that the sanitizer keeps; the line stays within it. */
+const DETAIL_LIMIT = 200;
+
+/** The buckets of the breakdown, with the words the line uses. */
+const BUCKETS: ReadonlyArray<readonly [string, string]> = [
+  ["proving", "proving"],
+  ["idleAfterJob", "idle after jobs"],
+  ["startingUp", "starting up"],
+  ["waitingForProof", "waiting for a proof"],
+  ["unusedEarlyStarts", "unused early starts"],
+  ["unaccounted", "unaccounted"],
+];
+
+const signedDollars = (value: number) => `${value < 0 ? "-" : ""}$${Math.abs(value).toFixed(2)}`;
+
 /**
- * GPU billing of the last 24 hours: `GET /billing?days=1`. The total is what RunPod billed, with the balance and the
- * days it lasts at the last 7 days' average; the workers started before a proof follow, with how many were unused and
- * what they cost at the rate RunPod's billing gives. When the backend cannot read RunPod it says so and the unused
- * cost is at the configured price, named as assumed. Degraded when the balance covers fewer than
- * {@link BALANCE_WARNING_DAYS} days; otherwise ok, since an unused worker is a cost, not an outage.
+ * GPU billing of the last 24 hours: `GET /billing?days=1`. The line leads with what RunPod billed, then says where it
+ * went, the buckets of `last24h.breakdown` largest first (by size, whatever the sign), as dollars; buckets that round to
+ * $0.00 are left out, and when the line would pass {@link DETAIL_LIMIT} characters the smallest go and "+N more" says
+ * how many. The balance and the days it lasts at the last 7 days' average follow. When the backend cannot read RunPod
+ * the line says so and gives what our records hold, at the assumed price.
+ *
+ * Degraded when the balance covers fewer than {@link BALANCE_WARNING_DAYS} days, and when the unaccounted dollars are
+ * more than {@link UNACCOUNTED_WARNING_SHARE} of the bill of 24 hours (our records do not match the bill); the line
+ * gives both numbers. Otherwise ok: an unused worker is a cost, not an outage.
  */
 export const gpuBillingCheck = (backendBase: string): Spec => ({
   id: "gpu-billing",
@@ -71,32 +92,56 @@ export const gpuBillingCheck = (backendBase: string): Spec => ({
     const body = record(json(answer));
     const total = record(body?.total);
     if (body === null || total === null) return { state: "down", detail: "answered something that is not the GPU billing" };
-    const billed = number(record(body.last24h)?.billedUsd);
+    const last24h = record(body.last24h);
+    const billed = number(last24h?.billedUsd);
     const spendKnown = body.available === true && billed !== null;
-    const parts: string[] = [spendKnown ? `${dollars(billed)} billed by RunPod in 24 h` : "RunPod billing is not available"];
-    const age = number(body.ageSeconds);
-    if (spendKnown && age !== null && age > BILLING_STALE_SECONDS) parts.push(`RunPod figures are ${duration(age)} old`);
     let state: "ok" | "degraded" = "ok";
+
+    const assumed = number(record(body.assumptions)?.gpuUsdPerHour);
+    const rate = body.rateSource === "assumed" && assumed !== null ? ` at the assumed $${assumed.toFixed(2)}/h` : "";
+    const head = spendKnown ? `${dollars(billed)} in 24 h` : `RunPod billing is not available; our records for 24 h${rate}`;
+
+    const breakdown = record(last24h?.breakdown);
+    const unaccounted = number(record(breakdown?.unaccounted)?.usd);
+    const mismatch = spendKnown && billed > 0 && unaccounted !== null && Math.abs(unaccounted) > UNACCOUNTED_WARNING_SHARE * billed;
+    if (mismatch) state = "degraded";
+    const items = BUCKETS.map(([key, label], order) => ({ key, order, usd: number(record(breakdown?.[key])?.usd), label }))
+      .filter((item): item is typeof item & { usd: number } => item.usd !== null && Math.abs(item.usd) >= 0.005)
+      .sort((left, right) => Math.abs(right.usd) - Math.abs(left.usd) || left.order - right.order)
+      .map((item) => ({
+        flagged: item.key === "unaccounted" && mismatch,
+        text:
+          item.key === "unaccounted" && mismatch
+            ? `${item.label} ${signedDollars(item.usd)} (${Math.round((Math.abs(item.usd) / (billed as number)) * 100)}% of the ${dollars(billed)} billed, records do not match the bill)`
+            : `${item.label} ${signedDollars(item.usd)}`,
+      }));
+
+    const tail: string[] = [];
+    const age = number(body.ageSeconds);
+    if (spendKnown && age !== null && age > BILLING_STALE_SECONDS) tail.push(`RunPod figures are ${duration(age)} old`);
     const account = record(body.account);
     const balance = number(account?.balanceUsd);
     if (balance !== null) {
       const daysLeft = number(account?.daysLeft);
-      if (daysLeft === null) parts.push(`balance ${balanceDollars(balance)}, no spend in the last 7 days`);
+      if (daysLeft === null) tail.push(`balance ${balanceDollars(balance)}, no spend in the last 7 days`);
       else {
-        const left = Math.floor(daysLeft);
         const low = daysLeft < BALANCE_WARNING_DAYS;
         if (low) state = "degraded";
-        parts.push(`balance ${balanceDollars(balance)}, ${count(left, "day")} left at the 7-day average${low ? ` (under ${BALANCE_WARNING_DAYS})` : ""}`);
+        tail.push(`balance ${balanceDollars(balance)}, ${count(Math.floor(daysLeft), "day")} left${low ? ` (under ${BALANCE_WARNING_DAYS})` : ""}`);
       }
     }
-    const early = record(total.earlyStarts);
-    const sessions = number(early?.sessions) ?? 0;
-    const unused = number(early?.unused) ?? 0;
-    const assumed = number(record(body.assumptions)?.gpuUsdPerHour);
-    const rate = body.rateSource === "assumed" && assumed !== null ? ` at the assumed $${assumed.toFixed(2)}/h` : "";
-    const unusedText = unused === 0 ? "0 unused" : `${unused} unused (about ${dollars(early?.unusedUsd)}${rate})`;
-    const earlyText = sessions === 0 ? "none" : `${sessions}, ${unusedText}`;
-    return { state, detail: `${parts.join("; ")}. Workers started before a proof: ${earlyText}.` };
+
+    const compose = (shown: typeof items, hidden: number) => {
+      const list = [...shown.map((item) => item.text), ...(hidden > 0 ? [`+${hidden} more`] : [])].join(", ");
+      return `${[`${head}${list === "" ? "" : `: ${list}`}`, ...tail].join("; ")}.`;
+    };
+    // Too long: the smallest buckets go first, and the flagged one stays.
+    let shown = items;
+    for (let keep = items.length; keep >= 0; keep -= 1) {
+      shown = items.filter((item, index) => item.flagged || index < keep);
+      if (compose(shown, items.length - shown.length).length <= DETAIL_LIMIT) break;
+    }
+    return { state, detail: compose(shown, items.length - shown.length) };
   },
 });
 

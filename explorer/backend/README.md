@@ -406,12 +406,15 @@ only for a direct local request, such as the status service on 127.0.0.1; a requ
   "days": 7, "rateSource": "runpod", "usdPerHour": 0.76,
   "assumptions": { "idleTimeoutSeconds": 60, "gpuUsdPerHour": 2.25, "gpuUsdPerHourIsFallback": true, "dailyCapSeconds": 3600 },
   "available": true, "ageSeconds": 90,
-  "last24h": { "billedUsd": 1.18, "billedSeconds": 5400 }, "effectiveUsdPerHour": 0.76, "averageDailyUsd7d": 1.7,
+  "last24h": { "billedUsd": 1.18, "billedSeconds": 5400, "breakdown": { "...": "as in total" } }, "effectiveUsdPerHour": 0.76, "averageDailyUsd7d": 1.7,
   "account": { "balanceUsd": 153.38, "balanceAgeSeconds": 30, "spendNowUsdPerHour": 0, "spendLimitUsd": 80, "daysLeft": 90.2 },
   "total": { "billedUsd": 11.9, "billedSeconds": 52000, "effectiveUsdPerHour": 0.8238,
-    "earlyStarts": { "sessions": 31, "used": 26, "unused": 5, "unusedSeconds": 420, "unusedUsd": 0.0887, "readyBeforeDueSeconds": 380 } },
+    "earlyStarts": { "sessions": 31, "used": 26, "unused": 5, "unusedSeconds": 420, "unusedUsd": 0.0887, "waitingSeconds": 380 },
+    "breakdown": { "proving": { "seconds": 31000, "usd": 6.54 }, "startingUp": { "seconds": 4100, "usd": 0.87 }, "waitingForProof": { "seconds": 2200, "usd": 0.46 },
+      "unusedEarlyStarts": { "seconds": 420, "usd": 0.0887 }, "idleAfterJob": { "seconds": 9300, "usd": 1.96 }, "unaccounted": { "seconds": 4980, "usd": 2.0 } } },
   "byDay": [ { "day": "2026-11-06", "billedUsd": 1.7, "billedSeconds": 7600, "effectiveUsdPerHour": 0.8053,
-    "earlyStarts": { "sessions": 5, "used": 4, "unused": 1, "unusedSeconds": 80, "unusedUsd": 0.0169, "readyBeforeDueSeconds": 60 } } ]
+    "earlyStarts": { "sessions": 5, "used": 4, "unused": 1, "unusedSeconds": 80, "unusedUsd": 0.0169, "waitingSeconds": 60 },
+    "breakdown": { "...": "the six buckets of the day, each { seconds, usd }" } } ]
 }
 ```
 
@@ -421,7 +424,16 @@ for a day RunPod has no figure for. `earlyStarts` is the part of it that workers
 (by the day a session started): `unused` counts the sessions that did not end `used`, `unusedSeconds` their billed time
 estimated from each session's start to its end plus the endpoint's idle timeout (a session that a restart ended has no
 idle part), `unusedUsd` that time at `usdPerHour`, and `readyBeforeDueSeconds` how long a worker sat ready before the due
-time in used sessions: the lead that was longer than it needed to be. The status page shows the last 24 hours (`GPU billing`).
+time in used sessions: the lead that was longer than it needed to be.
+
+`breakdown` (on each day, in `total` and in `last24h`) puts every billed second in one bucket, each `{ seconds, usd }` at
+`usdPerHour`: `proving` (the request on the worker, until the proof returned), `startingUp` (cold start before a worker
+can take work), `waitingForProof` (a started worker ready and idle until its proof began), `unusedEarlyStarts` (billed
+time of sessions with no proof), `idleAfterJob` (the idle timeout after each job, not counted again where a later job or
+session overlaps) and `unaccounted` (RunPod's bill minus the five; negative when our records claim more than was billed;
+null for a period without a RunPod figure). An instant counts in one bucket only; the boundaries and a worked example are
+in the header of `src/billing-breakdown.ts`. Session records are kept 7 days, so older days show no early starts. The
+status page shows the last 24 hours (`GPU billing`), degraded when `unaccounted` is more than 25% of the bill.
 
 ### `GET /warmup/summary?days=7` (deprecated)
 

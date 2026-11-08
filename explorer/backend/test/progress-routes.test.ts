@@ -351,14 +351,65 @@ describe("GET /billing (2026-11-07)", () => {
       assumptions: { gpuUsdPerHour: 2.25 },
     });
     expect(body.total).toMatchObject({ billedUsd: 2.28, billedSeconds: 10_800, effectiveUsdPerHour: 0.76 });
-    expect(body.total.earlyStarts).toEqual({ sessions: 2, used: 1, unused: 1, unusedSeconds: 70, unusedUsd: Math.round((70 / 3600) * 0.76 * 10_000) / 10_000, readyBeforeDueSeconds: 30 });
+    expect(body.total.earlyStarts).toEqual({ sessions: 2, used: 1, unused: 1, unusedSeconds: 70, unusedUsd: Math.round((70 / 3600) * 0.76 * 10_000) / 10_000, waitingSeconds: 30 });
     expect(body.byDay).toHaveLength(3);
     // The test clock sits just after midnight UTC: the sessions started the hour before, on the day before.
     expect(body.byDay[1]).toMatchObject({ billedUsd: 0.76, billedSeconds: 3600, effectiveUsdPerHour: 0.76, earlyStarts: { sessions: 2, unused: 1 } });
-    expect(body.byDay[0].earlyStarts).toEqual({ sessions: 0, used: 0, unused: 0, unusedSeconds: 0, unusedUsd: 0, readyBeforeDueSeconds: 0 });
+    expect(body.byDay[0].earlyStarts).toEqual({ sessions: 0, used: 0, unused: 0, unusedSeconds: 0, unusedUsd: 0, waitingSeconds: 0 });
     expect(JSON.stringify(body)).not.toMatch(/https?:|key|token|wasted/i);
     expect((await run.get("/billing?days=1")).body).toMatchObject({ days: 1 });
     expect(((await run.get("/billing?days=1")).body as any).byDay).toHaveLength(2);
+  });
+
+  it("puts every billed second in one bucket, per day, in the total and over the last 24 hours (2026-11-07)", async () => {
+    const run = withBilling(snapshot);
+    sessions(run);
+    const now = run.context.now();
+    // A job proved 30 minutes ago: a 50 s request on the worker after 20 s of waiting for a cold worker.
+    recordProveTiming(run.storage, {
+      jobId: "j1",
+      direction: "first-to-second",
+      startedAt: now - 1_900_000,
+      provedAt: now - 1_800_000,
+      timing: { wait_worker_ms: 20_000, not_ready_count: 1, remote_ms: 50_000, worker_total_ms: 48_000 },
+    });
+    const body = (await run.get("/billing")).body as Record<string, any>;
+    // The sessions of the helper: a used one (cold start 30 s, ready, ends at 70 s, and the worker idles 60 s more until
+    // the next request) and an unused one that starts at 100 s with 70 s billed; the used one's waiting takes its first 30 s.
+    const total = body.total.breakdown;
+    expect(total).toMatchObject({
+      proving: { seconds: 48 },
+      startingUp: { seconds: 50 },
+      waitingForProof: { seconds: 100 },
+      unusedEarlyStarts: { seconds: 40 },
+      idleAfterJob: { seconds: 60 },
+    });
+    const claimed = 48 + 50 + 100 + 40 + 60;
+    expect(total.unaccounted).toEqual({ seconds: 10_800 - claimed, usd: Math.round((2.28 - (claimed / 3600) * 0.76) * 10_000) / 10_000 });
+    // The day totals add up to the bill of the day, and the total to the bill of the window.
+    for (const day of body.byDay) {
+      const sum = ["proving", "startingUp", "waitingForProof", "unusedEarlyStarts", "idleAfterJob", "unaccounted"].reduce((acc, key) => acc + day.breakdown[key].seconds, 0);
+      expect(sum).toBeCloseTo(day.billedSeconds, 2);
+    }
+    expect(body.last24h.breakdown).toMatchObject({ proving: { seconds: 48 }, unusedEarlyStarts: { seconds: 40 }, idleAfterJob: { seconds: 60 } });
+    // The 24 h bill is 1800 s (the hour of the snapshot): unaccounted is that minus the buckets.
+    expect(body.last24h.breakdown.unaccounted.seconds).toBe(1800 - claimed);
+    expect(body.last24h.billedSeconds).toBe(1800);
+  });
+
+  it("computes the buckets for days RunPod has no figure for, with unaccounted null", async () => {
+    for (const run of [setup(), withBilling((now) => ({ spend: { days: [{ start: dayOf(now, 5), amountUsd: 1, billedSeconds: 100 }], hours: [], readAt: now }, balance: null }))]) {
+      const noReading = run.context.billing === undefined;
+      sessions(run);
+      const body = (await run.get("/billing")).body as Record<string, any>;
+      expect(body.total.breakdown.unusedEarlyStarts.seconds).toBe(70);
+      expect(body.last24h.breakdown.unusedEarlyStarts.seconds).toBe(70);
+      // With a reading but no billed hour, RunPod billed nothing in 24 h: the records are then all unaccounted for.
+      if (noReading) expect(body.last24h.breakdown.unaccounted).toBeNull();
+      else expect(body.last24h.breakdown.unaccounted).toEqual({ seconds: -140, usd: -1.4 });
+      for (const day of body.byDay.filter((entry: any) => entry.billedUsd === null)) expect(day.breakdown.unaccounted).toBeNull();
+      expect(body.byDay.some((day: any) => day.billedUsd === null && day.breakdown.unusedEarlyStarts.seconds > 0)).toBe(true);
+    }
   });
 
   it("keeps the account off a request that came through Caddy", async () => {

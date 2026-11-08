@@ -6,9 +6,10 @@
 import type { Context, Hono } from "hono";
 import { PROOF_DIRECTIONS, secondsPerSlot, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
 import { figuresOf, publicFiguresOf } from "../billing.ts";
+import { accountTimeline, bucketSecondsWithin, breakdownOf, sumBreakdowns, type Breakdown } from "../billing-breakdown.ts";
 import type { BackendModuleContext } from "../module.ts";
 import { findActiveJob, findLatestJob, getJob, listJobsSince, type PlannedJob } from "../requests/jobs.ts";
-import { getTiming, listTimings, recentTimings, statOf } from "../requests/timings.ts";
+import { getTiming, listTimings, provedJobsSince, recentTimings, statOf } from "../requests/timings.ts";
 import type { Storage } from "../storage.ts";
 import { decisionBoardOf } from "../watch/decisions.ts";
 import { createWarmupStore } from "../watch/warmup-store.ts";
@@ -208,13 +209,17 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     // The rate that RunPod billed; the configured price only when RunPod's billing cannot be read.
     const rateSource = figures.effectiveUsdPerHour === null ? ("assumed" as const) : ("runpod" as const);
     const usdPerHour = figures.effectiveUsdPerHour ?? gpuUsdPerHour;
-    const sessionDays = createWarmupStore(storage).summary(at - days * 86_400_000, { idleTimeoutSeconds, gpuUsdPerHour: usdPerHour });
+    const warmups = createWarmupStore(storage);
+    const sessionDays = warmups.summary(at - days * 86_400_000, { idleTimeoutSeconds, gpuUsdPerHour: usdPerHour });
+    // The records of the window plus a day before it, so that a tail or a session that crosses midnight is whole.
+    const recordsFrom = at - (days + 1) * 86_400_000;
+    const timeline = accountTimeline({ sessions: warmups.endedSessions(recordsFrom), jobs: provedJobsSince(storage, recordsFrom), idleTimeoutSeconds });
     // The account (balance, spend limit, spend now, days left) only for a direct local request, such as the status
     // service on 127.0.0.1. Caddy adds X-Forwarded-For to every request it passes on, so a request from the internet
     // never sees them; the backend listens on 127.0.0.1 only.
     const local = request.req.header("x-forwarded-for") === undefined;
     const shown = figures;
-    return { days, at, snapshot, figures, shown, local, rateSource, usdPerHour, sessionDays, assumptions: { idleTimeoutSeconds, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds } };
+    return { days, at, snapshot, figures, shown, local, rateSource, usdPerHour, sessionDays, timeline, assumptions: { idleTimeoutSeconds, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds } };
   }
 
   const money = (value: number) => Math.round(value * 10_000) / 10_000;
@@ -223,12 +228,13 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
    * GPU billing in general: what RunPod billed per UTC day and in total, the last 24 hours, the rate and where it comes
    * from, and (only for a direct local request) the account. `earlyStarts` is the part of it that workers started before
    * a proof account for: sessions, used and unused, the billed seconds of the unused ones priced at the rate, and the
-   * seconds a worker sat ready before the due time. `days`: 1 to 30, default 7.
+   * seconds a worker sat ready before the due time (`waitingSeconds`). `breakdown`, on each day, in the total and in
+   * `last24h`, says where the billed seconds went (rules in `billing-breakdown.ts`). `days`: 1 to 30, default 7.
    */
   app.get("/billing", async (request) => {
     const window = await billingWindow(request);
     if ("refused" in window) return window.refused;
-    const { days, at, snapshot, shown, local, rateSource, usdPerHour, sessionDays, assumptions } = window;
+    const { days, at, snapshot, shown, local, rateSource, usdPerHour, sessionDays, timeline, assumptions } = window;
     const earlyOf = new Map(sessionDays.map((day) => [day.day, day]));
     const early = (day: (typeof sessionDays)[number] | undefined) => ({
       sessions: day?.sessions ?? 0,
@@ -236,15 +242,18 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
       unused: day?.wasted ?? 0,
       unusedSeconds: day?.wastedSeconds ?? 0,
       unusedUsd: day?.wastedCostUsd ?? 0,
-      readyBeforeDueSeconds: day?.idleBeforeDueSeconds ?? 0,
+      waitingSeconds: day?.idleBeforeDueSeconds ?? 0,
     });
     const first = new Date(at - days * 86_400_000).toISOString().slice(0, 10);
     const billedOf = new Map((snapshot.spend?.days ?? []).filter((day) => day.start >= first).map((day) => [day.start, day]));
     const dayKeys = [...new Set([...billedOf.keys(), ...earlyOf.keys()])].sort().reverse();
     const byDay = dayKeys.map((day) => {
       const billed = billedOf.get(day);
+      const dayStart = Date.parse(`${day}T00:00:00Z`);
+      const billedAmount = billed === undefined ? null : { seconds: Math.round(billed.billedSeconds * 100) / 100, usd: money(billed.amountUsd) };
       return {
         day,
+        breakdown: breakdownOf(bucketSecondsWithin(timeline, dayStart, dayStart + 86_400_000), usdPerHour, billedAmount),
         billedUsd: billed === undefined ? null : money(billed.amountUsd),
         billedSeconds: billed === undefined ? null : Math.round(billed.billedSeconds * 100) / 100,
         effectiveUsdPerHour: billed !== undefined && billed.billedSeconds > 0 ? money(billed.amountUsd / (billed.billedSeconds / 3600)) : null,
@@ -255,14 +264,20 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     const billedDays = byDay.filter((day) => day.billedUsd !== null);
     const billedUsd = billedDays.length === 0 ? null : sum((day) => day.billedUsd ?? 0);
     const billedSeconds = billedDays.length === 0 ? null : sum((day) => day.billedSeconds ?? 0);
+    const breakdownTotal = sumBreakdowns(byDay.map((day) => day.breakdown));
     const earlyTotal = {
       sessions: sum((day) => day.earlyStarts.sessions),
       used: sum((day) => day.earlyStarts.used),
       unused: sum((day) => day.earlyStarts.unused),
       unusedSeconds: sum((day) => day.earlyStarts.unusedSeconds),
       unusedUsd: sum((day) => day.earlyStarts.unusedUsd),
-      readyBeforeDueSeconds: sum((day) => day.earlyStarts.readyBeforeDueSeconds),
+      waitingSeconds: sum((day) => day.earlyStarts.waitingSeconds),
     };
+    const last24h: Breakdown = breakdownOf(
+      bucketSecondsWithin(timeline, at - 86_400_000, at),
+      usdPerHour,
+      shown.last24hUsd === null || shown.last24hBilledSeconds === null ? null : { seconds: shown.last24hBilledSeconds, usd: shown.last24hUsd },
+    );
     return request.json({
       days,
       /** Where the price of a GPU hour comes from: "runpod" (measured from RunPod's billing) or "assumed" (the configured price, a fallback). */
@@ -272,7 +287,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
       /** Whether RunPod's billing could be read, and how many seconds ago. */
       available: shown.available,
       ageSeconds: shown.ageSeconds,
-      last24h: { billedUsd: shown.last24hUsd, billedSeconds: shown.last24hBilledSeconds },
+      last24h: { billedUsd: shown.last24hUsd, billedSeconds: shown.last24hBilledSeconds, breakdown: last24h },
       effectiveUsdPerHour: shown.effectiveUsdPerHour,
       averageDailyUsd7d: shown.averageDailyUsd7d,
       // Left out, not nulled, for a request that came through Caddy.
@@ -282,6 +297,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
         billedSeconds,
         effectiveUsdPerHour: billedUsd === null || billedSeconds === null || billedSeconds === 0 ? null : money(billedUsd / (billedSeconds / 3600)),
         earlyStarts: earlyTotal,
+        breakdown: breakdownTotal,
       },
       byDay,
     });
