@@ -1,0 +1,67 @@
+{
+  "messageId": "0x00050000c9be6ab2a70642475d4a2ec9c896c44f8fa9c0cd000000000000001a",
+  "kind": "token",
+  "status": "sent",
+  "direction": {
+    "sourceChainId": 943,
+    "destinationChainId": 11155111,
+    "label": "943>11155111"
+  },
+  "sender": "0x00000000000000000000000000000000000000e1",
+  "executor": "0x2c00675092e2955d27f476b5a1bac9ac5bb6fa86",
+  "sentLogIndex": 1,
+  "sent": {
+    "transactionHash": "0xdc87c269f4b3508057ceba644b5af8093ec8c11ab074887bfc7a814dc7ae4ba6",
+    "blockNumber": 25853073,
+    "timestamp": 1794174159
+  },
+  "covered": null,
+  "delivered": null,
+  "callbackFailed": false,
+  "releaseFailed": false,
+  "transfer": {
+    "sourceToken": {
+      "chainId": 943,
+      "address": "0x11b211e478105683096e5da4ce1abf019ff35961",
+      "symbol": "tUSD",
+      "name": "zkb Test Dollar",
+      "decimals": 6,
+      "metadataRead": true,
+      "isBridgedCopy": false,
+      "homeChainId": 943,
+      "homeToken": "0x11b211e478105683096e5da4ce1abf019ff35961"
+    },
+    "destinationToken": null,
+    "sender": "0x00000000000000000000000000000000000000e2",
+    "recipient": "0x00000000000000000000000000000000000000e3",
+    "paidTo": null,
+    "value": "30500000",
+    "deliveredValue": null,
+    "handler": "handleBridgedTokensAndCall",
+    "deploysCopy": false,
+    "hasCallback": true,
+    "sourceIsNative": true,
+    "deliveryRouter": null,
+    "routerAmount": null,
+    "fee": null,
+    "received": null,
+    "deliverer": null,
+    "finalRecipient": null,
+    "feeSource": null
+  },
+  "data": "0xf248fbcf00000000000000000000000011b211e478105683096e5da4ce1abf019ff3596100000000000000000000000000000000000000000000000000000000000000e30000000000000000000000000000000000000000000000000000000001d164a000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000493e000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000000e20000000000000000000000000000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000038d7ea4c680000000000000000000000000000000000000000000000000000000000000000000",
+  "costs": {
+    "sent": {
+      "chainId": 943,
+      "hash": "0xdc87c269f4b3508057ceba644b5af8093ec8c11ab074887bfc7a814dc7ae4ba6",
+      "block": "25853073",
+      "gasUsed": "114255",
+      "effectiveGasPriceWei": "1000000007",
+      "costWei": "114255000799785",
+      "costUsd": null,
+      "nativeUsd": null
+    },
+    "delivered": null,
+    "proof": null
+  }
+}

@@ -4,7 +4,7 @@ import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import type { PairConfig, TokenInfo } from "@terminal/model/types";
 import { Shell } from "../../src/app/Shell";
 import { formatRoute, parseRoute } from "../../src/app/route";
-import { choiceOf, counterpartOf, nativeTokensOf, tokenFor } from "../../src/bridge/bridge-model";
+import { choiceOf, counterpartOf, NATIVE_ADDRESS, nativeTokensOf, tokenFor } from "../../src/bridge/bridge-model";
 import { connectedWallet, renderWithWallet } from "../app/support";
 
 // The owner (quotes 101–102): a link names the native coin as the zero address on its chain, "native" is read and
@@ -67,8 +67,26 @@ describe("a flip keeps the asset", () => {
     expect(counterpartOf(bySymbol("zUSDC"), tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("USDC");
   });
 
-  it("a token with no counterpart in the list falls back to the other chain's first token, not its native coin", () => {
+  it("a token with no counterpart in the list falls back to the other chain's gas token (the default), not its first token", () => {
     const lone: TokenInfo = { address: "0x0000000000000000000000000000000000009999", symbol: "LONE", decimals: 18, side: "first", counterpart: null };
-    expect(counterpartOf(lone, [...FIXTURE_TOKENS, ...nativeTokensOf(FIXTURE_PAIR as PairConfig)], FIXTURE_PAIR as PairConfig)?.symbol).toBe("zUSDC");
+    expect(counterpartOf(lone, [...FIXTURE_TOKENS, ...nativeTokensOf(FIXTURE_PAIR as PairConfig)], FIXTURE_PAIR as PairConfig)?.symbol).toBe(FIXTURE_PAIR.second.nativeSymbol);
+  });
+
+  it("native ETH with no copy on the other chain yet flips to that chain's gas token, not its first token", () => {
+    // New contracts: nothing of WETH is bridged yet, so the list has no zWETH; the first PulseChain token is a test token.
+    const fresh: readonly TokenInfo[] = [
+      { address: "0x0000000000000000000000000000000000003001", symbol: "tTKN", decimals: 18, side: "second", counterpart: "0x0000000000000000000000000000000000004001" },
+      { address: "0x0000000000000000000000000000000000004001", symbol: "zTKN", decimals: 18, side: "first", counterpart: "0x0000000000000000000000000000000000003001" },
+      ...nativeTokensOf(FIXTURE_PAIR as PairConfig),
+    ];
+    const eth = fresh.find((token) => token.side === "first" && token.address === NATIVE_ADDRESS)!;
+    expect(counterpartOf(eth, fresh, FIXTURE_PAIR as PairConfig)).toMatchObject({ side: "second", address: NATIVE_ADDRESS });
+    // And with a copy listed, the counterpart still wins.
+    expect(counterpartOf(bySymbol("ETH"), tokens, FIXTURE_PAIR as PairConfig)?.symbol).toBe("zWETH");
+  });
+
+  it("a token with no counterpart and no gas token on the other side falls back to that side's first token", () => {
+    const lone: TokenInfo = { address: "0x0000000000000000000000000000000000009999", symbol: "LONE", decimals: 18, side: "first", counterpart: null };
+    expect(counterpartOf(lone, [lone, ...FIXTURE_TOKENS], FIXTURE_PAIR as PairConfig)?.side).toBe("second");
   });
 });

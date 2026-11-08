@@ -15,7 +15,7 @@ describe("the fixture indexer client with a token that has no counterpart", () =
     const { createFixtureIndexerClient } = await import("../../src/data/fixture-indexer-client");
     const { buildFixtureFeed, FIXTURE_NOW } = await import("@terminal/data/fixtures");
     const detail = await createFixtureIndexerClient().message(buildFixtureFeed(FIXTURE_NOW)[0]!.id);
-    expect(detail?.transfer?.destinationToken.address).toBe(TOKEN.address);
+    expect(detail?.transfer?.destinationToken?.address).toBe(TOKEN.address);
     expect(detail?.transfer?.sourceToken.address).toBe(TOKEN.address);
   });
 });

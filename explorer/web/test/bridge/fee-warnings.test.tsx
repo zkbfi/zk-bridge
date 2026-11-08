@@ -65,3 +65,14 @@ describe("the sample prices", () => {
     expect(samplePrices([{ ...usdc, symbol: "ODD" }], { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, chainId: 5 } }).get("native:5")).toBeNull();
   });
 });
+
+describe("the native coin, which carries no tip", () => {
+  it("never warns about the fee (small transfer, low tip, high cap): there is no fee", async () => {
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?dir=second-to-first&bridge.token=second:native&bridge.amount=5`);
+    renderWithWallet(<Shell />, { wallet: connectedWallet() });
+    expect(await screen.findByText(/no tip; anyone can deliver it, for free/)).toBeInTheDocument();
+    // Once the draft settles the pill is a plain go, with no warning line under it.
+    await waitFor(() => expect(document.querySelector(".zb-go")?.textContent).toBe("Bridge"));
+    expect(document.querySelector(".zb-verdict")).toBeNull();
+  });
+});

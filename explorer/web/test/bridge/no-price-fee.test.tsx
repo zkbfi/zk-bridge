@@ -81,3 +81,31 @@ describe("when the price cannot be derived", () => {
     expect(output()).not.toHaveTextContent(/^990$/);
   });
 });
+
+describe("the native coin (the wrap route, which carries no tip)", () => {
+  const openNative = (amount: string) => {
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.token=first:native&bridge.amount=${amount}`);
+    renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
+  };
+
+  it("with no market price: no fee is claimed, no 1% note, and You receive is the amount", async () => {
+    everyPriceIs({ kind: "no-market" });
+    openNative("1000");
+    expect(await screen.findByText(`Sent as ${FIXTURE_PAIR.first.nativeSymbol}: no tip; anyone can deliver it, for free; it may take longer.`)).toBeInTheDocument();
+    await waitFor(() => expect(output()).toHaveTextContent(/^1,?000$/));
+    expect(screen.queryByText(/maximum/)).toBeNull();
+    expect(screen.queryByText(/Deliver for/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Delivery settings/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Gas level/ })).toBeNull();
+    expect(document.querySelector(".zb-fee-state")).toBeNull();
+  });
+
+  it("with prices known: still no tip and You receive is the amount", async () => {
+    everyPriceIs({ kind: "known" });
+    answer.data = sample();
+    openNative("2");
+    expect(await screen.findByText(/no tip; anyone can deliver it, for free/)).toBeInTheDocument();
+    await waitFor(() => expect(output()).toHaveTextContent(/^2$/));
+    expect(screen.queryByText(/Deliver for/)).toBeNull();
+  });
+});

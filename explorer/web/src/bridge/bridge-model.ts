@@ -83,7 +83,8 @@ export const tokenFor = (choice: string | undefined, tokens: readonly TokenInfo[
  * The token a flip moves to, keeping the asset (owner, quotes 101–102): a token's counterpart on the other chain; the
  * native coin's counterpart is its wrapped native token's counterpart (ETH on Ethereum ↔ zWETH on PulseChain); and a
  * counterpart that is the other chain's wrapped native token lands on that chain's native coin when the list has it.
- * Only a token with no counterpart in the list falls back to the other chain's first token.
+ * A token with no counterpart in the list (such as a native coin whose copy is not deployed on the other chain yet)
+ * falls back to the other chain's default token, its gas token (tokenFor), never to whichever token is listed first.
  *
  * @param token The token now chosen.
  * @param tokens Every token of the pair.
@@ -105,7 +106,7 @@ export const counterpartOf = (token: TokenInfo, tokens: readonly TokenInfo[], pa
     const native = tokens.find((candidate) => candidate.side === otherSide && isNativeToken(candidate));
     return same(found.address, otherWrapped) && native !== undefined ? native : found;
   }
-  return tokens.find((candidate) => candidate.side === otherSide && !isNativeToken(candidate)) ?? tokens.find((candidate) => candidate.side === otherSide) ?? null;
+  return tokenFor(undefined, tokens, otherSide);
 };
 
 /** The steps a transfer goes through, with an estimate each, for the time drawer. */

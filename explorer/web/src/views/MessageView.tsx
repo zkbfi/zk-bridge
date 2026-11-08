@@ -13,7 +13,7 @@ import type { PairConfig, TokenInfo } from "@terminal/model/types";
 import { formatRoute, type ExplorePage } from "../app/route";
 import { useMessage } from "../app/queries";
 import { useServices } from "../app/services";
-import { amountText } from "../bridge/bridge-model";
+import { amountText, arrivesAsSymbol } from "../bridge/bridge-model";
 import { Chevron, CopyIcon, ExternalLink } from "../bridge/icons";
 import { iconSubjectOf } from "../bridge/image-source";
 import { Num } from "../bridge/Num";
@@ -36,17 +36,24 @@ const explore = (page: ExplorePage): string => formatRoute({ name: "explore", pa
 /** Why a value is "—": the indexer does not record it yet. */
 const NOT_RECORDED = "The indexer does not record this yet";
 
-/** A detail token as the icon set knows it: its side, and the token on the other side as its counterpart. */
-const tokenInfoOf = (token: DetailToken, other: DetailToken, pair: PairConfig): TokenInfo => ({
+/** A detail token as the icon set knows it: its side, and the token on the other side as its counterpart (when known). */
+const tokenInfoOf = (token: DetailToken, other: DetailToken | null, pair: PairConfig): TokenInfo => ({
   address: token.address,
   symbol: token.symbol,
   decimals: token.decimals,
   side: token.chainId === pair.first.chainId ? "first" : "second",
-  counterpart: other.address,
+  counterpart: other?.address ?? null,
 });
 
+/**
+ * What a transfer arrives as: the destination token when the indexer knows it; else, before the first delivery deploys
+ * the copy, the copy's symbol (z + the symbol, or the native token for a copy going home) at the sent token's decimals.
+ */
+export const arrivingAs = (transfer: { readonly sourceToken: DetailToken; readonly destinationToken: DetailToken | null }): { readonly symbol: string; readonly decimals: number } =>
+  transfer.destinationToken ?? { symbol: arrivesAsSymbol(transfer.sourceToken), decimals: transfer.sourceToken.decimals };
+
 /** A token's icon, with the chain badge unless `badge` is false (a row that names the chain on its left). */
-const TokenMark = ({ token, other, pair, size, surface, badge = true }: { readonly token: DetailToken; readonly other: DetailToken; readonly pair: PairConfig; readonly size: number; readonly surface?: "accent" | "plain"; readonly badge?: boolean }) => (
+const TokenMark = ({ token, other, pair, size, surface, badge = true }: { readonly token: DetailToken; readonly other: DetailToken | null; readonly pair: PairConfig; readonly size: number; readonly surface?: "accent" | "plain"; readonly badge?: boolean }) => (
   <TokenIcon subject={iconSubjectOf(tokenInfoOf(token, other, pair), pair)} badgeChainId={badge ? token.chainId : null} symbol={token.symbol} size={size} surface={surface ?? "plain"} decorative />
 );
 
@@ -231,7 +238,7 @@ const DeliveryDrawer = ({ detail, reverted, pair }: { readonly detail: MessageDe
         ["Block", detail.deliveredBlockNumber === null ? <Missing why={NOT_RECORDED} /> : <a href={explore({ kind: "block", chainId: detail.destinationChainId, id: String(detail.deliveredBlockNumber) })}>{detail.deliveredBlockNumber.toLocaleString("en-US")}</a>],
         ["Gas", gasUsed ?? <Missing why={NOT_RECORDED} />],
         ["Cost", cost],
-        ...(detail.transfer === null ? [] : [["Paid out", paid === null ? <Missing why={NOT_RECORDED} /> : <><Num text={amountText(paid, detail.transfer.destinationToken.decimals)} /> {detail.transfer.destinationToken.symbol}</>] as const]),
+        ...(detail.transfer === null ? [] : [["Paid out", paid === null ? <Missing why={NOT_RECORDED} /> : <><Num text={amountText(paid, arrivingAs(detail.transfer).decimals)} /> {arrivingAs(detail.transfer).symbol}</>] as const]),
       ]}
     />
   );
@@ -388,18 +395,22 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
             </AmountRow>
             <AmountRow label="Received" chain={destination} hash={detail.destinationTransactionHash}>
               {(transfer.delivery === null ? transfer.deliveredValue : transfer.delivery.received) === null ? (
-                <Missing why={detail.deliveredAt === null ? "Not delivered yet" : transfer.delivery === null ? NOT_RECORDED : feeMissingWhy(transfer.delivery)} />
+                detail.deliveredAt === null && transfer.destinationToken === null ? (
+                  <span className="zb-small">arrives as {arrivingAs(transfer).symbol} once delivered</span>
+                ) : (
+                  <Missing why={detail.deliveredAt === null ? "Not delivered yet" : transfer.delivery === null ? NOT_RECORDED : feeMissingWhy(transfer.delivery)} />
+                )
               ) : (
                 <>
-                  <b><Num text={amountText((transfer.delivery === null ? transfer.deliveredValue : transfer.delivery.received) as bigint, transfer.destinationToken.decimals)} /></b>
-                  <TokenMark token={transfer.destinationToken} other={transfer.sourceToken} pair={pair} size={22} badge={false} />
+                  <b><Num text={amountText((transfer.delivery === null ? transfer.deliveredValue : transfer.delivery.received) as bigint, arrivingAs(transfer).decimals)} /></b>
+                  {transfer.destinationToken === null ? <span>{arrivingAs(transfer).symbol}</span> : <TokenMark token={transfer.destinationToken} other={transfer.sourceToken} pair={pair} size={22} badge={false} />}
                 </>
               )}
             </AmountRow>
             <FeeRow token={transfer.sourceToken} other={transfer.destinationToken} pair={pair} destination={destination} delivery={transfer.delivery} />
             {transfer.delivery === null || transfer.delivery.fee === null ? null : (
               <p className="zb-small zb-xsummary">
-                {feeSummaryText({ sent: transfer.value, sentDecimals: transfer.sourceToken.decimals, sentSymbol: transfer.sourceToken.symbol, fee: transfer.delivery.fee, received: transfer.delivery.received, decimals: transfer.destinationToken.decimals, symbol: transfer.destinationToken.symbol })}
+                {feeSummaryText({ sent: transfer.value, sentDecimals: transfer.sourceToken.decimals, sentSymbol: transfer.sourceToken.symbol, fee: transfer.delivery.fee, received: transfer.delivery.received, decimals: arrivingAs(transfer).decimals, symbol: arrivingAs(transfer).symbol })}
               </p>
             )}
             {deliveredBy}

@@ -258,3 +258,21 @@ describe("the time drawer with a wait timeline (2026-11-07)", () => {
     expect(screen.getByText("Sent on Ethereum")).toBeInTheDocument();
   });
 });
+
+describe("a route that carries no tip (the native coin)", () => {
+  it("says so in a segment that opens nothing, leaves out the gas level, and keeps the time", async () => {
+    const full = "Sent as ETH: no tip; anyone can deliver it, for free; it may take longer.";
+    const { container } = render(<FeeLine {...props({ tipless: true, summary: "No tip", summaryFull: full })} />);
+    const pill = container.querySelector(".zb-joined.zb-dctl")!;
+    expect(pill.querySelectorAll(".zb-dseg")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /^Delivery settings/ })).toBeNull();
+    expect(screen.queryByRole("img", { name: "Gas" })).toBeNull();
+    const segment = pill.querySelector('[data-fee="none"]')!;
+    expect(segment).toHaveTextContent("No tip");
+    expect(segment).toHaveAccessibleName(full);
+    await userEvent.hover(segment);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(full);
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent(/delivery settings/);
+    expect(screen.getByRole("img", { name: "Time" })).toBeInTheDocument();
+  });
+});

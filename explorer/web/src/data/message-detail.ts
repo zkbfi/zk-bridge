@@ -19,12 +19,18 @@ export type DetailToken = {
   readonly address: Address;
   readonly decimals: number;
   readonly chainId: number;
+  /** True when the token is a bridged copy (it goes home as its native token); false or absent for a native token. */
+  readonly isBridgedCopy?: boolean;
 };
 
 /** The token part of a message. Null for a message that carries no tokens. */
 export type DetailTransfer = {
   readonly sourceToken: DetailToken;
-  readonly destinationToken: DetailToken;
+  /**
+   * The token that arrives, or null when the indexer does not know it yet: before the first delivery deploys the copy,
+   * the destination token has no address (rc17: an in-flight tUSD transfer on the new contracts).
+   */
+  readonly destinationToken: DetailToken | null;
   readonly recipient: Address;
   /** The user who sent the tokens on the source chain (the message's own sender is the mediator), or null when the answer does not carry it. */
   readonly sender: Address | null;
@@ -102,6 +108,7 @@ const tokenOf = (value: unknown, what: string): DetailToken => {
     // The indexer sets decimals to 18 by assumption when the token did not answer.
     decimals: typeof row.decimals === "number" ? row.decimals : 18,
     chainId: readInteger(row.chainId, `${what}.chainId`),
+    ...(row.isBridgedCopy === true ? { isBridgedCopy: true } : {}),
   };
 };
 
@@ -110,7 +117,7 @@ const transferOf = (value: unknown): DetailTransfer | null => {
   const row = readRecord(value, "transfer");
   return {
     sourceToken: tokenOf(row.sourceToken, "transfer.sourceToken"),
-    destinationToken: tokenOf(row.destinationToken, "transfer.destinationToken"),
+    destinationToken: row.destinationToken === null || row.destinationToken === undefined ? null : tokenOf(row.destinationToken, "transfer.destinationToken"),
     recipient: readAddress(row.recipient, "transfer.recipient"),
     sender: typeof row.sender === "string" ? readAddress(row.sender, "transfer.sender") : null,
     value: readAmount(row.value, "value"),
