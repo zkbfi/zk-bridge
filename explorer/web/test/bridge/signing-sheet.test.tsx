@@ -29,7 +29,9 @@ describe("the signing dialog on the bridge screen", () => {
     const steps = sheet.querySelectorAll(".zb-step");
     expect(steps.length).toBe(draft.steps.length);
     expect(steps[0]?.getAttribute("data-state")).toBe("now");
-    expect(within(sheet).getByText(draft.steps[0]!.plan.title)).toBeInTheDocument();
+    // The headline names the current step; the step list names every step.
+    expect(within(sheet).getByTestId("confirm-headline")).toHaveTextContent(draft.steps[0]!.plan.title);
+    expect(within(sheet).getAllByText(draft.steps[0]!.plan.title)).toHaveLength(2);
   });
 
   it("shows an inserted gate confirmation in the step list, the wait for a beacon header, and a retry after a reverted confirmation", async () => {

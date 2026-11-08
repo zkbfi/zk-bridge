@@ -1,0 +1,72 @@
+/*
+ * The review before a signature (owner, 2026-11-08: "the confirmation modal is hugely crowded"). One reading order: the
+ * headline (what happens, the amount, where it goes), the steps, the key facts in one square panel, then the raw facts
+ * behind a Details pill. Square panels, pill controls, no shadows (the sheet itself carries the elevation). Colours are
+ * the bridge screen's roles from bridge.css, so light and dark follow the theme class on <html>.
+ */
+.zb-rv { display: grid; gap: 14px; font-size: var(--zb-step--1); }
+.zb-rv p { margin: 0; }
+
+.zb-rv-head { display: grid; gap: 2px; }
+.zb-rv-title { margin: 0; font-size: var(--zb-step-0); font-weight: 600; }
+.zb-rv-amount { font-size: var(--zb-step-2); font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.zb-rv-dest { color: var(--zb-muted); font-size: var(--zb-step-0); }
+.zb-rv-position { color: var(--zb-muted); font-weight: 600; }
+
+.zb-rv-status:empty { display: none; }
+
+/* A square panel on the raised tone with a hairline: the key facts, the tip. */
+.zb-rv-panel { background: var(--zb-raised); color: var(--zb-raised-ink); border: 1px solid var(--zb-raised-edge); }
+.zb-rv-panel > .zb-rv-h { padding: 12px 14px 0; }
+.zb-rv-panel > .zb-rv-warn { margin: 8px 14px; }
+.zb-rv-panel > .zb-rv-more { padding: 4px 14px 12px; }
+
+/* One fact: label and value side by side; on a phone the label sits over the value. */
+.zb-rv-row { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); gap: 4px 12px; padding: 9px 14px; border-top: 1px solid var(--zb-raised-edge); }
+.zb-rv-row:first-child { border-top: 0; }
+.zb-rv-k { color: var(--zb-muted); }
+.zb-rv-v { min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+@media (max-width: 519px) { .zb-rv-row { grid-template-columns: minmax(0, 1fr); gap: 0; padding-block: 7px; } }
+.zb-rv-mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.92em; overflow-wrap: anywhere; word-break: break-all; }
+.zb-rv-meaning { color: var(--zb-muted); }
+
+.zb-rv-h { margin: 0; font-size: var(--zb-step-micro); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--zb-muted); }
+.zb-rv-group { display: grid; }
+.zb-rv-group > .zb-rv-h { padding: 12px 0 2px; }
+.zb-rv-group .zb-rv-row { padding-inline: 0; }
+.zb-rv-p { line-height: 1.45; }
+.zb-rv-p > p + p { margin-top: 6px; }
+.zb-rv-strong { font-weight: 600; }
+.zb-rv-small { color: var(--zb-muted); font-size: var(--zb-step-micro); }
+
+/* The one sentence about the router of a relay with no tip: an accent bar, not a box. */
+.zb-rv-notice { padding-left: 12px; border-left: 3px solid var(--zb-accent); }
+.zb-rv-warn { border: 1.5px solid var(--zb-accent); color: var(--zb-warn); padding: 8px 12px; }
+
+/* Details and other disclosures: a pill with a centred chevron that turns when open. */
+.zb-rv-more > summary { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: var(--zb-touch); padding: 0 18px; border: 1.5px solid var(--zb-pill-edge); border-radius: 999px; background: var(--zb-pill); color: var(--zb-pill-ink); font-weight: 600; cursor: pointer; list-style: none; user-select: none; }
+.zb-rv-more > summary::-webkit-details-marker { display: none; }
+.zb-rv-more > summary .zb-chev { width: 14px; height: 14px; transition: transform 140ms ease-out; }
+.zb-rv-more[open] > summary .zb-chev { transform: rotate(180deg); }
+.zb-rv-more > summary:focus-visible { outline: 2px solid var(--zb-accent); outline-offset: 2px; }
+.zb-rv-more-body { display: grid; gap: 10px; margin-top: 10px; }
+.zb-rv > .zb-rv-review > .zb-rv-more > .zb-rv-more-body, .zb-rv > .zb-rv-more > .zb-rv-more-body { background: var(--zb-raised); color: var(--zb-raised-ink); border: 1px solid var(--zb-raised-edge); padding: 2px 14px 12px; }
+@media (prefers-reduced-motion: reduce) { .zb-rv-more > summary .zb-chev { transition: none; } }
+
+.zb-rv-review { display: grid; gap: 14px; }
+.zb-rv-notes { margin: 0; padding: 10px 0 0 18px; display: grid; gap: 4px; color: var(--zb-muted); }
+
+.zb-rv-sent { display: flex; align-items: baseline; gap: 10px; padding: 10px 0; }
+.zb-rv-sent + .zb-rv-sent { border-top: 1px solid var(--zb-raised-edge); }
+.zb-rv-sent-text { min-width: 0; overflow-wrap: anywhere; }
+.zb-rv-pill { flex: none; display: inline-flex; align-items: center; min-height: 22px; padding: 0 10px; border-radius: 999px; border: 1.5px solid currentColor; font-size: var(--zb-step-micro); font-weight: 700; }
+.zb-rv-pill[data-status="success"] { color: var(--zb-good); }
+.zb-rv-pill[data-status="reverted"] { color: var(--zb-bad); }
+
+.zb-rv-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+/* In the bridge's sheet the send button is the Go pill; a blocked send is the blocked tone. */
+.zb-sign .zb-rv-actions button { min-height: var(--zb-touch); padding-inline: 20px; font-weight: 700; }
+.zb-sign .zb-rv-quiet { border: 1.5px solid var(--zb-pill-edge) !important; background: var(--zb-pill) !important; color: var(--zb-pill-ink) !important; }
+.zb-sign .zb-rv-send { background: var(--zb-go) !important; color: var(--zb-go-ink) !important; }
+.zb-sign .zb-rv-send:disabled { background: var(--zb-blocked) !important; color: var(--zb-blocked-ink) !important; opacity: 1 !important; }
+@media (max-width: 519px) { .zb-sign .zb-rv-actions > button { flex: 1 1 0; } }

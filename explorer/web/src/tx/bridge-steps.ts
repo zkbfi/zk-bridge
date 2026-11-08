@@ -29,6 +29,8 @@ export type StepDisclosure = {
   readonly destinationNativeSymbol: string | null;
   /** The chain that delivers the message, where the router lives. Null for a step that is not a relay. */
   readonly destinationChainId: number | null;
+  /** The name of that chain, for the headline of the review. Absent or null: the review says `the other chain`. */
+  readonly destinationChainName?: string | null;
   /** The token that the amount is in, for the tip lines. Null for a step that is not a relay. */
   readonly amountToken: { readonly symbol: string; readonly decimals: number } | null;
   /** The tip that this relay carries, or null for a plain relay. */
@@ -158,7 +160,7 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
   if (delivery === null) {
     if (call !== null) throw new PlanInputError("A call after the delivery needs a tip, because only the delivery router makes it. Choose a tip, or clear the call fields.");
     const steps = buildBridgeSteps(terminalValues, tokens, context);
-    return withDisclosure(steps, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, delivery: null });
+    return withDisclosure(steps, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, destinationChainName: destinationChain.name, delivery: null });
   }
 
   if (isNative) throw new PlanInputError("The wrap route carries no call data, so it cannot carry a tip.");
@@ -177,7 +179,7 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
         ? { ...step.plan, arguments: step.plan.arguments.map((argument) => explainRouterReceiver(argument, { chainName: destinationChain.name, recipient: receiver, deployed })) }
         : step.plan,
   }));
-  return withDisclosure(adjusted, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, delivery, deliveryCall: call });
+  return withDisclosure(adjusted, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, destinationChainName: destinationChain.name, delivery, deliveryCall: call });
 };
 
 /**
