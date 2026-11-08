@@ -5,6 +5,7 @@ import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
 import { bridgeLinkedFields } from "../../src/app/route";
 import { connectedWallet, renderWithWallet } from "../app/support";
+import { USDC_QUERY } from "./token-link";
 
 const OTHER = "0x52908400098527886E0F7030069857D2E4169EE7";
 const ROUTER = "0x1111111111111111111111111111111111111111";
@@ -23,7 +24,7 @@ describe("which link fields need the user's attention", () => {
 });
 
 describe("a crafted bridge link", () => {
-  const crafted = `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=0.01&bridge.receiver=${OTHER}&tip.mode=fixed&tip.fixed=5&tip.router=${ROUTER}`;
+  const crafted = `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}&bridge.amount=0.01&bridge.receiver=${OTHER}&tip.mode=fixed&tip.fixed=5&tip.router=${ROUTER}`;
 
   it("names the receiver, the tip and the router on the screen", async () => {
     window.history.replaceState(null, "", crafted);
@@ -55,7 +56,7 @@ describe("a crafted bridge link", () => {
   });
 
   it("repeats the warning in the review, with the full receiver address", async () => {
-    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=0.01&bridge.receiver=${OTHER}`);
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}&bridge.amount=0.01&bridge.receiver=${OTHER}`);
     renderWithWallet(<Shell />, { wallet: connectedWallet() });
     const pill = await waitFor(() => {
       const found = screen.getAllByRole("button").find((button) => button.classList.contains("zb-go"));
@@ -70,7 +71,7 @@ describe("a crafted bridge link", () => {
   });
 
   it("shows the full relay router in the review, with the warning for a router that is not the delivery router", async () => {
-    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=0.01&tip.router=${ROUTER}`);
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}&bridge.amount=0.01&tip.router=${ROUTER}`);
     renderWithWallet(<Shell />, { wallet: connectedWallet() });
     const pill = await waitFor(() => {
       const found = screen.getAllByRole("button").find((button) => button.classList.contains("zb-go"));

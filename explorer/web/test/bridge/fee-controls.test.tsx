@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
 import { connectedWallet, disconnectedWallet, renderWithWallet } from "../app/support";
+import { USDC_QUERY } from "./token-link";
 
 // The owner (quotes 81–82): the bars beside the gas can are the gas level; tapping them moves every number "because a
 // new level of fee spend has been consented to"; the tip must drive the fee; all of it works without a wallet.
@@ -13,7 +14,7 @@ beforeEach(() => {
 });
 
 const at = async (query: string, connected: boolean) => {
-  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
+  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}&${query}`);
   renderWithWallet(<Shell />, { wallet: connected ? connectedWallet() : disconnectedWallet() });
   await waitFor(() => expect(feeText()).toMatch(/\d/), { timeout: 3000 });
 };

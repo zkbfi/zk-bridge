@@ -20,7 +20,7 @@ A copy takes the name of the native token, then " from " and the home chain, suc
 
 ## Choosing the token
 
-Tap the token beside the amount to open the token list.
+The token starts as the gas token of the chain you send from: ETH out of Ethereum, PLS out of PulseChain. A link that names a token opens with that token. Tap the token beside the amount to open the token list.
 
 - The tabs filter by chain: the first tab shows all chains, the others one chain each.
 - Each list shows your tokens: those you hold, or have bridged with zkb.fi before. Each row shows the token's price and your balance.

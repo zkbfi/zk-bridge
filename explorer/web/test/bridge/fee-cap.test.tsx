@@ -5,6 +5,7 @@ import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
 import { loadFeeCap, loadHardCap } from "../../src/bridge/fee-cap";
 import { connectedWallet, renderWithWallet } from "../app/support";
+import { tokenQuery } from "./token-link";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -14,7 +15,7 @@ const goPill = (): HTMLButtonElement => screen.getAllByRole("button").find((butt
 
 describe("the hard cap on the bridge screen", () => {
   const at = async (query: string) => {
-    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${tokenQuery(query)}`);
     renderWithWallet(<Shell />, { wallet: connectedWallet() });
     await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
   };
@@ -65,7 +66,7 @@ describe("the hard cap on the bridge screen", () => {
 });
 
 const openReview = async (query: string) => {
-  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${query}`);
+  window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${tokenQuery(query)}`);
   renderWithWallet(<Shell />, { wallet: connectedWallet() });
   const pill = await waitFor(() => {
     const found = screen.getAllByRole("button").find((button) => button.classList.contains("zb-go"));
@@ -81,7 +82,7 @@ const openReview = async (query: string) => {
 
 describe("the cap in the review", () => {
   // PulseChain → Ethereum at the sample prices: $1,000 of zUSDC, delivery about $5.06 on Ethereum.
-  const GAS_BASED = "dir=second-to-first&bridge.amount=1000&tip.mode=gas-multiplier&tip.price=3000";
+  const GAS_BASED = `dir=second-to-first&bridge.amount=1000&tip.mode=gas-multiplier&tip.price=3000`;
 
   it("warns High cap % for a gas-based fee whose cap would leave too much if gas rises, shows the drift, and lowers the cap in place", async () => {
     const review = await openReview(GAS_BASED);
@@ -97,7 +98,7 @@ describe("the cap in the review", () => {
   });
 
   it("never warns about the cap for a fee fixed at signing (the default share)", async () => {
-    const review = await openReview("dir=second-to-first&bridge.amount=1000&tip.cap=2");
+    const review = await openReview(`dir=second-to-first&bridge.amount=1000&tip.cap=2`);
     expect(within(review).queryByRole("group", { name: "Fee cap" })).toBeNull();
     expect(within(review).queryByText("Can drift")).toBeNull();
   });
