@@ -245,3 +245,16 @@ describe("tickLabels", () => {
     expect(tickLabels([], 320)).toEqual({ shown: [], hidden: [] });
   });
 });
+
+describe("the time drawer with a wait timeline (2026-11-07)", () => {
+  it("shows the timeline instead of the plain step list when one is given, and the steps when none is", async () => {
+    const { unmount } = render(<FeeLine {...props({ timeline: <p>typical 18 min · up to 75 min</p> })} />);
+    await userEvent.click(document.querySelector('[data-fee="time"]') as HTMLElement);
+    expect(screen.getByText("typical 18 min · up to 75 min")).toBeInTheDocument();
+    expect(screen.queryByText("Sent on Ethereum")).toBeNull();
+    unmount();
+    render(<FeeLine {...props()} />);
+    await userEvent.click(document.querySelector('[data-fee="time"]') as HTMLElement);
+    expect(screen.getByText("Sent on Ethereum")).toBeInTheDocument();
+  });
+});

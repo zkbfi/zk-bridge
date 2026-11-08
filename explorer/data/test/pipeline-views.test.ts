@@ -30,6 +30,13 @@ describe("the pipeline reads (2026-11-01)", () => {
     expect(benchmarksSchema.parse(ANSWERS.benchmarks).steps.workerWait.medianMs).toBe(60_000);
   });
 
+  it("pipeline: the rule that starts a proof is optional (an older backend omits it) and strict when given", () => {
+    const rule = { minIntervalSeconds: 3600, lookaheadSeconds: 320, profitMargin: 1, proofCostUsd: "0.025000", priced: false };
+    expect(directionPipelineSchema.parse({ ...ANSWERS.pipeline, rule }).rule).toEqual(rule);
+    expect(directionPipelineSchema.parse(ANSWERS.pipeline).rule).toBeUndefined();
+    expect(() => directionPipelineSchema.parse({ ...ANSWERS.pipeline, rule: { ...rule, priced: "no" } })).toThrow();
+  });
+
   it("progress: the answer, null for an unknown message, an error for another status or shape", async () => {
     const { client, seen } = clientAnswering({ [`/progress/${ID}`]: { status: 200, body: ANSWERS.progress } });
     expect(await client.progress(ID)).toMatchObject({ messageId: ID, job: { jobId: "new" } });

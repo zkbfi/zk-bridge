@@ -2,7 +2,7 @@
  * The proving pipeline of one direction: the batch that waits, the job that runs and its step, the newest proof and
  * where it is, the light client head, and the watcher's latest decision.
  */
-import type { ProofDirection } from "@zk-bridge/shared";
+import { PROOF_COST_USD, USD, type ProofDirection } from "@zk-bridge/shared";
 import type { HeldProof } from "../requests/held-proofs.ts";
 import type { Job } from "../requests/jobs.ts";
 import type { Storage } from "../storage.ts";
@@ -10,10 +10,38 @@ import type { WatchDecision } from "../watch/decisions.ts";
 import type { IndexedHead } from "./indexer.ts";
 import { jobStep, type Estimates, type ProofWhere, type WaitingService } from "./progress.ts";
 
+/**
+ * The rule that decides when a message of the direction gets a proof, for the dapp's wait timeline: a batch that does
+ * not pay waits `minIntervalSeconds` since the direction's last proof; it pays when its fees reach
+ * (`proofCostUsd` + the delivery gas of each message) times `profitMargin`. `priced` is false when the pair has no
+ * PulseChain mainnet side to price tokens on (a testnet): nothing pays there, so only the interval applies.
+ */
+export type PipelineRule = {
+  readonly minIntervalSeconds: number;
+  readonly lookaheadSeconds: number;
+  readonly profitMargin: number;
+  /** The proof's share of the cost of one message, in dollars, as text ("0.025000"). */
+  readonly proofCostUsd: string;
+  readonly priced: boolean;
+};
+
+/** The rule of a direction as the answer shows it. */
+export function pipelineRuleOf(rule: { readonly minIntervalSeconds: number; readonly lookaheadSeconds: number; readonly marginWad: bigint }, priced: boolean): PipelineRule {
+  return {
+    minIntervalSeconds: rule.minIntervalSeconds,
+    lookaheadSeconds: rule.lookaheadSeconds,
+    profitMargin: Number(rule.marginWad) / 1e18,
+    proofCostUsd: `${PROOF_COST_USD / USD}.${(PROOF_COST_USD % USD).toString().padStart(18, "0").slice(0, 6)}`,
+    priced,
+  };
+}
+
 /** The answer of `GET /directions/:direction/pipeline`. Times in milliseconds since 1970. */
 export type Pipeline = {
   readonly direction: ProofDirection;
   readonly now: number;
+  /** When a proof of the direction starts: the interval, the margin and whether fees can be priced. */
+  readonly rule: PipelineRule;
   /**
    * The batch the watcher holds back, or null when none waits. The wire keeps its first names: `trigger` "max-wait" and
    * `fallbackAt` are the minimum interval since the last proof (`watch.minIntervalSeconds`) and when it ends.
@@ -89,6 +117,7 @@ const describeJob = (job: Job) => ({ jobId: job.id, status: job.status, createdA
 /** Builds the pipeline of a direction from its facts. */
 export function buildPipeline(input: {
   direction: ProofDirection;
+  rule: PipelineRule;
   activeJob: Job | null;
   latestJob: Job | null;
   proofs: readonly HeldProof[];
@@ -123,6 +152,7 @@ export function buildPipeline(input: {
   return {
     direction: input.direction,
     now,
+    rule: input.rule,
     batch,
     job,
     latestJob: input.latestJob === null ? null : describeJob(input.latestJob),
