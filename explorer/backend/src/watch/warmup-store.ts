@@ -44,7 +44,13 @@ export interface WarmupStore {
   lead(config: WarmupConfig): Lead;
   recordObservation(input: { direction: ProofDirection; source: ObservationSource; seconds: number; at: number }): void;
   /** Opens a session and answers its identifier. */
-  openSession(input: { direction: ProofDirection; why: string; dueAt: number; leadSeconds: number; at: number }): string;
+  openSession(input: { direction: ProofDirection; why: string; dueAt: number; leadSeconds: number; at: number; prediction?: string }): string;
+  /**
+   * Whether a session of the direction was opened for the prediction ({@link predictionOf}) and spent its start: one
+   * that is open or ended in any way but `unusable` (the plan moved far off, so the prediction changed) or `restart`
+   * (the backend stopped it). Read from the database, so it survives a restart of the backend.
+   */
+  predictionStarted(direction: ProofDirection, prediction: string): boolean;
   markReady(id: string, at: number): void;
   /**
    * Ends a session. Its billed time is the estimate from the start to `at`, plus the endpoint's idle timeout (a worker
@@ -81,10 +87,17 @@ export function createWarmupStore(storage: Storage): WarmupStore {
     openSession(input) {
       const id = randomUUID();
       database
-        .prepare("INSERT INTO warmup_sessions (id, direction, why, due_at, lead_seconds, started_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .run(id, input.direction, input.why, input.dueAt, input.leadSeconds, input.at);
+        .prepare("INSERT INTO warmup_sessions (id, direction, why, due_at, lead_seconds, started_at, prediction) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(id, input.direction, input.why, input.dueAt, input.leadSeconds, input.at, input.prediction ?? null);
       database.prepare("DELETE FROM warmup_sessions WHERE ended_at IS NOT NULL AND ended_at < ?").run(input.at - SESSION_RETENTION_MILLISECONDS);
       return id;
+    },
+    predictionStarted(direction, prediction) {
+      return (
+        database
+          .prepare("SELECT 1 FROM warmup_sessions WHERE direction = ? AND prediction = ? AND COALESCE(outcome, '') NOT IN ('unusable', 'restart') LIMIT 1")
+          .get(direction, prediction) !== undefined
+      );
     },
     markReady(id, at) {
       database.prepare("UPDATE warmup_sessions SET ready_at = ? WHERE id = ? AND ready_at IS NULL").run(at, id);
