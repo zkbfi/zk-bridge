@@ -195,11 +195,19 @@ contract RedeployLayersTest is WorldSupport {
         script.readKept(chainA);
     }
 
-    /// Claim: the configuration is read, and a placeholder nonce is refused. Shows: the testnet file parses with the
-    /// placeholder refused by name.
+    /// Claim: the configuration is read, and a placeholder nonce is refused. Shows: the testnet file (filled for the run
+    /// of 2026-11-08) parses with the nonces that ran, and the same file with its placeholder back is refused by name.
     function test_theTestnetConfigurationRefusesItsPlaceholderNonce() public {
         string memory json = vm.readFile("script/testnet/redeploy.config.testnet.json");
+        RedeployLayers.ChainConfig memory chainA = script.readChain(json, ".chainA");
+        RedeployLayers.ChainConfig memory chainB = script.readChain(json, ".chainB");
+        assertEq(chainA.chainId, 11155111);
+        assertEq(chainA.deployerNonce, 14);
+        assertEq(chainB.chainId, 943);
+        assertEq(chainB.deployerNonce, 18);
+
+        string memory placeholder = vm.replace(json, '"deployerNonce": "14"', '"deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_SEPOLIA"');
         vm.expectRevert(abi.encodeWithSelector(RedeployLayers.PlaceholderValue.selector, ".chainA.deployerNonce"));
-        script.readChain(json, ".chainA");
+        script.readChain(placeholder, ".chainA");
     }
 }
