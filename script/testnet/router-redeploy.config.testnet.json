@@ -10,7 +10,7 @@
   "chainA": {
     "rpcAlias": "sepolia",
     "chainId": "11155111",
-    "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_SEPOLIA",
+    "deployerNonce": "22",
     "previousBridge": "0xd4b1ecc1b919cf9ba7ff45e57e1712b31aba4c66",
     "previousMediator": "0x2c00675092e2955d27f476b5a1bac9ac5bb6fa86",
     "previousRouter": "0x3846e483c98cd0f164c29a5e40f7295a5765aba4"
@@ -18,7 +18,7 @@
   "chainB": {
     "rpcAlias": "pulsechain_testnet_v4",
     "chainId": "943",
-    "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_943",
+    "deployerNonce": "26",
     "previousBridge": "0x3846e483c98cd0f164c29a5e40f7295a5765aba4",
     "previousMediator": "0x8eef4098d3726955f7d227c4d1d92487c99f7e62",
     "previousRouter": "0xbea5f0fd3712b02c25bda32c7719fb9373c0fa20"

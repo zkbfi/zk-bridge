@@ -2,7 +2,10 @@
   "chain_a": {
     "bridge": "0xd4b1ecc1b919cf9ba7ff45e57e1712b31aba4c66",
     "chain_id": 11155111,
-    "delivery_router": "0x3846e483c98cd0f164c29a5e40f7295a5765aba4",
+    "delivery_router": "0x1c4627d76e6b423e06c61f055c2ce0d3e944ce8a",
+    "delivery_routers": [
+      "0x3846e483c98cd0f164c29a5e40f7295a5765aba4"
+    ],
     "gate": "0x1782a38a37ce9fb9f53b0585b23b833847007e20",
     "light_client": "0x64ddc23ff43ea0cd2ce9a13ef6681ee651e76e4e",
     "mediator": "0x2c00675092e2955d27f476b5a1bac9ac5bb6fa86",
@@ -13,7 +16,10 @@
   "chain_b": {
     "bridge": "0x3846e483c98cd0f164c29a5e40f7295a5765aba4",
     "chain_id": 943,
-    "delivery_router": "0xbea5f0fd3712b02c25bda32c7719fb9373c0fa20",
+    "delivery_router": "0x6e0178049277442d5bf58963f9a1e0469b46fce3",
+    "delivery_routers": [
+      "0xbea5f0fd3712b02c25bda32c7719fb9373c0fa20"
+    ],
     "fork_registry": "0x0f094a965f280599b41f57a5182955f4afad063f",
     "gate": "0x0e8586fb952f8a299e31c8b8fbe093dde8e1be93",
     "light_client": "0x1dbbcc0bc25de5f6ae122fb0009b3ee4931fd958",
