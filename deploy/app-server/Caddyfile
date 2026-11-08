@@ -8,7 +8,7 @@
 #
 #   prove     the dapp's proof flow: start a job, read its state, read the latest proof of a direction; and the
 #             pipeline reads: where a transfer is and what it waits on (/progress), the batch, job and proof of a
-#             direction (/directions/<direction>/pipeline), the timings of each step (/benchmarks) and the warm-up spending (/warmup/summary)
+#             direction (/directions/<direction>/pipeline), the timings of each step (/benchmarks) and the GPU billing (/billing; /warmup/summary is its old name)
 #   webhook   the prover's callback; the backend's publicUrl names this host
 #   archive   evidence for messages that are sent and not yet delivered
 #   status    the status page and API of explorer/status (not an upstream snippet: one process, no green)
@@ -39,7 +39,7 @@ import /etc/caddy/upstreams/indexer.caddy
 }
 
 {$ZKB_PROVE_HOST} {
-	@routes path /health /requests /requests/* /proofs/latest/* /progress/* /directions/* /benchmarks /warmup/summary
+	@routes path /health /requests /requests/* /proofs/latest/* /progress/* /directions/* /benchmarks /billing /warmup/summary
 	handle @routes {
 		import backend
 	}

@@ -260,8 +260,20 @@ export const buildBackendSpec = (): OpenApiDocument => {
       "/benchmarks": {
         get: get("Proving timings", "Median and 90th percentile of each pipeline step over a window.", [query("window", "A number and m, h or d, from 1h to 30d.", { type: "string", default: "24h" })], json(open("Steps per direction."), "The timings."), { "400": errorResponse("Invalid window."), ...tooMany }),
       },
+      "/billing": {
+        get: get(
+          "GPU billing",
+          "What RunPod billed for GPU time, per UTC day (`byDay`) and in total (`total`): `billedUsd`, `billedSeconds` and `effectiveUsdPerHour`, null for a day RunPod has no figure for. `last24h` holds the last 24 hours. The price of a GPU hour is measured from RunPod's billing (amount divided by billed hours over the last 7 days): `rateSource` is `runpod`, and `usdPerHour` is that rate. Only when RunPod's billing cannot be read is `rateSource` `assumed`, and `usdPerHour` the configured price (`assumptions.gpuUsdPerHour`, a fallback). `ageSeconds` says how old the reading is (RunPod is read at most every 10 minutes, and the last good reading is kept when a read fails). `account` (`balanceUsd`, `balanceAgeSeconds`, `spendNowUsdPerHour`, `spendLimitUsd`, `daysLeft` at the 7-day average `averageDailyUsd7d`) is filled only for requests that reach the backend directly; through the public host its fields are null. `earlyStarts`, on each day and in the total, is the part of the bill that workers started before a proof account for: `sessions`, `used`, `unused`, `unusedSeconds`, `unusedUsd` (at `usdPerHour`) and `readyBeforeDueSeconds`.",
+          [query("days", "Days to report, 1 to 30.", { type: "integer", default: 7 })],
+          json(open("Billing per day, the total and the early starts."), "The billing."),
+          { "400": errorResponse("Invalid days."), ...tooMany },
+        ),
+      },
       "/warmup/summary": {
-        get: get("Warm-up spending", "GPU warm-up sessions per day: used and wasted, billed seconds and cost. The price of a GPU hour is measured from RunPod's billing (amount divided by billed hours over the last 7 days): `rateSource` is `runpod`, and `usdPerHour` is that rate. Only when RunPod's billing cannot be read is `rateSource` `assumed`, and `usdPerHour` the configured price (`assumptions.gpuUsdPerHour`, a fallback). `estimatedCostUsd` and `wastedCostUsd` use `usdPerHour`. `billing` holds what RunPod billed in the last 24 h (`last24hUsd`, `last24hBilledSeconds`), the account `balanceUsd`, `currentSpendPerHr`, `spendLimit`, the 7-day average spend per day and the days the balance lasts at it; `ageSeconds` and `balanceAgeSeconds` say how old each reading is (RunPod is read at most every 10 minutes, and the last good reading is kept when a read fails). Each day and the total carry `billedUsd` and `runpodBilledSeconds` for the whole endpoint, null when RunPod has no figure for the day.", [query("days", "Days to report, 1 to 30.", { type: "integer", default: 1 })], json(open("Daily totals and the sum."), "The summary."), { "400": errorResponse("Invalid days."), ...tooMany }),
+        get: {
+          ...get("Early-start spending (deprecated)", "Deprecated: the old name of `/billing`, kept with its old body (worker sessions per day with `wasted` fields, and RunPod's `billing` beside them). Use `/billing`.", [query("days", "Days to report, 1 to 30.", { type: "integer", default: 7 })], json(open("Daily totals and the sum."), "The summary."), { "400": errorResponse("Invalid days."), ...tooMany }),
+          deprecated: true,
+        },
       },
       "/archive/proofs": { get: get("Archived proof rows", "The proofs the backend archived.", [], json(open("The rows."), "The rows.")) },
       "/evidence/{messageId}": { get: get("Delivery evidence", "The archived evidence of a delivery, as JSON.", [messageId], json(open("The evidence."), "The evidence."), { "400": errorResponse("Not a message identifier."), "404": errorResponse("No evidence for this message.") }) },

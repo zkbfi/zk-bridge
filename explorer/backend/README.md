@@ -4,7 +4,7 @@ The backend is one open-source service with four modules. Each module can run al
 
 | Module | What it does | Routes |
 | --- | --- | --- |
-| `requests` | Takes proof requests from dapp pages and runs one proving job per direction, and shows where each transfer is in the pipeline. | `POST /requests`, `GET /requests/:id`, `GET /directions/:direction`, `GET /progress/:messageId`, `GET /directions/:direction/pipeline`, `GET /benchmarks`, `GET /warmup/summary` |
+| `requests` | Takes proof requests from dapp pages and runs one proving job per direction, and shows where each transfer is in the pipeline. | `POST /requests`, `GET /requests/:id`, `GET /directions/:direction`, `GET /progress/:messageId`, `GET /directions/:direction/pipeline`, `GET /benchmarks`, `GET /billing`, `GET /warmup/summary` (deprecated) |
 | `webhook` | Receives the proof package from the prover, checks it, and posts it to the msgboard. | `POST /webhook/jobs/:jobId` |
 | `msgboard-indexer` | Keeps the latest valid proof of each direction. | `GET /proofs/latest/:direction` |
 | `archive` | Builds and keeps evidence for messages that are sent and not yet delivered. | `GET /evidence/:messageId` |
@@ -254,7 +254,7 @@ Settings, all optional (`watch` in the configuration file):
 | `warmup.defaultLeadSeconds`, `minLeadSeconds`, `maxLeadSeconds` | 90, 20, 600 | The lead time without observations, and its bounds. |
 | `warmup.holdIntervalSeconds` | 40 | The ping that keeps a warm worker, after its last ready answer. Below the endpoint's idle timeout. |
 | `warmup.intervalSeconds`, `graceSeconds`, `minGapSeconds` | 30, 45, 300 | Ping again while no worker is ready; end after the due time; the pause after a timed-out ping. |
-| `warmup.idleTimeoutSeconds`, `gpuUsdPerHour` | 60, 2.25 | The endpoint's idle timeout (billed after the last request) and the GPU price, for the cost estimate of `/warmup/summary`. |
+| `warmup.idleTimeoutSeconds`, `gpuUsdPerHour` | 60, 2.25 | The endpoint's idle timeout (billed after the last request) and the GPU price, for the unused-worker cost of `/billing` when RunPod's billing cannot be read. |
 | `warmup.dailyCapSeconds` | 3600 | The most warm-up seconds in any 24 hours, both directions together. |
 | `warmup.pingTimeoutSeconds` | 300 | How long one ping may wait for a cold worker. |
 | `warmup.leadSeconds` | none | The fixed lead time of before 2026-11-01. Still accepted; it does nothing and the start log warns (`config_ignored`). |
@@ -393,25 +393,43 @@ that did not fail. `head` is null when the indexer cannot be read. `decision` ca
 `proof_due` / `proof_not_due`, and for a due proof `trigger`, `batchSize`, `feesUsd`, `costUsd` and `outcome`
 (`job-started`, `job-active`, `keep-alive-this-period`, `duplicate`, `nothing-to-prove`, `rate-limited`, `cannot-check`).
 
-### `GET /warmup/summary?days=7`
+### `GET /billing?days=7`
 
-What the warm-ups of the remote prover cost, per UTC day (by the day a session started). `days` is a whole number from 1
-to 30 (default 7); anything else is a 400. It names no host and no key.
+GPU billing in general, per UTC day and in total: what RunPod billed, the billed seconds, the effective price of a GPU
+hour, the last 24 hours and where the rate comes from. `days` is a whole number from 1 to 30 (default 7); anything else
+is a 400. It names no host and no key. The account (`account`: balance, spend limit, spend now, days left) is filled
+only for a direct local request, such as the status service on 127.0.0.1; a request that came through Caddy (it has
+`X-Forwarded-For`) gets nulls.
 
 ```json
 {
-  "days": 7, "assumptions": { "idleTimeoutSeconds": 60, "gpuUsdPerHour": 2.25, "dailyCapSeconds": 3600 },
-  "total": { "sessions": 31, "used": 26, "wasted": 5, "billedSeconds": 3100, "wastedSeconds": 420, "idleBeforeDueSeconds": 380, "estimatedCostUsd": 1.94, "wastedCostUsd": 0.26 },
-  "byDay": [ { "day": "2026-11-06", "sessions": 5, "used": 4, "wasted": 1, "billedSeconds": 510, "wastedSeconds": 80, "idleBeforeDueSeconds": 60, "estimatedCostUsd": 0.3188, "wastedCostUsd": 0.05 } ]
+  "days": 7, "rateSource": "runpod", "usdPerHour": 0.76,
+  "assumptions": { "idleTimeoutSeconds": 60, "gpuUsdPerHour": 2.25, "gpuUsdPerHourIsFallback": true, "dailyCapSeconds": 3600 },
+  "available": true, "ageSeconds": 90,
+  "last24h": { "billedUsd": 1.18, "billedSeconds": 5400 }, "effectiveUsdPerHour": 0.76, "averageDailyUsd7d": 1.7,
+  "account": { "balanceUsd": 153.38, "balanceAgeSeconds": 30, "spendNowUsdPerHour": 0, "spendLimitUsd": 80, "daysLeft": 90.2 },
+  "total": { "billedUsd": 11.9, "billedSeconds": 52000, "effectiveUsdPerHour": 0.8238,
+    "earlyStarts": { "sessions": 31, "used": 26, "unused": 5, "unusedSeconds": 420, "unusedUsd": 0.0887, "readyBeforeDueSeconds": 380 } },
+  "byDay": [ { "day": "2026-11-06", "billedUsd": 1.7, "billedSeconds": 7600, "effectiveUsdPerHour": 0.8053,
+    "earlyStarts": { "sessions": 5, "used": 4, "unused": 1, "unusedSeconds": 80, "unusedUsd": 0.0169, "readyBeforeDueSeconds": 60 } } ]
 }
 ```
 
-`billedSeconds` is the estimate from each session's start to its end plus the endpoint's idle timeout (a worker is billed
-until the timeout after its last request; a session that a restart ended has no idle part); `wastedSeconds` counts the
-sessions that did not end `used`. `idleBeforeDueSeconds` is how long a worker sat ready before the due time in used
-sessions: the lead that was longer than it needed to be. The status page shows the last 24 hours (`Prover warm-ups`).
+`rateSource` is `runpod` when the rate is measured from RunPod's billing (amount over billed hours, last 7 days) and
+`assumed` when it could not be read; then `usdPerHour` is the configured price. `billedUsd` and `billedSeconds` are null
+for a day RunPod has no figure for. `earlyStarts` is the part of it that workers started before a proof account for
+(by the day a session started): `unused` counts the sessions that did not end `used`, `unusedSeconds` their billed time
+estimated from each session's start to its end plus the endpoint's idle timeout (a session that a restart ended has no
+idle part), `unusedUsd` that time at `usdPerHour`, and `readyBeforeDueSeconds` how long a worker sat ready before the due
+time in used sessions: the lead that was longer than it needed to be. The status page shows the last 24 hours (`GPU billing`).
 
-#### Measuring the warm-up
+### `GET /warmup/summary?days=7` (deprecated)
+
+The old name of `/billing`, with its old body: the worker sessions per day (`sessions`, `used`, `wasted`, `billedSeconds`,
+`wastedSeconds`, `idleBeforeDueSeconds`, `estimatedCostUsd`, `wastedCostUsd`) with RunPod's `billing` beside them
+(`billedUsd` and `runpodBilledSeconds` per day and in total). Same `days`, same limit, same account rule. Use `/billing`.
+
+#### Measuring the early starts
 
 `scripts/warmup-replay.sh /path/to/backend.sqlite [hours] ["p:margin ..."]` (needs `sqlite3`, only reads) prints the
 sessions of the window by outcome with the GPU time they held, and replays the `used` ones with other lead settings from

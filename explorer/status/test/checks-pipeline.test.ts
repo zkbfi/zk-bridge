@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { benchmarksCheck, indexerFeedCheck, pipelineCheck, warmupCheck } from "../src/checks/pipeline.ts";
+import { benchmarksCheck, indexerFeedCheck, pipelineCheck, gpuBillingCheck } from "../src/checks/pipeline.ts";
 import { fakeFetch, makeDeps } from "./support.ts";
 
 const NOW = 1_800_000_000_000;
@@ -57,57 +57,75 @@ describe("benchmarksCheck", () => {
   });
 });
 
-describe("warmupCheck", () => {
-  const url = `${backend}/warmup/summary?days=1`;
+describe("gpuBillingCheck", () => {
+  const url = `${backend}/billing?days=1`;
   const run = async (reply: { body?: object; status?: number; text?: string }) => {
     const c = { now: NOW };
     const deps = makeDeps({ clock: c, fetch: fakeFetch({ [url]: reply }, c) });
-    return warmupCheck(backend).run(deps);
+    return gpuBillingCheck(backend).run(deps);
   };
 
-  const billing = (extra: object = {}) => ({ available: true, ageSeconds: 120, last24hUsd: 1.18, balanceUsd: 153.38, balanceDaysLeft: 90.2, averageDailyUsd7d: 1.7, ...extra });
-  const total = { sessions: 38, used: 34, wasted: 4, wastedCostUsd: 0.1204, estimatedCostUsd: 0.4, wastedSeconds: 570 };
+  const base = (extra: object = {}) => ({
+    rateSource: "runpod",
+    available: true,
+    ageSeconds: 120,
+    last24h: { billedUsd: 1.18, billedSeconds: 5400 },
+    account: { balanceUsd: 153.38, daysLeft: 90.2 },
+    total: { earlyStarts: { sessions: 38, used: 34, unused: 4, unusedUsd: 0.1204, unusedSeconds: 570 } },
+    ...extra,
+  });
+  const account = (balanceUsd: number, daysLeft: number | null) => ({ account: { balanceUsd, daysLeft } });
 
-  it("gives the sessions, the money RunPod billed, the wasted part and the balance", async () => {
-    expect(await run({ body: { rateSource: "runpod", total, billing: billing() } })).toEqual({
+  it("is the GPU billing check of the pipeline section", () => {
+    expect(gpuBillingCheck(backend)).toMatchObject({ id: "gpu-billing", name: "GPU billing", section: "pipeline" });
+  });
+
+  it("leads with the total RunPod billed, then the balance, then the workers started before a proof", async () => {
+    expect(await run({ body: base() })).toEqual({
       state: "ok",
-      detail: "38 warm-ups in 24 h, 34 used and 4 wasted; $1.18 billed by RunPod in 24 h, about $0.12 of it wasted; balance $153, 90 days left at the 7-day average",
+      detail: "$1.18 billed by RunPod in 24 h; balance $153, 90 days left at the 7-day average. Workers started before a proof: 38, 4 unused (about $0.12).",
     });
   });
 
   it("is degraded when the balance covers fewer than 14 days, and says the days left", async () => {
-    const low = await run({ body: { total, billing: billing({ balanceUsd: 20, balanceDaysLeft: 11.76 }) } });
+    const low = await run({ body: base(account(20, 11.76)) });
     expect(low.state).toBe("degraded");
     expect(low.detail).toContain("balance $20, 11 days left at the 7-day average (under 14)");
-    expect((await run({ body: { total, billing: billing({ balanceUsd: 23.8, balanceDaysLeft: 14 }) } })).state).toBe("ok");
-    expect((await run({ body: { total, billing: billing({ balanceUsd: 23.7, balanceDaysLeft: 13.99 }) } })).state).toBe("degraded");
-    expect((await run({ body: { total: { sessions: 0 }, billing: billing({ balanceDaysLeft: 3 }) } })).state).toBe("degraded");
+    expect((await run({ body: base(account(23.8, 14)) })).state).toBe("ok");
+    expect((await run({ body: base(account(23.7, 13.99)) })).state).toBe("degraded");
+    expect((await run({ body: base({ ...account(153, 3), total: { earlyStarts: { sessions: 0 } } }) })).state).toBe("degraded");
   });
 
   it("says when there is no spend to divide by, and when the figures are old", async () => {
-    expect((await run({ body: { total, billing: billing({ balanceDaysLeft: null, averageDailyUsd7d: 0 }) } })).detail).toContain("balance $153, no spend in the last 7 days");
-    expect((await run({ body: { total, billing: billing({ ageSeconds: 2700 }) } })).detail).toContain("RunPod figures are 45 min old");
-    expect((await run({ body: { total, billing: billing({ balanceUsd: 4.5, balanceDaysLeft: 20 }) } })).detail).toContain("balance $4.50,");
+    expect((await run({ body: base(account(153.38, null)) })).detail).toContain("balance $153, no spend in the last 7 days");
+    expect((await run({ body: base({ ageSeconds: 2700 }) })).detail).toContain("$1.18 billed by RunPod in 24 h; RunPod figures are 45 min old; balance");
+    expect((await run({ body: base(account(4.5, 20)) })).detail).toContain("balance $4.50,");
   });
 
-  it("names the assumed price when RunPod's billing cannot be read", async () => {
-    expect(await run({ body: { total: { sessions: 6, used: 4, wasted: 2, estimatedCostUsd: 0.4567, wastedCostUsd: 0.1, wastedSeconds: 160 }, assumptions: { gpuUsdPerHour: 2.25 }, billing: { available: false } } })).toEqual({
+  it("leaves out the account when the request came through Caddy", async () => {
+    expect(await run({ body: base({ account: { balanceUsd: null, daysLeft: null } }) })).toEqual({
       state: "ok",
-      detail: "6 warm-ups in 24 h, 4 used and 2 wasted; RunPod billing is not available; about $0.46 of GPU time at the assumed $2.25/h, $0.10 of it wasted (3 min)",
+      detail: "$1.18 billed by RunPod in 24 h. Workers started before a proof: 38, 4 unused (about $0.12).",
     });
   });
 
-  it("says when there was no warm-up, with the money billed, and is down on a bad answer", async () => {
-    expect(await run({ body: { total: { sessions: 0 } } })).toEqual({ state: "ok", detail: "no warm-up in 24 h" });
-    expect(await run({ body: { total: {} } })).toEqual({ state: "ok", detail: "no warm-up in 24 h" });
-    expect(await run({ body: { total: { sessions: 0 }, billing: billing() } })).toEqual({ state: "ok", detail: "no warm-up in 24 h; $1.18 billed by RunPod in 24 h; balance $153, 90 days left at the 7-day average" });
-    expect(await run({ status: 429 })).toEqual({ state: "down", detail: "answered 429 on /warmup/summary" });
-    expect(await run({ text: "x" })).toEqual({ state: "down", detail: "answered something that is not the warm-up summary" });
-    expect(await run({ body: { total: { sessions: 1 } } })).toMatchObject({ state: "ok", detail: expect.stringContaining("1 warm-up in 24 h, 0 used and 0 wasted; RunPod billing is not available; about $0.00") });
+  it("names the assumed price when RunPod's billing cannot be read", async () => {
+    expect(
+      await run({ body: { rateSource: "assumed", available: false, assumptions: { gpuUsdPerHour: 2.25 }, total: { earlyStarts: { sessions: 6, used: 4, unused: 2, unusedUsd: 0.1 } } } }),
+    ).toEqual({ state: "ok", detail: "RunPod billing is not available. Workers started before a proof: 6, 2 unused (about $0.10 at the assumed $2.25/h)." });
+    expect((await run({ body: { rateSource: "assumed", total: { earlyStarts: { sessions: 1, unused: 1 } } } })).detail).toBe("RunPod billing is not available. Workers started before a proof: 1, 1 unused (about $0.00).");
+  });
+
+  it("says when no worker was started, or none was unused, and is down on a bad answer", async () => {
+    expect(await run({ body: base({ total: { earlyStarts: { sessions: 0 } } }) })).toMatchObject({ detail: expect.stringContaining("Workers started before a proof: none.") });
+    expect((await run({ body: { total: {} } })).detail).toBe("RunPod billing is not available. Workers started before a proof: none.");
+    expect((await run({ body: base({ total: { earlyStarts: { sessions: 5, unused: 0 } } }) })).detail).toContain("Workers started before a proof: 5, 0 unused.");
+    expect(await run({ status: 429 })).toEqual({ state: "down", detail: "answered 429 on /billing" });
+    expect(await run({ text: "x" })).toEqual({ state: "down", detail: "answered something that is not the GPU billing" });
   });
 
   it("keeps the detail within the sanitizer: one line, no URL, under 200 characters", async () => {
-    const result = await run({ body: { total, billing: billing({ balanceUsd: 20, balanceDaysLeft: 11.76, ageSeconds: 7200 }) } });
+    const result = await run({ body: base({ ...account(20, 11.76), ageSeconds: 7200 }) });
     expect(result.detail.length).toBeLessThan(200);
     expect(result.detail).not.toMatch(/https?:|\n/);
   });

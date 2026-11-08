@@ -1,6 +1,6 @@
 /**
  * The read routes of the pipeline: `GET /progress/:messageId`, `GET /directions/:direction/pipeline` and
- * `GET /benchmarks` and `GET /warmup/summary`. They answer from the backend database, the watcher's latest decision and the chain indexer, and
+ * `GET /benchmarks`, `GET /billing` and `GET /warmup/summary` (the old name of `/billing`). They answer from the backend database, the watcher's latest decision and the chain indexer, and
  * never name an endpoint, a key or a path. Each caller may read {@link READS_PER_CALLER_PER_MINUTE} times a minute.
  */
 import type { Context, Hono } from "hono";
@@ -192,24 +192,104 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
   });
 
   /**
-   * What the warm-up of the remote prover cost, per UTC day by the day a session started: sessions, used and wasted,
-   * the billed GPU seconds estimated (to the endpoint's idle timeout after the end), the cost at the configured price,
-   * and the seconds a worker sat ready before the due time. `days`: 1 to 30, default 7.
+   * Reads and prices the window of a billing request: the figures from RunPod, the rate and the worker sessions
+   * started before a proof, per UTC day. Null with the answer to send when `days` is not 1 to 30 or the caller is limited.
    */
-  app.get("/warmup/summary", async (request) => {
+  async function billingWindow(request: Context) {
     const text = request.req.query("days") ?? "7";
     const days = /^\d+$/.test(text) ? Number(text) : 0;
-    if (days < 1 || days > 30) return request.json({ error: "days is a whole number from 1 to 30" }, 400);
+    if (days < 1 || days > 30) return { refused: request.json({ error: "days is a whole number from 1 to 30" }, 400) };
     const refused = limited(request);
-    if (refused !== null) return refused;
+    if (refused !== null) return { refused };
     const { idleTimeoutSeconds, gpuUsdPerHour, dailyCapSeconds } = context.config.watch.warmup;
     const at = now();
     const snapshot = context.billing === undefined ? { spend: null, balance: null } : await context.billing.read();
     const figures = figuresOf(snapshot, at);
     // The rate that RunPod billed; the configured price only when RunPod's billing cannot be read.
-    const rateSource = figures.effectiveUsdPerHour === null ? "assumed" : "runpod";
+    const rateSource = figures.effectiveUsdPerHour === null ? ("assumed" as const) : ("runpod" as const);
     const usdPerHour = figures.effectiveUsdPerHour ?? gpuUsdPerHour;
-    const warmupDays = createWarmupStore(storage).summary(at - days * 86_400_000, { idleTimeoutSeconds, gpuUsdPerHour: usdPerHour });
+    const sessionDays = createWarmupStore(storage).summary(at - days * 86_400_000, { idleTimeoutSeconds, gpuUsdPerHour: usdPerHour });
+    // The account (balance, spend limit, spend now, days left) only for a direct local request, such as the status
+    // service on 127.0.0.1. Caddy adds X-Forwarded-For to every request it passes on, so a request from the internet
+    // never sees them; the backend listens on 127.0.0.1 only.
+    const shown = request.req.header("x-forwarded-for") === undefined ? figures : publicFiguresOf(figures);
+    return { days, at, snapshot, figures, shown, rateSource, usdPerHour, sessionDays, assumptions: { idleTimeoutSeconds, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds } };
+  }
+
+  const money = (value: number) => Math.round(value * 10_000) / 10_000;
+
+  /**
+   * GPU billing in general: what RunPod billed per UTC day and in total, the last 24 hours, the rate and where it comes
+   * from, and (only for a direct local request) the account. `earlyStarts` is the part of it that workers started before
+   * a proof account for: sessions, used and unused, the billed seconds of the unused ones priced at the rate, and the
+   * seconds a worker sat ready before the due time. `days`: 1 to 30, default 7.
+   */
+  app.get("/billing", async (request) => {
+    const window = await billingWindow(request);
+    if ("refused" in window) return window.refused;
+    const { days, at, snapshot, shown, rateSource, usdPerHour, sessionDays, assumptions } = window;
+    const earlyOf = new Map(sessionDays.map((day) => [day.day, day]));
+    const early = (day: (typeof sessionDays)[number] | undefined) => ({
+      sessions: day?.sessions ?? 0,
+      used: day?.used ?? 0,
+      unused: day?.wasted ?? 0,
+      unusedSeconds: day?.wastedSeconds ?? 0,
+      unusedUsd: day?.wastedCostUsd ?? 0,
+      readyBeforeDueSeconds: day?.idleBeforeDueSeconds ?? 0,
+    });
+    const first = new Date(at - days * 86_400_000).toISOString().slice(0, 10);
+    const billedOf = new Map((snapshot.spend?.days ?? []).filter((day) => day.start >= first).map((day) => [day.start, day]));
+    const dayKeys = [...new Set([...billedOf.keys(), ...earlyOf.keys()])].sort().reverse();
+    const byDay = dayKeys.map((day) => {
+      const billed = billedOf.get(day);
+      return {
+        day,
+        billedUsd: billed === undefined ? null : money(billed.amountUsd),
+        billedSeconds: billed === undefined ? null : Math.round(billed.billedSeconds * 100) / 100,
+        effectiveUsdPerHour: billed !== undefined && billed.billedSeconds > 0 ? money(billed.amountUsd / (billed.billedSeconds / 3600)) : null,
+        earlyStarts: early(earlyOf.get(day)),
+      };
+    });
+    const sum = (pick: (day: (typeof byDay)[number]) => number) => money(byDay.reduce((total, day) => total + pick(day), 0));
+    const billedDays = byDay.filter((day) => day.billedUsd !== null);
+    const billedUsd = billedDays.length === 0 ? null : sum((day) => day.billedUsd ?? 0);
+    const billedSeconds = billedDays.length === 0 ? null : sum((day) => day.billedSeconds ?? 0);
+    const earlyTotal = {
+      sessions: sum((day) => day.earlyStarts.sessions),
+      used: sum((day) => day.earlyStarts.used),
+      unused: sum((day) => day.earlyStarts.unused),
+      unusedSeconds: sum((day) => day.earlyStarts.unusedSeconds),
+      unusedUsd: sum((day) => day.earlyStarts.unusedUsd),
+      readyBeforeDueSeconds: sum((day) => day.earlyStarts.readyBeforeDueSeconds),
+    };
+    return request.json({
+      days,
+      /** Where the price of a GPU hour comes from: "runpod" (measured from RunPod's billing) or "assumed" (the configured price, a fallback). */
+      rateSource,
+      usdPerHour,
+      assumptions,
+      /** Whether RunPod's billing could be read, and how many seconds ago. */
+      available: shown.available,
+      ageSeconds: shown.ageSeconds,
+      last24h: { billedUsd: shown.last24hUsd, billedSeconds: shown.last24hBilledSeconds },
+      effectiveUsdPerHour: shown.effectiveUsdPerHour,
+      averageDailyUsd7d: shown.averageDailyUsd7d,
+      account: { balanceUsd: shown.balanceUsd, balanceAgeSeconds: shown.balanceAgeSeconds, spendNowUsdPerHour: shown.currentSpendPerHr, spendLimitUsd: shown.spendLimit, daysLeft: shown.balanceDaysLeft },
+      total: {
+        billedUsd,
+        billedSeconds,
+        effectiveUsdPerHour: billedUsd === null || billedSeconds === null || billedSeconds === 0 ? null : money(billedUsd / (billedSeconds / 3600)),
+        earlyStarts: earlyTotal,
+      },
+      byDay,
+    });
+  });
+
+  /** @deprecated The old name of `/billing`, kept with its old body: warm-up sessions with RunPod billing beside them. */
+  app.get("/warmup/summary", async (request) => {
+    const window = await billingWindow(request);
+    if ("refused" in window) return window.refused;
+    const { days, snapshot, shown, rateSource, usdPerHour, sessionDays: warmupDays, assumptions } = window;
     const billedOf = new Map((snapshot.spend?.days ?? []).map((day) => [day.start, day]));
     const byDay = warmupDays.map((day) => {
       const billed = billedOf.get(day.day);
@@ -227,11 +307,8 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
       /** Where the price of a GPU hour comes from: "runpod" (measured from RunPod's billing) or "assumed" (the configured price, a fallback). */
       rateSource,
       usdPerHour,
-      assumptions: { idleTimeoutSeconds, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds },
-      // The account (balance, spend limit, spend now, days left) only for a direct local request, such as the status
-      // service on 127.0.0.1. Caddy adds X-Forwarded-For to every request it passes on, so a request from the internet
-      // never sees them; the backend listens on 127.0.0.1 only.
-      billing: request.req.header("x-forwarded-for") === undefined ? figures : publicFiguresOf(figures),
+      assumptions,
+      billing: shown,
       total: {
         sessions: sum((day) => day.sessions),
         used: sum((day) => day.used),

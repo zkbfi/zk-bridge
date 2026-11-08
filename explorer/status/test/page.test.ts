@@ -10,7 +10,7 @@ const status = {
   summary: { status: "operational", message: "All 3 checks pass.", checkedAt: 999_000 },
   sections: [
     { title: "Bridges & gates", checks: [check("gate-943", "PulseChain testnet gate", "ok", "detection mode (detect-beacon-roots): admits sends"), check("bridge-943", "PulseChain testnet bridge", "ok", "deposits are open")] },
-    { title: "Pipeline", checks: [check("pipeline-warmup", "Prover warm-ups (24 h)", "degraded", "3 warm-ups in 24 h")] },
+    { title: "Pipeline", checks: [check("gpu-billing", "GPU billing", "degraded", "$1.18 billed by RunPod in 24 h")] },
   ],
 };
 
@@ -40,9 +40,9 @@ describe("the page script", () => {
   });
 
   it("scrolls to and highlights the check of #check=<id>", async () => {
-    const { document, scrolled } = await open("#check=pipeline-warmup");
-    expect(Array.from(document.querySelectorAll(".target")).map((row) => row.getAttribute("data-check"))).toEqual(["pipeline-warmup"]);
-    expect(scrolled).toEqual(["pipeline-warmup"]);
+    const { document, scrolled } = await open("#check=gpu-billing");
+    expect(Array.from(document.querySelectorAll(".target")).map((row) => row.getAttribute("data-check"))).toEqual(["gpu-billing"]);
+    expect(scrolled).toEqual(["gpu-billing"]);
   });
 
   it("follows a later change of the anchor, and ignores an unknown id or a broken one", async () => {
@@ -65,7 +65,7 @@ describe("the page script", () => {
     expect(visible()).toEqual(["gate-943"]);
     expect(document.querySelectorAll("h2.hidden").length).toBe(1);
     type("degraded");
-    expect(visible()).toEqual(["pipeline-warmup"]);
+    expect(visible()).toEqual(["gpu-billing"]);
     type("deposits open");
     expect(visible()).toEqual(["bridge-943"]);
     type("zzz");
@@ -81,14 +81,14 @@ describe("the page script", () => {
     const filter = document.getElementById("filter") as HTMLInputElement;
     filter.value = "bridge";
     filter.dispatchEvent(new dom.window.Event("input"));
-    dom.window.location.hash = "#check=pipeline-warmup";
-    await vi.waitFor(() => expect(document.querySelector(".target")?.getAttribute("data-check")).toBe("pipeline-warmup"));
+    dom.window.location.hash = "#check=gpu-billing";
+    await vi.waitFor(() => expect(document.querySelector(".target")?.getAttribute("data-check")).toBe("gpu-billing"));
     expect(filter.value).toBe("");
     expect(visible().length).toBe(3);
   });
 
   it("shows the warm-up check of the pipeline section", async () => {
     const { document } = await open("");
-    expect(document.querySelector('.row[data-check="pipeline-warmup"]')?.textContent).toContain("Prover warm-ups (24 h)");
+    expect(document.querySelector('.row[data-check="gpu-billing"]')?.textContent).toContain("GPU billing");
   });
 });
