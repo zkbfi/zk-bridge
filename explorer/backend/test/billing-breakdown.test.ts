@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountTimeline, bucketSecondsWithin, breakdownOf, sumBreakdowns, totalSeconds, type JobRecord, type SessionRecord } from "../src/billing-breakdown.ts";
+import { accountTimeline, billedThroughOf, bucketSecondsWithin, breakdownOfSpans, daySpan, hourSpans, sumBreakdowns, totalSeconds, type BucketSeconds, type JobRecord, type SessionRecord, type Span } from "../src/billing-breakdown.ts";
 
 const S = 1000;
 const T = 1_800_000_000_000;
@@ -23,16 +23,28 @@ const job = (request: number, proving: number, over: Partial<JobRecord> = {}): J
   workerTotalMs: proving * S,
   ...over,
 });
-const seconds = (sessions: SessionRecord[], jobs: JobRecord[], idle = 60) => bucketSecondsWithin(accountTimeline({ sessions, jobs, idleTimeoutSeconds: idle }), ...FOREVER);
+const seconds = (sessions: SessionRecord[], jobs: JobRecord[], idle = 60) => bucketSecondsWithin(accountTimeline({ sessions, jobs, idleSecondsAt: () => idle }), ...FOREVER);
+
+const ZERO: BucketSeconds = { proving: 0, startingUp: 0, waitingForProof: 0, unusedEarlyStarts: 0, idleAfterJob: 0 };
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+/** A timeline of the given seconds, all as proving, from `from` on. */
+const provingFor = (from: number, spans: Array<[number, number]>) => accountTimeline({ sessions: [], jobs: spans.map(([start, end]) => ({ startedAt: null, provedAt: from + end * S, waitWorkerMs: null, notReadyCount: 0, remoteMs: (end - start) * S, workerTotalMs: (end - start) * S })), idleSecondsAt: () => 0 });
+/** One span of an hour, billed or not. */
+const span = (over: Partial<Span> & { from: number }): Span => ({ to: over.from + HOUR, cutoff: over.from + HOUR, usdPerHour: 1, billed: null, ...over });
+const unaccountedFor = (claimed: BucketSeconds, billed: { seconds: number; usd: number }) => {
+  const total = totalSeconds(claimed);
+  const line = { proving: [[0, total * S]], startingUp: [], waitingForProof: [], unusedEarlyStarts: [], idleAfterJob: [] } as never;
+  return breakdownOfSpans(line, [span({ from: 0, to: 4_000_000_000_000, cutoff: 4_000_000_000_000, usdPerHour: 3600, billed })], null).unaccounted;
+};
 
 describe("the billing breakdown", () => {
   it("follows the worked example of the header: a cold session, a job after it, a second job during its tail", () => {
     const result = seconds([session({ start: 0, readyAt: at(40), end: 100 })], [job(110, 50), job(190, 50)]);
     expect(result).toEqual({ proving: 100, startingUp: 40, waitingForProof: 70, unusedEarlyStarts: 0, idleAfterJob: 90 });
     expect(totalSeconds(result)).toBe(300);
-    const billed = breakdownOf(result, 3600, { seconds: 310, usd: 310 });
-    expect(billed.unaccounted).toEqual({ seconds: 10, usd: 10 });
-    expect(breakdownOf(result, 3600, { seconds: 290, usd: 290 }).unaccounted).toEqual({ seconds: -10, usd: -10 });
+    expect(unaccountedFor(result, { seconds: 310, usd: 310 })).toEqual({ seconds: 10, usd: 10 });
+    expect(unaccountedFor(result, { seconds: 290, usd: 290 })).toEqual({ seconds: -10, usd: -10 });
   });
 
   it("counts a job without a session: its proving, its tail, and the wait of a job that met no worker", () => {
@@ -103,7 +115,7 @@ describe("the billing breakdown", () => {
   it("splits at UTC midnight and measures any window", () => {
     const midnight = Math.ceil(T / 86_400_000) * 86_400_000;
     const before = (midnight - T) / S;
-    const timeline = accountTimeline({ sessions: [], jobs: [job(before - 10, 30)], idleTimeoutSeconds: 60 });
+    const timeline = accountTimeline({ sessions: [], jobs: [job(before - 10, 30)], idleSecondsAt: () => 60 });
     const first = bucketSecondsWithin(timeline, midnight - 86_400_000, midnight);
     const second = bucketSecondsWithin(timeline, midnight, midnight + 86_400_000);
     expect(first.proving).toBe(10);
@@ -112,31 +124,150 @@ describe("the billing breakdown", () => {
     expect(first.idleAfterJob + second.idleAfterJob).toBe(60);
   });
 
-  it("reports unaccounted as the bill minus the buckets, rounded as shown, and null without a bill", () => {
-    const result = breakdownOf({ proving: 1800, startingUp: 360, waitingForProof: 0, unusedEarlyStarts: 0, idleAfterJob: 360 }, 1.8, { seconds: 3000, usd: 1.5 });
-    expect(result).toEqual({
-      proving: { seconds: 1800, usd: 0.9 },
-      startingUp: { seconds: 360, usd: 0.18 },
-      waitingForProof: { seconds: 0, usd: 0 },
-      unusedEarlyStarts: { seconds: 0, usd: 0 },
-      idleAfterJob: { seconds: 360, usd: 0.18 },
-      unaccounted: { seconds: 480, usd: 0.24 },
+  it("prices each day at its own RunPod rate, so that the dollars of unaccounted follow its seconds (cause 1, 2026-11-08)", () => {
+    // Two days: day one billed 3600 s at $1.80 an hour, day two 3600 s at $0.72. The records claim 1800 s on each.
+    const day1 = Date.UTC(2026, 10, 6);
+    const day2 = day1 + DAY;
+    const timeline = accountTimeline({
+      sessions: [],
+      jobs: [
+        { startedAt: null, provedAt: day1 + 2 * HOUR, waitWorkerMs: null, notReadyCount: 0, remoteMs: 1800 * S, workerTotalMs: 1800 * S },
+        { startedAt: null, provedAt: day2 + 2 * HOUR, waitWorkerMs: null, notReadyCount: 0, remoteMs: 1800 * S, workerTotalMs: 1800 * S },
+      ],
+      idleSecondsAt: () => 0,
     });
-    // A record that claims more than was billed is reported as it is.
-    expect(breakdownOf({ proving: 4000, startingUp: 0, waitingForProof: 0, unusedEarlyStarts: 0, idleAfterJob: 0 }, 1.8, { seconds: 3000, usd: 1.5 }).unaccounted).toEqual({ seconds: -1000, usd: -0.5 });
-    expect(breakdownOf({ proving: 10, startingUp: 0, waitingForProof: 0, unusedEarlyStarts: 0, idleAfterJob: 0 }, 1.8, null).unaccounted).toBeNull();
+    const rows = [
+      { start: "2026-11-06", amountUsd: 1.8, billedSeconds: 3600 },
+      { start: "2026-11-07", amountUsd: 0.72, billedSeconds: 3600 },
+    ];
+    const through = day2 + DAY;
+    const parts = rows.map((row, index) => breakdownOfSpans(timeline, [daySpan({ dayStart: day1 + index * DAY, row, hours: [], billedThrough: through, fallbackUsdPerHour: 9 })], through));
+    expect(parts.map((part) => part.proving.usd)).toEqual([0.9, 0.36]);
+    expect(parts.map((part) => part.unaccounted)).toEqual([{ seconds: 1800, usd: 0.9 }, { seconds: 1800, usd: 0.36 }]);
+    const total = sumBreakdowns(parts);
+    expect(total.unaccounted).toEqual({ seconds: 3600, usd: 1.26 });
+    expect(total.proving).toEqual({ seconds: 3600, usd: 1.26 });
+    expect(total.billed).toEqual({ seconds: 7200, usd: 2.52 });
+    // Priced at the average rate ($1.26) the two would both be 0.63, and the dollars and the seconds would disagree.
+    // A day without billed time uses the fallback rate for its (empty) comparison.
+    expect(daySpan({ dayStart: day1, row: { start: "2026-11-06", amountUsd: 0, billedSeconds: 0 }, hours: [], billedThrough: through, fallbackUsdPerHour: 9 })).toMatchObject({ usdPerHour: 9, billed: { seconds: 0, usd: 0 } });
+    expect(daySpan({ dayStart: day1, row: undefined, hours: [], billedThrough: null, fallbackUsdPerHour: 9 })).toMatchObject({ usdPerHour: 9, billed: null, cutoff: day1 + DAY });
   });
 
-  it("adds days; unaccounted adds the days that have a bill and is null when none has", () => {
-    const zero = { proving: 0, startingUp: 0, waitingForProof: 0, unusedEarlyStarts: 0, idleAfterJob: 0 };
-    const a = breakdownOf({ ...zero, proving: 100 }, 3600, { seconds: 130, usd: 130 });
-    const b = breakdownOf({ ...zero, proving: 50 }, 3600, null);
-    const c = breakdownOf({ ...zero, idleAfterJob: 60 }, 3600, { seconds: 50, usd: 50 });
+  it("prices the last 24 hours hour by hour; an hour RunPod billed nothing for is billed nothing (cause 1)", () => {
+    const at = Date.UTC(2026, 10, 8, 10, 30);
+    const h = (hour: number) => Date.UTC(2026, 10, 8, hour);
+    // Proving 600 s in hour 8 (rate $3.6/h) and 600 s in hour 9 (rate $0.36/h), 300 s in hour 5 that has no bill.
+    const timeline = accountTimeline({
+      sessions: [],
+      jobs: [[8, 700], [9, 700], [5, 400]].map(([hour, end]) => ({ startedAt: null, provedAt: h(hour as number) + (end as number) * S, waitWorkerMs: null, notReadyCount: 0, remoteMs: (hour === 5 ? 300 : 600) * S, workerTotalMs: (hour === 5 ? 300 : 600) * S })),
+      idleSecondsAt: () => 0,
+    });
+    const hours = [
+      { start: "2026-11-08T08", amountUsd: 1.0, billedSeconds: 1000 },
+      { start: "2026-11-08T09", amountUsd: 0.1, billedSeconds: 1000 },
+      { start: "2026-11-08T10", amountUsd: 0.01, billedSeconds: 100 },
+    ];
+    const through = billedThroughOf({ days: [], hours }, at);
+    expect(through).toBe(h(10));
+    const spans = hourSpans({ at, hours, billedThrough: through, fallbackUsdPerHour: 5 });
+    expect(spans).toHaveLength(25);
+    const result = breakdownOfSpans(timeline, spans, through);
+    // Hour 8: 600 s at $3.6/h = 0.6; hour 9: 600 s at $0.36/h = 0.06; hour 5 has no bill, so it takes the rate of the window
+    // (1.11 / 2100 s = $1.9029/h): 300 s = 0.1586.
+    expect(result.proving).toEqual({ seconds: 1500, usd: 0.8186 });
+    expect(result.billed).toEqual({ seconds: 2000, usd: 1.1 });
+    // Unaccounted: hour 8 +400 s ($0.4), hour 9 +400 s ($0.04), hour 5 -300 s against a bill of zero (-$0.1586); the dollars follow each hour's rate.
+    expect(result.unaccounted).toEqual({ seconds: 500, usd: 0.2814 });
+    expect(result.billedThrough).toBe("2026-11-08T10:00:00.000Z");
+  });
+
+  it("applies the idle timeout that was in effect when each job ended (cause 2, 2026-11-08)", () => {
+    const change = T + 1000 * S;
+    const idleSecondsAt = (when: number) => (when < change ? 60 : 5);
+    const jobs = [job(100, 50), job(1100, 50)];
+    const result = bucketSecondsWithin(accountTimeline({ sessions: [], jobs, idleSecondsAt }), ...FOREVER);
+    // The first job ended at 150 (60 s tail), the second at 1150 (5 s tail).
+    expect(result).toMatchObject({ proving: 100, idleAfterJob: 65 });
+    // An unused session without billed seconds takes the timeout of the time it ended.
+    const old = bucketSecondsWithin(accountTimeline({ sessions: [session({ start: 0, end: 50, outcome: "restart" })], jobs: [], idleSecondsAt }), ...FOREVER);
+    const recent = bucketSecondsWithin(accountTimeline({ sessions: [session({ start: 1500, end: 1550, outcome: "restart" })], jobs: [], idleSecondsAt }), ...FOREVER);
+    expect(old.unusedEarlyStarts).toBe(110);
+    expect(recent.unusedEarlyStarts).toBe(55);
+    // A used session waits for its job no longer than the timeout at its end.
+    const waits = bucketSecondsWithin(accountTimeline({ sessions: [session({ start: 1000, readyAt: at(1030), end: 1100 })], jobs: [job(1300, 10, { waitWorkerMs: 100 * S, notReadyCount: 1 })], idleSecondsAt }), ...FOREVER);
+    expect(waits.waitingForProof).toBe(70 + 5);
+  });
+
+  it("leaves out what RunPod has not billed yet, and reports it as not yet billed (cause 3, 2026-11-08)", () => {
+    const at = Date.UTC(2026, 10, 8, 4, 20);
+    const midnight = Date.UTC(2026, 10, 8);
+    // Billing reached hour 02:00; our records have 600 s of proving in 01:00-02:00 (billed 500 s) and 900 s in 03:00-04:00 (not billed yet).
+    const timeline = accountTimeline({
+      sessions: [],
+      jobs: [
+        { startedAt: null, provedAt: midnight + HOUR + 700 * S, waitWorkerMs: null, notReadyCount: 0, remoteMs: 600 * S, workerTotalMs: 600 * S },
+        { startedAt: null, provedAt: midnight + 3 * HOUR + 900 * S, waitWorkerMs: null, notReadyCount: 0, remoteMs: 900 * S, workerTotalMs: 900 * S },
+      ],
+      idleSecondsAt: () => 0,
+    });
+    const spend = {
+      days: [{ start: "2026-11-08", amountUsd: 0.5, billedSeconds: 1000 }],
+      hours: [
+        { start: "2026-11-08T01", amountUsd: 0.25, billedSeconds: 500 },
+        { start: "2026-11-08T02", amountUsd: 0.25, billedSeconds: 500 },
+      ],
+    };
+    const through = billedThroughOf(spend, at);
+    expect(through).toBe(midnight + 2 * HOUR);
+    const day = breakdownOfSpans(timeline, [daySpan({ dayStart: midnight, row: spend.days[0], hours: spend.hours, billedThrough: through, fallbackUsdPerHour: 9 })], through);
+    // Compared: the day's bill without the filling hour (500 s, $0.25) against the 600 s proved before it.
+    expect(day.billed).toEqual({ seconds: 500, usd: 0.25 });
+    expect(day.proving.seconds).toBe(600);
+    expect(day.unaccounted).toEqual({ seconds: -100, usd: -0.05 });
+    expect(day.notYetBilled).toEqual({ seconds: 900, usd: 0.45 });
+    expect(day.billedThrough).toBe("2026-11-08T02:00:00.000Z");
+    // Without the lag handling the day would show 1000 - 1500 = -500 s.
+    const last24h = breakdownOfSpans(timeline, hourSpans({ at, hours: spend.hours, billedThrough: through, fallbackUsdPerHour: 9 }), through);
+    expect(last24h.notYetBilled.seconds).toBe(900);
+    expect(last24h.unaccounted).toEqual({ seconds: -100, usd: -0.05 });
+    // A day that starts after the billing has reached has nothing to compare; RunPod reading nothing leaves the start of the day.
+    const next = breakdownOfSpans(timeline, [daySpan({ dayStart: midnight + DAY, row: { start: "2026-11-09", amountUsd: 1, billedSeconds: 10 }, hours: [], billedThrough: through, fallbackUsdPerHour: 9 })], through);
+    expect(next.unaccounted).toBeNull();
+    expect(billedThroughOf({ days: [], hours: [] }, at)).toBe(midnight);
+    expect(billedThroughOf({ days: [], hours: [{ start: "2026-11-08T03", amountUsd: 0, billedSeconds: 0 }] }, at)).toBe(midnight);
+    expect(billedThroughOf(null, at)).toBeNull();
+  });
+
+  it("keeps a small negative that real records cause: more proving claimed than billed, over a complete period", () => {
+    const timeline = provingFor(0, [[0, 600]]);
+    const result = breakdownOfSpans(timeline, [span({ from: 0, to: 3_600_000, cutoff: 3_600_000, usdPerHour: 3.6, billed: { seconds: 590, usd: 0.59 } })], 4_000_000);
+    expect(result.unaccounted).toEqual({ seconds: -10, usd: -0.01 });
+    expect(ZERO.proving).toBe(0);
+  });
+
+  it("adds days; unaccounted and billed add the days that have one, notYetBilled all, and nothing is null for no days", () => {
+    const line = provingFor(0, [[0, 100]]);
+    const a = breakdownOfSpans(line, [span({ from: 0, to: 1_000_000, cutoff: 1_000_000, usdPerHour: 3600, billed: { seconds: 130, usd: 130 } })], 5000);
+    const b = breakdownOfSpans(line, [span({ from: 0, to: 1_000_000, cutoff: 1_000_000, usdPerHour: 3600 })], null);
+    const c = breakdownOfSpans(line, [span({ from: 0, to: 1_000_000, cutoff: 50_000, usdPerHour: 3600, billed: { seconds: 20, usd: 20 } })], 50_000);
+    expect(a.unaccounted).toEqual({ seconds: 30, usd: 30 });
+    expect(b.unaccounted).toBeNull();
+    expect(b.billedThrough).toBeNull();
+    expect(c.notYetBilled).toEqual({ seconds: 50, usd: 50 });
     const total = sumBreakdowns([a, b, c]);
-    expect(total.proving).toEqual({ seconds: 150, usd: 150 });
-    expect(total.idleAfterJob).toEqual({ seconds: 60, usd: 60 });
-    expect(total.unaccounted).toEqual({ seconds: 20, usd: 20 });
+    expect(total.proving).toEqual({ seconds: 250, usd: 250 });
+    expect(total.unaccounted).toEqual({ seconds: 30 + -30, usd: 0 });
+    expect(total.notYetBilled).toEqual({ seconds: 50, usd: 50 });
+    expect(total.billedThrough).toBe(new Date(5000).toISOString());
     expect(sumBreakdowns([b]).unaccounted).toBeNull();
-    expect(sumBreakdowns([]).proving).toEqual({ seconds: 0, usd: 0 });
+    expect(sumBreakdowns([b]).billed).toBeNull();
+    expect(sumBreakdowns([])).toMatchObject({ proving: { seconds: 0, usd: 0 }, notYetBilled: { seconds: 0, usd: 0 }, billedThrough: null });
+  });
+
+  it("counts the buckets of a day that RunPod has no figure for, outside the comparison", () => {
+    const line = provingFor(0, [[0, 100]]);
+    const mixed = breakdownOfSpans(line, [span({ from: 0, to: 1_000_000, cutoff: 1_000_000, usdPerHour: 3600, billed: { seconds: 150, usd: 150 } }), span({ from: 1_000_000, to: 2_000_000, cutoff: 2_000_000, usdPerHour: 3600 })], null);
+    expect(mixed.unaccounted).toEqual({ seconds: 50, usd: 50 });
   });
 });

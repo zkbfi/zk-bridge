@@ -471,8 +471,11 @@ Other intervals: `intervalSeconds` (30) applies only while no worker is ready, a
 repeats after the shorter of it and `holdIntervalSeconds`; `pingTimeoutSeconds` (300) only bounds a ping that meets a
 cold worker. The 2 s margin between a hold and the stop must cover the ping's round trip: if holds regularly arrive
 late, the worker restarts between them, and `warmup_held` followed by a slow `warmup_ready` shows it; raise the idle timeout then.
-The billing breakdown uses `idleTimeoutSeconds` for records before the change as well, so days before the cut to 5 s show
-their idle tail shorter than RunPod billed and the difference lands in "unaccounted".
+The billing breakdown applies the idle timeout that was in effect when each job ended: the backend keeps the endpoint's
+timeout over time in the `idle_timeout_history` table (`at`, `seconds`). A migration seeds it: 60 s from the beginning, and
+5 s from 2026-11-08T01:59:00Z, when the timeout was set to 5 s by hand (a PATCH on the endpoint); at start-up the sync
+adds a row whenever the timeout it reads (or sets) differs from the latest row. `warmup_sessions.billed_seconds` stays as
+it was stored.
 
 ### `GET /billing?days=7`
 
@@ -511,10 +514,19 @@ time in used sessions: the lead that was longer than it needed to be.
 `usdPerHour`: `proving` (the request on the worker, until the proof returned), `startingUp` (cold start before a worker
 can take work), `waitingForProof` (a started worker ready and idle until its proof began), `unusedEarlyStarts` (billed
 time of sessions with no proof), `idleAfterJob` (the idle timeout after each job, not counted again where a later job or
-session overlaps) and `unaccounted` (RunPod's bill minus the five; negative when our records claim more than was billed;
+session overlaps; its tail is the idle timeout of the time the job ended) and `unaccounted` (RunPod's bill minus the five;
 null for a period without a RunPod figure). An instant counts in one bucket only; the boundaries and a worked example are
-in the header of `src/billing-breakdown.ts`. Session records are kept 7 days, so older days show no early starts. The
-status page shows the last 24 hours (`GPU billing`), degraded when `unaccounted` is more than 25% of the bill.
+in the header of `src/billing-breakdown.ts`. Session records are kept 7 days, so older days show no early starts.
+
+What makes `unaccounted` meaningful: each period is priced at its own RunPod rate (a day at its day's bill over its billed
+hours, the last 24 hours hour by hour), so its seconds and dollars agree and a total is the sum of its days. RunPod's bill
+lags, so only time before `billedThrough` (ISO, the start of RunPod's latest hour bucket, which is still filling) is
+compared: the records after it are `notYetBilled` (`{ seconds, usd }`, an estimate at the period's rate), and `billed`
+is the bill that was compared, which the six buckets add up to. Each breakdown has `billedThrough`, `billed` and
+`notYetBilled`. What remains negative is a real disagreement between record and bill, small ones mostly from proving
+being an upper bound (`remote_ms` includes queueing until the GPU image reports `worker_total_ms`). The status page shows
+the last 24 hours (`GPU billing`), degraded when `unaccounted` is more than 25% of the compared bill; it says "billing
+caught up to 03:00 UTC" when records after that are left out.
 
 ### `GET /warmup/summary?days=7` (deprecated)
 

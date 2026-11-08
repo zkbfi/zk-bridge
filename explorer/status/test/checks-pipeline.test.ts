@@ -138,6 +138,33 @@ describe("gpuBillingCheck", () => {
     expect((await run({ body: base(last24h(1, { unaccounted: null })) })).state).toBe("ok");
   });
 
+  it("judges the mismatch on the billed part only, and says how far billing has caught up (2026-11-08)", async () => {
+    const lagging = (compared: number, unaccounted: number, through: string, notYet = 900) => {
+      const body = base(last24h(1, { proving: 0.5, idleAfterJob: 0.1, startingUp: 0, waitingForProof: 0, unusedEarlyStarts: 0, unaccounted }));
+      Object.assign(body.last24h.breakdown, { billed: amount(compared), billedThrough: through, notYetBilled: { seconds: notYet, usd: 0.45 } });
+      return body;
+    };
+    const day = new Date(NOW).toISOString().slice(0, 10);
+    // 0.1 of 0.5 compared is 20%: ok, though 0.1 of the 24 h bill of 1.0 and a big unbilled part would have looked otherwise.
+    const fine = await run({ body: lagging(0.5, 0.1, `${day}T03:00:00.000Z`) });
+    expect(fine.state).toBe("ok");
+    expect(fine.detail).toContain("unaccounted $0.10; billing caught up to 03:00 UTC; balance $153");
+    // 0.2 of 0.5 compared is 40%: degraded, and the share is of the compared bill.
+    const bad = await run({ body: lagging(0.5, 0.2, `${day}T03:00:00.000Z`) });
+    expect(bad.state).toBe("degraded");
+    expect(bad.detail).toContain("unaccounted $0.20 (40% of the $0.50 billed, records do not match the bill)");
+    // Another day than now has its date. Nothing not yet billed, no date, or a date that is not one: nothing to say.
+    expect((await run({ body: lagging(0.5, 0.1, "2026-01-02T23:00:00.000Z") })).detail).toContain("billing caught up to 01-02 23:00 UTC");
+    expect((await run({ body: lagging(0.5, 0.1, `${day}T03:00:00.000Z`, 0) })).detail).not.toContain("caught up");
+    expect((await run({ body: lagging(0.5, 0.1, "never") })).detail).not.toContain("caught up");
+    const none = lagging(0.5, 0.1, `${day}T03:00:00.000Z`);
+    Object.assign(none.last24h.breakdown, { billedThrough: null });
+    expect((await run({ body: none })).detail).not.toContain("caught up");
+    const noRest = lagging(0.5, 0.1, `${day}T03:00:00.000Z`);
+    Object.assign(noRest.last24h.breakdown, { notYetBilled: null });
+    expect((await run({ body: noRest })).detail).not.toContain("caught up");
+  });
+
   it("is degraded when the idle timeout RunPod reports differs from the backend's configuration, and says both numbers", async () => {
     const idle = (configured: number | null, endpoint: number | null) => base({ assumptions: { idleTimeoutSeconds: configured, endpointIdleTimeoutSeconds: endpoint } });
     const differs = await run({ body: idle(5, 60) });

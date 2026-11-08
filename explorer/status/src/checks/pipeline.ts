@@ -79,7 +79,9 @@ const signedDollars = (value: number) => `${value < 0 ? "-" : ""}$${Math.abs(val
  * the line says so and gives what our records hold, at the assumed price.
  *
  * Degraded when the balance covers fewer than {@link BALANCE_WARNING_DAYS} days, and when the unaccounted dollars are
- * more than {@link UNACCOUNTED_WARNING_SHARE} of the bill of 24 hours (our records do not match the bill), and when the
+ * more than {@link UNACCOUNTED_WARNING_SHARE} of the part of the bill that was compared (our records do not match the bill;
+ * RunPod's bill lags, so only time up to `billedThrough` is judged and the line says "billing caught up to 03:00 UTC"
+ * when records after it are left out), and when the
  * idle timeout RunPod reports for the endpoint differs from the backend's configuration; the line gives both numbers. Otherwise ok: an unused worker is a cost, not an outage.
  */
 export const gpuBillingCheck = (backendBase: string): Spec => ({
@@ -103,7 +105,10 @@ export const gpuBillingCheck = (backendBase: string): Spec => ({
 
     const breakdown = record(last24h?.breakdown);
     const unaccounted = number(record(breakdown?.unaccounted)?.usd);
-    const mismatch = spendKnown && billed > 0 && unaccounted !== null && Math.abs(unaccounted) > UNACCOUNTED_WARNING_SHARE * billed;
+    // RunPod's bill lags: the backend compares only what RunPod has billed (`breakdown.billed`, up to `billedThrough`) and
+    // reports the records after it as `notYetBilled`. The mismatch is judged on that complete part only.
+    const compared = number(record(breakdown?.billed)?.usd) ?? billed;
+    const mismatch = spendKnown && compared !== null && compared > 0 && unaccounted !== null && Math.abs(unaccounted) > UNACCOUNTED_WARNING_SHARE * compared;
     if (mismatch) state = "degraded";
     const items = BUCKETS.map(([key, label], order) => ({ key, order, usd: number(record(breakdown?.[key])?.usd), label }))
       .filter((item): item is typeof item & { usd: number } => item.usd !== null && Math.abs(item.usd) >= 0.005)
@@ -112,11 +117,16 @@ export const gpuBillingCheck = (backendBase: string): Spec => ({
         flagged: item.key === "unaccounted" && mismatch,
         text:
           item.key === "unaccounted" && mismatch
-            ? `${item.label} ${signedDollars(item.usd)} (${Math.round((Math.abs(item.usd) / (billed as number)) * 100)}% of the ${dollars(billed)} billed, records do not match the bill)`
+            ? `${item.label} ${signedDollars(item.usd)} (${Math.round((Math.abs(item.usd) / (compared as number)) * 100)}% of the ${dollars(compared as number)} billed, records do not match the bill)`
             : `${item.label} ${signedDollars(item.usd)}`,
       }));
 
     const tail: string[] = [];
+    const through = typeof breakdown?.billedThrough === "string" ? new Date(breakdown.billedThrough) : null;
+    if (through !== null && !Number.isNaN(through.getTime()) && (number(record(breakdown?.notYetBilled)?.seconds) ?? 0) > 0) {
+      const clock = through.toISOString().slice(11, 16);
+      tail.push(`billing caught up to ${through.toISOString().slice(0, 10) === new Date(run.now()).toISOString().slice(0, 10) ? "" : `${through.toISOString().slice(5, 10)} `}${clock} UTC`);
+    }
     // The backend sets the endpoint to its configured idle timeout at start-up; a difference means that did not happen or was undone.
     const assumptions = record(body.assumptions);
     const configured = number(assumptions?.idleTimeoutSeconds);

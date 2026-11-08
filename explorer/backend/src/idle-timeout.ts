@@ -31,6 +31,8 @@ export function createIdleTimeoutSync(input: {
   /** False reads and reports only; nothing is changed at RunPod. */
   sync: boolean;
   logger: Logger;
+  /** Told the first endpoint's idle timeout, as read and again as set (the backend keeps the history for the billing breakdown). */
+  onObserved?: (seconds: number) => void;
   fetchFunction?: () => typeof fetch;
   timeoutMilliseconds?: number;
 }): IdleTimeoutSync {
@@ -57,6 +59,7 @@ export function createIdleTimeoutSync(input: {
       const from = settings?.idleTimeout;
       if (typeof from !== "number" || !Number.isFinite(from)) throw new Error("the endpoint settings have no idleTimeout");
       known.set(endpoint.id, from);
+      if (endpoint === input.endpoints[0]) input.onObserved?.(from);
       if (from === input.idleTimeoutSeconds) {
         input.logger.info("runpod_idle_timeout_ok", { endpointId, idleTimeoutSeconds: from });
         return;
@@ -67,6 +70,7 @@ export function createIdleTimeoutSync(input: {
       }
       await call(endpoint, "PATCH");
       known.set(endpoint.id, input.idleTimeoutSeconds);
+      if (endpoint === input.endpoints[0]) input.onObserved?.(input.idleTimeoutSeconds);
       input.logger.info("runpod_idle_timeout_set", { endpointId, from, to: input.idleTimeoutSeconds });
     } catch (error) {
       input.logger.warn("runpod_idle_timeout_failed", { endpointId, reason: reasonOf(error) });

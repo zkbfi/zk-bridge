@@ -16,6 +16,7 @@ import { createProverFactories } from "./requests/job-prover.ts";
 import { createProofNeedReader, withoutIndexer } from "./requests/proof-need.ts";
 import { openStorage } from "./storage.ts";
 import { billingEndpoints, createBillingReader } from "./billing.ts";
+import { createIdleHistory } from "./idle-history.ts";
 import { createIdleTimeoutSync } from "./idle-timeout.ts";
 import { createProverPing } from "./watch/ping.ts";
 import { watchedDirections } from "./watch/module.ts";
@@ -99,10 +100,11 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
   const pingProver = createProverPing({ ...warmupTarget(config, secrets), timeoutMilliseconds: config.watch.warmup.pingTimeoutSeconds * 1000 });
   const runpodEndpoints = billingEndpoints(config, secrets);
   const billing = runpodEndpoints.length === 0 ? undefined : createBillingReader({ endpoints: runpodEndpoints, now, logger });
+  const idleHistory = createIdleHistory(storage);
   const idleSync =
     runpodEndpoints.length === 0
       ? undefined
-      : createIdleTimeoutSync({ endpoints: runpodEndpoints, idleTimeoutSeconds: config.watch.warmup.idleTimeoutSeconds, sync: config.watch.warmup.syncIdleTimeout, logger });
+      : createIdleTimeoutSync({ endpoints: runpodEndpoints, idleTimeoutSeconds: config.watch.warmup.idleTimeoutSeconds, sync: config.watch.warmup.syncIdleTimeout, logger, onObserved: (seconds) => idleHistory.record(now(), seconds) });
   const context: BackendModuleContext = {
     storage,
     config,

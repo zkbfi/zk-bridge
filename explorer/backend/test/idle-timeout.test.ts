@@ -22,13 +22,26 @@ function fakeRunpod(settings: unknown = { idleTimeout: 60, workersMin: 0, worker
   return { state, calls, fetchFunction: () => fetchFunction };
 }
 
-function make(runpod = fakeRunpod(), options: { idle?: number; sync?: boolean; endpoints?: Array<typeof ENDPOINT> } = {}) {
+function make(runpod = fakeRunpod(), options: { idle?: number; sync?: boolean; endpoints?: Array<typeof ENDPOINT>; seen?: number[] } = {}) {
   const lines: string[] = [];
   const record = (level: string) => (event: string, fields?: unknown) => void lines.push(`${level} ${event} ${JSON.stringify(fields)}`);
   const logger = { debug: record("debug"), info: record("info"), warn: record("warn"), error: record("error") };
-  const sync = createIdleTimeoutSync({ endpoints: options.endpoints ?? [ENDPOINT], idleTimeoutSeconds: options.idle ?? 5, sync: options.sync ?? true, logger, fetchFunction: runpod.fetchFunction });
+  const sync = createIdleTimeoutSync({ endpoints: options.endpoints ?? [ENDPOINT], idleTimeoutSeconds: options.idle ?? 5, sync: options.sync ?? true, logger, fetchFunction: runpod.fetchFunction, ...(options.seen === undefined ? {} : { onObserved: (seconds: number) => options.seen?.push(seconds) }) });
   return { runpod, lines, sync };
 }
+
+describe("telling the history of the idle timeout (2026-11-08)", () => {
+  it("reports the first endpoint's timeout as read and as set, and no other endpoint's", async () => {
+    const seen: number[] = [];
+    await make(fakeRunpod(), { seen, endpoints: [ENDPOINT, { id: "other123", apiKey: KEY }] }).sync.run();
+    expect(seen).toEqual([60, 5]);
+    const already: number[] = [];
+    await make(fakeRunpod({ idleTimeout: 5 }), { seen: already }).sync.run();
+    expect(already).toEqual([5]);
+    // Nobody listening is fine.
+    await make().sync.run();
+  });
+});
 
 describe("setting the endpoint's idle timeout", () => {
   it("sets it when it differs: a GET, one PATCH with only idleTimeout, and a log with the short id and both numbers", async () => {
