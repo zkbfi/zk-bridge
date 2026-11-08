@@ -221,7 +221,9 @@ export const TransactionDialog = ({ steps, onClose, variant = "modal", onFinishe
         {state.phase === "preparing" ? <Text>Preparing the transaction: estimating gas and fees…</Text> : null}
         {state.phase === "waiting" && state.gateWait != null ? (
           <Notice tone="info">
-            The {state.gateWait.chainName} deposit gate needs a beacon header of epoch {state.gateWait.epoch.toString()} on chain before this epoch can be confirmed. Checking again in {state.gateWait.seconds} seconds.
+            {state.gateWait.epochSecondsLeft === undefined
+              ? `The ${state.gateWait.chainName} deposit gate needs a beacon header of epoch ${state.gateWait.epoch.toString()} on chain before this epoch can be confirmed. Checking again in ${state.gateWait.seconds} seconds.`
+              : `Epoch ${state.gateWait.epoch.toString()} of the ${state.gateWait.chainName} deposit gate ends in ${Math.max(state.gateWait.epochSecondsLeft, 0)} seconds, too soon for a confirmation and your send to land in it. Waiting for the next epoch: checking again in ${state.gateWait.seconds} seconds.`}
           </Notice>
         ) : null}
         {state.phase === "wallet" ? <Notice tone="info">Confirm in your wallet. With a hardware wallet, read the screen of the device too.</Notice> : null}

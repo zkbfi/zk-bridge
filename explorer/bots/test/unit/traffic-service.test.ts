@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { signerFromPrivateKeyText } from "../../../terminal/src/signing/key-sources.ts";
 import { BotConfigError, parseBotConfig } from "../../src/config/bot-config.ts";
 import { LockHeldError } from "../../src/runtime/lock-file.ts";
-import { gateBeaconUrlOf, ignoredScheduleSettings, startTraffic, tipRateOf, type TrafficOverrides } from "../../src/traffic/service.ts";
+import { gateBeaconUrlOf, ignoredScheduleSettings, SKIP_RETRIES, startTraffic, tipRateOf, type TrafficOverrides } from "../../src/traffic/service.ts";
 import { HOUR_MILLISECONDS } from "../../src/traffic/schedule.ts";
 import { seeded } from "../support/seeded.ts";
 import { createServiceWorld, type ServiceWorld } from "../support/service-world.ts";
@@ -440,6 +440,46 @@ describe("startTraffic on the hourly plan", () => {
     const first = await plansOf(5);
     expect(await plansOf(5)).toEqual(first);
     expect(first).toHaveLength(2);
+  });
+});
+
+describe("startTraffic, skips that a later try mends", () => {
+  const T0 = HOUR_START + 1_650_000;
+  const GAP = 300_000;
+  const half = () => 0.5;
+  const stateOf = (created: ServiceWorld) => JSON.parse(readFileSync(statePath(created), "utf8")).directions;
+
+  /** A gate on chain 1 that has no header for the epoch. An attempt looks at it four times (the first look and three waits): the clock moves one gap and a second in all. */
+  function waitingGate(clock: { at: number }) {
+    return (chainId: number) =>
+      chainId === 1
+        ? { ensure: async () => ((clock.at += (GAP + 1_000) / 4), { kind: "wait" as const, epoch: 6n, headerEpoch: 5n, retryAfterSeconds: 0 }) }
+        : null;
+  }
+
+  it("gives the send back to the plan in the same hour, and uses it up after the limit", async () => {
+    const created = await prepare({ directions: { "first-to-second": { enabled: true }, "second-to-first": { enabled: false } } });
+    const clock = { at: T0 };
+    const { overrides } = overridesFor({ random: half, gate: waitingGate(clock), sleep: async () => undefined, now: () => clock.at });
+    const controller = new AbortController();
+    const running = run(created, overrides, { runOnce: false, signal: controller.signal });
+    for (let waited = 0; waited < 600 && named(created, "traffic_skipped").length < SKIP_RETRIES + 1; waited += 1) await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+    await running;
+    const skipped = named(created, "traffic_skipped").slice(0, SKIP_RETRIES + 1);
+    expect(skipped.map((event) => event.reason)).toEqual(Array(SKIP_RETRIES + 1).fill("gate-epoch-has-no-header"));
+    expect(named(created, "traffic_retry_planned").slice(0, SKIP_RETRIES).map((event) => event.retry)).toEqual([1, 2, 3]);
+    // The first planned send was tried again and again, then used up: the next try belongs to the second time.
+    expect(stateOf(created)["first-to-second"].plan.sent[0]).toBe(true);
+  });
+
+  it("does not give back a send of --once, which has no plan", async () => {
+    const created = await prepare({ directions: { "first-to-second": { enabled: true }, "second-to-first": { enabled: false } } });
+    const clock = { at: NOW };
+    const { overrides } = overridesFor({ gate: waitingGate(clock), sleep: async () => undefined, now: () => clock.at });
+    await run(created, overrides);
+    expect(named(created, "traffic_skipped")).toHaveLength(1);
+    expect(named(created, "traffic_retry_planned")).toEqual([]);
   });
 });
 

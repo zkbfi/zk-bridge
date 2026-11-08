@@ -16,4 +16,7 @@ export {
   describeRevert,
   type GateConfirmation,
   ensureGateConfirmed,
+  GATE_SAFETY_SECONDS,
+  GATE_BLOCK_SECONDS,
+  gateConfirmWindow,
 } from "@zkb/data";

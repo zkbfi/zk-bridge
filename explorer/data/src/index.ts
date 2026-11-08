@@ -564,6 +564,9 @@ export {
   type GateConfirmation,
   ensureGateConfirmed,
   EVIDENCE_BLOCK_LAG,
+  GATE_SAFETY_SECONDS,
+  GATE_BLOCK_SECONDS,
+  gateConfirmWindow,
   SIMULATION_RETRY_MILLISECONDS,
   type EvidenceBlock,
 } from "./gate-evidence.js";

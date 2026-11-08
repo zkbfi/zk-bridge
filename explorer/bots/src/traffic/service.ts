@@ -14,10 +14,13 @@ import { boundsOf, type Random } from "./plan.ts";
 import { drawPlan, dueIndex, hourOf, unsentIn, type Cadence, type HourPlan } from "./schedule.ts";
 import { INITIAL_TRAFFIC_STATE, trafficStateSchema, type TrafficDirectionState } from "./state.ts";
 import { loadTestTokens } from "./tokens-file.ts";
-import { createTraffic, type TrafficSide } from "./traffic.ts";
+import { createTraffic, RETRYABLE_SKIPS, type TrafficSide } from "./traffic.ts";
 
 /** The directions of a pair, in the order of the configuration. */
 const DIRECTIONS: readonly ProofDirection[] = ["first-to-second", "second-to-first"];
+
+/** How many times one planned send is given back to the plan after a skip that a later try can mend (see `RETRYABLE_SKIPS`). */
+export const SKIP_RETRIES = 3;
 
 /** Replacements for the parts that touch the outside world. Tests pass fakes. */
 export interface TrafficOverrides {
@@ -142,6 +145,7 @@ async function runTraffic(input: StartTrafficInput, statePath: string): Promise<
     }) as unknown as readonly [TrafficSide, TrafficSide];
     const random = overrides.random ?? Math.random;
     const bounds = new Map(Object.entries(traffic.tokens).map(([symbol, settings]) => [symbol, (decimals: number) => boundsOf(settings, decimals)] as const));
+    const now = overrides.now ?? Date.now;
     const bot = createTraffic({
       sides,
       tokens,
@@ -152,10 +156,10 @@ async function runTraffic(input: StartTrafficInput, statePath: string): Promise<
       ),
       random,
       logger,
+      now,
       ...(overrides.sleep === undefined ? {} : { sleep: overrides.sleep }),
     });
     const state = createStateFile({ path: statePath, schema: trafficStateSchema, initial: INITIAL_TRAFFIC_STATE });
-    const now = overrides.now ?? Date.now;
     const enabled = DIRECTIONS.filter((direction) => traffic.directions[direction].enabled);
 
     logger.info("traffic_started", {
@@ -192,6 +196,9 @@ async function runTraffic(input: StartTrafficInput, statePath: string): Promise<
       return drawn;
     };
 
+    /** How often each planned send (by direction, hour and index) was given back to the plan. */
+    const givenBack = new Map<string, number>();
+
     const attemptIn = async (direction: ProofDirection, index: number | null): Promise<void> => {
       const startedAt = now();
       const record = async (): Promise<void> => {
@@ -201,8 +208,22 @@ async function runTraffic(input: StartTrafficInput, statePath: string): Promise<
         }));
       };
       const outcome = await bot.attempt({ direction, beforeFirstSend: record });
-      // A skip before any transaction still uses up the time: the next try is at the next one.
-      if (outcome.kind === "skipped") await record();
+      if (outcome.kind !== "skipped") return;
+      // A skip that a later try can mend (the gate's epoch was not confirmed, or ending) gives the send back to the plan: the
+      // next try is after the minimum gap, in the same hour. Any other skip still uses up the time.
+      const key = `${direction}:${hourOf(startedAt)}:${index}`;
+      const retries = givenBack.get(key) ?? 0;
+      if (index !== null && RETRYABLE_SKIPS.has(outcome.reason) && retries < SKIP_RETRIES) {
+        givenBack.set(key, retries + 1);
+        await change(direction, (current) => ({
+          // An attempt with an index came from a plan, and nothing replaces the plan during the attempt, even when it crossed the hour.
+          plan: { ...(current.plan as HourPlan), sent: (current.plan as HourPlan).sent.map((used, at) => used && at !== index) },
+          lastAttemptAtMilliseconds: startedAt,
+        }));
+        logger.info("traffic_retry_planned", { direction, reason: outcome.reason, retry: retries + 1, of: SKIP_RETRIES });
+        return;
+      }
+      await record();
     };
 
     await runLoop({

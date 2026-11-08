@@ -1,5 +1,5 @@
 import { formatUnits, type Address, type Hex } from "viem";
-import { bridgedSymbolOf, defaultTip, encodeFeeDirector, GateEvidenceError, routerCallbackGas, type FeeDirector, type GateConfirmation, type ProtectedAddress, type ProofDirection } from "@zk-bridge/shared";
+import { bridgedSymbolOf, defaultTip, encodeFeeDirector, GateEvidenceError, gateConfirmWindow, routerCallbackGas, type FeeDirector, type GateConfirmation, type ProtectedAddress, type ProofDirection } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type Simulation, type TransactionPort } from "../chain/transactions.ts";
 import type { Logger } from "../logging/logger.ts";
 import { approvalData, messageIdOf, relayData, relayRefusalOf, type TrafficReader } from "./chain.ts";
@@ -46,6 +46,8 @@ export interface TrafficInput {
   readonly logger: Logger;
   /** Waits, between two looks at the gate when the epoch has no header yet. Default: a timer. */
   readonly sleep?: (milliseconds: number) => Promise<void>;
+  /** The clock, in milliseconds, that the time left in the epoch is read from. Default: `Date.now`. */
+  readonly now?: () => number;
 }
 
 /**
@@ -59,6 +61,19 @@ export const GATE_WAITS = 3;
  * balancer may answer the latest block from one node and then lack it on the next ("block not found").
  */
 export const GATE_NODE_RETRIES = 3;
+
+/**
+ * How many times one attempt waits for the next epoch because too little of the current one remains (see
+ * `GATE_SAFETY_SECONDS` of the shared gate code: 60 s). One wait normally suffices; the others cover a node that still
+ * serves the old epoch as its latest block.
+ */
+export const GATE_EPOCH_DEFERS = 3;
+
+/**
+ * The skips that a later try in the same hour can mend: the epoch had no confirmation or no header yet, or too little of
+ * it was left. The service gives such an attempt back to the plan instead of dropping the send.
+ */
+export const RETRYABLE_SKIPS: ReadonlySet<string> = new Set(["gate-not-confirmed", "gate-epoch-has-no-header", "gate-epoch-ending"]);
 
 /** The pause before asking the gate again after a node error. */
 export const GATE_NODE_RETRY_MILLISECONDS = 3000;
@@ -111,6 +126,7 @@ function simulatedWith(simulation: Extract<Simulation, { readonly ok: false }>):
 export function createTraffic(input: TrafficInput): Traffic {
   const { sides, logger } = input;
   const wallet = sides[0].port.account;
+  const now = input.now ?? Date.now;
   const sleep = input.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
 
   /** The candidates of a direction: the native tokens of the source, and the copies on the source of the destination's tokens. */
@@ -187,14 +203,6 @@ export function createTraffic(input: TrafficInput): Traffic {
       native -= receipt.gasUsed * receipt.effectiveGasPrice;
     }
 
-    // The gate of the source chain: the first send of an epoch confirms it first (see "Gate evidence: confirm, then send"
-    // in docs/hardened-build-contract.md). A gate that does not enforce, or a confirmed epoch, needs nothing.
-    if (source.gate !== null) {
-      const confirmed = await confirmGate(source, direction, described, native, announce);
-      if (confirmed.kind === "skipped") return confirmed;
-      native -= confirmed.spentWei;
-    }
-
     // The first send of a native token deploys its copy on the destination. The send needs no gas number for that: the
     // executor of the delivery brings the gas. A send whose copy has no code yet deploys it. With `deployMessage` (no copy came home yet) the runner cannot price
     // the send: the indexer names no destination token for a deploy message. Both are logged, so the operator delivers it
@@ -204,7 +212,25 @@ export function createTraffic(input: TrafficInput): Traffic {
     // The terms have no follow-up call, so the callback gas is the base that the router needs for its own work.
     const callbackGas = routerCallbackGas({});
     const data = relayData({ token: candidate.sourceToken, router, amount, terms: termsFor(destination, router, candidate.destinationToken), callbackGas });
-    const simulation = await source.port.simulate({ to: source.contracts.mediator, data });
+
+    // The gate of the source chain: the first send of an epoch confirms it first (see "Gate evidence: confirm, then send"
+    // in docs/hardened-build-contract.md). A gate that does not enforce, or a confirmed epoch, needs nothing. The confirm
+    // and the send must land in one epoch: confirmGate waits for the next epoch when too little of this one is left, and
+    // when the epoch rolled over after the confirmation (the simulation says ForkNotConfirmed) the gate is asked once more.
+    let simulation: Simulation;
+    for (let redone = false; ; redone = true) {
+      if (source.gate !== null) {
+        const confirmed = await confirmGate(source, direction, described, native, announce);
+        if (confirmed.kind === "skipped") return confirmed;
+        native -= confirmed.spentWei;
+      }
+      simulation = await source.port.simulate({ to: source.contracts.mediator, data });
+      if (!simulation.ok && !redone && source.gate !== null && relayRefusalOf(simulation.reason).refusal === "gate-not-confirmed") {
+        logger.warn("gate_epoch_rolled", { direction, ...described, chain: source.name, detail: simulation.reason });
+        continue;
+      }
+      break;
+    }
     if (!simulation.ok) {
       const refused = relayRefusalOf(simulation.reason);
       return skip(direction, refused.refusal, { ...described, error: refused.error, detail: simulation.reason, ...simulatedWith(simulation) });
@@ -243,22 +269,34 @@ export function createTraffic(input: TrafficInput): Traffic {
   ): Promise<{ readonly kind: "ready"; readonly spentWei: bigint } | SkippedOutcome> {
     const gate = source.gate as TrafficGate;
     let confirmation: GateConfirmation;
-    for (let waited = 0, retried = 0; ; waited += 1) {
-      try {
-        confirmation = await gate.ensure(wallet);
-      } catch (error) {
-        // A refused evidence is final; a node error is asked again, and does not count as a wait.
-        if (!(error instanceof GateEvidenceError) && retried < GATE_NODE_RETRIES) {
-          retried += 1;
-          waited -= 1;
-          await sleep(GATE_NODE_RETRY_MILLISECONDS);
-          continue;
+    let secondsLeft = 0;
+    for (let deferred = 0; ; deferred += 1) {
+      for (let waited = 0, retried = 0; ; waited += 1) {
+        try {
+          confirmation = await gate.ensure(wallet);
+        } catch (error) {
+          // A refused evidence is final; a node error is asked again, and does not count as a wait.
+          if (!(error instanceof GateEvidenceError) && retried < GATE_NODE_RETRIES) {
+            retried += 1;
+            waited -= 1;
+            await sleep(GATE_NODE_RETRY_MILLISECONDS);
+            continue;
+          }
+          const code = error instanceof GateEvidenceError ? error.code : null;
+          return skip(direction, "gate-evidence-failed", { ...described, chain: source.name, code, detail: (error as Error).message });
         }
-        const code = error instanceof GateEvidenceError ? error.code : null;
-        return skip(direction, "gate-evidence-failed", { ...described, chain: source.name, code, detail: (error as Error).message });
+        if (confirmation.kind !== "wait" || waited >= GATE_WAITS) break;
+        await sleep(confirmation.retryAfterSeconds * 1000);
       }
-      if (confirmation.kind !== "wait" || waited >= GATE_WAITS) break;
-      await sleep(confirmation.retryAfterSeconds * 1000);
+      if (confirmation.kind !== "confirm") break;
+      // The confirmation must be mined in its epoch, or it confirms nothing for the send that follows it.
+      const window = gateConfirmWindow(confirmation.validUntil, now());
+      secondsLeft = window.secondsLeft;
+      if (!window.late) break;
+      const fields = { direction, chain: source.name, epoch: confirmation.epoch, secondsLeft: window.secondsLeft, waitSeconds: window.waitSeconds };
+      if (deferred >= GATE_EPOCH_DEFERS) return skip(direction, "gate-epoch-ending", { ...described, ...fields });
+      logger.info("gate_confirm_deferred", fields);
+      await sleep(window.waitSeconds * 1000);
     }
     if (confirmation.kind === "not-needed") return { kind: "ready", spentWei: 0n };
     const skipped = (reason: string, fields: Record<string, unknown>) => skip(direction, reason, { ...described, chain: source.name, ...fields });
@@ -277,6 +315,7 @@ export function createTraffic(input: TrafficInput): Traffic {
       chain: source.name,
       gate: confirmation.call.to,
       epoch: confirmation.epoch,
+      secondsLeft,
       forkVersion: confirmation.forkVersion,
       transactionHash: receipt.hash,
       gasUsed: receipt.gasUsed,
