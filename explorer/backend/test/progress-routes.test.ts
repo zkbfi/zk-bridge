@@ -6,6 +6,7 @@ import { decisionBoardOf } from "../src/watch/decisions.ts";
 import { createWarmupStore } from "../src/watch/warmup-store.ts";
 import type { HeadUpdate, IndexedHead, IndexedMessage, IndexerReads } from "../src/progress/indexer.ts";
 import { ESTIMATE_REUSE_MILLISECONDS, READS_PER_CALLER_PER_MINUTE, createReadLimiter, registerProgressRoutes, workerWarmAt } from "../src/progress/routes.ts";
+import type { BillingReader, BillingSnapshot } from "../src/billing.ts";
 import { makeBackend, makeConfig } from "./support.ts";
 
 const ID = `0x${"ab".repeat(32)}`;
@@ -33,8 +34,9 @@ function fakeIndexer() {
   return { state, reads };
 }
 
-function setup(options: { indexer?: IndexerReads | null } = {}) {
+function setup(options: { indexer?: IndexerReads | null; billing?: BillingReader } = {}) {
   const backend = makeBackend();
+  if (options.billing !== undefined) (backend.context as { billing?: BillingReader }).billing = options.billing;
   const indexer = fakeIndexer();
   const app = new Hono();
   let caller = "10.0.0.1";
@@ -227,6 +229,76 @@ describe("GET /warmup/summary (2026-11-06)", () => {
     for (const days of ["0", "31", "x", "1.5", "-1"]) expect((await run.get(`/warmup/summary?days=${days}`)).status).toBe(400);
     for (let index = 0; index < READS_PER_CALLER_PER_MINUTE; index += 1) await run.get("/warmup/summary");
     expect((await run.get("/warmup/summary")).status).toBe(429);
+  });
+});
+
+describe("GET /warmup/summary with RunPod billing (2026-11-07)", () => {
+  /** The context clock is read first, so the days are those of the test's own `now`. */
+  const withBilling = (build: (now: number) => BillingSnapshot) => {
+    const probe = setup();
+    const now = probe.context.now();
+    const reader: BillingReader = { read: async () => build(now) };
+    return setup({ billing: reader });
+  };
+  const dayOf = (now: number, back: number) => new Date(now - back * 86_400_000).toISOString().slice(0, 10);
+
+  function sessions(run: ReturnType<typeof setup>) {
+    const store = createWarmupStore(run.storage);
+    const start = run.context.now() - 3_600_000;
+    const used = store.openSession({ direction: "first-to-second", why: "message", dueAt: start + 60_000, leadSeconds: 60, at: start });
+    store.markReady(used, start + 30_000);
+    store.endSession(used, "used", start + 70_000, 60);
+    const wasted = store.openSession({ direction: "first-to-second", why: "message", dueAt: start + 600_000, leadSeconds: 60, at: start + 100_000 });
+    store.endSession(wasted, "unusable", start + 110_000, 60);
+  }
+
+  const snapshot = (now: number): BillingSnapshot => ({
+    spend: {
+      // $0.76 an hour: 3 600 s billed for $0.76 each day.
+      days: [-2, -1, 0].map((back) => ({ start: dayOf(now, -back), amountUsd: 0.76, billedSeconds: 3600 })).reverse(),
+      hours: [{ start: new Date(now - 3_600_000).toISOString().slice(0, 13), amountUsd: 0.38, billedSeconds: 1800 }],
+      readAt: now - 90_000,
+    },
+    balance: { balanceUsd: 153.38, currentSpendPerHr: 0, spendLimit: 80, readAt: now - 30_000 },
+  });
+
+  it("prices the wasted seconds at the rate RunPod billed, and gives the money next to the estimate", async () => {
+    const run = withBilling(snapshot);
+    sessions(run);
+    const body = (await run.get("/warmup/summary")).body as Record<string, any>;
+    expect(body.rateSource).toBe("runpod");
+    expect(body.usdPerHour).toBeCloseTo(0.76, 4);
+    // 70 wasted seconds at $0.76 an hour; the same seconds at the assumed $2.25 an hour would be 0.0438.
+    expect(body.total.wastedSeconds).toBe(70);
+    expect(body.total.wastedCostUsd).toBeCloseTo((70 / 3600) * 0.76, 4);
+    expect(body.total.estimatedCostUsd).toBeCloseTo((200 / 3600) * 0.76, 4);
+    expect(body.assumptions).toMatchObject({ gpuUsdPerHour: 2.25, gpuUsdPerHourIsFallback: true });
+    expect(body.billing).toMatchObject({ available: true, ageSeconds: 90, last24hUsd: 0.38, last24hBilledSeconds: 1800, balanceUsd: 153.38, balanceAgeSeconds: 30, currentSpendPerHr: 0, spendLimit: 80, effectiveUsdPerHour: 0.76 });
+    const today = (body.byDay as Array<Record<string, any>>)[0];
+    expect(today).toMatchObject({ billedUsd: 0.76, runpodBilledSeconds: 3600, effectiveUsdPerHour: 0.76 });
+    expect(body.total).toMatchObject({ billedUsd: 0.76, runpodBilledSeconds: 3600 });
+    expect(JSON.stringify(body)).not.toMatch(/https?:|key|token/i);
+  });
+
+  it("falls back to the assumed rate, and says so, when billing is missing, unread or has no billed time", async () => {
+    for (const run of [setup(), withBilling(() => ({ spend: null, balance: null })), withBilling((now) => ({ spend: { days: [{ start: dayOf(now, 0), amountUsd: 0, billedSeconds: 0 }], hours: [], readAt: now }, balance: null }))]) {
+      sessions(run);
+      const body = (await run.get("/warmup/summary")).body as Record<string, any>;
+      expect(body.rateSource).toBe("assumed");
+      expect(body.usdPerHour).toBe(2.25);
+      expect(body.total.wastedCostUsd).toBeCloseTo((70 / 3600) * 2.25, 3);
+      expect(body.total.billedUsd === null || body.total.billedUsd === 0).toBe(true);
+    }
+    const none = (await setup().get("/warmup/summary")).body as Record<string, any>;
+    expect(none.billing).toMatchObject({ available: false, ageSeconds: null, last24hUsd: null, balanceUsd: null });
+  });
+
+  it("answers from the cache of the reader: a read does not wait for RunPod beyond the reader", async () => {
+    let reads = 0;
+    const run = setup({ billing: { read: async () => ((reads += 1), { spend: null, balance: null }) } });
+    await run.get("/warmup/summary");
+    await run.get("/warmup/summary?days=1");
+    expect(reads).toBe(2);
   });
 });
 

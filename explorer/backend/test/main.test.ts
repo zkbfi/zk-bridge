@@ -209,6 +209,33 @@ describe("secrets in the log", () => {
     expect(text).not.toContain(SECRETS.webhookBearer);
   });
 
+  it("reads RunPod's billing for a RunPod endpoint with a key, serves it on /warmup/summary, and logs no key", async () => {
+    const real = globalThis.fetch;
+    const seen: string[] = [];
+    const runpod = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes("runpod.")) return real(input, init);
+      seen.push(`${url} ${new Headers(init?.headers).get("authorization")}`);
+      if (url.includes("graphql")) return Response.json({ data: { myself: { clientBalance: 153.38, currentSpendPerHr: 0, spendLimit: 80 } } });
+      const today = new Date().toISOString().slice(0, 10);
+      return Response.json([{ time: `${today} 00:00:00`, amount: 0.76, timeBilledMs: 3_600_000 }]);
+    };
+    vi.stubGlobal("fetch", runpod);
+    const lines: string[] = [];
+    const config = makeConfig({ ...configFor(workspace(), await needyIndexer()), remote: { endpoint: "https://abc123.api.runpod.ai" } });
+    const running = await startBackend({ config, pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, write: (line) => lines.push(line) });
+    try {
+      const body = (await (await real(`http://127.0.0.1:${running.port}/warmup/summary`)).json()) as { rateSource: string; usdPerHour: number; billing: { balanceUsd: number } };
+      expect(body).toMatchObject({ rateSource: "runpod", usdPerHour: 0.76, billing: { balanceUsd: 153.38 } });
+    } finally {
+      await running.stop();
+      vi.unstubAllGlobals();
+    }
+    expect(seen.length).toBe(3);
+    expect(seen.every((entry) => entry.endsWith(`Bearer ${SECRETS.runpodApiKey}`))).toBe(true);
+    expect(lines.join("\n")).not.toContain(SECRETS.runpodApiKey);
+  });
+
   it("the requests module needs a beacon endpoint for both chains", async () => {
     const lonely = { ...PAIR, sides: [PAIR.sides[0], { ...PAIR.sides[1], beaconUrl: null }] } as typeof PAIR;
     await expect(startBackend({ config: configFor(workspace()), pair: lonely, enabled: ["requests"], environment: ENVIRONMENT, write: () => {} })).rejects.toThrow("beaconUrls needs an entry for chain 369");

@@ -65,19 +65,51 @@ describe("warmupCheck", () => {
     return warmupCheck(backend).run(deps);
   };
 
-  it("gives the sessions, what was wasted, and the estimated cost", async () => {
-    expect(await run({ body: { total: { sessions: 6, used: 4, wasted: 2, estimatedCostUsd: 0.4567, wastedCostUsd: 0.1, wastedSeconds: 160 } } })).toEqual({
+  const billing = (extra: object = {}) => ({ available: true, ageSeconds: 120, last24hUsd: 1.18, balanceUsd: 153.38, balanceDaysLeft: 90.2, averageDailyUsd7d: 1.7, ...extra });
+  const total = { sessions: 38, used: 34, wasted: 4, wastedCostUsd: 0.1204, estimatedCostUsd: 0.4, wastedSeconds: 570 };
+
+  it("gives the sessions, the money RunPod billed, the wasted part and the balance", async () => {
+    expect(await run({ body: { rateSource: "runpod", total, billing: billing() } })).toEqual({
       state: "ok",
-      detail: "6 warm-ups in 24 h, 4 used and 2 wasted; about $0.46 of GPU time, $0.10 of it wasted (3 min)",
+      detail: "38 warm-ups in 24 h, 34 used and 4 wasted; $1.18 billed by RunPod in 24 h, about $0.12 of it wasted; balance $153, 90 days left at the 7-day average",
     });
   });
 
-  it("says when there was none, and is down on a bad answer", async () => {
+  it("is degraded when the balance covers fewer than 14 days, and says the days left", async () => {
+    const low = await run({ body: { total, billing: billing({ balanceUsd: 20, balanceDaysLeft: 11.76 }) } });
+    expect(low.state).toBe("degraded");
+    expect(low.detail).toContain("balance $20, 11 days left at the 7-day average (under 14)");
+    expect((await run({ body: { total, billing: billing({ balanceUsd: 23.8, balanceDaysLeft: 14 }) } })).state).toBe("ok");
+    expect((await run({ body: { total, billing: billing({ balanceUsd: 23.7, balanceDaysLeft: 13.99 }) } })).state).toBe("degraded");
+    expect((await run({ body: { total: { sessions: 0 }, billing: billing({ balanceDaysLeft: 3 }) } })).state).toBe("degraded");
+  });
+
+  it("says when there is no spend to divide by, and when the figures are old", async () => {
+    expect((await run({ body: { total, billing: billing({ balanceDaysLeft: null, averageDailyUsd7d: 0 }) } })).detail).toContain("balance $153, no spend in the last 7 days");
+    expect((await run({ body: { total, billing: billing({ ageSeconds: 2700 }) } })).detail).toContain("RunPod figures are 45 min old");
+    expect((await run({ body: { total, billing: billing({ balanceUsd: 4.5, balanceDaysLeft: 20 }) } })).detail).toContain("balance $4.50,");
+  });
+
+  it("names the assumed price when RunPod's billing cannot be read", async () => {
+    expect(await run({ body: { total: { sessions: 6, used: 4, wasted: 2, estimatedCostUsd: 0.4567, wastedCostUsd: 0.1, wastedSeconds: 160 }, assumptions: { gpuUsdPerHour: 2.25 }, billing: { available: false } } })).toEqual({
+      state: "ok",
+      detail: "6 warm-ups in 24 h, 4 used and 2 wasted; RunPod billing is not available; about $0.46 of GPU time at the assumed $2.25/h, $0.10 of it wasted (3 min)",
+    });
+  });
+
+  it("says when there was no warm-up, with the money billed, and is down on a bad answer", async () => {
     expect(await run({ body: { total: { sessions: 0 } } })).toEqual({ state: "ok", detail: "no warm-up in 24 h" });
     expect(await run({ body: { total: {} } })).toEqual({ state: "ok", detail: "no warm-up in 24 h" });
+    expect(await run({ body: { total: { sessions: 0 }, billing: billing() } })).toEqual({ state: "ok", detail: "no warm-up in 24 h; $1.18 billed by RunPod in 24 h; balance $153, 90 days left at the 7-day average" });
     expect(await run({ status: 429 })).toEqual({ state: "down", detail: "answered 429 on /warmup/summary" });
     expect(await run({ text: "x" })).toEqual({ state: "down", detail: "answered something that is not the warm-up summary" });
-    expect(await run({ body: { total: { sessions: 1 } } })).toMatchObject({ state: "ok", detail: expect.stringContaining("1 warm-up in 24 h, 0 used and 0 wasted; about $0.00") });
+    expect(await run({ body: { total: { sessions: 1 } } })).toMatchObject({ state: "ok", detail: expect.stringContaining("1 warm-up in 24 h, 0 used and 0 wasted; RunPod billing is not available; about $0.00") });
+  });
+
+  it("keeps the detail within the sanitizer: one line, no URL, under 200 characters", async () => {
+    const result = await run({ body: { total, billing: billing({ balanceUsd: 20, balanceDaysLeft: 11.76, ageSeconds: 7200 }) } });
+    expect(result.detail.length).toBeLessThan(200);
+    expect(result.detail).not.toMatch(/https?:|\n/);
   });
 });
 

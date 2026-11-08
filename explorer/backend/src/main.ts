@@ -15,6 +15,7 @@ import * as requests from "./requests/module.ts";
 import { createProverFactories } from "./requests/job-prover.ts";
 import { createProofNeedReader, withoutIndexer } from "./requests/proof-need.ts";
 import { openStorage } from "./storage.ts";
+import { billingEndpoints, createBillingReader } from "./billing.ts";
 import { createProverPing } from "./watch/ping.ts";
 import { watchedDirections } from "./watch/module.ts";
 import * as webhook from "./webhook/module.ts";
@@ -95,7 +96,9 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     logger,
   });
   const pingProver = createProverPing({ ...warmupTarget(config, secrets), timeoutMilliseconds: config.watch.warmup.pingTimeoutSeconds * 1000 });
-  const context: BackendModuleContext = { storage, config, pair: input.pair, prover: provers.utilityProver, proverForJob: provers.proverForJob, readProofNeed, now, logger, pingProver };
+  const runpodEndpoints = billingEndpoints(config, secrets);
+  const billing = runpodEndpoints.length === 0 ? undefined : createBillingReader({ endpoints: runpodEndpoints, now, logger });
+  const context: BackendModuleContext = { storage, config, pair: input.pair, prover: provers.utilityProver, proverForJob: provers.proverForJob, readProofNeed, now, logger, pingProver, ...(billing === undefined ? {} : { billing }) };
   const app = createApp({ context, modules: MODULES, enabled: input.enabled });
   const stoppers = await Promise.all(input.enabled.map((name) => MODULES[name].start(context)));
   const server = await new Promise<ReturnType<typeof serve> & { port: number }>((resolve) => {
