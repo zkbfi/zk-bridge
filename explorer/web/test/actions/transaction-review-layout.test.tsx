@@ -49,7 +49,7 @@ describe("the review of the owner's wrap", () => {
     expect(headline).toHaveTextContent("to 0x8D43…4Bdd on PulseChain");
     expect(document.querySelectorAll(".zb-step")).toHaveLength(2);
     const review = screen.getByTestId("confirm-review");
-    expect(within(review).getByText("Network fee").nextSibling).toHaveTextContent("at most 0.000000487972174893 ETH");
+    expect(within(review).getByText("Network fee").nextSibling).toHaveTextContent("at most ≈ 0.00000049 ETH");
     expect(screen.getByTestId("confirm-no-router")).toHaveTextContent(/^The delivery router wraps the coin you send, then relays it on the bridge\. It takes no fee/);
     const details = screen.getByTestId("confirm-details") as HTMLDetailsElement;
     expect(details.open).toBe(false);
@@ -84,5 +84,15 @@ describe("the review of the owner's wrap", () => {
     expect(document.querySelectorAll(".zb-step")).toHaveLength(0);
     expect(screen.queryByText(/^Step \d of/)).toBeNull();
     expect(screen.queryByTestId("confirm-sent")).toBeNull();
+  });
+});
+
+describe("approxCoin", () => {
+  it("rounds small amounts to two significant digits and keeps larger ones to six decimals", async () => {
+    const { approxCoin } = await import("../../src/actions/TransactionDialog");
+    expect(approxCoin(0n)).toBe("0");
+    expect(approxCoin(487_972_174_893n)).toBe("≈ 0.00000049");
+    expect(approxCoin(2_626_560_000_000_000n)).toBe("≈ 0.0026");
+    expect(approxCoin(12_345_678_900_000_000n)).toBe("0.012345");
   });
 });

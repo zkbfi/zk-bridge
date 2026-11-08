@@ -136,13 +136,28 @@ const DeliveryPanel = ({ delivery }: { readonly delivery: DeliveryView }) => (
   </section>
 );
 
+/** A mined step in plain words: "done", or "reverted". */
+const statusWord = (status: string): string => (status === "success" ? "done" : status);
+
+/**
+ * A coin amount in wei, rounded to two significant digits for reading ("≈ 0.00000049"); the exact figure stays in the
+ * Details (the fee in wei). Amounts of 0.01 or more show at most 6 decimals.
+ */
+export const approxCoin = (wei: bigint): string => {
+  if (wei === 0n) return "0";
+  const exact = formatUnits(wei, 18);
+  const value = Number(exact);
+  if (value >= 0.01) return formatUnits(wei, 18, { maximumFractionDigits: 6 });
+  return `≈ ${Number(value.toPrecision(2)).toLocaleString("en-US", { maximumSignificantDigits: 2, maximumFractionDigits: 20 })}`;
+};
+
 /** The transactions of the sequence that are mined: their status as a pill, their title and their hash. */
 const SentRows = ({ outcomes }: { readonly outcomes: SequenceState["outcomes"] }) => (
   <>
     {outcomes.map((outcome) => (
       <div key={outcome.transactionHash} className="zb-rv-sent">
         <span className="zb-rv-pill" data-status={outcome.status}>
-          {outcome.status}
+          {statusWord(outcome.status)}
         </span>
         <span className="zb-rv-sent-text">
           {outcome.title}: <Mono>{outcome.transactionHash}</Mono>
@@ -174,7 +189,7 @@ const Review = ({ view, prepared, outcomes }: ReviewProps) => {
         </Row>
         <Row label="Value sent">{view.valueText}</Row>
         <Row label="Network fee">
-          at most {formatUnits(prepared.maximumNetworkFee, 18)} {native}
+          at most {approxCoin(prepared.maximumNetworkFee)} {native}
         </Row>
       </section>
 
@@ -260,7 +275,7 @@ export const TransactionReview = ({ steps, state, view, variant, onClose, onCanc
           <StepList
             steps={listed.map((planned, index) => ({
               label: planned.plan.title,
-              ...(index < state.outcomes.length ? { at: state.outcomes[index]!.status } : index === state.stepIndex ? { at: state.phase === "wallet" ? "in your wallet" : state.phase === "confirming" ? "confirming" : "now" } : { estimate: "next" }),
+              ...(index < state.outcomes.length ? { at: statusWord(state.outcomes[index]!.status) } : index === state.stepIndex ? { at: state.phase === "wallet" ? "in your wallet" : state.phase === "confirming" ? "confirming" : "now" } : { estimate: "next" }),
             }))}
             current={state.phase === "finished" ? listed.length : state.stepIndex}
           />
