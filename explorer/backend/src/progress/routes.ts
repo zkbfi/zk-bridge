@@ -219,7 +219,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     // never sees them; the backend listens on 127.0.0.1 only.
     const local = request.req.header("x-forwarded-for") === undefined;
     const shown = figures;
-    return { days, at, snapshot, figures, shown, local, rateSource, usdPerHour, sessionDays, timeline, assumptions: { idleTimeoutSeconds, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds } };
+    return { days, at, snapshot, figures, shown, local, rateSource, usdPerHour, sessionDays, timeline, assumptions: { idleTimeoutSeconds, endpointIdleTimeoutSeconds: context.endpointIdleTimeoutSeconds?.() ?? null, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds } };
   }
 
   const money = (value: number) => Math.round(value * 10_000) / 10_000;

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, beaconVariableName, headerRpcVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
 import { SINGLE_ENDPOINT_LABEL, endpointKeyVariables, remoteEndpointListSchema, type ProverSecret, type RemoteEndpoint } from "@zk-bridge/shared/prover";
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
-import { DEFAULT_WARMUP } from "./watch/warmup.ts";
+import { DEFAULT_WARMUP, holdIntervalFor } from "./watch/warmup.ts";
 
 /** The modules that the backend can run, in the order that the example file lists them. */
 export const MODULE_NAMES = ["requests", "webhook", "msgboard-indexer", "archive"] as const;
@@ -171,13 +171,21 @@ export const backendConfigSchema = z
             defaultLeadSeconds: positiveInteger.default(DEFAULT_WARMUP.defaultLeadSeconds),
             minLeadSeconds: positiveInteger.default(DEFAULT_WARMUP.minLeadSeconds),
             maxLeadSeconds: positiveInteger.default(DEFAULT_WARMUP.maxLeadSeconds),
-            /** Ping a warm worker again this long after its last ready answer. Below the endpoint's idle timeout. */
-            holdIntervalSeconds: positiveInteger.default(DEFAULT_WARMUP.holdIntervalSeconds),
+            /**
+             * Ping a warm worker again this long after its last ready answer. Must be below `idleTimeoutSeconds`.
+             * Default: `idleTimeoutSeconds - 2`, at least 1 (3 with the default idle timeout of 5).
+             */
+            holdIntervalSeconds: positiveInteger.optional(),
             /** Ping again this often while no worker is ready. */
             intervalSeconds: positiveInteger.default(DEFAULT_WARMUP.intervalSeconds),
             graceSeconds: positiveInteger.default(DEFAULT_WARMUP.graceSeconds),
-            /** The endpoint's idle timeout: a worker is billed this long after its last request (the cost estimate). */
-            idleTimeoutSeconds: z.number().min(0).max(3600).default(DEFAULT_WARMUP.idleTimeoutSeconds),
+            /**
+             * The RunPod endpoint's idle timeout, owned here: a worker is billed this long after its last request. With
+             * `syncIdleTimeout` the backend sets the endpoint to this value at start-up. Also the cost estimate.
+             */
+            idleTimeoutSeconds: z.number().int().min(1).max(3600).default(DEFAULT_WARMUP.idleTimeoutSeconds),
+            /** Set the RunPod endpoint's idle timeout to `idleTimeoutSeconds` at start-up when it differs. */
+            syncIdleTimeout: z.boolean().default(DEFAULT_WARMUP.syncIdleTimeout),
             /** What the remote GPU costs per hour, in USD (the cost estimate). */
             gpuUsdPerHour: z.number().min(0).max(1000).default(DEFAULT_WARMUP.gpuUsdPerHour),
             minGapSeconds: positiveInteger.default(DEFAULT_WARMUP.minGapSeconds),
@@ -189,7 +197,12 @@ export const backendConfigSchema = z
             leadSeconds: positiveInteger.optional(),
           })
           .strict()
+          .transform((warmup) => ({ ...warmup, holdIntervalSeconds: warmup.holdIntervalSeconds ?? holdIntervalFor(warmup.idleTimeoutSeconds) }))
           .refine((warmup) => warmup.minLeadSeconds <= warmup.maxLeadSeconds, { message: "minLeadSeconds must not be above maxLeadSeconds", path: ["minLeadSeconds"] })
+          .refine((warmup) => warmup.holdIntervalSeconds < warmup.idleTimeoutSeconds, {
+            message: "holdIntervalSeconds must be below idleTimeoutSeconds, or the worker stops between two holds and every hold cold-starts it (leave holdIntervalSeconds out to derive it)",
+            path: ["holdIntervalSeconds"],
+          })
           .prefault({}),
       })
       .strict()

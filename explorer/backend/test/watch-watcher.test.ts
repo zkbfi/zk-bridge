@@ -14,8 +14,8 @@ import type { WatchDecision } from "../src/watch/decisions.ts";
 import { createDirectionWatcher, REFUSED_RETRIES, REFUSED_RETRY_SECONDS, type ListedMessage } from "../src/watch/watcher.ts";
 import { memoryLogger } from "./support.ts";
 
-/** The settings before 2026-11-06 (p90, no margin, 90 s grace): the scenarios of these tests rest on them. */
-const LEGACY_WARMUP = { ...DEFAULT_WARMUP, leadP: 0.9, leadMarginSeconds: 0, minLeadSeconds: 30, graceSeconds: 90 };
+/** The settings before 2026-11-06 (p90, no margin, 90 s grace, hold 40 s under a 60 s idle timeout): the scenarios of these tests rest on them. */
+const LEGACY_WARMUP = { ...DEFAULT_WARMUP, holdIntervalSeconds: 40, idleTimeoutSeconds: 60, leadP: 0.9, leadMarginSeconds: 0, minLeadSeconds: 30, graceSeconds: 90 };
 
 // A Sepolia-like clock: 12 s slots, genesis at a round time, 8192 slots per period.
 const GENESIS = 1_600_000_000;

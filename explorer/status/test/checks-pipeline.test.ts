@@ -138,6 +138,20 @@ describe("gpuBillingCheck", () => {
     expect((await run({ body: base(last24h(1, { unaccounted: null })) })).state).toBe("ok");
   });
 
+  it("is degraded when the idle timeout RunPod reports differs from the backend's configuration, and says both numbers", async () => {
+    const idle = (configured: number | null, endpoint: number | null) => base({ assumptions: { idleTimeoutSeconds: configured, endpointIdleTimeoutSeconds: endpoint } });
+    const differs = await run({ body: idle(5, 60) });
+    expect(differs.state).toBe("degraded");
+    expect(differs.detail).toContain("RunPod idle timeout is 60 s, the backend config says 5 s; balance $153");
+    expect(differs.detail.length).toBeLessThanOrEqual(200);
+    // Equal, unknown (null: the backend could not read the endpoint) or missing: nothing to say.
+    for (const body of [idle(5, 5), idle(5, null), idle(null, 60), base()]) {
+      const same = await run({ body });
+      expect(same.state).toBe("ok");
+      expect(same.detail).not.toContain("idle timeout");
+    }
+  });
+
   it("keeps the flagged unaccounted bucket when the line is shortened", async () => {
     const result = await run({
       body: base({ ...last24h(1, { proving: 0.5, idleAfterJob: 0.1, startingUp: 0.05, waitingForProof: 0.05, unusedEarlyStarts: 0.04, unaccounted: 0.26 }), ...account(20, 11.76), ageSeconds: 7200 }),

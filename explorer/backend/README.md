@@ -218,8 +218,9 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
     ones left open.
   - *Cost cap:* at most `dailyCapSeconds` (1 hour) of sessions in any 24 hours, both directions together. Over it, no
     session starts (`warmup_capped`, once per target) and a warm one stops at its next hold.
-  - *Not done:* the backend never changes the endpoint's `workersMin`; the server holds no RunPod management key.
-    Set the endpoint's idle timeout to 60 s (docs/gpu-prover.md); `holdIntervalSeconds` must stay below it.
+  - *The idle timeout is owned here.* `idleTimeoutSeconds` (default 5) is the one place to set it: at start-up the backend reads
+    each RunPod endpoint's settings and, when `idleTimeout` differs, sets it (see "Tuning the idle timeout"). The backend
+    never changes `workersMin` or `workersMax`.
 - **The log.** `finality_seen` (slot, `source` sse or poll, `latencyMs` from the start of the signature slot),
   `proof_due` (why; for a message `trigger` profit or interval, `batch`, `waitedSeconds`, `feesUsd`, `costUsd`; for a
   handoff or keep-alive that took waiting messages along, `riders`), `proof_not_due` (why, at debug level unless
@@ -252,9 +253,11 @@ Settings, all optional (`watch` in the configuration file):
 | `warmup.enabled` | `true` | `false` sends no ping. |
 | `warmup.leadP`, `leadObservations`, `leadMarginSeconds` | 0.75, 20, 5 | The quantile of the newest observations that the lead time takes, and the seconds added to it. A higher quantile or margin spares the proof a wait and costs idle GPU time. |
 | `warmup.defaultLeadSeconds`, `minLeadSeconds`, `maxLeadSeconds` | 90, 20, 600 | The lead time without observations, and its bounds. |
-| `warmup.holdIntervalSeconds` | 40 | The ping that keeps a warm worker, after its last ready answer. Below the endpoint's idle timeout. |
+| `warmup.holdIntervalSeconds` | `idleTimeoutSeconds - 2`, at least 1 (3) | The ping that keeps a warm worker, after its last ready answer. Must be below `idleTimeoutSeconds` (the start-up refuses the file otherwise); leave it out and it follows the idle timeout. |
 | `warmup.intervalSeconds`, `graceSeconds`, `minGapSeconds` | 30, 45, 300 | Ping again while no worker is ready; end after the due time; the pause after a timed-out ping. |
-| `warmup.idleTimeoutSeconds`, `gpuUsdPerHour` | 60, 2.25 | The endpoint's idle timeout (billed after the last request) and the GPU price, for the unused-worker cost of `/billing` when RunPod's billing cannot be read. |
+| `warmup.idleTimeoutSeconds` | 5 | The RunPod endpoint's idle timeout in whole seconds (1 to 3600): a worker is billed this long after its last request. The backend sets the endpoint to it at start-up; the billing breakdown uses it too. |
+| `warmup.syncIdleTimeout` | `true` | `false` only reads the endpoint's idle timeout and warns (`runpod_idle_timeout_differs`) when it differs; nothing is changed at RunPod. |
+| `warmup.gpuUsdPerHour` | 2.25 | The GPU price, for the unused-worker cost of `/billing` when RunPod's billing cannot be read. |
 | `warmup.dailyCapSeconds` | 3600 | The most warm-up seconds in any 24 hours, both directions together. |
 | `warmup.pingTimeoutSeconds` | 300 | How long one ping may wait for a cold worker. |
 | `warmup.leadSeconds` | none | The fixed lead time of before 2026-11-01. Still accepted; it does nothing and the start log warns (`config_ignored`). |
@@ -393,6 +396,35 @@ that did not fail. `head` is null when the indexer cannot be read. `decision` ca
 `proof_due` / `proof_not_due`, and for a due proof `trigger`, `batchSize`, `feesUsd`, `costUsd` and `outcome`
 (`job-started`, `job-active`, `keep-alive-this-period`, `duplicate`, `nothing-to-prove`, `rate-limited`, `cannot-check`).
 
+### Tuning the idle timeout
+
+`watch.warmup.idleTimeoutSeconds` decides how long RunPod keeps a worker up, and bills it, after its last request. It
+trades two costs. A long timeout pays for the tail after every proof: with 60 s and about one proof an hour, "idle after
+job" was $3.22 of $11.54 in 7 days. A short one risks a cold start for the next request: a worker that stopped takes
+about 49 s to answer ready (observed), during which a proof waits.
+
+To change it, set `watch.warmup.idleTimeoutSeconds` in the backend config and restart. At start-up the backend reads each
+RunPod endpoint (the same endpoints and key as the billing reads), and when `idleTimeout` differs it sets it, logging
+`runpod_idle_timeout_set` (`endpointId` first 6 characters, `from`, `to`); when it already matches it logs
+`runpod_idle_timeout_ok`. If RunPod cannot be reached the backend logs `runpod_idle_timeout_failed` (the reason, never the
+key) and starts anyway. Nothing else needs to change: `holdIntervalSeconds` follows (`idleTimeoutSeconds - 2`, at least 1),
+so a warm worker is pinged 2 s before it would stop. A hold interval of `idleTimeoutSeconds` or more is refused at
+start-up. `syncIdleTimeout: false` stops the backend from changing the endpoint. `/billing` shows both numbers
+(`assumptions.idleTimeoutSeconds`, `assumptions.endpointIdleTimeoutSeconds`, null while unknown) and the status check
+"GPU billing" is degraded when they differ.
+
+A rough rule for mainnet: raise the timeout when proofs arrive closer together than the idle timeout plus a cold start (about 5 s
+plus 49 s now, so about a minute). Then the gap between two proofs is shorter than what a stop and a restart cost, and
+holding the worker is cheaper than starting it again. Look at "starting up" and "idle after job" in `/billing`: a large
+"starting up" with a small "idle after job" says to raise it. With a few proofs an hour, keep it low.
+
+Other intervals: `intervalSeconds` (30) applies only while no worker is ready, and a hold that is not answered ready
+repeats after the shorter of it and `holdIntervalSeconds`; `pingTimeoutSeconds` (300) only bounds a ping that meets a
+cold worker. The 2 s margin between a hold and the stop must cover the ping's round trip: if holds regularly arrive
+late, the worker restarts between them, and `warmup_held` followed by a slow `warmup_ready` shows it; raise the idle timeout then.
+The billing breakdown uses `idleTimeoutSeconds` for records before the change as well, so days before the cut to 5 s show
+their idle tail shorter than RunPod billed and the difference lands in "unaccounted".
+
 ### `GET /billing?days=7`
 
 GPU billing in general, per UTC day and in total: what RunPod billed, the billed seconds, the effective price of a GPU
@@ -404,7 +436,7 @@ only for a direct local request, such as the status service on 127.0.0.1; a requ
 ```json
 {
   "days": 7, "rateSource": "runpod", "usdPerHour": 0.76,
-  "assumptions": { "idleTimeoutSeconds": 60, "gpuUsdPerHour": 2.25, "gpuUsdPerHourIsFallback": true, "dailyCapSeconds": 3600 },
+  "assumptions": { "idleTimeoutSeconds": 5, "endpointIdleTimeoutSeconds": 5, "gpuUsdPerHour": 2.25, "gpuUsdPerHourIsFallback": true, "dailyCapSeconds": 3600 },
   "available": true, "ageSeconds": 90,
   "last24h": { "billedUsd": 1.18, "billedSeconds": 5400, "breakdown": { "...": "as in total" } }, "effectiveUsdPerHour": 0.76, "averageDailyUsd7d": 1.7,
   "account": { "balanceUsd": 153.38, "balanceAgeSeconds": 30, "spendNowUsdPerHour": 0, "spendLimitUsd": 80, "daysLeft": 90.2 },

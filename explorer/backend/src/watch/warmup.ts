@@ -31,16 +31,22 @@ export type WarmupConfig = {
   readonly minLeadSeconds: number;
   readonly maxLeadSeconds: number;
   /**
-   * After a ready answer, ping again this long after it to keep the worker. Keep it below the endpoint's idle timeout
-   * (60 s) by a margin that covers a slow answer.
+   * After a ready answer, ping again this long after it to keep the worker. It must stay below `idleTimeoutSeconds`
+   * by a margin that covers a slow answer; the configuration derives it as `idleTimeoutSeconds - 2` (at least 1).
    */
   readonly holdIntervalSeconds: number;
   /** While no worker is ready (the endpoint answered 204, or the ping failed), ping again this often. */
   readonly intervalSeconds: number;
   /** A session ends this long after its due time when no job started. */
   readonly graceSeconds: number;
-  /** The endpoint's idle timeout: a worker stays up, and billed, this long after its last request. For the cost estimate. */
+  /**
+   * The endpoint's idle timeout: a worker stays up, and billed, this long after its last request. The backend is its
+   * owner: at start-up it sets the RunPod endpoint's `idleTimeout` to this value (`syncIdleTimeout`), and the cost
+   * estimate uses it.
+   */
   readonly idleTimeoutSeconds: number;
+  /** Whether the backend pushes `idleTimeoutSeconds` to the RunPod endpoints at start-up (`runpod_idle_timeout_set`). */
+  readonly syncIdleTimeout: boolean;
   /** What the remote GPU costs per hour, in USD, for the cost estimate. */
   readonly gpuUsdPerHour: number;
   /** No new session starts within this long of a ping that timed out. */
@@ -51,6 +57,11 @@ export type WarmupConfig = {
   readonly pingTimeoutSeconds: number;
 };
 
+/** The hold interval when none is set: two seconds under the idle timeout (3 s for 5 s), at least 1. */
+export function holdIntervalFor(idleTimeoutSeconds: number): number {
+  return Math.max(1, idleTimeoutSeconds - 2);
+}
+
 /** The defaults. */
 export const DEFAULT_WARMUP: WarmupConfig = {
   leadP: 0.75,
@@ -59,10 +70,11 @@ export const DEFAULT_WARMUP: WarmupConfig = {
   defaultLeadSeconds: 90,
   minLeadSeconds: 20,
   maxLeadSeconds: 600,
-  holdIntervalSeconds: 40,
+  holdIntervalSeconds: holdIntervalFor(5),
   intervalSeconds: 30,
   graceSeconds: 45,
-  idleTimeoutSeconds: 60,
+  idleTimeoutSeconds: 5,
+  syncIdleTimeout: true,
   gpuUsdPerHour: 2.25,
   minGapSeconds: 300,
   dailyCapSeconds: 3600,

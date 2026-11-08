@@ -8,8 +8,8 @@ import { DEFAULT_WARMUP } from "../src/watch/warmup.ts";
 import { createWarmupStore } from "../src/watch/warmup-store.ts";
 import { makeBackend, makeClock, memoryLogger, makeConfig, makeProofPackage, postFrom, controllableProver, fakeProofNeed } from "./support.ts";
 
-/** The settings before 2026-11-06 (p90, no margin, 90 s grace): the scenarios of these tests rest on them. */
-const LEGACY_WARMUP = { ...DEFAULT_WARMUP, leadP: 0.9, leadMarginSeconds: 0, minLeadSeconds: 30, graceSeconds: 90 };
+/** The settings before 2026-11-06 (p90, no margin, 90 s grace, hold 40 s under a 60 s idle timeout): the scenarios of these tests rest on them. */
+const LEGACY_WARMUP = { ...DEFAULT_WARMUP, holdIntervalSeconds: 40, idleTimeoutSeconds: 60, leadP: 0.9, leadMarginSeconds: 0, minLeadSeconds: 30, graceSeconds: 90 };
 
 const countJobs = (storage: ReturnType<typeof makeBackend>["storage"]) =>
   (storage.database.prepare("SELECT count(*) AS total FROM jobs").get() as { total: number }).total;
