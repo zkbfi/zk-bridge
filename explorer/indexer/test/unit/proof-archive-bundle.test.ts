@@ -31,7 +31,7 @@ async function filledArchive(): Promise<ProofArchive> {
 describe("export and import of the archive files", () => {
   it("round-trips into a fresh archive, and a second import changes nothing", async () => {
     const source = await filledArchive();
-    expect(await exportArchive(source, directory)).toEqual({ storage_proofs: 2, light_client_proofs: 1, message_evidence: 1, conflicts: 1 });
+    expect(await exportArchive(source, directory)).toEqual({ storage_proofs: 2, light_client_proofs: 1, message_evidence: 1, handoff_updates: 0, conflicts: 1 });
     const { archive } = await freshArchive();
     const first = await importArchive(archive, directory);
     expect(first.storage_proofs).toEqual({ inserted: 2, unchanged: 0, merged: 0, conflict: 0, invalid: 0 });
@@ -39,7 +39,7 @@ describe("export and import of the archive files", () => {
     expect(first.message_evidence.inserted).toBe(1);
     const second = await importArchive(archive, directory);
     expect(second.storage_proofs.unchanged + second.light_client_proofs.unchanged + second.message_evidence.unchanged).toBe(4);
-    expect(await archive.counts()).toEqual({ storageProofs: 2, lightClientProofs: 1, evidence: 1, conflicts: 0 });
+    expect(await archive.counts()).toEqual({ storageProofs: 2, lightClientProofs: 1, evidence: 1, handoffUpdates: 0, conflicts: 0 });
   });
 
   it("reports a different value as a conflict and counts records that do not hold together as invalid", async () => {
@@ -93,12 +93,12 @@ describe("manifests", () => {
     await rm(log);
     expect(manifest).toMatchObject({ formatVersion: 1, createdAt: "1970-01-01T00:00:00.000Z", commit: "a8c9ffd6b362acfdb444c62d039e9870bacfc690", lastPublished: "2026-11-02T00:00:00Z bafybeihkoviema7g3gxyt6la7vd5ho32ictqbilu3wnlo3rs7ewhnp7lly 4 a8c9ffd6b362acfdb444c62d039e9870bacfc690" });
     expect(manifest.host).toEqual(expect.any(String));
-    expect(manifest.counts).toMatchObject({ archive: 4, files: 1, "archive/storage_proofs.ndjson": 2 });
-    expect(await checkManifest(directory)).toEqual({ missing: [], changed: [], unlisted: [], checked: 5 });
+    expect(manifest.counts).toMatchObject({ archive: 5, files: 1, "archive/storage_proofs.ndjson": 2 });
+    expect(await checkManifest(directory)).toEqual({ missing: [], changed: [], unlisted: [], checked: 6 });
     await writeFile(join(directory, "files", "a.ssz"), "other");
     await rm(join(directory, "archive", "conflicts.ndjson"));
     await writeFile(join(directory, "extra.txt"), "x");
-    expect(await checkManifest(directory)).toEqual({ missing: ["archive/conflicts.ndjson"], changed: ["files/a.ssz"], unlisted: ["extra.txt"], checked: 4 });
+    expect(await checkManifest(directory)).toEqual({ missing: ["archive/conflicts.ndjson"], changed: ["files/a.ssz"], unlisted: ["extra.txt"], checked: 5 });
     const publicManifest = await writeManifest(directory, { commit: "a8c9ffd6b362acfdb444c62d039e9870bacfc690", now: () => new Date(0), ipfsLog: join(directory, "missing.log"), public: true });
     expect(publicManifest.host).toBeUndefined();
     expect(publicManifest.lastPublished).toBeNull();
@@ -147,7 +147,7 @@ describe("the public tree", { timeout: 60_000 }, () => {
   it("writes the allowlisted chain data deterministically, from the archive or from a bundle, and passes its own check", async () => {
     const archive = await filledArchive();
     const fromArchive = join(directory, "a");
-    expect(await exportPublicTree({ kind: "archive", archive }, fromArchive)).toEqual({ storageProofs: 1, lightClientProofs: 1, evidence: 1 });
+    expect(await exportPublicTree({ kind: "archive", archive }, fromArchive)).toEqual({ storageProofs: 1, lightClientProofs: 1, evidence: 1, handoffUpdates: 0 });
     const bundle = join(directory, "bundle");
     await exportArchive(archive, bundle);
     const fromBundle = join(directory, "b");
@@ -307,7 +307,7 @@ describe("the command line", { timeout: 60_000 }, () => {
     const source = await filledArchive();
     const bundle = join(directory, "bundle");
     await run(["export", "--out", bundle], { archive: source });
-    expect((await run(["manifest-write", "--dir", bundle, "--commit", "a8c9ffd6b362acfdb444c62d039e9870bacfc690"])).out[0]).toMatchObject({ files: 4 });
+    expect((await run(["manifest-write", "--dir", bundle, "--commit", "a8c9ffd6b362acfdb444c62d039e9870bacfc690"])).out[0]).toMatchObject({ files: 5 });
     expect((await run(["manifest-check", "--dir", bundle])).code).toBe(0);
     await appendFile(join(bundle, "archive", "conflicts.ndjson"), "x");
     expect((await run(["manifest-check", "--dir", bundle])).code).toBe(1);

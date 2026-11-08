@@ -85,6 +85,40 @@ export interface OpeningProver {
   openingProof(request: DirectionRequest): Promise<OpeningPackage>;
 }
 
+/** The record of the committee handoff update of one period, as `handoff-update` printed it. */
+export interface HandoffRecord {
+  /** The JSON line exactly as printed: canonical JSON with sorted keys, which the archive stores and hashes. */
+  readonly text: string;
+  readonly chainId: number;
+  readonly period: number;
+  readonly attestedSlot: number;
+  readonly finalizedSlot: number;
+  readonly signatureSlot: number;
+}
+
+/** The `handoff-update` command, apart from {@link ProverBinary} like {@link OpeningProver}: only the handoff capture uses it. */
+export interface HandoffProver {
+  /**
+   * `handoff-update --route <route> --period <n>`: the complete committee handoff update of `period` of the SOURCE
+   * chain of the route of `direction`. @throws ProverCommandError naming every source the prover tried.
+   */
+  handoffUpdate(request: DirectionRequest & { readonly period: number }): Promise<HandoffRecord>;
+}
+
+const isWhole = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+/** Reads the record line of `handoff-update`. @throws ProverOutputError for another shape. */
+export function parseHandoffRecord(stdout: string): HandoffRecord {
+  const value = parseSingleJsonLine(stdout, "handoff-update") as Record<string, unknown> | null;
+  const text = stdout.trim();
+  if (value === null || typeof value !== "object" || value.format !== "zkb-handoff-update/1" || typeof value.update !== "object" || value.update === null) {
+    throw new ProverOutputError("handoff-update printed something that is not a handoff record");
+  }
+  const { chainId, period, attestedSlot, finalizedSlot, signatureSlot } = value;
+  if (![chainId, period, attestedSlot, finalizedSlot, signatureSlot].every(isWhole)) throw new ProverOutputError("handoff-update printed a record without its numbers");
+  return { text, chainId, period, attestedSlot, finalizedSlot, signatureSlot } as HandoffRecord;
+}
+
 /** A secret of the prover: the NAME of the variable it reads and the value that the child gets under that name. */
 export interface ProverSecret {
   readonly variable: string;
@@ -113,6 +147,8 @@ export interface ProverBinaryInput {
   readonly stateCacheDirectory?: string;
   /** The proof cache of the runner (`proof-cache.ts`), which the `opening-proof` command reads before it asks a node. */
   readonly proofCacheDirectory?: string;
+  /** The handoff archive the prover asks last for a missed period (`source.handoff_archive_urls`). */
+  readonly handoffArchiveUrls?: readonly string[];
   readonly logger: LogSink;
 }
 
@@ -139,7 +175,7 @@ function parseSingleJsonLine(stdout: string, command: string): unknown {
  * of mode 0700, writes it with mode 0600, and removes the directory when the command ends. The proving key goes to
  * the child through the environment variable that the file names. No secret is ever an argument.
  */
-export function createProverBinary(input: ProverBinaryInput): ProverBinary & OpeningProver {
+export function createProverBinary(input: ProverBinaryInput): ProverBinary & OpeningProver & HandoffProver {
   const environment: Record<string, string> = { ...input.baseEnvironment };
   const secrets: readonly ProverSecret[] = input.proverSecret === null ? [] : "variable" in input.proverSecret ? [input.proverSecret] : input.proverSecret;
   for (const secret of secrets) environment[secret.variable] = secret.value;
@@ -154,6 +190,7 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary & Ope
       const options = {
         ...(input.stateCacheDirectory === undefined ? {} : { stateCacheDirectory: input.stateCacheDirectory }),
         ...(input.proofCacheDirectory === undefined ? {} : { proofCacheDirectory: input.proofCacheDirectory }),
+        ...(input.handoffArchiveUrls === undefined ? {} : { handoffArchiveUrls: input.handoffArchiveUrls }),
       };
       await writeFile(path, renderProverConfig(route, backend, input.handoff, options), { mode: 0o600 });
       return await use(path, route.name);
@@ -222,6 +259,13 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary & Ope
         const parsed = openingPackageSchema.safeParse(parseSingleJsonLine(output.stdout, "opening-proof"));
         if (!parsed.success) throw new ProverOutputError(`opening-proof printed an unexpected package: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
         return parsed.data;
+      });
+    },
+    async handoffUpdate(request) {
+      return withConfigFile(request.direction, null, async (path, route) => {
+        const output = await run("handoff-update", ["--config", path, "handoff-update", "--route", route, "--period", String(request.period)]);
+        if (output.code !== 0) throw new ProverCommandError("handoff-update", output.code, tailOf(output.stderr));
+        return parseHandoffRecord(output.stdout);
       });
     },
     async verify(request) {

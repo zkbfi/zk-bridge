@@ -345,6 +345,9 @@ publication.
     time), or 404.
   - `GET /api/proofs/light-client/:direction?startSlot=&limit=`
   - `GET /api/proofs/evidence/:messageId`
+  - `GET /api/proofs/handoffs/:chainId` returns `{ periods }` (ascending), and `GET /api/proofs/handoffs/:chainId/<period>.json`
+    the handoff update of that sync-committee period exactly as stored (404 when none, 400 for another file name).
+    The backend captures one per period and chain; the archive keeps them for good.
   - `GET /api/proofs/summary`
 
   They show the same public fields as the IPFS tree (no source host, fetch time, job id or source) and answer 503 while

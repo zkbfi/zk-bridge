@@ -63,7 +63,7 @@ describe("the rule of a direction (2026-11-07)", () => {
 
 describe("the pipeline of a direction (2026-11-01)", () => {
   it("an idle direction: nothing waits, nothing runs", () => {
-    expect(buildPipeline(base)).toEqual({ direction: "first-to-second", now: NOW, rule, batch: null, job: null, latestJob: null, latestProof: null, head: null, decision: null, deposits: null });
+    expect(buildPipeline(base)).toEqual({ direction: "first-to-second", now: NOW, rule, batch: null, job: null, latestJob: null, latestProof: null, head: null, decision: null, deposits: null, deadline: null });
   });
 
   it("a batch that waits, with its count, trigger, expected time and fallback (the wire keeps max-wait and fallbackAt)", () => {
@@ -107,5 +107,16 @@ describe("the pipeline, while the destination bridge waits for deposits to open 
     expect(buildPipeline({ ...base, decision: decided({ deposits: { open: false, remoteHasHead: false } }) }).deposits).toEqual({ open: false, remoteHasHead: false, waiting: true, proofDue: false });
     expect(buildPipeline({ ...base, decision: decided({ deposits: { open: true, remoteHasHead: null } }) }).deposits).toEqual({ open: true, remoteHasHead: null, waiting: false, proofDue: false });
     expect(buildPipeline({ ...base, decision: decided({}) }).deposits).toBeNull();
+  });
+});
+
+describe("the pipeline shows when the destination light client strands (2026-11-07)", () => {
+  it("gives the deadline of the latest decision with the hours left from now, and null without one", () => {
+    const decision: WatchDecision = { at: 1, finalizedSlot: 10, headSlot: 5, genesisTime: 0, secondsPerSlot: 12, due: false, why: "nothing-due", detail: "d", deadline: { at: NOW + 5.25 * 3_600_000, period: 17, headPeriod: 15, lastKnownPeriod: 16 } };
+    expect(buildPipeline({ ...base, decision }).deadline).toEqual({ at: NOW + 5.25 * 3_600_000, hoursLeft: 5.25, period: 17, headSlot: 5, headPeriod: 15 });
+    const passed = buildPipeline({ ...base, decision: { ...decision, deadline: { ...decision.deadline!, at: NOW - 1_800_000 } } });
+    expect(passed.deadline?.hoursLeft).toBe(-0.5);
+    const { deadline: _none, ...older } = decision;
+    expect(buildPipeline({ ...base, decision: older }).deadline).toBeNull();
   });
 });

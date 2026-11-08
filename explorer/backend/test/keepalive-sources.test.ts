@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { zeroHash } from "viem";
-import { fetchJsonGet, readHistory, readLightClient, readSource, USER_AGENT, type JsonGet } from "../src/keepalive/sources.ts";
+import { archiveSource, fetchJsonGet, handoffSources, hostOf, localArchiveSource, readHistory, readHistoryFrom, readLightClient, readSource, USER_AGENT, type HandoffSource, type JsonGet } from "../src/keepalive/sources.ts";
 
 const LIGHT_CLIENT = "0x1dbbcc0bc25de5f6ae122fb0009b3ee4931fd958";
 
@@ -133,5 +133,132 @@ describe("fetchJsonGet", () => {
     const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 200 }));
     expect(await fetchJsonGet()("http://beacon/c")).toEqual({ status: 200, body: {} });
     expect(spy).toHaveBeenCalledOnce();
+  });
+});
+
+describe("the handoff sources of a missed period (2026-11-07)", () => {
+  const SLOTS = 8192;
+  const updatesPath = (start: number, count: number) => `/eth/v1/beacon/light_client/updates?start_period=${start}&count=${count}`;
+  const statePath = (period: number) => `/eth/v1/beacon/states/${(period + 1) * SLOTS - 1}/finality_checkpoints`;
+  const recordOf = (chainId: number, period: number) => ({ format: "zkb-handoff-update/1", chainId, period });
+
+  /** A fake web: each host answers from its own map; a host listed in `down` cannot be reached. */
+  function web(hosts: Record<string, Record<string, { status: number; body: unknown }>>, down: readonly string[] = []) {
+    const asked: string[] = [];
+    const get: JsonGet = async (url) => {
+      const parsed = new URL(url);
+      asked.push(`${parsed.host}${parsed.pathname}${parsed.search}`);
+      if (down.includes(parsed.host)) throw new Error("connect ECONNREFUSED");
+      return hosts[parsed.host]?.[`${parsed.pathname}${parsed.search}`] ?? { status: 404, body: null };
+    };
+    return { asked, get };
+  }
+
+  const endpoints = { chainId: 943, beaconUrl: "https://main.example/key/943", stateUrls: ["https://states.example"], handoffUrls: ["https://more.example"], archiveUrls: ["https://archive.example/api/proofs/handoffs"] };
+
+  it("names hosts only", () => {
+    expect(hostOf("https://user:secret@main.example:8443/key/943?x=1")).toBe("main.example:8443");
+    expect(hostOf("not a url")).toBe("an endpoint");
+  });
+
+  it("first fails, second serves: the main node lacks the period and the next handoff URL has it", async () => {
+    const fake = web({ "main.example": { "/key/943/eth/v1/beacon/light_client/updates?start_period=5&count=1": { status: 200, body: [] } }, "more.example": { [updatesPath(5, 1)]: { status: 200, body: [update(5 * SLOTS + 10)] } } });
+    expect(await readHistoryFrom(handoffSources(fake.get, endpoints), [5], SLOTS)).toEqual({ kind: "serves" });
+    // The main node serves the route, so its states and the state URL are not asked.
+    expect(fake.asked).toEqual(["main.example/key/943/eth/v1/beacon/light_client/updates?start_period=5&count=1", `more.example${updatesPath(5, 1)}`]);
+  });
+
+  it("asks the states when the node lacks the route (chain 943), and they serve", async () => {
+    const fake = web({ "states.example": { [statePath(5)]: { status: 200, body: {} }, [statePath(6)]: { status: 200, body: {} } } });
+    expect(await readHistoryFrom(handoffSources(fake.get, endpoints), [5, 6], SLOTS)).toEqual({ kind: "serves" });
+    expect(fake.asked).toContain(`main.example/key/943${statePath(5)}`);
+    expect(fake.asked).not.toContain(`more.example${updatesPath(5, 2)}`);
+  });
+
+  it("the archive serves when no beacon node has the period", async () => {
+    const fake = web({ "archive.example": { "/api/proofs/handoffs/943/5.json": { status: 200, body: recordOf(943, 5) } } });
+    expect(await readHistoryFrom(handoffSources(fake.get, endpoints), [5], SLOTS)).toEqual({ kind: "serves" });
+  });
+
+  it("all fail: stranded with what each source answered, by host", async () => {
+    const fake = web({ "archive.example": { "/api/proofs/handoffs/943/5.json": { status: 200, body: recordOf(943, 4) } } });
+    const history = await readHistoryFrom(handoffSources(fake.get, { ...endpoints, local: () => false }), [5], SLOTS);
+    expect(history).toEqual({
+      kind: "missing",
+      period: 5,
+      tried: [
+        "main.example (light_client/updates): does not serve the route (404 or 501)",
+        `main.example (states): no state at slot ${6 * SLOTS - 1} (answered 404)`,
+        `states.example (states): no state at slot ${6 * SLOTS - 1} (answered 404)`,
+        "more.example (light_client/updates): does not serve the route (404 or 501)",
+        `more.example (states): no state at slot ${6 * SLOTS - 1} (answered 404)`,
+        "this backend (handoff archive): no record of period 5",
+        "archive.example (handoff archive): period 5: not a handoff record of the period",
+      ],
+    });
+    expect(JSON.stringify(history)).not.toContain("key");
+  });
+
+  it("a source that cannot answer makes the read fail instead of calling the light client stranded", async () => {
+    const fake = web({}, ["archive.example", "more.example"]);
+    await expect(readHistoryFrom(handoffSources(fake.get, endpoints), [5], SLOTS)).rejects.toThrow(/no source answered for period 5, and some could not be read: more.example \(light_client\/updates\): connect ECONNREFUSED; archive.example \(handoff archive\): connect ECONNREFUSED/);
+  });
+
+  it("a beacon node that answers an error is asked for its states too", async () => {
+    const fake = web({ "main.example": { "/key/943/eth/v1/beacon/light_client/updates?start_period=5&count=1": { status: 500, body: null }, [`/key/943${statePath(5)}`]: { status: 200, body: {} } } });
+    expect(await readHistoryFrom(handoffSources(fake.get, { ...endpoints, stateUrls: [], handoffUrls: [], archiveUrls: [] }), [5], SLOTS)).toEqual({ kind: "serves" });
+  });
+
+  it("a state probe that cannot be reached counts as no state", async () => {
+    const fake = web({}, ["states.example"]);
+    const history = await readHistoryFrom(handoffSources(fake.get, { ...endpoints, handoffUrls: [], archiveUrls: [] }), [5], SLOTS);
+    expect(history.kind === "missing" && history.tried).toContain(`states.example (states): no state at slot ${6 * SLOTS - 1} (answered nothing)`);
+  });
+
+  it("a node that pruned some periods gives the rest, and the archive the others", async () => {
+    const fake = web({
+      "main.example": { "/key/943/eth/v1/beacon/light_client/updates?start_period=5&count=2": { status: 200, body: [update(6 * SLOTS + 1)] }, "/key/943/eth/v1/beacon/light_client/updates?start_period=5&count=3": { status: 200, body: [update(6 * SLOTS + 1)] }, "/key/943/eth/v1/beacon/light_client/updates?start_period=7&count=1": { status: 200, body: [] } },
+      "archive.example": { "/api/proofs/handoffs/943/5.json": { status: 200, body: recordOf(943, 5) } },
+    });
+    const sources = handoffSources(fake.get, { ...endpoints, handoffUrls: [] });
+    expect(await readHistoryFrom(sources, [5, 6], SLOTS)).toEqual({ kind: "serves" });
+    const all = await readHistoryFrom(handoffSources(fake.get, { ...endpoints, handoffUrls: [] }), [5, 6, 7], SLOTS);
+    expect(all).toMatchObject({ kind: "missing", period: 7 });
+    expect(all.kind === "missing" && all.tried?.[0]).toBe("main.example (light_client/updates): no update for periods 5, 7");
+  });
+
+  it("each kind of source says what it has", async () => {
+    const local: HandoffSource = localArchiveSource((period) => period === 3);
+    expect(await local.ask([3], SLOTS)).toEqual({ served: [3], answer: "has period 3" });
+    const archive = archiveSource(web({ "a.example": { "/943/3.json": { status: 200, body: recordOf(943, 3) }, "/943/4.json": { status: 200, body: recordOf(943, 4) } } }).get, "https://a.example/", 943);
+    expect(await archive.ask([3, 4], SLOTS)).toEqual({ served: [3, 4], answer: "has periods 3, 4" });
+    expect(await archive.ask([5], SLOTS)).toEqual({ served: [], answer: "period 5: answered 404" });
+    const otherChain = archiveSource(web({ "a.example": { "/1/3.json": { status: 200, body: recordOf(943, 3) } } }).get, "https://a.example", 1);
+    expect((await otherChain.ask([3], SLOTS)).served).toEqual([]);
+    const nullBody = archiveSource(web({ "a.example": { "/1/3.json": { status: 200, body: null } } }).get, "https://a.example", 1);
+    expect((await nullBody.ask([3], SLOTS)).answer).toBe("period 3: not a handoff record of the period");
+    const states = handoffSources(web({ "m.example": { [statePath(3)]: { status: 200, body: {} } } }).get, { chainId: 1, beaconUrl: "https://m.example", stateUrls: [], handoffUrls: [], archiveUrls: [] });
+    await states[0]?.ask([3], SLOTS);
+    expect(await states[1]?.ask([3], SLOTS)).toEqual({ served: [3], answer: "holds the states of period 3" });
+    const updates = handoffSources(web({ "m.example": { [updatesPath(3, 1)]: { status: 200, body: [update(3 * SLOTS)] } } }).get, { chainId: 1, beaconUrl: "https://m.example", stateUrls: [], handoffUrls: [], archiveUrls: [] });
+    expect(await updates[0]?.ask([3], SLOTS)).toEqual({ served: [3], answer: "has period 3" });
+    expect(await updates[1]?.ask([3], SLOTS)).toEqual({ served: [], answer: "not asked: the beacon node serves light_client/updates, so updates are not built from states" });
+  });
+
+  it("needs nothing when no period is missing, and passes a thrown non-error on", async () => {
+    expect(await readHistoryFrom([], [], SLOTS)).toEqual({ kind: "not-needed" });
+    const odd: HandoffSource = {
+      label: "odd",
+      ask: async () => {
+        throw "text";
+      },
+    };
+    await expect(readHistoryFrom([odd], [1], SLOTS)).rejects.toThrow("some could not be read: text");
+    const throwsText = web({}, []);
+    const failing: JsonGet = async () => {
+      throw "plain";
+    };
+    await expect(readHistoryFrom(handoffSources(failing, { chainId: 1, beaconUrl: "https://m.example", stateUrls: [], handoffUrls: [], archiveUrls: ["https://a.example"] }), [1], SLOTS)).rejects.toThrow(/m.example \(light_client\/updates\): plain; a.example \(handoff archive\): plain/);
+    expect(throwsText.asked).toEqual([]);
   });
 });

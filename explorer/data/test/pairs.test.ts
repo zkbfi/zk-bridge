@@ -54,6 +54,10 @@ describe("loadPair", () => {
     expect(pair.sides[0].headerRpcUrls).toEqual(["https://h.example", "https://i.example/k"]);
     expect(pair.sides[1].headerRpcUrls).toEqual([]);
     expect(() => loadPair({ environment: { EXPLORER_HEADER_RPC_URL_1: "ws://x.example" }, deployment })).toThrow(/EXPLORER_HEADER_RPC_URL_1/);
+    const withHandoffs = loadPair({ environment: { EXPLORER_HANDOFF_URLS_1: "https://h.example" }, deployment });
+    expect(withHandoffs.sides[0].handoffUrls).toEqual(["https://h.example"]);
+    expect("handoffUrls" in withHandoffs.sides[1]).toBe(false);
+    expect(() => loadPair({ environment: { EXPLORER_HANDOFF_URLS_1: "ftp://x.example" }, deployment })).toThrow(/EXPLORER_HANDOFF_URLS_1/);
   });
 
   it("lets a chain start with no endpoint when the caller does not require one, so the user can set it later", () => {

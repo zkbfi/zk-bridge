@@ -67,6 +67,7 @@ use super::branch_store::{
     stored_branch_proves_genesis_validators_root, GenesisValidatorsRootBranchStore,
     MemoryBranchStore,
 };
+use super::handoff_archive::{ask_archive, is_handoff_of, ArchiveAnswer, ArchiveClient};
 use super::state_store::{StateStore, StoredState};
 use super::{HashEvidence, HistoricalEvidence, RootsEvidence, SourceBlock, StoredHead, UpdatePlan};
 use crate::chain::checked_raw_header;
@@ -436,6 +437,13 @@ pub struct HttpBeaconSource {
     genesis_time: Mutex<Option<u64>>,
     state_cache: Mutex<Vec<(B256, Arc<StateView>)>>,
     era_cache: Mutex<Vec<(u64, Arc<Vec<B256>>)>>,
+    /// The host of `client`, for messages (never the URL).
+    host: String,
+    /// More beacon APIs (`source.handoff_urls`), asked in order for the handoff update of a period that `client` lacks.
+    handoff_clients: Vec<ArchiveClient>,
+    /// The handoff archive (`source.handoff_archive_urls`), asked last, and the chain id its paths name.
+    archive: Vec<ArchiveClient>,
+    chain_id: u64,
 }
 
 /// What the branch store held for a state root, after the check.
@@ -462,7 +470,33 @@ impl HttpBeaconSource {
             genesis_time: Mutex::new(None),
             state_cache: Mutex::new(Vec::new()),
             era_cache: Mutex::new(Vec::new()),
+            host: "beacon_url".into(),
+            handoff_clients: Vec::new(),
+            archive: Vec::new(),
+            chain_id: 0,
         }
+    }
+
+    /// The same source with the host of its main node, which messages name (never the URL: it may hold a key).
+    pub fn with_host(mut self, host: String) -> Self {
+        self.host = host;
+        self
+    }
+
+    /// The same source with more beacon APIs for handoff updates (`source.handoff_urls`). They are asked in order for
+    /// `/eth/v1/beacon/light_client/updates` of a period that the main node does not give, after the main node and the
+    /// state URLs could not build it. Every update is still verified by the program against the stored committee.
+    pub fn with_handoff_clients(mut self, clients: Vec<ArchiveClient>) -> Self {
+        self.handoff_clients = clients;
+        self
+    }
+
+    /// The same source with the handoff archive (`source.handoff_archive_urls`, see [`super::handoff_archive`]), asked
+    /// last for a handoff update, and for the committees of a store whose head state no node serves.
+    pub fn with_handoff_archive(mut self, chain_id: u64, archive: Vec<ArchiveClient>) -> Self {
+        self.chain_id = chain_id;
+        self.archive = archive;
+        self
     }
 
     /// The same source with more beacon APIs for states (`source.state_urls`). They are asked in order, only for
@@ -551,6 +585,10 @@ impl HttpBeaconSource {
     ) -> Result<()> {
         for update in updates {
             let finalized = &update.finalized_header;
+            // A header that carries its execution header was repaired already (a record of the handoff archive).
+            if !finalized.execution_header_rlp.is_empty() {
+                continue;
+            }
             let fork = schedule.fork_at_slot(finalized.beacon.slot)?;
             match plan_header_repair(finalized, fork)? {
                 HeaderRepair::Untouched => {}
@@ -1049,8 +1087,12 @@ impl HttpBeaconSource {
         if next_committee_hash == B256::ZERO {
             return self.store_without_next_committee(head);
         }
-        let state = self.state_for(head.state_root)?;
-        let store = store_at(head, &state, true);
+        let store = match self.state_for(head.state_root) {
+            Ok(state) => store_at(head, &state, true),
+            Err(error) => self
+                .store_from_archive(head, true)
+                .map_err(|why| Error::Beacon(format!("{error}; the handoff archive: {why}")))?,
+        };
         let held = store
             .next_sync_committee
             .as_ref()
@@ -1081,8 +1123,194 @@ impl HttpBeaconSource {
                 response.status
             )));
         }
-        let state = self.state_for(head.state_root)?;
-        Ok(store_at(head, &state, false))
+        match self.state_for(head.state_root) {
+            Ok(state) => Ok(store_at(head, &state, false)),
+            Err(error) => self
+                .store_from_archive(head, false)
+                .map_err(|why| Error::Beacon(format!("{error}; the handoff archive: {why}"))),
+        }
+    }
+
+    /// The store at `head` from the handoff archive, for a head whose state no node serves any more: the handoff of the
+    /// period before the head proves the committee of the head period, and the handoff of the head period proves the
+    /// next one. The program checks the committees against the hashes the light client stores.
+    fn store_from_archive(
+        &self,
+        head: &BeaconHeader,
+        include_next: bool,
+    ) -> std::result::Result<LightClientStore, String> {
+        let period = self.chain.spec().period_at_slot(head.slot);
+        let committee_of = |handoff_period: u64| {
+            self.archived_handoff(handoff_period)
+                .map(|update| {
+                    update
+                        .next_sync_committee
+                        .expect("an archived handoff proves the next committee")
+                        .committee
+                })
+                .map_err(|tried| format!("period {handoff_period}: {}", tried.join(", ")))
+        };
+        let current = committee_of(period.checked_sub(1).ok_or("the head is in period 0")?)?;
+        let next = if include_next {
+            Some(committee_of(period)?)
+        } else {
+            None
+        };
+        Ok(LightClientStore {
+            header_root: header_root(head),
+            header_slot: head.slot,
+            current_sync_committee: current,
+            next_sync_committee: next,
+        })
+    }
+
+    /// The handoff update of `period` from the sources after the main node: the update assembled from blocks and states
+    /// (the main node, then the state URLs), each beacon API of `source.handoff_urls`, then the handoff archive. Each
+    /// update must be the handoff of the period ([`is_handoff_of`]).
+    ///
+    /// # Errors
+    /// What each source answered, by host, in order, the main node first.
+    pub fn handoff_from_fallbacks(
+        &self,
+        period: u64,
+    ) -> std::result::Result<LightClientUpdate, Vec<String>> {
+        self.fallback_handoff(period, true)
+    }
+
+    fn fallback_handoff(
+        &self,
+        period: u64,
+        use_archive: bool,
+    ) -> std::result::Result<LightClientUpdate, Vec<String>> {
+        let mut tried = vec![format!(
+            "{} (light_client/updates): no update for the period",
+            self.host
+        )];
+        match self.assembled_handoff(period) {
+            Ok(update) => return Ok(update),
+            Err(error) => tried.push(format!(
+                "{} and {} state URLs (blocks and states): {error}",
+                self.host,
+                self.state_clients.len()
+            )),
+        }
+        for fallback in &self.handoff_clients {
+            match fetch_period_updates(fallback.client.as_ref(), self.chain, period, period + 1) {
+                Ok(mut found) => match found.remove(&period) {
+                    Some(update) if is_handoff_of(self.chain, period, &update) => return Ok(update),
+                    Some(_) => tried.push(format!("{} (light_client/updates): an update that is not the handoff of the period", fallback.host)),
+                    None => tried.push(format!("{} (light_client/updates): no update for the period", fallback.host)),
+                },
+                Err(error) => tried.push(format!("{} (light_client/updates): {error}", fallback.host)),
+            }
+        }
+        if !use_archive {
+            return Err(tried);
+        }
+        match self.archived_handoff(period) {
+            Ok(update) => Ok(update),
+            Err(more) => {
+                tried.extend(more);
+                Err(tried)
+            }
+        }
+    }
+
+    /// The handoff update of `period` from the handoff archive, the first archive that has a record that passes.
+    ///
+    /// # Errors
+    /// What each archive answered, by host; `no handoff archive configured` when there is none.
+    fn archived_handoff(&self, period: u64) -> std::result::Result<LightClientUpdate, Vec<String>> {
+        self.archived_handoff_where(period, |_| true)
+    }
+
+    fn archived_handoff_where(
+        &self,
+        period: u64,
+        accept: impl Fn(&LightClientUpdate) -> bool,
+    ) -> std::result::Result<LightClientUpdate, Vec<String>> {
+        if self.archive.is_empty() {
+            return Err(vec![
+                "no handoff archive configured (source.handoff_archive_urls)".into(),
+            ]);
+        }
+        let mut tried = Vec::new();
+        for archive in &self.archive {
+            match ask_archive(archive, self.chain, self.chain_id, period) {
+                ArchiveAnswer::Found(update) if accept(&update) => return Ok(*update),
+                ArchiveAnswer::Found(_) => tried.push(format!(
+                    "{} (handoff archive): a record that does not move the head",
+                    archive.host
+                )),
+                ArchiveAnswer::Missing(why) => {
+                    tried.push(format!("{} (handoff archive): {why}", archive.host))
+                }
+            }
+        }
+        Err(tried)
+    }
+
+    /// The archived handoff of the head period that can be the first step from a head without the next committee.
+    fn archived_head_handoff(
+        &self,
+        period: u64,
+        head_slot: u64,
+    ) -> std::result::Result<LightClientUpdate, Vec<String>> {
+        self.archived_handoff_where(period, |update| {
+            proves_next_committee_from_head(self.chain, head_slot, update)
+        })
+    }
+
+    /// The handoff update of `period` assembled from blocks and states: the newest block whose child, inside the period,
+    /// signs it. Only after the period ended (the node's head is past it).
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the period has not ended, when the node lacks a block or a state, or when the update is not
+    /// the handoff of the period.
+    fn assembled_handoff(&self, period: u64) -> Result<LightClientUpdate> {
+        let spec = self.chain.spec();
+        let first_slot_after =
+            (period + 1) * spec.epochs_per_sync_committee_period * spec.slots_per_epoch;
+        let chain_head = Self::require(self.header_by_id("head")?, "a head header")?;
+        if chain_head.slot < first_slot_after {
+            return Err(Error::Beacon(format!(
+                "sync committee period {period} has not ended"
+            )));
+        }
+        let update = self.assembled_update_until(first_slot_after - 1)?;
+        if !is_handoff_of(self.chain, period, &update) {
+            return Err(Error::Beacon(format!(
+                "the update assembled at the end of sync committee period {period} (attested at slot {}, signed at slot {}) is not its handoff",
+                update.attested_header.beacon.slot, update.signature_slot
+            )));
+        }
+        Ok(update)
+    }
+
+    /// The complete handoff update of `period`, ready for the handoff archive: from the main node's
+    /// `light_client/updates` when it serves the period, else from [`Self::handoff_from_fallbacks`] (without the
+    /// archive), with the branch of `genesis_validators_root` attached and the finalized header repaired as its fork needs.
+    /// The `handoff-update` command prints it as a record.
+    ///
+    /// # Errors
+    /// `Error::Beacon` naming every source tried, and the errors of the branch and the repair.
+    pub fn complete_handoff(&self, period: u64) -> Result<LightClientUpdate> {
+        let served = fetch_period_updates(self.client.as_ref(), self.chain, period, period + 1)?
+            .remove(&period)
+            .filter(|update| is_handoff_of(self.chain, period, update));
+        let update = match served {
+            Some(update) => update,
+            None => self.fallback_handoff(period, false).map_err(|tried| {
+                Error::Beacon(format!(
+                    "no source has the handoff update of sync committee period {period}. Tried: {}",
+                    tried.join("; ")
+                ))
+            })?,
+        };
+        let schedule = self.fork_schedule()?;
+        let mut updates = self.attach_genesis_validators_root_branches(vec![update])?;
+        self.repair_finalized_headers(&schedule, &mut updates)?;
+        Ok(updates.remove(0))
     }
 
     /// The update from the light-client endpoint, or `None` when the node does not serve it.
@@ -1115,6 +1343,28 @@ impl HttpBeaconSource {
         let periods = handoff_periods(self.chain, head.slot, next_committee_known, &latest);
         let mut handoffs =
             fetch_period_updates(self.client.as_ref(), self.chain, periods.start, periods.end)?;
+        let latest_period = self
+            .chain
+            .spec()
+            .period_at_slot(latest.finalized_header.beacon.slot);
+        for period in periods.clone() {
+            if handoffs.contains_key(&period) {
+                continue;
+            }
+            match self.handoff_from_fallbacks(period) {
+                Ok(update) => {
+                    handoffs.insert(period, update);
+                }
+                Err(tried) => {
+                    return Err(Error::Beacon(format!(
+                        "no source has a light-client update for sync committee period {period}; the light client head is \
+                         in period {} and the catch-up to period {latest_period} needs every period in between. Tried: {}",
+                        periods.start,
+                        tried.join("; ")
+                    )))
+                }
+            }
+        }
         if let Some(period) = head_period_handoff_to_build(
             self.chain,
             head.slot,
@@ -1122,7 +1372,18 @@ impl HttpBeaconSource {
             &handoffs,
             &latest,
         ) {
-            handoffs.insert(period, self.head_period_handoff(period, head.slot)?);
+            let update = match self.head_period_handoff(period, head.slot) {
+                Ok(update) => update,
+                Err(error) => self
+                    .archived_head_handoff(period, head.slot)
+                    .map_err(|tried| {
+                        Error::Beacon(format!(
+                            "{error}; the handoff archive: {}",
+                            tried.join("; ")
+                        ))
+                    })?,
+            };
+            handoffs.insert(period, update);
         }
         let mut folded = assemble_fold(
             self.chain,
@@ -2491,6 +2752,232 @@ mod tests {
         periods
             .map(|period| (period, period_scenario(period).update))
             .collect()
+    }
+
+    // ---------------------------------------------------------------- handoff sources
+
+    use crate::beacon::handoff_archive::{record_json, update_json, ArchiveClient};
+
+    fn updates_body(period: u64) -> Vec<u8> {
+        serde_json::json!([{ "version": "deneb", "data": update_json(&period_scenario(period).update) }])
+            .to_string()
+            .into_bytes()
+    }
+
+    fn updates_path(period: u64) -> String {
+        format!("/eth/v1/beacon/light_client/updates?start_period={period}&count=1")
+    }
+
+    fn named(host: &str, pages: Vec<(String, Vec<u8>)>) -> ArchiveClient {
+        ArchiveClient {
+            host: host.into(),
+            client: Box::new(Node(pages.into_iter().collect())),
+        }
+    }
+
+    fn record_page(period: u64) -> (String, Vec<u8>) {
+        let record = record_json(
+            ChainKind::Pulsechain,
+            369,
+            period,
+            &period_scenario(period).update,
+        )
+        .unwrap();
+        (
+            format!("/369/{period}.json"),
+            record.to_string().into_bytes(),
+        )
+    }
+
+    /// Claim: a period the main node lacks comes from the next source that has it, in order: the states, then each
+    /// handoff URL, then the archive; with none, the error names every source by host and what it answered.
+    /// Why it matters: a light client strands only when no source at all has the handoff update of a period it missed.
+    #[test]
+    fn a_missed_period_comes_from_the_first_source_that_has_it() {
+        let source = pulsechain_source(vec![])
+            .with_host("main.example".into())
+            .with_handoff_clients(vec![
+                named("first.example", vec![]),
+                named(
+                    "second.example",
+                    vec![(updates_path(101), updates_body(101))],
+                ),
+            ]);
+        let update = source.handoff_from_fallbacks(101).unwrap();
+        // A beacon API update carries no branch of genesis_validators_root; the rest is the served update.
+        assert_eq!(
+            update,
+            period_scenario(101)
+                .update
+                .with_genesis_validators_root_branch(Vec::new())
+        );
+
+        let tried = source.handoff_from_fallbacks(102).unwrap_err().join("; ");
+        for expected in [
+            "main.example (light_client/updates): no update for the period",
+            "main.example and 0 state URLs (blocks and states): ",
+            "first.example (light_client/updates): no update for the period",
+            "second.example (light_client/updates): no update for the period",
+            "no handoff archive configured",
+        ] {
+            assert!(tried.contains(expected), "`{expected}` in `{tried}`");
+        }
+
+        let archived = pulsechain_source(vec![]).with_handoff_archive(
+            369,
+            vec![
+                named("empty.example", vec![]),
+                named("archive.example", vec![record_page(103)]),
+            ],
+        );
+        assert_eq!(
+            archived.handoff_from_fallbacks(103).unwrap(),
+            period_scenario(103).update
+        );
+        let tried = archived.handoff_from_fallbacks(104).unwrap_err().join("; ");
+        assert!(
+            tried.contains("empty.example (handoff archive): answered 404"),
+            "{tried}"
+        );
+        assert!(
+            tried.contains("archive.example (handoff archive): answered 404"),
+            "{tried}"
+        );
+    }
+
+    /// Claim: a handoff URL that answers an error, or an update of the period that is not its handoff, is named and passed.
+    #[test]
+    fn a_wrong_handoff_answer_is_named_and_passed() {
+        let mut not_handoff = period_scenario(101).update;
+        not_handoff.next_sync_committee = None;
+        let wrong = serde_json::json!([{ "data": update_json(&not_handoff) }])
+            .to_string()
+            .into_bytes();
+        let source = pulsechain_source(vec![]).with_handoff_clients(vec![
+            named("wrong.example", vec![(updates_path(101), wrong)]),
+            named("broken.example", vec![(updates_path(101), b"{}".to_vec())]),
+        ]);
+        let tried = source.handoff_from_fallbacks(101).unwrap_err().join("; ");
+        assert!(
+            tried.contains(
+                "wrong.example (light_client/updates): an update that is not the handoff"
+            ),
+            "{tried}"
+        );
+        assert!(
+            tried.contains("broken.example (light_client/updates): "),
+            "{tried}"
+        );
+    }
+
+    /// Claim: an archive record that cannot be the first step from a head without the next committee is not used for it.
+    #[test]
+    fn the_archived_head_handoff_must_move_the_head() {
+        let source = pulsechain_source(vec![])
+            .with_handoff_archive(369, vec![named("archive.example", vec![record_page(100)])]);
+        let early_head = 100 * PERIOD_SLOTS + 5;
+        assert!(source.archived_head_handoff(100, early_head).is_ok());
+        let tried = source
+            .archived_head_handoff(100, 100 * PERIOD_SLOTS + 5_000)
+            .unwrap_err()
+            .join("; ");
+        assert!(tried.contains("does not move the head"), "{tried}");
+    }
+
+    /// Claim: the period's update is built from blocks and states only once the period ended.
+    #[test]
+    fn a_period_is_assembled_only_after_it_ended() {
+        let head = serde_json::json!({ "data": { "header": { "message": {
+            "slot": (101 * PERIOD_SLOTS + 3).to_string(), "proposer_index": "0",
+            "parent_root": format!("{:#x}", B256::ZERO), "state_root": format!("{:#x}", B256::ZERO), "body_root": format!("{:#x}", B256::ZERO)
+        } } } });
+        let source = pulsechain_source(vec![(
+            "/eth/v1/beacon/headers/head".into(),
+            head.to_string().into_bytes(),
+        )]);
+        let error = source.assembled_handoff(101).unwrap_err().to_string();
+        assert!(error.contains("period 101 has not ended"), "{error}");
+        let error = source.assembled_handoff(100).unwrap_err().to_string();
+        assert!(error.contains("no block with a child"), "{error}");
+    }
+
+    /// Claim: the store at a head whose state no node serves comes from the archived handoffs of the period before and
+    /// of the head period; a missing record is named.
+    /// Why it matters: a light client whose head state was pruned would otherwise strand even with every handoff known.
+    #[test]
+    fn a_store_comes_from_the_archive_when_the_head_state_is_gone() {
+        let head = period_scenario(101).update.finalized_header.beacon;
+        let source = pulsechain_source(vec![]).with_handoff_archive(
+            369,
+            vec![named(
+                "archive.example",
+                vec![record_page(100), record_page(101)],
+            )],
+        );
+        let store = source.store_at_head(&head, committee_hash_of(102)).unwrap();
+        assert_eq!(store.header_slot, head.slot);
+        assert_eq!(
+            committee_hash(&store.current_sync_committee).unwrap(),
+            committee_hash_of(101)
+        );
+        assert_eq!(
+            store
+                .next_sync_committee
+                .as_ref()
+                .map(|c| committee_hash(c).unwrap()),
+            Some(committee_hash_of(102))
+        );
+        let without_next = source.store_at_head(&head, B256::ZERO).unwrap();
+        assert!(without_next.next_sync_committee.is_none());
+
+        let only_before = pulsechain_source(vec![])
+            .with_handoff_archive(369, vec![named("archive.example", vec![record_page(100)])]);
+        let error = only_before
+            .store_at_head(&head, committee_hash_of(102))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "the handoff archive: period 101: archive.example (handoff archive): answered 404"
+            ),
+            "{error}"
+        );
+        let mut genesis = head;
+        genesis.slot = 3;
+        let error = only_before
+            .store_at_head(&genesis, B256::ZERO)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("the head is in period 0"), "{error}");
+    }
+
+    /// Claim: `handoff-update` takes the main node's update when it serves the period, and never asks the archive.
+    #[test]
+    fn a_complete_handoff_comes_from_the_main_node_first_and_never_from_the_archive() {
+        let scenario = period_scenario(101).update;
+        let branches = MemoryBranchStore::new();
+        branches
+            .put(
+                scenario.attested_header.beacon.state_root,
+                scenario.genesis_validators_root_branch.clone(),
+            )
+            .unwrap();
+        let served = pulsechain_source(vec![(updates_path(101), updates_body(101))])
+            .with_branch_store(Arc::new(branches));
+        let update = served.complete_handoff(101).unwrap();
+        assert_eq!(
+            update.attested_header,
+            period_scenario(101).update.attested_header
+        );
+        assert!(!update.genesis_validators_root_branch.is_empty());
+        let archived_only = pulsechain_source(vec![])
+            .with_handoff_archive(369, vec![named("archive.example", vec![record_page(101)])]);
+        let error = archived_only.complete_handoff(101).unwrap_err().to_string();
+        assert!(
+            error.contains("no source has the handoff update of sync committee period 101"),
+            "{error}"
+        );
+        assert!(!error.contains("archive.example"), "{error}");
     }
 
     fn committee_hash_of(period: u64) -> B256 {

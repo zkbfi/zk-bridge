@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { serve } from "@hono/node-server";
 import { redactError } from "@zk-bridge/shared/config";
 import { createLogger } from "../../backend/src/logger.ts";
+import { createAlerter } from "./alerts.ts";
 import { buildChecks } from "./checks/index.ts";
 import { StatusConfigError, loadStatusPair, parseStatusConfig, resolveReference, secretValues } from "./config.ts";
 import type { ChainClient, Deps } from "./deps.ts";
@@ -84,6 +85,10 @@ export async function main(argv: readonly string[], environment: Readonly<Record
       timeoutMilliseconds: config.timeoutSeconds * 1000,
       retentionMilliseconds: config.retentionDays * 86_400_000,
       secrets: () => secrets,
+      alerter:
+        config.alerts === undefined
+          ? undefined
+          : createAlerter({ url: resolveReference(config.alerts.webhookUrl, environment), checks: config.alerts.checks, fetch: deps.fetch, logger, now: Date.now, secrets: () => secrets }),
     });
     const app = createServer({ store, checks, now: Date.now, intervalSeconds: config.intervalSeconds });
     const server = await new Promise<ReturnType<typeof serve> & { port: number }>((resolve) => {

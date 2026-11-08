@@ -40,7 +40,7 @@
       "beaconUrl": "env:STATUS_BEACON_URL_943"
     }
   },
-  "lightClients": { "keepAliveSeconds": 43200, "marginSeconds": 21600 },
+  "lightClients": { "keepAliveSeconds": 43200, "marginSeconds": 21600, "deadlineDegradedSeconds": 43200, "deadlineDownSeconds": 21600 },
   "pipeline": { "maxUndeliveredAgeSeconds": 7200, "maxJobSeconds": 3600 },
   "runpod": { "endpointId": "yourendpointid", "apiKey": "env:RUNPOD_API_KEY" },
   "wallets": [

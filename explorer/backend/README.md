@@ -39,6 +39,9 @@ The backend reads no endpoint from the environment.
 | `rpcUrls` | The execution endpoint of each chain, by chain identifier. Both chains of the pair are required. |
 | `beaconUrls` | The beacon endpoint of each chain. The `requests` module needs both. |
 | `stateUrls` | Optional. More beacon APIs of each chain, by chain identifier, as a list. The prover asks them in order, only for states, when the beacon endpoint does not serve an old state. The prover also keeps every state it verified in `beacon-states/` next to `databasePath`, and reads the start state of a job from there first. |
+| `handoffUrls` | Optional. More beacon APIs of each chain, by chain identifier, as a list. Asked for the committee handoff update of a period that the beacon endpoint and the states cannot give, and for states after `stateUrls` (prover `source.handoff_urls`). See "The handoff archive". |
+| `handoffArchiveUrls` | Optional. More base URLs of the handoff archive (`<base>/<chainId>/<period>.json`), asked after this backend's own table and the indexer's, such as `https://<gateway>/ipfs/<cid>/handoff-updates`. |
+| `handoffCapture` | `{ enabled: true, backfillPeriods: 8, intervalSeconds: 600 }`. The capture of the handoff archive (archive module). |
 | `headerRpcUrls` | Optional. More execution RPCs of each chain, by chain identifier, as a list. The prover asks them in order, only for `debug_getRawHeader`, when the RPC endpoint lacks it (the `opening-proof` command needs the raw header of the other chain's block, and the `evidence` command the raw header of a Gloas source block). The prover file names them for both sides of a route (`source.header_rpc_urls`, `destination.header_rpc_urls`). Every header is checked against its block hash. |
 | `msgboardUrl` | The msgboard node. The `webhook` and `msgboard-indexer` modules need it. |
 | `indexerUrl` | The chain indexer. The `requests` module needs it and refuses to start without it. Without it the archive reports `degraded`. |
@@ -55,7 +58,7 @@ A secret is never in the file. The file names the environment variable, and the 
 | `RUNPOD_API_KEY` | `apiKeyVariable` of an entry of `remote.endpoints`, or `runpodApiKeyVariable` with `remote.endpoint` | The key of a proving endpoint. Each entry with a key names its own variable; an entry without one (a dedicated worker on its TCP port) needs none. A key reaches the prover only through the environment of the child process. |
 | `BACKEND_WEBHOOK_BEARER` | `webhookBearerVariable` | The bearer value that the prover sends to the webhook. At least 32 bytes. The backend refuses to start with less. |
 
-The endpoints in `rpcUrls`, `beaconUrls`, `stateUrls`, `headerRpcUrls`, `msgboardUrl`, `remote.endpoints` (every entry), `remote.endpoint`
+The endpoints in `rpcUrls`, `beaconUrls`, `stateUrls`, `headerRpcUrls`, `handoffUrls`, `handoffArchiveUrls`, `msgboardUrl`, `remote.endpoints` (every entry), `remote.endpoint`
 and `indexerUrl` can carry a key. They stay in the file, so protect the file. The logger removes every endpoint, and every
 long part of its path, from each log line.
 
@@ -177,6 +180,27 @@ minutes: the board proof (`proofs`), every `webhook_proofs` row (posted or held)
 host passes this route on. The nightly export (`deploy/app-server/proofs.sh`) also takes the proofs from a snapshot of
 the SQLite file. See docs/proof-archive.md.
 
+### The handoff archive
+
+A light client that missed a sync-committee period border moves again only with the handoff update of each period it
+missed (docs/testnet-run.md, "Why a light client strands"). PulseChain nodes serve no light-client routes and prune the
+states the prover builds those updates from, so the archive module captures one per period of each source chain:
+
+- Every `handoffCapture.intervalSeconds` (600) it looks at the last `handoffCapture.backfillPeriods` (8) ended periods
+  of each source chain (the clock comes from the light client on the other side) and runs
+  `zk-bridge-prover handoff-update --route <route> --period <p>` for each one without a record. The record (about
+  60 KB) goes into the `handoff_updates` table and stays for good. A failed period waits the interval, doubled with each
+  failure, at most 6 hours (`handoff_capture_failed`, with every source the prover tried); `handoff_captured` logs a
+  success. `handoffCapture.enabled: false` turns it off; `GET /health` counts the records and the failing periods.
+- `GET /archive/handoffs/<chainId>` lists the periods; `GET /archive/handoffs/<chainId>/<period>.json` gives a record
+  exactly as stored. They are loopback-only like `/archive/proofs`, which lists the records of the last 7 days for the
+  indexer (older ones reach it through the nightly snapshot).
+- Every prover run of the backend names the archive as `source.handoff_archive_urls`: this backend's route, then
+  `<indexerUrl>/api/proofs/handoffs`, then `handoffArchiveUrls`. `handoffUrls` (per chain) adds beacon APIs asked for a
+  handoff update and for states (`source.handoff_urls`).
+- The watcher's planner asks the same sources (`readHistoryFrom` in `src/keepalive/sources.ts`), so "stranded" means
+  none of them has the period; its reason lists each source by host and what it answered.
+
 ## Proving on finality
 
 The requests module also starts proofs on its own, within seconds of the source chain finalizing what a proof needs.
@@ -282,6 +306,11 @@ Settings, all optional (`watch` in the configuration file):
 `limits.pendingProofStaleSeconds` (600) belongs to the same rules: see "Proofs we already have".
 
 The keep-alive timer (docs/testnet-run.md, "Keeping the light clients alive") stays as the backstop.
+
+For a missed period the planner asks every handoff source in the prover's order (beacon node, states, `handoffUrls`,
+the handoff archive) and reports `stranded` only when all of them lack it, with what each answered; a source that cannot
+be reached makes the read fail and retry instead. Each decision also records the light client's deadline (`deadline`
+on the pipeline wire).
 
 ### Batching and profit
 
@@ -430,6 +459,12 @@ pair), 503 when the indexer is not configured or cannot be read.
     "detail": "…", "batch": { "messages": 2, "startAt": 1793503000000, "startWhy": "interval", "dueAt": 1793503000000, "lastProofAt": 1793499400000, "…": "…" } }
 }
 ```
+
+`deadline` is `{ at, hoursLeft, period, headSlot, headPeriod }`: when the destination light client strands if no proof
+lands (the first second of the period after the last committee it stores; from then on only handoff updates move it),
+from the watcher's latest decision. `hoursLeft` is negative once it passed; `period` is the period it would strand in.
+It is null until the watcher read the light client. The dapp shows it on the light client cards; the status service
+computes the same deadline from the chain itself.
 
 `deposits` is `{ open, remoteHasHead, waiting, proofDue }` when the latest decision read the destination bridge:
 `waiting` while it waits for an update of this direction's light client to open deposits, `proofDue` when that

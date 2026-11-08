@@ -12,6 +12,9 @@ import type { ProofArchive } from "../../proof-archive/store";
  *   as proof cache entries without the fetch time (`{ entries: [...] }`). 404 when there is none.
  * - `GET /api/proofs/light-client/:direction?startSlot=&limit=`: light client update proofs, newest start first.
  * - `GET /api/proofs/evidence/:messageId`: the delivery evidence archived for a message.
+ * - `GET /api/proofs/handoffs/:chainId`: `{ periods }`, the sync-committee periods that have a handoff update, ascending.
+ * - `GET /api/proofs/handoffs/:chainId/<period>.json`: the handoff update of one period, the JSON text exactly as stored
+ *   (404 when none). The same layout as `handoff-updates/<chain id>/<period>.json` in the IPFS tree.
  * - `GET /api/proofs/summary`: row counts.
  *
  * 503 when the archive is off or its database cannot be reached.
@@ -20,6 +23,8 @@ import type { ProofArchive } from "../../proof-archive/store";
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const MESSAGE_ID = /^0x[0-9a-fA-F]{64}$/;
 const DECIMAL = /^\d{1,19}$/;
+const MAX_INTEGER = 2_147_483_647;
+const HANDOFF_FILE = /^(\d{1,10})\.json$/;
 
 /** Registers the routes. `archive` is for a test; the default is the archive of the process. */
 export const registerProofRoutes = (app: Hono, archive: () => Promise<ProofArchive | null> = () => proofArchive()): void => {
@@ -57,6 +62,25 @@ export const registerProofRoutes = (app: Hono, archive: () => Promise<ProofArchi
     const evidence = await target.evidence(messageId);
     if (evidence.length === 0) return c.json({ error: "no archived evidence for this message", evidence: [] }, 404);
     return c.json({ evidence: evidence.map(publicEvidence) });
+  });
+
+  app.get("/api/proofs/handoffs/:chainId", async (c) => {
+    const chainId = c.req.param("chainId");
+    if (!DECIMAL.test(chainId) || Number(chainId) > MAX_INTEGER) return c.json({ error: "expected a chain id" }, 400);
+    const target = await archive();
+    if (target === null) return c.json(unavailable, 503);
+    return c.json({ periods: await target.handoffPeriods(Number(chainId)) });
+  });
+
+  app.get("/api/proofs/handoffs/:chainId/:file", async (c) => {
+    const { chainId, file } = c.req.param();
+    const name = HANDOFF_FILE.exec(file);
+    if (!DECIMAL.test(chainId) || Number(chainId) > MAX_INTEGER || name === null || Number(name[1]) > MAX_INTEGER) return c.json({ error: "expected a chain id and <period>.json" }, 400);
+    const target = await archive();
+    if (target === null) return c.json(unavailable, 503);
+    const found = await target.handoff(Number(chainId), Number(name[1]));
+    if (found === null) return c.json({ error: "no archived handoff update for this period" }, 404);
+    return c.body(found.record, 200, { "content-type": "application/json" });
   });
 
   app.get("/api/proofs/summary", async (c) => {

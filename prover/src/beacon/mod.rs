@@ -5,6 +5,7 @@
 //! needs for its layout rows.
 
 pub mod branch_store;
+pub mod handoff_archive;
 pub mod http;
 pub mod state_store;
 

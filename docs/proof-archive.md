@@ -30,6 +30,11 @@ What is hard to get again:
 - **Delivery evidence of messages.** The prover builds it from receipts and header ancestry. The backend deletes it once
   the message is delivered.
 - **Verified beacon states.** Public beacon nodes prune them.
+- **Handoff updates of sync-committee periods.** A light client strands for good if no source has the "handoff
+  update" of a period it missed (one period is about 23 to 27 hours). PulseChain beacon nodes serve no light client
+  routes and prune the states the prover builds those updates from. So the backend captures, for every period of each
+  source chain, one complete prover-ready update (a "handoff record"), and the archive keeps it for good. The record is
+  untrusted data: the zk proof checks the committee signatures.
 
 ## Design
 
@@ -59,8 +64,12 @@ drops it.
 | `storage_proofs` | chain id, address, block number, block hash, storage keys | The raw `eth_getProof` answer (jsonb, as the node sent it). Also the stored slot (the light client head whose `executionBlockHashes` entry the key opens), `fetched_at` and the source **host** (never a URL). |
 | `light_client_proofs` | pair, direction, start slot, new slot, `keccak256(proof)` | The proof bytes and public values. Also the fields derived from the public values: roots, execution block hash and number. When known: the program key, the whole proof message (`payload`), the posting chain, transaction and block, the msgboard message hash, and the backend job id. A second distinct proof of the same slots is its own row. |
 | `message_evidence` | message id, `sha256(body)` | The evidence JSON exactly as the backend stored it (text, so the hash holds), with pair, direction and the backend's `stored_at`. |
+| `handoff_updates` | chain id, period | The handoff update of one sync-committee period of a source chain, as the JSON text the backend stored (`record`, text, so the bytes and the hash hold). Also `sha256` of that text, `attested_slot` and `finalized_slot` (read from it), the backend's `stored_at`, the source and `ingested_at`. Schema version 2. |
 | `conflicts` | id (one row per distinct incoming value) | Table, key, column, the archived value and the refused value, and the source. |
 | `schema_version` | version | Migrations applied. |
+
+The handoff updates are about 60 KB a record, one per period per chain: about 2 a day on testnet, about 45 MB a year in
+total.
 
 **Left out of the backend tables:**
 
@@ -86,6 +95,18 @@ drops it.
    - Live: every 5 minutes the indexer reads the backend's private route `GET /archive/proofs`. It is on the loopback
      port only and no Caddy host passes it on. It is set by `PROOF_ARCHIVE_BACKEND_URL` in `indexer.env`.
    - Nightly: the export ingests the backend snapshot and the runner's proof cache.
+4. **Handoff updates, from the backend** (`backend-rows.ts`). The same two ways in.
+   - Live: `GET /archive/proofs` has a field `handoffs: [{ chainId, period, record, storedAt }]` with the rows stored in
+     the last 7 days. A backend without the field counts as none.
+   - Nightly: `ingest-backend` reads the table `handoff_updates` of the snapshot (all rows). A snapshot without the
+     table counts as none.
+   - Each record is checked before it goes in: it parses; `format` is exactly `zkb-handoff-update/1`; `chainId` and
+     `period` are integers equal to the row's; `attestedSlot` and `signatureSlot` are integers with
+     `floor(slot / 8192) = period` (all four chains have 8192 slots per period); `finalizedSlot` is an integer not above
+     `attestedSlot`; `nextSyncCommitteeRoot` is `0x` and 64 hex digits; `update` is an object with a
+     `next_sync_committee` object. A record that fails is refused: it is logged (`proof_archive_handoff_refused`, with the
+     chain, period and reason, never the text) and counted as `invalid`, like an invalid light client proof.
+   - A different record for the same chain and period is a conflict (recorded in `conflicts`, the first stays).
 
 ### Read routes (indexer, public under `/api/*`)
 
@@ -93,7 +114,13 @@ drops it.
   fetch time. It answers 404 when there are none.
 - `GET /api/proofs/light-client/:direction?startSlot=&limit=` returns the newest start slot first, at most 500.
 - `GET /api/proofs/evidence/:messageId`
-- `GET /api/proofs/summary` returns row counts.
+- `GET /api/proofs/handoffs/:chainId` returns `{ periods: [...] }`, the periods that have a handoff update, ascending.
+- `GET /api/proofs/handoffs/:chainId/<period>.json` returns the record JSON exactly as stored (`application/json`). It
+  answers 404 when there is none and 400 for a file name that is not `<period>.json`. A prover reads
+  `<base>/<chainId>/<period>.json`, with base `.../api/proofs/handoffs` or `.../ipfs/<cid>/handoff-updates`: the layout
+  is the same in both.
+- `GET /api/proofs/summary` returns row counts (`storageProofs`, `lightClientProofs`, `evidence`, `handoffUpdates`,
+  `conflicts`).
 
 Every route answers 503 when the archive is off: no `DATABASE_URL`, `PROOF_ARCHIVE=off`, or the database cannot be
 reached.
@@ -141,6 +168,7 @@ hosts, fetch times and backend job ids. The public tree on IPFS is built separat
 | `storage-proofs/<chain>/<account>/<block>-<block hash>.<sha256>.json` | one storage proof record | for good |
 | `light-client-proofs/<pair>/<direction>/<start>-<new>-<proof hash>.<sha256>.json` | one light client proof record | for good |
 | `evidence/<pair>/<direction>/<message id>-<body sha256>.<sha256>.json` | one evidence record | for good |
+| `handoff-updates/<chain id>/<period>.<sha256>.json` | one handoff update record (the archive row; its `record` field is the update text) | for good |
 | `conflicts/conflict.<sha256>.json` | one conflict the archive recorded | for good |
 | `beacon-states/<chain>/<slot>-<root>.ssz` and `.summary` | the verified beacon states of the runner and the backend | 30 days |
 | `snapshots/<stamp>.sqlite` | the backend's database, one each night | 30 days |
@@ -270,7 +298,7 @@ ansible-playbook proofs.yml -e action=publish -e dry_run=true
 `deploy/operator/pull-proofs.sh` every day at 04:45 UTC, in the local time zone. Over the `zkbfi-app` ssh alias it
 copies the mirror into `~/zkb-backups/proofs/mirror`:
 
-- `storage-proofs/`, `light-client-proofs/`, `evidence/`, `conflicts/`: rsync `--ignore-existing`. A file that is here is
+- `storage-proofs/`, `light-client-proofs/`, `evidence/`, `handoff-updates/`, `conflicts/`: rsync `--ignore-existing`. A file that is here is
   never fetched again, and nothing here is deleted, even when the server no longer has it; such records are logged.
 - `beacon-states/`, `snapshots/`, `manifests/`: rsync `--ignore-existing --delete`, so the Mac follows the server's
   window; the deletions are counted in the log.
@@ -305,6 +333,7 @@ Measured on testnet (Sepolia and PulseChain testnet v4), 2026-11-02: beacon stat
 | Beacon states, testnet | about 150 MB | about 4.5 GB (then flat) | about 4.5 GB |
 | Proofs and evidence, testnet | about 5 MB | about 150 MB | about 1.8 GB (never deleted) |
 | SQLite snapshots | one `backend.sqlite` | 30 of them | 30 of them |
+| Handoff updates, testnet | about 120 KB (2 records of about 60 KB) | about 3.6 MB | about 45 MB (never deleted; one record per period per chain, about 2 a day on testnet) |
 | Manifests | a few MB (one line per file) | 30 of them | 30 of them |
 | **Mirror, testnet** | | **about 4.7 GB** plus 30 snapshots | about 6.5 GB |
 | **Mirror, mainnet** (about double) | | **about 9.5 GB** | about 13 GB |
@@ -324,8 +353,13 @@ of evidence of the archive, and the beacon states of the mirror's window (30 day
 - `storage-proofs/<chain>/<account>/<block>-<hash>.json`
 - `light-client-proofs/<pair>/<direction>/<start>-<new>-<proofHash>.json`
 - `evidence/<pair>/<direction>/<messageId>-<sha256>.json`: the bytes as built.
+- `handoff-updates/<chain id>/<period>.json`: exactly the record text (compact JSON, sorted keys). It holds only hex,
+  numbers and fixed key names. The sanitizer checks that it is a valid handoff update for the chain and period in its
+  path and scans everything but the fixed `format` tag.
 - `beacon-states/<chain>/<slot>-<root>.ssz|.summary`
-- `README.txt`, which says how to check each kind.
+- `README.txt`, which says how to check each kind. For the handoff updates it says what they are and that a prover reads
+  them at `<tree>/handoff-updates/<chain id>/<period>.json`; the proof verifies the committee signatures, so nobody has
+  to trust the file.
 - `manifest.json`, without the host name.
 
 What is left out: no source host, no fetch time, no job id, no source, and nothing from jobs, requests or timings.

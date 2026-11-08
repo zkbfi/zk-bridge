@@ -122,3 +122,68 @@ export function evidenceRecord(input: { readonly messageId: string; readonly pai
     source: input.source,
   };
 }
+
+/** The format tag of a handoff update record. */
+export const HANDOFF_FORMAT = "zkb-handoff-update/1";
+/** Slots in a sync-committee period: 8192 on all four chains. */
+export const SLOTS_PER_PERIOD = 8192;
+const HANDOFF_ROOT = /^0x[0-9a-fA-F]{64}$/;
+const INTEGER_COLUMN = 2_147_483_647;
+
+/**
+ * The handoff update of one sync-committee period of a source chain, as the backend captured it: a complete,
+ * prover-ready light client update that carries the committee of the next period. `record` is the JSON text exactly as
+ * the backend stored it (compact, sorted keys), so the bytes and the hash hold; `sha256` is the hex SHA-256 of that
+ * text. The slots are read from the text. The zk proof checks the committee signatures, so the data is untrusted.
+ */
+export const handoffRecordSchema = z.object({
+  chainId: z.number().int().positive().max(INTEGER_COLUMN),
+  period: z.number().int().nonnegative().max(INTEGER_COLUMN),
+  record: z.string().min(1),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  attestedSlot: z.number().int().nonnegative(),
+  finalizedSlot: z.number().int().nonnegative(),
+  storedAt: z.number().int().nullable().default(null),
+  source: z.string().min(1),
+});
+export type HandoffRecord = z.infer<typeof handoffRecordSchema>;
+
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Checks a handoff update text against the key it is stored under and builds its archive record. A text that fails
+ * is refused with the reason (never the text itself).
+ */
+export function handoffRecord(input: { readonly chainId: number; readonly period: number; readonly record: string; readonly storedAt: number | null; readonly source: string }): { ok: true; record: HandoffRecord } | { ok: false; reason: string } {
+  let value: unknown;
+  try {
+    value = JSON.parse(input.record);
+  } catch {
+    return { ok: false, reason: "the record is not JSON" };
+  }
+  if (!isObject(value)) return { ok: false, reason: "the record is not an object" };
+  if (value.format !== HANDOFF_FORMAT) return { ok: false, reason: "the record has another format" };
+  const whole = (item: unknown): item is number => typeof item === "number" && Number.isSafeInteger(item) && item >= 0;
+  if (!whole(value.chainId) || value.chainId !== input.chainId || !whole(value.period) || value.period !== input.period) return { ok: false, reason: "the chain or period differs from the key" };
+  if (input.chainId < 1 || input.chainId > INTEGER_COLUMN || input.period > INTEGER_COLUMN) return { ok: false, reason: "the chain or period is out of range" };
+  const { attestedSlot, signatureSlot, finalizedSlot } = value;
+  if (!whole(attestedSlot) || !whole(signatureSlot) || Math.floor(attestedSlot / SLOTS_PER_PERIOD) !== input.period || Math.floor(signatureSlot / SLOTS_PER_PERIOD) !== input.period) {
+    return { ok: false, reason: "a slot is not in the period" };
+  }
+  if (!whole(finalizedSlot) || finalizedSlot > attestedSlot) return { ok: false, reason: "the finalized slot is not a slot up to the attested one" };
+  if (typeof value.nextSyncCommitteeRoot !== "string" || !HANDOFF_ROOT.test(value.nextSyncCommitteeRoot)) return { ok: false, reason: "the next sync committee root is not 32 bytes of hex" };
+  if (!isObject(value.update) || !isObject(value.update.next_sync_committee)) return { ok: false, reason: "the update has no next sync committee" };
+  return {
+    ok: true,
+    record: {
+      chainId: input.chainId,
+      period: input.period,
+      record: input.record,
+      sha256: createHash("sha256").update(input.record).digest("hex"),
+      attestedSlot,
+      finalizedSlot,
+      storedAt: input.storedAt,
+      source: input.source,
+    },
+  };
+}

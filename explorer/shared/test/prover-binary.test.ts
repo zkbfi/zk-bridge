@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPair, type Pair } from "../src/index.js";
 import type { CommandExecutor, CommandSpec } from "../src/prover/execute-command.js";
-import { EXIT_UP_TO_DATE, ProverCommandError, ProverOutputError, createProverBinary } from "../src/prover/prover-binary.js";
+import { EXIT_UP_TO_DATE, ProverCommandError, ProverOutputError, createProverBinary, parseHandoffRecord } from "../src/prover/prover-binary.js";
 import { describeRoute, renderProverConfig } from "../src/prover/prover-config.js";
 import { evidenceFor, memoryLogger, word } from "./support/prover-builders.js";
 
@@ -50,7 +50,7 @@ interface Seen {
   readonly configPath: string | null;
 }
 
-async function setup(answer: { code: number; stdout?: string; stderr?: string }, extra: { backend?: typeof remote | null; secret?: boolean; defaultDirectory?: boolean; handoff?: { webhookUrl: string; bearerVariable: string }; stateCacheDirectory?: string; proofCacheDirectory?: string } = {}) {
+async function setup(answer: { code: number; stdout?: string; stderr?: string }, extra: { backend?: typeof remote | null; secret?: boolean; defaultDirectory?: boolean; handoff?: { webhookUrl: string; bearerVariable: string }; stateCacheDirectory?: string; proofCacheDirectory?: string; handoffArchiveUrls?: readonly string[] } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "prover-binary-"));
   scratch.push(directory);
   const seen: Seen[] = [];
@@ -77,6 +77,7 @@ async function setup(answer: { code: number; stdout?: string; stderr?: string },
     ...(extra.defaultDirectory === true ? {} : { temporaryDirectory: join(directory, "nested") }),
     ...(extra.stateCacheDirectory === undefined ? {} : { stateCacheDirectory: extra.stateCacheDirectory }),
     ...(extra.proofCacheDirectory === undefined ? {} : { proofCacheDirectory: extra.proofCacheDirectory }),
+    ...(extra.handoffArchiveUrls === undefined ? {} : { handoffArchiveUrls: extra.handoffArchiveUrls }),
     logger,
   });
   return { binary, seen, directory, events };
@@ -229,6 +230,31 @@ describe("prove", () => {
     const { binary, seen } = await setup({ code: 3 }, { defaultDirectory: true });
     await binary.prove({ direction: "first-to-second" });
     expect(seen[0]!.configPath!.startsWith(tmpdir())).toBe(true);
+  });
+});
+
+describe("handoff-update", () => {
+  const record = JSON.stringify({ attestedSlot: 8000, chainId: 1, finalizedSlot: 7900, format: "zkb-handoff-update/1", nextSyncCommitteeRoot: word(3), period: 0, signatureSlot: 8001, update: { signature_slot: "8001" } });
+
+  it("runs handoff-update on the route with the period and the archive in the file, and gives the record line exactly", async () => {
+    const { binary, seen } = await setup({ code: 0, stdout: `${record}\n` }, { backend: null, handoffArchiveUrls: ["http://127.0.0.1:8787/archive/handoffs"] });
+    const answer = await binary.handoffUpdate({ direction: "first-to-second", period: 0 });
+    expect(answer).toEqual({ text: record, chainId: 1, period: 0, attestedSlot: 8000, finalizedSlot: 7900, signatureSlot: 8001 });
+    expect(seen[0]!.spec.args.slice(2)).toEqual(["handoff-update", "--route", "ethereum_to_pulsechain", "--period", "0"]);
+    expect(seen[0]!.configText).toContain('handoff_archive_urls = ["http://127.0.0.1:8787/archive/handoffs"]');
+    expect(seen[0]!.configText).not.toContain("[prover]");
+  });
+
+  it("throws the command error with the tail of standard error", async () => {
+    const { binary } = await setup({ code: 1, stderr: "no source has the handoff update" }, { backend: null });
+    await expect(binary.handoffUpdate({ direction: "second-to-first", period: 3 })).rejects.toThrow(/no source has the handoff update/);
+  });
+
+  it("refuses a line that is not a handoff record", () => {
+    expect(() => parseHandoffRecord(JSON.stringify({ format: "other", update: {} }))).toThrow(ProverOutputError);
+    expect(() => parseHandoffRecord(JSON.stringify({ format: "zkb-handoff-update/1", update: null }))).toThrow(ProverOutputError);
+    expect(() => parseHandoffRecord("null")).toThrow(ProverOutputError);
+    expect(() => parseHandoffRecord(JSON.stringify({ format: "zkb-handoff-update/1", update: {}, chainId: 1, period: -1, attestedSlot: 1, finalizedSlot: 1, signatureSlot: 1 }))).toThrow(/numbers/);
   });
 });
 

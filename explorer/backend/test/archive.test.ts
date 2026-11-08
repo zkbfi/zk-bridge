@@ -215,7 +215,7 @@ describe("evidence archive", () => {
     const backend = makeBackend({ enabled: ["archive"] });
     await runArchiveCycle(backend.context);
     expect((await backend.app.request(`/evidence/${id("a")}`)).status).toBe(404);
-    expect(health(backend.context)).toEqual({ state: "degraded", detail: "indexerUrl is not set" });
+    expect(health(backend.context)).toEqual({ state: "degraded", detail: "indexerUrl is not set; handoff capture off" });
     await (await start(backend.context))();
   });
 

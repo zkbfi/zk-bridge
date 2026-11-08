@@ -16,7 +16,7 @@
 export const PROOF_ARCHIVE_SCHEMA = "proof_archive";
 
 /** The version that {@link MIGRATION} brings the schema to. */
-export const PROOF_ARCHIVE_VERSION = 1;
+export const PROOF_ARCHIVE_VERSION = 2;
 
 /**
  * The migration, as one script: one transaction under an advisory lock, so two indexers that start at once (the blue
@@ -95,5 +95,20 @@ CREATE TABLE IF NOT EXISTS proof_archive.conflicts (
 -- One report per distinct incoming value. A digest, because a whole proof is over the size of an index row.
 CREATE UNIQUE INDEX IF NOT EXISTS conflicts_once ON proof_archive.conflicts (table_name, md5(row_key::text), column_name, md5(coalesce(incoming_value, '')));
 INSERT INTO proof_archive.schema_version (version) VALUES (1) ON CONFLICT DO NOTHING;
+-- Version 2: the handoff update of each sync-committee period of a source chain (a light client strands for good when no
+-- source has the update of a missed period). The text is kept exactly as the backend stored it, so the bytes and hash hold.
+CREATE TABLE IF NOT EXISTS proof_archive.handoff_updates (
+  chain_id integer NOT NULL,
+  period integer NOT NULL,
+  record text NOT NULL,
+  sha256 text NOT NULL,
+  attested_slot bigint NOT NULL,
+  finalized_slot bigint NOT NULL,
+  stored_at bigint,
+  source text NOT NULL,
+  ingested_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (chain_id, period)
+);
+INSERT INTO proof_archive.schema_version (version) VALUES (2) ON CONFLICT DO NOTHING;
 COMMIT;
 `;

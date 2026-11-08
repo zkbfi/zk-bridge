@@ -26,6 +26,7 @@ import { chainNamer } from "./ExploreScreen";
 import { statusWord } from "./explore-model";
 import { KV, RouteIcons, shortHex, XBand, XGroup, XRow } from "./parts";
 import { CONTRACT_NAMES, type ContractKey } from "./contract-names";
+import { StrandingLine } from "../stranding/StrandingLine";
 import { SLOTS_PER_PERIOD } from "./tx-model";
 
 const explore = (page: ExplorePage): string => formatRoute({ name: "explore", page });
@@ -237,6 +238,7 @@ export const ContractPage = ({ chainId, address }: { readonly chainId: number; r
         {key === "gate" ? <KV k="Gate state" href={explore({ kind: "gate", chainId, id: String(chainId) })}>open the gate</KV> : null}
         {key === "lightClient" ? (
           <>
+            <StrandingLine chainId={chainId} wrap={(line) => <KV k="Light client strands">{line}</KV>} />
             <XGroup title="Proofs posted to it" right={proofs.length} />
             {proofs.map((proof) => <XRow key={proof.number} href={explore({ kind: "proof", chainId, id: String(proof.number) })} title={`Proof #${proof.number}`} sub={`slot ${proof.slot.toLocaleString("en-US")}`} status="posted" />)}
           </>

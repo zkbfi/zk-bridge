@@ -1,6 +1,6 @@
 import type { Deps } from "../deps.ts";
 import type { CheckDefinition, CheckSpec } from "../types.ts";
-import { beaconCheck, lightClientCheck, rpcCheck } from "./chains.ts";
+import { beaconCheck, lightClientCheck, lightClientDeadlineCheck, rpcCheck } from "./chains.ts";
 import { bridgeCheck, gateCheck } from "./bridges.ts";
 import { benchmarksCheck, indexerFeedCheck, pipelineCheck, gpuBillingCheck } from "./pipeline.ts";
 import { runpodCheck } from "./prover.ts";
@@ -26,6 +26,8 @@ export function buildChecks(deps: Deps): CheckDefinition[] {
     ...sides.flatMap((side) => [rpcCheck(deps, side.chainId), ...(side.beaconUrl === null ? [] : [beaconCheck(deps, side.chainId)])]),
     lightClientCheck(deps, "first-to-second"),
     lightClientCheck(deps, "second-to-first"),
+    lightClientDeadlineCheck(deps, "first-to-second"),
+    lightClientDeadlineCheck(deps, "second-to-first"),
     ...sides.flatMap((side) => [bridgeCheck(deps, side.chainId), gateCheck(deps, side.chainId)]),
     benchmarksCheck(deps, services.backendLocal),
     gpuBillingCheck(services.backendLocal),

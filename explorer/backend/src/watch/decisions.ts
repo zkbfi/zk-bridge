@@ -53,6 +53,11 @@ export type WatchDecision = {
    * Absent when the watcher does not read them.
    */
   readonly deposits?: DepositsFacts;
+  /**
+   * When the destination light client strands if no proof lands (`deadlineOf` in keepalive/plan.ts, of the facts this decision read):
+   * `at` in milliseconds since 1970, `period` the period it would strand in. Absent from a decision made before it.
+   */
+  readonly deadline?: { readonly at: number; readonly period: number; readonly headPeriod: number; readonly lastKnownPeriod: number };
 };
 
 /** The latest decision per direction. */

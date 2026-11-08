@@ -145,6 +145,17 @@ describe("endpoints in the configuration", () => {
     expect(() => makeConfig({ headerRpcUrls: { "1": ["not a url"] } })).toThrow(BackendConfigError);
   });
 
+  it("passes the handoff URLs of a chain to the pair, and lists them and the archive URLs as addresses that can carry a key", () => {
+    const keyed = "https://handoff-1.invalid/v1/KEYHANDOFF777";
+    const archive = "https://archive.invalid/KEYARCHIVE888/handoff-updates";
+    const config = makeConfig({ ...endpoints, handoffUrls: { "1": [keyed] }, handoffArchiveUrls: [archive] });
+    const pair = loadBackendPair(config, DEPLOYMENT);
+    expect(pair.sides[0].handoffUrls).toEqual([keyed]);
+    expect(pair.sides[1].handoffUrls).toBeUndefined();
+    expect(endpointValues(config, pair)).toEqual(expect.arrayContaining([keyed, archive]));
+    expect(() => makeConfig({ handoffUrls: { "1": ["ws://x.invalid"] } })).toThrow(BackendConfigError);
+  });
+
   it("names the missing chain, or the unknown pair", () => {
     expect(() => loadBackendPair(makeConfig({ rpcUrls: { "1": "http://rpc-1.invalid" } }), DEPLOYMENT)).toThrow("rpcUrls needs an entry for chain 369");
     expect(() => loadBackendPair(makeConfig({ ...endpoints, pair: "nowhere" }), DEPLOYMENT)).toThrow('unknown pair "nowhere"');
@@ -352,7 +363,7 @@ describe("startBackend", () => {
     const running = await startBackend({ config, pair: PAIR, enabled: ["archive"], environment: ENVIRONMENT, write: () => {} });
     try {
       const report = (await (await fetch(`http://127.0.0.1:${running.port}/health`)).json()) as { modules: Record<string, unknown> };
-      expect(report.modules).toEqual({ archive: { state: "degraded", detail: "indexerUrl is not set" } });
+      expect(report.modules).toEqual({ archive: { state: "degraded", detail: "indexerUrl is not set; 0 handoff records, 0 periods failing" } });
     } finally {
       await running.stop();
     }

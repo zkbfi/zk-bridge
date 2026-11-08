@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assess, currentSlotAt, DEFAULT_POLICY, formatHours, neededHandoffPeriods, worseExitCode, EXIT_READ_FAILED, VERDICT_EXIT_CODES, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
+import { assess, currentSlotAt, deadlineOf, DEFAULT_POLICY, formatHours, neededHandoffPeriods, worseExitCode, EXIT_READ_FAILED, VERDICT_EXIT_CODES, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
 
 // A PulseChain-like clock: 10 s slots, 8192 slots per period (22.75 hours), genesis at time 0 for easy numbers.
 const PERIOD = 8192;
@@ -113,6 +113,21 @@ describe("assess", () => {
     expect(result.verdict).toBe("stranded");
     expect(result.handoffPeriods).toEqual([1367]);
     expect(result.reason).toMatch(/no handoff update for period 1367/);
+  });
+
+  it("stranded lists each source tried and what it answered, when several were asked (2026-11-07)", () => {
+    const tried = ["main.example (light_client/updates): does not serve the route (404 or 501)", "archive.example (handoff archive): period 1367: answered 404"];
+    const result = judge({ head: 11_194_368, nowSlot: 1368 * PERIOD + 4000, history: { kind: "missing", period: 1367, tried } });
+    expect(result.verdict).toBe("stranded");
+    expect(result.reason).toBe(`the light client stores committees up to period 1367, the source signs in period 1368, and no source has the handoff update for period 1367: no proof can move it. Tried: ${tried.join("; ")}`);
+    const empty = judge({ head: 11_194_368, nowSlot: 1368 * PERIOD + 4000, history: { kind: "missing", period: 1367, tried: [] } });
+    expect(empty.reason).toMatch(/the source node gives no handoff update for period 1367: no proof can move it$/);
+  });
+
+  it("the deadline is the first second of the period after the last stored committee (2026-11-07)", () => {
+    expect(deadlineOf(facts(100 * PERIOD + 5, true), at(100 * PERIOD + 5))).toEqual({ headSlot: 100 * PERIOD + 5, headPeriod: 100, lastKnownPeriod: 101, strandPeriod: 102, deadlineSeconds: at(102 * PERIOD), secondsLeft: at(102 * PERIOD) - at(100 * PERIOD + 5) });
+    const unknownNext = deadlineOf(facts(100 * PERIOD + 5, false), at(102 * PERIOD));
+    expect(unknownNext).toMatchObject({ lastKnownPeriod: 100, strandPeriod: 101, secondsLeft: -at(PERIOD) });
   });
 
   it("stranded names the first needed period when the history was not asked", () => {

@@ -8,7 +8,8 @@ import { z } from "zod";
 import { PROOF_DIRECTIONS, messageBridgeAbi, secondsPerSlot, type ContractCaller, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
 import { BackendConfigError, type BackendConfig } from "../config.ts";
 import { DEFAULT_POLICY, type LightClientFacts } from "../keepalive/plan.ts";
-import { fetchJsonGet, readHistory, readLightClient, type JsonGet } from "../keepalive/sources.ts";
+import { fetchJsonGet, handoffSources, readHistoryFrom, readLightClient, type JsonGet } from "../keepalive/sources.ts";
+import { handoffEndpointsOf } from "../archive/handoffs.ts";
 import type { BackendModuleContext } from "../module.ts";
 import { readHeldProofs } from "../requests/held-proofs.ts";
 import { findActiveJob, lastProofStartedAt } from "../requests/jobs.ts";
@@ -173,7 +174,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
       sourceChainId: source.chainId,
       readFacts: () => readFacts(destination),
       readMessages: messageReader({ indexerUrl: config.indexerUrl as string, source, destination, get }),
-      readHistory: (periods, slotsPerPeriod) => readHistory(get, beaconUrl, periods, slotsPerPeriod),
+      readHistory: (periods, slotsPerPeriod) => readHistoryFrom(handoffSources(get, handoffEndpointsOf(context, source)), periods, slotsPerPeriod),
       findActiveJob: () => findActiveJob(context.storage, direction),
       readHeldProofs: () => readHeldProofs(context.storage, direction),
       readLastProofAt: () => lastProofStartedAt(context.storage, direction),

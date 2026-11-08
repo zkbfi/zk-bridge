@@ -55,7 +55,7 @@ describe("health of the real modules", () => {
     const report = await healthOf(backend);
     expect(report.status).toBe("ok");
     expect(report.modules.requests).toEqual({ state: "running" });
-    expect(report.modules.archive).toEqual({ state: "degraded", detail: "indexerUrl is not set" });
+    expect(report.modules.archive).toEqual({ state: "degraded", detail: "indexerUrl is not set; handoff capture off" });
     expect(report.queue.length).toBe(0);
     expect(report.lastJobs["first-to-second"]?.status).toBe("proving");
     expect(report.lastJobs["second-to-first"]).toBeNull();

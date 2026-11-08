@@ -81,10 +81,34 @@ verified by anything the light client holds. Call the first slot of K + 1 the de
   handoff and the newest update into **one proof** (up to 64 updates; `prover/src/beacon/http.rs`, "Catching up"). So a
   single proof does cross period borders, period by period inside the fold, as long as the source node gives every
   handoff. The program refuses a fold step that skips a period, so there is no shortcut.
-- **Stranded**: the source node gives no handoff for a needed period. The public chain 943 node serves no
+- **Stranded**: no source has the handoff of a needed period. The public chain 943 node serves no
   `light_client/updates` at all; valve.city's chain 943 beacon serves recent periods (it gave 1367 and 1368 on
-  2026-10-31, not 1366). A node that pruned a period strands the light client the same way. Once stranded, no proof
-  can move it: it needs a node with that history, or a new light client from a new checkpoint.
+  2026-10-31, not 1366). A node that pruned a period is no help either. Once stranded, no proof can move it: it needs
+  a source with that history, or a new light client from a new checkpoint (the contracts are immutable, so transfers
+  after the last stored head would stay locked).
+
+Owner, 2026-11-07: "ok, but stranded would require none of the rpcs to have the data, is that right?" ... "yes, do all
+four". Since then the prover and the planner ask every source for a missed period, in this order, and call a light
+client stranded only when all of them lack it:
+
+1. the beacon node (`EXPLORER_BEACON_URL_<id>`, `light_client/updates`);
+2. the blocks and the state at the end of the period, from the beacon node and then each `EXPLORER_STATE_URLS_<id>`
+   entry (asked only on a chain whose node lacks the updates route, such as 943; the prover assembles the update);
+3. each `EXPLORER_HANDOFF_URLS_<id>` entry (backend `handoffUrls`, prover `source.handoff_urls`): its updates route,
+   then its states;
+4. the handoff archive: the backend's own table (`GET /archive/handoffs/<chainId>/<period>.json`), the indexer's
+   (`/api/proofs/handoffs/...`), then backend `handoffArchiveUrls` (such as the published IPFS tree,
+   `https://<gateway>/ipfs/<cid>/handoff-updates`).
+
+The archive exists because PulseChain nodes prune the states the prover builds a 943 handoff from: the backend's
+archive module asks the prover for each period's complete handoff update as soon as the period ends
+(`zk-bridge-prover handoff-update --route <r> --period <p>`, about 60 KB per period), keeps it for good, and the proof
+archive exports and publishes it (docs/proof-archive.md, "handoff updates"). A record is not trusted: the proof checks
+the committee signature. The stranded reason lists each source by host and what it answered. When a source cannot be
+reached at all, the verdict is a failed read (exit 3), not stranded.
+
+The prover also builds the store of an old head from the archive (the handoff of the period before the head proves the
+head period's committee) when no node serves the head's state any more.
 
 The prover asks for a handoff only from the first period whose next committee the light client lacks (fixed on
 2026-10-31: it used to ask for the head period too, which failed with "no light-client update for sync committee
@@ -110,10 +134,17 @@ finalized period, how many periods behind it is, when the deadline comes (or how
 | fresh | The head is recent and the deadline is more than the margin (6 h) away. | 0 |
 | needs keep-alive | One ordinary proof moves it: the head is older than 12 h, or the deadline is inside the margin. | 10 |
 | needs stepping (k steps) | The deadline passed; the source node gives the k handoffs, and one proof folds them. | 11 |
-| STRANDED | The deadline passed and the source node lacks a needed handoff. | 12 |
+| STRANDED | The deadline passed and no source (beacon node, states, handoff URLs, handoff archive) has a needed handoff. | 12 |
 
 Exit code 3 means a read failed, 2 a bad argument. The worst light client decides. Use the beacon endpoint the prover
-uses (`EXPLORER_BEACON_URL_<chainId>`): which periods it serves decides between stepping and stranded.
+uses (`EXPLORER_BEACON_URL_<chainId>`), and `--backend-config` so the check also asks the state URLs, the handoff URLs
+and the handoff archive the backend uses.
+
+The status service warns before the deadline: its check `lightclient-deadline-<direction>` reads the light client from
+the chain only and says, for example, "PulseChain testnet v4 checks Sepolia: 5.2 h until stranded (head slot …, period
+…, strands in period …)": degraded within 12 h, down within 6 h. With `alerts.webhookUrl` set it posts to that webhook
+when the check turns down (explorer/status/README.md, "Alerts"). The dapp shows the same deadline on the Explore light
+client cards ("N h until stranded").
 
 ### March
 

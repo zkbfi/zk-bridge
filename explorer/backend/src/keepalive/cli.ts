@@ -5,6 +5,9 @@ export const USAGE = `zk-bridge-keepalive status|march [options]
 
 Reads both light clients of a pair, judges whether each can still move, and (march) makes the proofs that move them.
 Endpoints come from EXPLORER_RPC_URL_<chainId> and EXPLORER_BEACON_URL_<chainId>, or from --backend-config.
+A missed period is looked for in every source the prover asks: the beacon node, its states and EXPLORER_STATE_URLS_<id>,
+EXPLORER_HANDOFF_URLS_<id>, then the handoff archive (the backend's own, the indexer's and handoffArchiveUrls of the
+--backend-config file). Stranded means none of them has it; the reason lists what each one answered.
 
   --pair <name>                  the pair (default: the backend config's, else sepolia-pls943)
   --deployment <file>            the deployment file (default: the backend config's)

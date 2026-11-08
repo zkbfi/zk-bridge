@@ -1,8 +1,10 @@
 import type { Hono } from "hono";
 import type { Pair } from "@zk-bridge/shared";
-import type { ProverBinary } from "@zk-bridge/shared/prover";
+import type { HandoffProver, ProverBinary } from "@zk-bridge/shared/prover";
 import type { BillingReader } from "./billing.ts";
 import type { BackendConfig, ModuleName } from "./config.ts";
+import type { LightClientFacts } from "./keepalive/plan.ts";
+import type { PairSide } from "@zk-bridge/shared";
 import type { ModuleHealth } from "./health.ts";
 import type { Logger } from "./logger.ts";
 import type { ProofNeedReader } from "./requests/proof-need.ts";
@@ -32,6 +34,10 @@ export type BackendModuleContext = {
   readonly billing?: BillingReader;
   /** The idle timeout that RunPod reports for the prover endpoint, from the start-up sync; null while unknown. Absent without a RunPod endpoint. */
   readonly endpointIdleTimeoutSeconds?: () => number | null;
+  /** The `handoff-update` command, for the capture of the handoff archive (`archive/handoffs.ts`). Absent: no capture. */
+  readonly handoffProver?: HandoffProver;
+  /** Reads the light client on a side. Default (absent): viem over the side's RPC endpoint. A test replaces it. */
+  readonly readLightClientOf?: (side: PairSide) => Promise<LightClientFacts>;
 };
 
 /** The two functions every module exports, plus an optional health report. */

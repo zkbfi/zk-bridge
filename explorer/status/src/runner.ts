@@ -1,7 +1,8 @@
 import type { Logger } from "../../backend/src/logger.ts";
 import { sanitize } from "./sanitize.ts";
+import type { Alerter } from "./alerts.ts";
 import type { Store } from "./store.ts";
-import type { CheckDefinition, CheckResult, Outcome } from "./types.ts";
+import type { CheckDefinition, CheckResult, Outcome, State } from "./types.ts";
 
 const DAY = 86_400_000;
 
@@ -23,13 +24,16 @@ export type RunnerInput = {
   readonly retentionMilliseconds: number;
   /** The secret values this process holds; no detail may contain one. */
   readonly secrets: () => readonly string[];
+  /** Told about every result with the state before it. Optional: absent means no alerts. */
+  readonly alerter?: Alerter;
 };
 
 /** Runs the checks together, each with its own timeout. A check that throws or does not answer is down. */
 export function createRunner(input: RunnerInput): Runner {
   const { store, logger, now } = input;
   const info = Object.fromEntries(input.checks.map((check) => [check.id, { name: check.name, section: check.section }]));
-  const lastState = new Map<string, string>();
+  /** Seeded from the store so that a restart does not read a stored state as new. */
+  const lastState = new Map<string, State>(store.current().map((row) => [row.id, row.state]));
   let running: Promise<CheckResult[]> | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
   let lastPrune: number | null = null;
@@ -65,6 +69,7 @@ export function createRunner(input: RunnerInput): Runner {
         logger.warn("check_changed", { check: result.id, from: before, to: result.state, detail: result.detail });
       }
       lastState.set(result.id, result.state);
+      await input.alerter?.notify(result, info[result.id]?.name as string, before);
     }
     if (lastPrune === null || now() - lastPrune >= DAY) {
       lastPrune = now();

@@ -93,6 +93,16 @@ CREATE TABLE IF NOT EXISTS idle_timeout_history (
   at INTEGER PRIMARY KEY,
   seconds INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS handoff_updates (
+  chain_id INTEGER NOT NULL,
+  period INTEGER NOT NULL,
+  record TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  attested_slot INTEGER NOT NULL,
+  finalized_slot INTEGER NOT NULL,
+  stored_at INTEGER NOT NULL,
+  PRIMARY KEY (chain_id, period)
+);
 `;
 
 /**

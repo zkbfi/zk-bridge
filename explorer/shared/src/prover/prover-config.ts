@@ -55,6 +55,11 @@ export interface RouteOptions {
    * reads. See `proof-cache.ts`.
    */
   readonly proofCacheDirectory?: string;
+  /**
+   * The handoff archive of the route's source chain (`source.handoff_archive_urls`): base URLs that serve
+   * `<base>/<chainId>/<period>.json`, asked last for the committee handoff update of a period no beacon node gives.
+   */
+  readonly handoffArchiveUrls?: readonly string[];
 }
 
 /** One direction of a pair, as the prover configuration file describes a route. */
@@ -141,6 +146,14 @@ function stateLines(stateUrls: readonly string[], cacheDirectory: string | undef
   return lines;
 }
 
+/** `handoff_urls` and `handoff_archive_urls` of the source. */
+function handoffSourceLines(handoffUrls: readonly string[], archiveUrls: readonly string[]): readonly string[] {
+  const lines: string[] = [];
+  if (handoffUrls.length > 0) lines.push(`handoff_urls = [${handoffUrls.map((url) => quoted(url, "source handoff url")).join(", ")}]`);
+  if (archiveUrls.length > 0) lines.push(`handoff_archive_urls = [${archiveUrls.map((url) => quoted(url, "handoff archive url")).join(", ")}]`);
+  return lines;
+}
+
 /**
  * `header_rpc_urls` of one side: the endpoints that the prover asks for the raw header when the main RPC lacks
  * `debug_getRawHeader`. The `opening-proof` command reads them on the destination, the `evidence` command on the source
@@ -199,6 +212,7 @@ export function renderProverConfig(
     `bridge = ${quoted(source.contracts.bridge, "source bridge")}`,
     ...stateLines(source.stateUrls ?? [], options.stateCacheDirectory),
     ...headerLines(source.headerRpcUrls ?? [], "source"),
+    ...handoffSourceLines(source.handoffUrls ?? [], options.handoffArchiveUrls ?? []),
     "",
     `[routes.${route.name}.destination]`,
     `chain_id = ${destination.chainId}`,

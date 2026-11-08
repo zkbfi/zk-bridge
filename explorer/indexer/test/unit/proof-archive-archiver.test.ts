@@ -155,7 +155,7 @@ describe("the proof routes", () => {
     expect((await routes.request(`/api/proofs/evidence/${messageId}`)).status).toBe(200);
     expect((await routes.request(`/api/proofs/evidence/0x${"0f".repeat(32)}`)).status).toBe(404);
     expect((await routes.request("/api/proofs/evidence/0x01")).status).toBe(400);
-    expect(await (await routes.request("/api/proofs/summary")).json()).toEqual({ storageProofs: 1, lightClientProofs: 1, evidence: 1, conflicts: 0 });
+    expect(await (await routes.request("/api/proofs/summary")).json()).toEqual({ storageProofs: 1, lightClientProofs: 1, evidence: 1, handoffUpdates: 0, conflicts: 0 });
   });
 
   it("serve only the public fields, the same as the IPFS tree: no source host, fetch time, job id, source or backend time", async () => {
