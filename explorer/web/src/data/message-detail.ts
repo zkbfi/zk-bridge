@@ -32,6 +32,27 @@ export type DetailTransfer = {
   readonly value: bigint;
   readonly deliveredValue: bigint | null;
   readonly hasCallback: boolean;
+  /**
+   * The delivery fee, when a delivery router delivered (the indexer's `fee`, `received`, `deliverer`, `feeSource`,
+   * `routerAmount`, `finalRecipient`). Null for a transfer that no router delivered, before the delivery, and in an
+   * answer that does not carry them (the RPC source). Amounts are base units of the destination token.
+   */
+  readonly delivery: DetailDelivery | null;
+};
+
+/** What a delivery router paid out of a transfer. */
+export type DetailDelivery = {
+  readonly router: Address;
+  /** What the router received. */
+  readonly amount: bigint | null;
+  /** The fee to the deliverer, or null when the indexer could not read it. */
+  readonly fee: bigint | null;
+  /** What the recipient received, or null when unknown. Zero when the router handed the amount off. */
+  readonly received: bigint | null;
+  readonly deliverer: Address | null;
+  /** The account that the router paid. */
+  readonly recipient: Address | null;
+  readonly source: "event" | "logs" | "terms" | null;
 };
 
 /** One message with the facts of both chains. */
@@ -95,6 +116,24 @@ const transferOf = (value: unknown): DetailTransfer | null => {
     value: readAmount(row.value, "value"),
     deliveredValue: row.deliveredValue === null || row.deliveredValue === undefined ? null : readAmount(row.deliveredValue, "deliveredValue"),
     hasCallback: row.hasCallback === true,
+    delivery: deliveryOf(row),
+  };
+};
+
+const optionalAddress = (value: unknown, what: string): Address | null => (typeof value === "string" ? readAddress(value, what) : null);
+const optionalAmount = (value: unknown, what: string): bigint | null => (value === null || value === undefined ? null : readAmount(value, what));
+
+const deliveryOf = (row: Record<string, unknown>): DetailDelivery | null => {
+  if (typeof row.deliveryRouter !== "string") return null;
+  const source = row.feeSource === "event" || row.feeSource === "logs" || row.feeSource === "terms" ? row.feeSource : null;
+  return {
+    router: readAddress(row.deliveryRouter, "transfer.deliveryRouter"),
+    amount: optionalAmount(row.routerAmount, "routerAmount"),
+    fee: optionalAmount(row.fee, "fee"),
+    received: optionalAmount(row.received, "received"),
+    deliverer: optionalAddress(row.deliverer, "transfer.deliverer"),
+    recipient: optionalAddress(row.finalRecipient, "transfer.finalRecipient"),
+    source,
   };
 };
 

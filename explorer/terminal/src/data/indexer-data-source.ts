@@ -326,7 +326,15 @@ function feedItemOf(item: Record<string, unknown>, pair: PairConfig, sideOf: (ch
     deliveredAt: delivered === null ? null : nullableInteger(delivered.timestamp),
     sourceTransactionHash: hex(sent.transactionHash, 'sent.transactionHash'),
     destinationTransactionHash: delivered === null || delivered.transactionHash === null ? null : hex(delivered.transactionHash, 'delivered.transactionHash'),
+    delivery: transfer === null ? null : deliveryOf(transfer, sideOf),
   }
+}
+
+/** The delivery fee of a transfer, when a delivery router delivered it (the indexer's `deliveryRouter` is set). */
+function deliveryOf(transfer: Record<string, unknown>, sideOf: (chainId: number) => ChainSide): FeedItem['delivery'] {
+  if (typeof transfer.deliveryRouter !== 'string') return null
+  const amountOrNull = (value: unknown, what: string): bigint | null => (value === null || value === undefined ? null : bigint(value, what))
+  return { token: viewToken(transfer.destinationToken, sideOf), fee: amountOrNull(transfer.fee, 'fee'), received: amountOrNull(transfer.received, 'received') }
 }
 
 function viewToken(view: unknown, sideOf: (chainId: number) => ChainSide): TokenInfo | null {

@@ -120,7 +120,7 @@ describe("GET /api/history", () => {
     await get(`/api/history?address=${address}&status=sent,covered&from=10&to=20&direction=1>369`);
     const [sent, delivered, heads] = calls;
     const lowercase = address.toLowerCase();
-    const filters = [1, 369, "sent", "covered", ...Array(5).fill(lowercase)];
+    const filters = [1, 369, "sent", "covered", ...Array(6).fill(lowercase)];
     expect(sent?.whereValues).toEqual([...filters, 10n, 20n]);
     expect(delivered?.whereValues).toEqual([...filters, 10n, 20n]);
     // An account or a status picks messages, so no head update can match.

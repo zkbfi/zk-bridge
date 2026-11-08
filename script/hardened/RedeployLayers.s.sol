@@ -93,6 +93,7 @@ contract RedeployLayers is LinkedCode {
     error UnknownMode(string mode);
     error AddressNotAsPredicted(string name, address predicted, address actual);
     error DeploymentMismatch(string field);
+    error PreviousRouterOfAnotherMediator(address previousRouter);
 
     function run() external {
         string memory json = vm.readFile(vm.envString("REDEPLOY_CONFIG"));
@@ -160,6 +161,8 @@ contract RedeployLayers is LinkedCode {
         kept.flowLimiter = address(mediator.flowLimiter());
         kept.remoteChainName = mediator.tokenFactory().homeChainName();
         DeliveryRouter router = DeliveryRouter(payable(chain.previousRouter));
+        // The kept router values are read from the router of the running mediator, never from a router of an older pair.
+        if (address(router.bridge()) != chain.previousMediator) revert PreviousRouterOfAnotherMediator(chain.previousRouter);
         kept.wrappedNative = address(router.wNative());
         kept.rewardAddress = router.rewardAddress();
         kept.failedDeliveryAddress = router.failedDeliveryAddress();
@@ -275,8 +278,11 @@ contract RedeployLayers is LinkedCode {
     /// @notice Deploys one router for the mediator that runs now (layer 3 alone).
     function deployRouter(ChainConfig memory chain, Kept memory kept, address deployer) public returns (address) {
         address predicted = vm.computeCreateAddress(deployer, chain.deployerNonce);
-        vm.startBroadcast(deployer);
+        console2.log("chain", chain.chainId);
+        console2.log("  n     delivery router (predicted)", predicted);
+        console2.log("  for the mediator", chain.previousMediator);
         Libraries memory none;
+        vm.startBroadcast(deployer);
         DeliveryRouter router = DeliveryRouter(
             payable(deployBuilt(
                     "DeliveryRouter",
@@ -289,6 +295,7 @@ contract RedeployLayers is LinkedCode {
         vm.stopBroadcast();
         _requireAsPredicted("router", predicted, address(router));
         verifyRouter(router, chain.previousMediator, kept);
+        requireBuiltCode("DeliveryRouter", address(router), none);
         return address(router);
     }
 

@@ -210,4 +210,64 @@ contract RedeployLayersTest is WorldSupport {
         vm.expectRevert(abi.encodeWithSelector(RedeployLayers.PlaceholderValue.selector, ".chainA.deployerNonce"));
         script.readChain(placeholder, ".chainA");
     }
+
+    /// Claim: the router configuration names the contracts of 2026-11-08 and refuses its placeholder nonces. Shows: both
+    /// chains parse up to the nonce, which is refused by name; with nonces filled in, the previous contracts are the
+    /// bridge, the mediator and the router of `deploy/deployments/sepolia-pls943.json`. Matters: the router run replaces
+    /// the router of the running mediator, and nothing is sent with a guessed nonce.
+    function test_theRouterConfigurationNamesTheRunningContractsAndRefusesItsPlaceholders() public {
+        string memory json = vm.readFile("script/testnet/router-redeploy.config.testnet.json");
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.PlaceholderValue.selector, ".chainA.deployerNonce"));
+        script.readChain(json, ".chainA");
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.PlaceholderValue.selector, ".chainB.deployerNonce"));
+        script.readChain(json, ".chainB");
+
+        json = vm.replace(json, "REPLACE_WITH_DEPLOYER_NONCE_ON_SEPOLIA", "20");
+        json = vm.replace(json, "REPLACE_WITH_DEPLOYER_NONCE_ON_943", "30");
+        RedeployLayers.ChainConfig memory chainA = script.readChain(json, ".chainA");
+        RedeployLayers.ChainConfig memory chainB = script.readChain(json, ".chainB");
+        assertEq(vm.parseJsonAddress(json, ".deployer"), 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc);
+        assertEq(chainA.chainId, 11155111);
+        assertEq(chainA.deployerNonce, 20);
+        assertEq(chainA.previousBridge, 0xD4b1ECc1b919cf9BA7Ff45e57e1712B31abA4C66);
+        assertEq(chainA.previousMediator, 0x2c00675092e2955d27F476B5a1baC9AC5Bb6FA86);
+        assertEq(chainA.previousRouter, 0x3846e483C98cD0f164c29A5e40F7295A5765ABa4);
+        assertEq(chainB.chainId, 943);
+        assertEq(chainB.deployerNonce, 30);
+        assertEq(chainB.previousMediator, 0x8eeF4098D3726955F7D227C4D1D92487C99F7e62);
+        assertEq(chainB.previousRouter, 0xBEa5F0fd3712B02c25Bda32C7719fB9373C0fA20);
+
+        string memory deployment = vm.readFile("deploy/deployments/sepolia-pls943.json");
+        assertEq(chainA.previousBridge, vm.parseJsonAddress(deployment, ".chain_a.bridge"));
+        assertEq(chainA.previousMediator, vm.parseJsonAddress(deployment, ".chain_a.mediator"));
+        assertEq(chainA.previousRouter, vm.parseJsonAddress(deployment, ".chain_a.delivery_router"));
+        assertEq(chainB.previousBridge, vm.parseJsonAddress(deployment, ".chain_b.bridge"));
+        assertEq(chainB.previousMediator, vm.parseJsonAddress(deployment, ".chain_b.mediator"));
+        assertEq(chainB.previousRouter, vm.parseJsonAddress(deployment, ".chain_b.delivery_router"));
+    }
+
+    /// Claim: the kept router values come only from a router of the running mediator. Shows: a previous router bound to
+    /// the other mediator is refused by `readKept`. Matters: a configuration that names a router of an older pair would
+    /// copy its reward and failed delivery addresses into the new router for good.
+    function test_aPreviousRouterOfAnotherMediatorIsRefused() public {
+        RedeployLayers.ChainConfig memory chainA = _chain(uint64(CHAIN_A), NONCE_A, bridgeA, mediatorA, routerB);
+        vm.chainId(CHAIN_A);
+        vm.expectRevert(
+            abi.encodeWithSelector(RedeployLayers.PreviousRouterOfAnotherMediator.selector, address(routerB))
+        );
+        script.readKept(chainA);
+    }
+
+    /// Claim: the router mode checks the code it deployed against the build output. Shows: the replaced router holds the
+    /// compiled `DeliveryRouter`, immutables aside, so `requireBuiltCode` passes inside `deployRouter`.
+    function test_aReplacedRouterIsTheBuiltCode() public {
+        RedeployLayers.ChainConfig memory chainA = _chain(uint64(CHAIN_A), NONCE_A, bridgeA, mediatorA, routerA);
+        vm.chainId(CHAIN_A);
+        RedeployLayers.Kept memory kept = script.readKept(chainA);
+        vm.setNonce(deployer, uint64(NONCE_A));
+        vm.recordLogs();
+        address replaced = script.deployRouter(chainA, kept, deployer);
+        assertGt(replaced.code.length, 0);
+        assertEq(DeliveryRouter(payable(replaced)).NATIVE_GAS_OVERHEAD(), 105_000, "the router of this build");
+    }
 }

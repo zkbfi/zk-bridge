@@ -16,6 +16,7 @@ export {
   finalityVariableName,
   type LoadPairOptions,
   loadPair,
+  deliveryRoutersOf,
   otherSide,
   sideOf,
   describePair,

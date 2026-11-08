@@ -126,6 +126,38 @@ describe("the message page, a token transfer", () => {
     expect(fee).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("shows the fee of a router delivery: the fee and its share, what the recipient received, the account the router paid, the deliverer and the source", async () => {
+    const detail = await detailOf(tokenItem.id);
+    const transfer = detail.transfer!;
+    const decimals = transfer.destinationToken.decimals;
+    const unit = 10n ** BigInt(decimals);
+    const recipient = "0x00000000000000000000000000000000000000a8";
+    const deliverer = "0x00000000000000000000000000000000000000a7";
+    const { container } = renderDetail({
+      ...detail,
+      transfer: { ...transfer, value: 123n * unit / 10n, deliveredValue: 123n * unit / 10n, delivery: { router: "0x00000000000000000000000000000000000000e7", amount: 123n * unit / 10n, fee: 123n * unit / 10_000n, received: 122_877n * unit / 10_000n, deliverer, recipient, source: "logs" } },
+    });
+    const fee = await screen.findByRole("button", { name: /^Fee/ });
+    expect(fee.querySelector(".zb-xv")).toHaveTextContent("0.0123 (0.1%)");
+    expect(row(/^Received on/).querySelector(".zb-xv")).toHaveTextContent("12.2877");
+    expect(row("To")).toHaveTextContent(/…00a8$/);
+    expect(screen.getByText(/12\.3 \S+ sent · 0\.0123 \S+ fee \(0\.1%\) · 12\.2877 \S+ received/)).toBeInTheDocument();
+    await userEvent.click(fee);
+    const drawer = within(container.querySelector(`#${CSS.escape(fee.getAttribute("aria-controls")!)}`) as HTMLElement);
+    expect(drawer.getByText("Tip to the deliverer").nextSibling).toHaveTextContent("0.0123");
+    expect(drawer.getByText("Deliverer").nextSibling).toHaveTextContent(/…00a7$/);
+    expect(drawer.getByText("Read from").nextSibling).toHaveTextContent("the token transfers of the delivery");
+  });
+
+  it("says why a router delivery has no fee figure: a native gas-based fee leaves no log", async () => {
+    const detail = await detailOf(tokenItem.id);
+    renderDetail({ ...detail, transfer: { ...detail.transfer!, delivery: { router: "0x00000000000000000000000000000000000000e7", amount: 5n, fee: null, received: null, deliverer: null, recipient: null, source: "terms" } } });
+    const fee = await screen.findByRole("button", { name: /^Fee/ });
+    expect(fee.querySelector(".zb-xv")).toHaveTextContent(/^—$/);
+    expect(row(/^Received on/).querySelector(".zb-xv")).toHaveTextContent("—");
+    expect(screen.queryByText(/ sent · /)).toBeNull();
+  });
+
   it("names who delivered it, the steps, and the ERC-20 mediator on each side, never a token mediator", async () => {
     const { container } = renderDetail(await detailOf(tokenItem.id));
     await screen.findByText("Token transfer");

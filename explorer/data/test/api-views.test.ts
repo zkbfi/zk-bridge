@@ -106,7 +106,23 @@ describe("feedItemView", () => {
     hasCallback: false,
     sourceIsNative: true,
     sentTimestamp: 1_000n,
+    deliveryRouter: null,
+    routerAmount: null,
+    fee: null,
+    received: null,
+    deliverer: null,
+    finalRecipient: null,
+    feeSource: null,
   };
+
+  it("shows the delivery fee of a router delivery: the fee, what the recipient received, the deliverer and the source", () => {
+    const view = feedItemView(sent, { ...transfer, deliveryRouter: addressOf("e7"), routerAmount: 12_300n, fee: 12n, received: 12_288n, deliverer: addressOf("77"), finalRecipient: addressOf("88"), feeSource: "event" }, index);
+    expect(view.transfer).toMatchObject({ deliveryRouter: addressOf("e7"), routerAmount: "12300", fee: "12", received: "12288", deliverer: addressOf("77"), finalRecipient: addressOf("88"), feeSource: "event" });
+  });
+
+  it("shows no fee for a transfer that no router delivered", () => {
+    expect(feedItemView(sent, transfer, index).transfer).toMatchObject({ deliveryRouter: null, fee: null, received: null, deliverer: null, feeSource: null });
+  });
 
   it("shows the log index of the send, so the evidence of the message can find its log", () => {
     expect(feedItemView({ ...sent, sentLogIndex: 9 }, null, index).sentLogIndex).toBe(9);

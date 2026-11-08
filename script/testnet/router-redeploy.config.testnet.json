@@ -1,0 +1,26 @@
+{
+  "_notes": [
+    "Input of script/hardened/RedeployLayers.s.sol in REDEPLOY_MODE=router (layer 3 alone): a new DeliveryRouter that emits Delivered, one chain per run (REDEPLOY_CHAIN=chainA or chainB). See docs/redeploy-2026-11-gas.md, \"Layer 3 later, alone\".",
+    "previous*: the contracts that run now, deployed on 2026-11-08 (deploy/deployments/sepolia-pls943.json). The new router is bound to previousMediator for good; the script refuses a previousRouter whose mediator is another one, and reads the wrapped native token, the reward address and the failed delivery address from previousRouter.",
+    "deployerNonce: read it with `cast nonce 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc --rpc-url <alias>` right before the run and replace the placeholder. The script refuses the placeholder by name and refuses a nonce that differs from the chain's, because it checks the new router against the predicted address.",
+    "deployer: the testnet deployer 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc (1Password vault zkb.fi, item \"testnet deployer wallet\"). The script refuses another signer.",
+    "Foundry resolves rpcAlias as for DeployBridge (docs/testnet-run.md). Never write a key into this file."
+  ],
+  "deployer": "0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc",
+  "chainA": {
+    "rpcAlias": "sepolia",
+    "chainId": "11155111",
+    "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_SEPOLIA",
+    "previousBridge": "0xd4b1ecc1b919cf9ba7ff45e57e1712b31aba4c66",
+    "previousMediator": "0x2c00675092e2955d27f476b5a1bac9ac5bb6fa86",
+    "previousRouter": "0x3846e483c98cd0f164c29a5e40f7295a5765aba4"
+  },
+  "chainB": {
+    "rpcAlias": "pulsechain_testnet_v4",
+    "chainId": "943",
+    "deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_943",
+    "previousBridge": "0x3846e483c98cd0f164c29a5e40f7295a5765aba4",
+    "previousMediator": "0x8eef4098d3726955f7d227c4d1d92487c99f7e62",
+    "previousRouter": "0xbea5f0fd3712b02c25bda32c7719fb9373c0fa20"
+  }
+}

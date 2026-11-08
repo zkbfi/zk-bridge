@@ -168,9 +168,25 @@ describe("parseBrowseMessages", () => {
       recipient: lower,
       token: { chainId: 943, address: lower, symbol: "tUSD", decimals: 6 },
       amount: 46610000n,
+      destinationToken: null,
+      fee: null,
+      received: null,
+      feeSource: null,
       sentAt: 10,
       deliveredAt: 20,
       sourceTransactionHash: id,
+    });
+  });
+
+  it("reads the delivery fee of a router delivery, and names the account that the router paid as the recipient", () => {
+    const other = "0x00000000000000000000000000000000000000a8";
+    const routed = { ...sent, transfer: { ...sent.transfer, destinationToken: { chainId: 1, address: lower, symbol: "zbtUSD", decimals: 6 }, fee: "46610", received: "46563390", feeSource: "event", finalRecipient: other } };
+    expect(parseBrowseMessages(page([routed])).items[0]).toMatchObject({
+      recipient: other,
+      destinationToken: { chainId: 1, address: lower, symbol: "zbtUSD", decimals: 6 },
+      fee: 46_610n,
+      received: 46_563_390n,
+      feeSource: "event",
     });
   });
 

@@ -62,7 +62,7 @@ describe("the DeliveryRouter ABI", () => {
     expect(errorNames).not.toContain("NothingToClaim");
   });
   it("has the events and the constant of the call after a delivery", () => {
-    expect(eventNames(deliveryRouterAbi)).toEqual(["CallFailed", "DeliveryFailed", "HandOffRefused", "Swept"]);
+    expect(eventNames(deliveryRouterAbi)).toEqual(["CallFailed", "Delivered", "DeliveryFailed", "HandOffRefused", "Swept"]);
     expect(functionNames(deliveryRouterAbi)).toContain("CALL_GAS_RESERVE");
   });
   it("names the inputs of CallFailed and marks the indexed ones", () => {

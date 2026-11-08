@@ -99,6 +99,13 @@ describe("mergeTransfer", () => {
       hasCallback: false,
       sourceIsNative: null,
       sentTimestamp: null,
+      deliveryRouter: null,
+      routerAmount: null,
+      fee: null,
+      received: null,
+      deliverer: null,
+      finalRecipient: null,
+      feeSource: null,
     });
   });
 

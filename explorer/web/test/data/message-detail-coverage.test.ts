@@ -1,3 +1,4 @@
+import { getAddress } from "viem";
 import { describe, expect, it } from "vitest";
 import { chainNameOf, parseMessageDetail } from "../../src/data/message-detail";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
@@ -121,7 +122,15 @@ describe("parseMessageDetail, the transfer", () => {
       value: 10n,
       deliveredValue: 9n,
       hasCallback: true,
+      delivery: null,
     });
+  });
+
+  it("reads the delivery fee of a router delivery, and only its known sources", () => {
+    const router = { ...transfer, deliveryRouter: OTHER, routerAmount: "10", fee: "1", received: "9", deliverer: ADDRESS, finalRecipient: OTHER, feeSource: "event" };
+    expect(parseMessageDetail({ ...base, transfer: router }).transfer?.delivery).toEqual({ router: getAddress(OTHER), amount: 10n, fee: 1n, received: 9n, deliverer: CHECKSUM, recipient: getAddress(OTHER), source: "event" });
+    const unknown = { ...transfer, deliveryRouter: OTHER, feeSource: "guess" };
+    expect(parseMessageDetail({ ...base, transfer: unknown }).transfer?.delivery).toEqual({ router: getAddress(OTHER), amount: null, fee: null, received: null, deliverer: null, recipient: null, source: null });
   });
 
   it("reads the user who sent the tokens and the block of the delivery when the answer carries them", () => {

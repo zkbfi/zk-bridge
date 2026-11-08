@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Address } from "viem";
 import { PULSEX_FACTORIES, STABLES, WPLS } from "@zkb/core";
 import type { PoolReader, Reserves } from "@zkb/data";
-import { PRICE_NOTE, loadPrices, nativePriceKey, samplePrices, tokenPriceKey, usePrices, type PriceSource, type PriceableToken } from "../src/index.js";
+import { PRICE_NOTE, STALE_PRICE_MAX_SECONDS, loadPrices, priceProblemOf, nativePriceKey, samplePrices, tokenPriceKey, usePrices, type PriceSource, type PriceableToken } from "../src/index.js";
 
 const [V1] = PULSEX_FACTORIES as [Address, ...Address[]];
 const [USDC] = STABLES as [(typeof STABLES)[number], ...(typeof STABLES)[number][]];
@@ -111,7 +111,7 @@ describe("usePrices", () => {
   it("reads nothing without a source or without tokens", async () => {
     const { result } = renderHook(() => usePrices({ tokens: [usdc], pair: pairOfChains, source: null }));
     await flush();
-    expect(result.current).toEqual({ data: undefined, error: null, isError: false, isFetching: false });
+    expect(result.current).toMatchObject({ data: undefined, error: null, isError: false, isFetching: false });
     const poolReader = vi.fn();
     const empty = renderHook(() => usePrices({ tokens: [], pair: pairOfChains, source: { mode: "live", id: "a", poolReader } }));
     await flush();
@@ -164,7 +164,7 @@ describe("usePrices", () => {
     expect(good).toBeDefined();
     fail = true;
     await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-    expect(result.current.data).toBe(good);
+    expect(result.current.data).toEqual(good);
     expect(result.current.isError).toBe(true);
     expect(String(result.current.error)).toMatch(/rpc down/);
     fail = false;
@@ -200,5 +200,95 @@ describe("usePrices", () => {
     second.unmount();
     await act(async () => { release(reader()); await settle(); });
     expect(second.result.current.isError).toBe(false);
+  });
+});
+
+describe("the state of each price", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  const flush = () => act(async () => { for (let turn = 0; turn < 50; turn += 1) await vi.advanceTimersByTimeAsync(0); });
+  const priced = tokenPriceKey(local);
+  const unpriced: PriceableToken = { ...local, address: "0x7777777777777777777777777777777777777777", symbol: "NOPE" };
+
+  it("is known for a price that was read, and no-market for one the source answered null for (the chain answered, there is no pool)", async () => {
+    const source: PriceSource = { mode: "live", id: "m", poolReader: async () => reader() };
+    const { result } = renderHook(() => usePrices({ tokens: [local, unpriced], pair: pairOfChains, source }));
+    await flush();
+    expect(result.current.states.get(priced)).toEqual({ kind: "known" });
+    expect(result.current.states.get(tokenPriceKey(unpriced))).toEqual({ kind: "no-market" });
+    // PulseChain's coin has a price; Ethereum's needs WETH's pool, which this reader does not have.
+    expect(result.current.states.get(nativePriceKey(369))).toEqual({ kind: "known" });
+  });
+
+  it("is no-market for every token and coin on a chain without markets (testnets), never unreachable", async () => {
+    const none: PoolReader = { block: BLOCK, pairOf: async () => null, reservesOf: async () => null };
+    const { result } = renderHook(() => usePrices({ tokens: [local], pair: { first: { chainId: 943 }, second: { chainId: 11155111 } }, source: { mode: "live", id: "t", poolReader: async () => none } }));
+    await flush();
+    expect([...result.current.states.values()].map((state) => state.kind)).toEqual(["no-market", "no-market", "no-market"]);
+  });
+
+  it("is stale, with its age, when the source fails and the last price is at most 10 minutes old; the price stays in data", async () => {
+    let clock = 1_000_000;
+    let fail = false;
+    const poolReader = async () => { if (fail) throw new Error("rpc down"); return reader(); };
+    const { result } = renderHook(() => usePrices({ tokens: [local], pair: pairOfChains, source: { mode: "live", id: "s", poolReader }, refreshMilliseconds: 30_000, now: () => clock }));
+    await flush();
+    fail = true;
+    clock += 90_000;
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(result.current.states.get(priced)).toEqual({ kind: "stale", ageSeconds: 90 });
+    expect(result.current.data?.get(priced)?.usdE18).toBeGreaterThan(0n);
+    expect(result.current.isError).toBe(true);
+    // At exactly the limit it is still usable; the next read, past it, is not.
+    clock += (STALE_PRICE_MAX_SECONDS - 90) * 1000;
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(result.current.states.get(priced)).toEqual({ kind: "stale", ageSeconds: STALE_PRICE_MAX_SECONDS });
+    clock += 1_000;
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(result.current.states.get(priced)).toEqual({ kind: "unreachable" });
+    expect(result.current.data?.get(priced)).toBeUndefined();
+    // It recovers by itself: the next good read makes it known again.
+    fail = false;
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(result.current.states.get(priced)).toEqual({ kind: "known" });
+  });
+
+  it("is unreachable when the first read fails, retried every 30 s, and when the reader met failed requests", async () => {
+    const bad = vi.fn(async (): Promise<PoolReader> => { throw new Error("timeout"); });
+    const first = renderHook(() => usePrices({ tokens: [local], pair: pairOfChains, source: { mode: "live", id: "u", poolReader: bad } }));
+    await flush();
+    expect(first.result.current.states.get(priced)).toEqual({ kind: "unreachable" });
+    expect(first.result.current.data).toBeUndefined();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(bad).toHaveBeenCalledTimes(2);
+    // Pool reads that fail read as "no pool"; the counting reader keeps that from passing for "no market".
+    const dropped = renderHook(() => usePrices({ tokens: [local], pair: pairOfChains, source: { mode: "live", id: "d", poolReader: async () => ({ ...reader(), failures: () => 2 }) } }));
+    await flush();
+    expect(dropped.result.current.states.get(priced)).toEqual({ kind: "unreachable" });
+    const clean = renderHook(() => usePrices({ tokens: [local], pair: pairOfChains, source: { mode: "live", id: "c", poolReader: async () => ({ ...reader(), failures: () => 0 }) } }));
+    await flush();
+    expect(clean.result.current.states.get(priced)).toEqual({ kind: "known" });
+  });
+
+  it("keeps no-market through a failed read, and is unreachable for every price when there is no source", async () => {
+    let fail = false;
+    const none: PoolReader = { block: BLOCK, pairOf: async () => null, reservesOf: async () => null };
+    const { result } = renderHook(() => usePrices({ tokens: [local], pair: pairOfChains, source: { mode: "live", id: "k", poolReader: async () => { if (fail) throw new Error("down"); return none; } }, refreshMilliseconds: 1_000 }));
+    await flush();
+    fail = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(result.current.states.get(priced)).toEqual({ kind: "no-market" });
+    const offline = renderHook(() => usePrices({ tokens: [local], pair: pairOfChains, source: null }));
+    expect([...offline.result.current.states.keys()]).toEqual([priced, nativePriceKey(1), nativePriceKey(369)]);
+    expect([...offline.result.current.states.values()].every((state) => state.kind === "unreachable")).toBe(true);
+    expect(renderHook(() => usePrices({ tokens: [], pair: pairOfChains, source: null })).result.current.states.size).toBe(0);
+  });
+
+  it("names the price the fee cannot rely on: unreachable, then no-market, then stale", () => {
+    const states = new Map<string, import("../src/index.js").PriceState>([["a", { kind: "stale", ageSeconds: 5 }], ["b", { kind: "no-market" }], ["c", { kind: "known" }]]);
+    expect(priceProblemOf(states, ["c", "a"])).toEqual({ key: "a", state: { kind: "stale", ageSeconds: 5 } });
+    expect(priceProblemOf(states, ["a", "b"])?.key).toBe("b");
+    expect(priceProblemOf(new Map([...states, ["d", { kind: "unreachable" as const }]]), ["a", "b", "d"])?.key).toBe("d");
+    expect(priceProblemOf(states, ["c", "missing"])).toBeNull();
   });
 });

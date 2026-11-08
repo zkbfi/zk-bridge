@@ -11,8 +11,13 @@ export type SideContracts = {
   readonly wrappedNative: Address;
   readonly gate: Address;
   readonly lightClient: Address;
-  /** Optional: a `DeliveryRouter`. It emits no events, so the indexer does not read it. */
+  /** Optional: the `DeliveryRouter` that the frontends send through now. */
   readonly deliveryRouter: Address | null;
+  /**
+   * Optional: earlier routers of the same mediator (`delivery_routers` of the deployment file). Messages sent to them
+   * are still delivered to them, so the indexer reads them too. See {@link deliveryRoutersOf}.
+   */
+  readonly deliveryRouters?: readonly Address[];
   /** Optional: a `ForkRegistry`, deployed on PulseChain only. */
   readonly forkRegistry: Address | null;
 };
@@ -89,6 +94,7 @@ const deploymentChainSchema = z.object({
   gate: addressField,
   light_client: addressField,
   delivery_router: addressField.nullish(),
+  delivery_routers: z.array(addressField).nullish(),
   fork_registry: addressField.nullish(),
   start_block: z.number().int().nonnegative(),
 });
@@ -223,9 +229,20 @@ const buildSide = (
       gate: normalizeAddress(section.gate),
       lightClient: normalizeAddress(section.light_client),
       deliveryRouter: optionalAddress(section.delivery_router),
+      deliveryRouters: (section.delivery_routers ?? []).map((address) => normalizeAddress(address)),
       forkRegistry: optionalAddress(section.fork_registry),
     },
   };
+};
+
+/**
+ * Every delivery router of a side: the current one first, then the earlier ones, each once, lowercase.
+ *
+ * @param side The side of the pair.
+ */
+export const deliveryRoutersOf = (side: { readonly contracts: Pick<SideContracts, "deliveryRouter" | "deliveryRouters"> }): readonly Address[] => {
+  const all = [...(side.contracts.deliveryRouter === null ? [] : [side.contracts.deliveryRouter]), ...(side.contracts.deliveryRouters ?? [])];
+  return [...new Set(all.map((address) => address.toLowerCase() as Address))];
 };
 
 /**

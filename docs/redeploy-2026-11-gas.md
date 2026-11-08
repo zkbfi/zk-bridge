@@ -215,7 +215,105 @@ deployment of a copy +19,152); a relay about +5,000; `openDeposits` +5,506. The 
 
 ## Layer 3 later, alone
 
-A new router needs no change to layers 1 and 2. On one chain:
+A new router needs no change to layers 1 and 2. It is bound for good to the mediator that it names, so it is deployed
+for the running mediator, one chain per run.
+
+### The router that emits `Delivered` (prepared 2026-11-07, not sent)
+
+Owner, verbatim: "it also looks like there are no fees coming out of the output, which is odd", then, on the missing
+success event of the router: "do both". The routers of 2026-11-08 emit an event only when something fails, so the
+explorer saw the mediator pay the router and nothing after it: no fee, no amount received. The new `DeliveryRouter`
+emits on every delivery that pays its recipient:
+
+```solidity
+event Delivered(
+    address indexed token,      // what the mediator released (the wrapped native token for an unwrap)
+    address indexed recipient,  // from the terms, or the 20 byte legacy data
+    address indexed feeTo,      // rewardAddress, or address(0) when no fee was paid
+    uint256 amount,             // what the router received: fee + paidOut
+    uint256 fee,                // to feeTo
+    uint256 paidOut,            // to the recipient
+    PaidAs paidAs,              // 1 Token, 2 Native, 3 Wrapped (the recipient refused the coin); 0 is never emitted
+    address callTarget          // the target of the call that follows, or address(0)
+);
+// topic0 = keccak256("Delivered(address,address,address,uint256,uint256,uint256,uint8,address)")
+```
+
+It is emitted after the payments and before the follow-up call (a failed call adds `CallFailed` after it); hand-offs
+still emit `DeliveryFailed` and no `Delivered`. It costs 3,779 gas per token delivery (all fee modes) and 3,785 per
+native delivery (`DeliveryRouterGas.t.sol`, before and after). Because the event runs after the fee measure,
+`NATIVE_GAS_OVERHEAD` rises from 100,000 to 105,000 (the work after the measure for two new accounts went from 97,268 to
+101,053 gas); `TOKEN_GAS_OVERHEAD` stays at 100,000 (82,190 to 85,969). `@zkb/core` follows (`NATIVE_GAS_OVERHEAD`
+105,000n), so its estimate for the routers of 2026-11-08 is 5,000 gas high, never low. Runtime code 8,472 bytes.
+
+The configuration is `script/testnet/router-redeploy.config.testnet.json`: the deployer, and for each chain the running
+bridge, mediator and router of `deploy/deployments/sepolia-pls943.json` (2026-11-08). Its two nonces are placeholders
+that the script refuses by name. The script also refuses a `previousRouter` whose mediator is not `previousMediator`
+(`PreviousRouterOfAnotherMediator`), and after the creation it reads back the mediator, the wrapped token, the reward
+and failed delivery addresses, and requires the compiled code (`BuiltCodeMismatch` otherwise).
+
+1. **Build** from the release commit: `forge build`, then `pnpm abis` (the ABI of the router in
+   `explorer/data/src/abis` carries `Delivered`). Do not rebuild between the dry run and the run.
+2. **Nonces** (no transactions). Write each into the configuration in place of its placeholder:
+
+   ```sh
+   cast nonce 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc --rpc-url sepolia
+   cast nonce 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc --rpc-url pulsechain_testnet_v4
+   ```
+
+3. **Dry run** (no `--broadcast`, nothing reaches a chain), one chain at a time:
+
+   ```sh
+   REDEPLOY_CONFIG=script/testnet/router-redeploy.config.testnet.json REDEPLOY_MODE=router REDEPLOY_CHAIN=chainA \
+     forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers \
+     --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc 2>&1 | redact | tee "$RUN_DIR/router-dry-run-sepolia.log"
+
+   REDEPLOY_CONFIG=script/testnet/router-redeploy.config.testnet.json REDEPLOY_MODE=router REDEPLOY_CHAIN=chainB \
+     forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers \
+     --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc 2>&1 | redact | tee "$RUN_DIR/router-dry-run-943.log"
+   ```
+
+   It prints `n delivery router (predicted)` and `new delivery router` with the same address. Done on 2026-11-07 with
+   the nonces of that moment (public RPCs as `rpcAlias`, `--sender` only, no keystore), both forks passed the
+   read-back:
+
+   | Chain | Deployer nonce | Predicted router | For the mediator | Node estimate of the creation |
+   |---|---|---|---|---|
+   | Sepolia 11155111 | 22 | `0x1c4627D76e6b423e06C61f055C2ce0d3E944Ce8a` | `0x2c00675092e2955d27F476B5a1baC9AC5Bb6FA86` | 13,526,903 gas (80.6% of the EIP-7825 cap) |
+   | 943 | 26 | `0x6e0178049277442d5BF58963f9a1E0469B46Fce3` | `0x8eeF4098D3726955F7D227C4D1D92487C99F7e62` | 2,288,865 gas |
+
+   The addresses hold only while the nonces are 22 and 26; any other transaction from the deployer first moves them,
+   and the script then refuses the stale nonce.
+
+4. **The deployment (sends one transaction per chain).** Sepolia:
+
+   ```sh
+   REDEPLOY_CONFIG=script/testnet/router-redeploy.config.testnet.json REDEPLOY_MODE=router REDEPLOY_CHAIN=chainA \
+     forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers \
+     --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc \
+     --broadcast --slow --skip-simulation 2>&1 | redact | tee "$RUN_DIR/router-sepolia.log"
+   ```
+
+   Chain 943, with explicit fees: Foundry's own estimate for 943 was a max fee of 15 wei (the dry run above printed
+   0.000000015 gwei and a priority fee of 1 wei), and the first broadcast of 2026-11-08 with Foundry's fees failed. 943
+   needs a priority fee above 0.001 gwei:
+
+   ```sh
+   REDEPLOY_CONFIG=script/testnet/router-redeploy.config.testnet.json REDEPLOY_MODE=router REDEPLOY_CHAIN=chainB \
+     forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers \
+     --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc \
+     --broadcast --slow --skip-simulation \
+     --with-gas-price 30000000 --priority-gas-price 10000000 2>&1 | redact | tee "$RUN_DIR/router-943.log"
+   ```
+
+5. **After.** Add the new router to `delivery_router` of each chain in the deployment file and keep the router of
+   2026-11-08 next to it: messages already sent name the old router as their receiver and are still delivered to it.
+   The indexer reads `delivery_routers` (a list: the new router first, the old ones after it) and indexes all of them;
+   for a router with no `Delivered` event it derives the fee from the transfer logs of the delivery (see
+   `explorer/indexer/README.md`). Then add the router to the runner's router allowlist and to the frontends
+   (`isKnownDeliveryRouter`).
+
+### Any later router
 
 ```sh
 REDEPLOY_CONFIG=<file whose previousRouter is the router to replace> REDEPLOY_MODE=router REDEPLOY_CHAIN=chainA \
@@ -223,11 +321,10 @@ REDEPLOY_CONFIG=<file whose previousRouter is the router to replace> REDEPLOY_MO
   --broadcast --slow --skip-simulation
 ```
 
-One transaction (create `DeliveryRouter`, about 2,300,000 local gas, about 12,800,000 on Sepolia) for the running
-mediator, with the kept wrapped token, reward address and failed delivery address. Then add it to the runner's router
-allowlist and to the frontends (`isKnownDeliveryRouter` is the frontend's own list). Messages already sent to the old
-router are still delivered to it: a router is the receiver named in each message, so the old router keeps working for
-them.
+One transaction (create `DeliveryRouter`, about 2,500,000 local gas, about 13,500,000 on Sepolia) for the running
+mediator, with the kept wrapped token, reward address and failed delivery address. Add the 943 fee flags above for
+chain 943. Messages already sent to the old router are still delivered to it: a router is the receiver named in each
+message, so the old router keeps working for them.
 
 ## Tokens in flight
 

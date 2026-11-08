@@ -12,7 +12,7 @@ import { useDeliveryCost, useFeed, useHeads, usePriorityFee, useTokens } from ".
 import { useServices } from "../app/services";
 import type { ProbeKind } from "../app/service-probe";
 import { useServiceProbe } from "../app/use-service-probe";
-import { relativeTime } from "../bridge/activity-model";
+import { feeLineOf, relativeTime } from "../bridge/activity-model";
 import { amountText, chainsFor } from "../bridge/bridge-model";
 import { Chevron, SearchIcon } from "../bridge/icons";
 import { Num } from "../bridge/Num";
@@ -474,7 +474,7 @@ const LatestTransfers = ({ feed, pair, now }: { readonly feed: readonly FeedItem
             href={href({ kind: "tx", chainId: source.chainId, id: item.sourceTransactionHash })}
             icon={item.token === null ? undefined : <TokenIcon subject={{ chainId: source.chainId, address: item.token.address }} symbol={item.token.symbol} isBridgedCopy={item.token.isBridgedCopy} size={28} decorative />}
             title={item.token === null || item.amount === null ? "Message" : <><Num text={amountText(item.amount, item.token.decimals)} /> {item.token.symbol}</>}
-            sub={<><RouteIcons from={source.chainId} to={destination.chainId} names={names} /> {relativeTime(item.sentAt, now)}</>}
+            sub={<><RouteIcons from={source.chainId} to={destination.chainId} names={names} /> {relativeTime(item.sentAt, now)}{feeLineOf(item) === null ? null : <span className="zb-fee-line">{feeLineOf(item)}</span>}</>}
             status={statusWord(item.status)}
           />
         );

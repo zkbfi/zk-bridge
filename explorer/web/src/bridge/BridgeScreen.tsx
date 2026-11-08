@@ -4,6 +4,7 @@ import { erc20ReaderFor, isFirstBridge, resolveCustomToken } from "./custom-toke
 import { addPending } from "./pending";
 import { priceNumber, usdText, type PriceQuote } from "./price-oracle";
 import { PRICE_NOTE, usePrices } from "./use-prices";
+import { priceNotice } from "./price-notice";
 import type { Address } from "viem";
 import type { TokenInfo } from "@terminal/model/types";
 import { useDeliveryCost, useHeads, useMaxFee, usePairHealth, usePriorityFee, useSnapshots, useTokens, useUsedTokens } from "../app/queries";
@@ -19,7 +20,7 @@ import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse,
 import { DeliveryMenu, deliverySummary, type TipChoiceKey } from "./DeliveryMenu";
 import { nativeSymbolOf, ceilingCostUsd, ceilingWeiOf, DEFAULT_GAS_LEVEL, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, routerCallbackGas, MAX_CALL_GAS, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
 import { formatUnits } from "viem";
-import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, ReviewNotice, ReviewRow, ReviewSheet, useDefaultFee, useFeeCaps, useFeeWarnings, useHardCap, useVerdict } from "@zkb/react";
+import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, ReviewNotice, ReviewRow, ReviewSheet, priceProblemOf, useDefaultFee, useFeeCaps, useFeeWarnings, useHardCap, useVerdict } from "@zkb/react";
 import { DirectionMenu } from "./DirectionMenu";
 import { FeeLine, GAS_LEVEL_NAMES, nextGasLevel, type FeeSlider } from "./FeeLine";
 import { Chevron, FlipIcon, FloppyIcon, Identicon, LockIcon, UnlockIcon } from "./icons";
@@ -174,7 +175,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const maxFee = useMaxFee(source.chainId, { enabled: token !== null && isNativeToken(token) && account !== null }).data ?? null;
   const max = balance === null || token === null ? null : maxSendable(token, balance, maxFee);
   const amount = token === null ? null : safeParse(form.amount ?? "", token.decimals);
-  const prices = usePrices(tokens).data;
+  const { data: prices, states: priceStates } = usePrices(tokens);
   // Money is integers (shared fee rules): prices and values in USD × 1e18, shares × 1e18.
   const nativeQuote = prices?.get(`native:${destination.chainId}`) ?? null;
   const priceOf = (subject: TokenInfo | null): PriceQuote | null => (subject === null ? null : (prices?.get(`${subject.side}:${subject.address}`) ?? null));
@@ -202,7 +203,13 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const costDefaultUsd = costAt(DEFAULT_GAS_LEVEL);
   const amountUsd = valueOf(amount);
   // A level above the default adds its extra expected cost on top of the curve, so the automatic fee rises with the bars too.
-  const { capWad, auto } = useDefaultFee({ amountUsd, costUsd, costDefaultUsd, capPercent });
+  // When the amount's value or the cost cannot be priced (no market, or the source is unreachable with no recent price
+  // held), the default fee is the automatic maximum: the cap in force, 1% unless the user moved it (owner: "use 1% - the
+  // frontend's auto maximum whenever the frontend cannot determine the price"). A price still held (stale) is used.
+  const priceKeys = token === null ? [] : [`${token.side}:${token.address}`, `native:${destination.chainId}`];
+  const priceProblem = priceProblemOf(priceStates, priceKeys);
+  const unpriced = amount !== null && amount > 0n && (amountUsd === null || costUsd === null) && priceProblem !== null && priceProblem.state.kind !== "stale";
+  const { capWad, auto } = useDefaultFee({ amountUsd, costUsd, costDefaultUsd, capPercent, unpriced });
   // The automatic fee signs the default share; a gas-based fee signs a limit no higher than the cap's share (owner,
   // quotes 70–71: "limited by the cap").
   const options = useMemo(
@@ -289,6 +296,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     write({ ...form, tip: { ...rest, ...(percentText === undefined ? {} : { percentText }), ceilingGweiText: formatUnits(wei, 9) } });
   };
   const capText = `${Number(capPercent.toPrecision(3))}%`;
+  const pricesNote = amount === null || amount <= 0n ? null : priceNotice({ states: priceStates, keys: priceKeys, nameOf: (key) => (key.startsWith("native:") ? destination.nativeSymbol : (token?.symbol ?? "")), unpriced: unpriced && automatic, maximumText: capText });
   const hardCapText = `${Number(hardCapPercent.toPrecision(3))}%`;
   const setCap = (value: number): void => {
     const next = Math.min(value, hardCapPercent);
@@ -784,6 +792,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             <span title={PRICE_NOTE}>{usd(received)}</span>
             {token === null ? null : <span className="zb-right">arrives as {arrivesAsSymbol(token)} on {destination.name}</span>}
           </div>
+          {pricesNote === null ? null : <p className="zb-price-note" role="status">{pricesNote}</p>}
         </div>
       </section>
 

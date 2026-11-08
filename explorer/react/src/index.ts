@@ -37,6 +37,8 @@ export { verdictOf, pressable, useVerdict, type Verdict, type VerdictInput } fro
 export {
   PRICE_NOTE,
   PRICE_REFRESH_MILLISECONDS,
+  STALE_PRICE_MAX_SECONDS,
+  priceProblemOf,
   tokenPriceKey,
   nativePriceKey,
   samplePrices,
@@ -48,6 +50,10 @@ export {
   type PriceSource,
   type UsePricesOptions,
   type PricesState,
+  type PriceState,
+  type PriceStates,
+  type PriceProblem,
+  type CountingPoolReader,
 } from "./prices.js";
 
 // Delivery status

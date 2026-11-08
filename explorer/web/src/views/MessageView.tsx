@@ -18,7 +18,8 @@ import { Chevron, CopyIcon, ExternalLink } from "../bridge/icons";
 import { iconSubjectOf } from "../bridge/image-source";
 import { Num } from "../bridge/Num";
 import { TokenIcon } from "../bridge/TokenIcon";
-import type { DetailToken, MessageDetail } from "../data/message-detail";
+import type { DetailDelivery, DetailToken, MessageDetail } from "../data/message-detail";
+import { feePercentText, feeSummaryText } from "../data/fee-summary";
 import { chainNamer } from "../explore/ExploreScreen";
 import { durationText, statusWord } from "../explore/explore-model";
 import { appOf, calledFunction, messageSteps, payloadBytes, payloadSummary, stepCostText, type MessageApp, type MessageStep } from "../explore/message-model";
@@ -106,16 +107,47 @@ const CopyId = ({ id }: { readonly id: Hex }) => {
  * opens into delivery gas, proof generation and the tip to the deliverer (owner: "show a total and allow a drawer to
  * open from a right pointing chevron"). The indexer records none of the parts yet, so each shows "—".
  */
-const FeeRow = ({ token, other, pair, destination }: { readonly token: DetailToken | null; readonly other: DetailToken | null; readonly pair: PairConfig; readonly destination: { readonly chainId: number; readonly name: string } }) => {
+/** Where the indexer read the fee, in words. */
+const FEE_SOURCE_WORDS: Readonly<Record<NonNullable<DetailDelivery["source"]>, string>> = {
+  event: "the router's Delivered event",
+  logs: "the token transfers of the delivery",
+  terms: "the sender's terms (the router paid the native coin, which leaves no log)",
+};
+
+/** Why a router delivery has no fee figure. */
+const feeMissingWhy = (delivery: DetailDelivery | null): string =>
+  delivery === null
+    ? "No delivery router delivered this transfer, so no delivery fee was taken"
+    : delivery.source === "terms"
+      ? "A gas-based fee paid in the native coin leaves no log, so the indexer cannot read it"
+      : NOT_RECORDED;
+
+const FeeRow = ({ token, other, pair, destination, delivery }: { readonly token: DetailToken | null; readonly other: DetailToken | null; readonly pair: PairConfig; readonly destination: { readonly chainId: number; readonly name: string }; readonly delivery: DetailDelivery | null }) => {
   const [open, setOpen] = useState(false);
   const id = useId();
-  // Each part: the amount and a small token icon in place of the symbol (owner). The indexer records no part yet.
-  const part = (
+  const fee = delivery?.fee ?? null;
+  const percent = feePercentText(fee, delivery?.received ?? null);
+  // Each part: the amount and a small token icon in place of the symbol (owner). The cost parts are not recorded yet;
+  // the tip is the fee that the router paid to the deliverer.
+  const icon = (size: number) => (other === null || token === null ? null : <TokenMark token={other} other={token} pair={pair} size={size} badge={false} />);
+  const missing = (
     <span className="zb-xamt-sm">
       <Missing why={NOT_RECORDED} />
-      {token === null || other === null ? null : <TokenMark token={token} other={other} pair={pair} size={14} badge={false} />}
+      {icon(14)}
     </span>
   );
+  const feePart =
+    fee === null || other === null ? (
+      <span className="zb-xamt-sm">
+        <Missing why={feeMissingWhy(delivery)} />
+        {icon(14)}
+      </span>
+    ) : (
+      <span className="zb-xamt-sm">
+        <Num text={amountText(fee, other.decimals)} />
+        {icon(14)}
+      </span>
+    );
   return (
     <>
       <button type="button" className="zb-kv zb-xkv zb-xtap" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
@@ -124,8 +156,8 @@ const FeeRow = ({ token, other, pair, destination }: { readonly token: DetailTok
           <span className="zb-xusd">$<Missing why="Needs a price; testnets have none" /></span>
         </span>
         <span className="zb-xv">
-          <b><Missing why={NOT_RECORDED} /></b>
-          {token === null || other === null ? null : <TokenMark token={token} other={other} pair={pair} size={22} badge={false} />}
+          <b>{fee === null || other === null ? <Missing why={feeMissingWhy(delivery)} /> : <><Num text={amountText(fee, other.decimals)} />{percent === null ? null : ` (${percent})`}</>}</b>
+          {icon(22)}
           <Chevron dir={open ? "down" : "right"} />
         </span>
       </button>
@@ -135,19 +167,31 @@ const FeeRow = ({ token, other, pair, destination }: { readonly token: DetailTok
             <dl className="zb-trail-grid">
               <div>
                 <dt>Delivery gas · <TokenIcon subject={{ chainId: destination.chainId }} symbol={destination.name} size={14} /></dt>
-                <dd>{part}</dd>
+                <dd>{missing}</dd>
               </div>
               <div>
                 <dt>Proof generation</dt>
-                <dd>{part}</dd>
+                <dd>{missing}</dd>
               </div>
               <div>
                 <dt>Tip to the deliverer</dt>
-                <dd>{part}</dd>
+                <dd>{feePart}</dd>
               </div>
+              {delivery?.deliverer == null ? null : (
+                <div>
+                  <dt>Deliverer</dt>
+                  <dd><a href={explore({ kind: "address", id: delivery.deliverer })} className="zb-mono">{shortHex(delivery.deliverer)}</a></dd>
+                </div>
+              )}
+              {delivery?.source == null ? null : (
+                <div>
+                  <dt>Read from</dt>
+                  <dd>{FEE_SOURCE_WORDS[delivery.source]}</dd>
+                </div>
+              )}
               <div className="zb-xfee-total">
                 <dt>Total</dt>
-                <dd>{part}</dd>
+                <dd>{feePart}</dd>
               </div>
             </dl>
           </div>
@@ -329,7 +373,7 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
         ) : (
           <>
             {transfer.sender === null ? <KV k="From"><Missing why={NOT_RECORDED} /></KV> : <KV k="From" href={explore({ kind: "address", id: transfer.sender })}><span className="zb-mono">{shortHex(transfer.sender)}</span></KV>}
-            <KV k="To" href={explore({ kind: "address", id: transfer.recipient })}><span className="zb-mono">{shortHex(transfer.recipient)}</span></KV>
+            <KV k="To" href={explore({ kind: "address", id: transfer.delivery?.recipient ?? transfer.recipient })}><span className="zb-mono">{shortHex(transfer.delivery?.recipient ?? transfer.recipient)}</span></KV>
             <a className="zb-kv zb-xkv" href={explore({ kind: "token", id: `${transfer.sourceToken.chainId === pair.first.chainId ? "first" : "second"}:${transfer.sourceToken.address}` })}>
               <span className="zb-k">Token</span>
               <span className="zb-xv">
@@ -343,16 +387,21 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
               <TokenMark token={transfer.sourceToken} other={transfer.destinationToken} pair={pair} size={22} badge={false} />
             </AmountRow>
             <AmountRow label="Received" chain={destination} hash={detail.destinationTransactionHash}>
-              {transfer.deliveredValue === null ? (
-                <Missing why={detail.deliveredAt === null ? "Not delivered yet" : NOT_RECORDED} />
+              {(transfer.delivery === null ? transfer.deliveredValue : transfer.delivery.received) === null ? (
+                <Missing why={detail.deliveredAt === null ? "Not delivered yet" : transfer.delivery === null ? NOT_RECORDED : feeMissingWhy(transfer.delivery)} />
               ) : (
                 <>
-                  <b><Num text={amountText(transfer.deliveredValue, transfer.destinationToken.decimals)} /></b>
+                  <b><Num text={amountText((transfer.delivery === null ? transfer.deliveredValue : transfer.delivery.received) as bigint, transfer.destinationToken.decimals)} /></b>
                   <TokenMark token={transfer.destinationToken} other={transfer.sourceToken} pair={pair} size={22} badge={false} />
                 </>
               )}
             </AmountRow>
-            <FeeRow token={transfer.sourceToken} other={transfer.destinationToken} pair={pair} destination={destination} />
+            <FeeRow token={transfer.sourceToken} other={transfer.destinationToken} pair={pair} destination={destination} delivery={transfer.delivery} />
+            {transfer.delivery === null || transfer.delivery.fee === null ? null : (
+              <p className="zb-small zb-xsummary">
+                {feeSummaryText({ sent: transfer.value, sentDecimals: transfer.sourceToken.decimals, sentSymbol: transfer.sourceToken.symbol, fee: transfer.delivery.fee, received: transfer.delivery.received, decimals: transfer.destinationToken.decimals, symbol: transfer.destinationToken.symbol })}
+              </p>
+            )}
             {deliveredBy}
           </>
         )}
