@@ -12,7 +12,7 @@
  * estimate still reverts with `ForkNotConfirmed` (the epoch rolled over), it asks once more.
  */
 import type { Address, Hash, Hex } from "viem";
-import type { GateConfirmation } from "@zk-bridge/shared";
+import { gateConfirmWindow, type GateConfirmation } from "@zk-bridge/shared";
 import { prepareTransaction, type PrepareClient, type PreparedTransaction } from "@terminal/tx/prepare";
 import type { WebStep } from "./bridge-steps";
 import { gateErrorText, passesGate, planGateConfirm, type GateCheck } from "./gate-check";
@@ -41,6 +41,8 @@ export interface SequenceDependencies {
   readonly checkGate?: GateCheck;
   /** Waits before the gate is asked again. Default: a timer. */
   readonly sleep?: (milliseconds: number) => Promise<void>;
+  /** The clock in milliseconds, which the time left in the epoch is read from. Default: `Date.now`. */
+  readonly now?: () => number;
 }
 
 /** The phases, in order. `waiting`: the gate check waits for the beacon header of the epoch, then asks again. */
@@ -60,6 +62,11 @@ export type GateWait = {
   readonly chainName: string;
   readonly epoch: bigint;
   readonly seconds: number;
+  /**
+   * Set when the check waits because too little of the epoch is left for a confirmation to land in it (not for a missing
+   * header): the seconds that remained in `epoch`.
+   */
+  readonly epochSecondsLeft?: number;
 };
 
 /** The whole state. The sequence replaces the object on every change. */
@@ -140,6 +147,7 @@ export const createTransactionSequence = (dependencies: SequenceDependencies): T
   const listeners = new Set<() => void>();
   // A cancel or a new start makes an older result stale. The counter lets the sequence drop it.
   let generation = 0;
+  const now = dependencies.now ?? Date.now;
   const sleep = dependencies.sleep ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
 
   const publish = (changes: Partial<SequenceState>): void => {
@@ -177,10 +185,24 @@ export const createTransactionSequence = (dependencies: SequenceDependencies): T
         if (mine === generation) await prepareCurrent({ ...attempt, waits: attempt.waits + 1 });
         return false;
       }
-      case "confirm":
+      case "confirm": {
+        // The confirmation and the send must land in one epoch. With less than the safety window left, a confirmation
+        // that the wallet signs and the chain mines would end up in the next epoch and confirm nothing for the send.
+        const window = gateConfirmWindow(answer.validUntil, now());
+        if (window.late) {
+          if (attempt.waits >= GATE_WAIT_LIMIT) {
+            publish({ phase: "error", error: `The ${chain.name} deposit gate still ends epoch ${answer.epoch} in ${window.secondsLeft} seconds after ${GATE_WAIT_LIMIT} checks. Nothing was sent.` });
+            return false;
+          }
+          publish({ phase: "waiting", gateWait: { chainName: chain.name, epoch: answer.epoch, seconds: window.waitSeconds, epochSecondsLeft: window.secondsLeft } });
+          await sleep(window.waitSeconds * 1000);
+          if (mine === generation) await prepareCurrent({ ...attempt, waits: attempt.waits + 1 });
+          return false;
+        }
         publish({ steps: [...state.steps.slice(0, state.stepIndex), confirmStepOf(step, answer), ...state.steps.slice(state.stepIndex)] });
         await prepareCurrent(attempt);
         return false;
+      }
     }
   };
 

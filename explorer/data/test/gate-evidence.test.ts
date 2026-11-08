@@ -8,6 +8,9 @@ import {
   createBeaconProofSource,
   describeRevert,
   ensureGateConfirmed,
+  GATE_BLOCK_SECONDS,
+  GATE_SAFETY_SECONDS,
+  gateConfirmWindow,
   GateEvidenceError,
   readGateStatus,
   SHAPE_REQUEST_ORDER,
@@ -323,5 +326,24 @@ describe("describeRevert", () => {
     expect(describeRevert("text")).toBe("an error");
     expect(describeRevert(null)).toBe("an error");
     expect(describeRevert({ shortMessage: 7, data: "0x12", cause: { shortMessage: "inner", data: 5 } })).toBe("inner");
+  });
+});
+
+describe("gateConfirmWindow", () => {
+  const end = 1_793_563_872n;
+  const at = (secondsBeforeEnd: number): number => (Number(end) - secondsBeforeEnd) * 1000;
+
+  it("lets a confirmation go ahead when the safety window remains", () => {
+    expect(gateConfirmWindow(end, at(200))).toEqual({ secondsLeft: 200, late: false, waitSeconds: 0 });
+    expect(gateConfirmWindow(end, at(GATE_SAFETY_SECONDS))).toMatchObject({ late: false });
+  });
+
+  it("is late below the window, and waits for the end of the epoch plus a block", () => {
+    expect(gateConfirmWindow(end, at(GATE_SAFETY_SECONDS - 1))).toEqual({ secondsLeft: 59, late: true, waitSeconds: 59 + GATE_BLOCK_SECONDS });
+    expect(gateConfirmWindow(end, at(10.5))).toMatchObject({ secondsLeft: 10, late: true });
+  });
+
+  it("waits only a block when the epoch has ended already", () => {
+    expect(gateConfirmWindow(end, at(-30))).toEqual({ secondsLeft: -30, late: true, waitSeconds: GATE_BLOCK_SECONDS });
   });
 });

@@ -29,7 +29,7 @@ const confirmAnswer = (epoch = 360_335n): GateConfirmation =>
     epoch,
     forkVersion: "0x90000075",
     shape: 6,
-    validUntil: 1_762_500_000n,
+    validUntil: 4_102_444_800n,
     evidence: { encoded: EVIDENCE, header: { slot: 11_530_720n } },
   }) as unknown as GateConfirmation;
 
@@ -96,7 +96,7 @@ describe("createTransactionSequence: the deposit gate", () => {
     const state = sequence.getState();
     expect(state.steps).toHaveLength(3);
     expect(state.steps[1]!.plan.title).toBe("Confirm this epoch on the gate (epoch 360335)");
-    expect(state.steps[1]!.gateConfirm).toEqual({ epoch: 360_335n, gas: 150_000n, validUntil: 1_762_500_000n });
+    expect(state.steps[1]!.gateConfirm).toEqual({ epoch: 360_335n, gas: 150_000n, validUntil: 4_102_444_800n });
     expect(state.prepared?.gasEstimate).toBe(150_000n);
     expect(state.prepared?.gasLimit).toBe(180_000n);
     expect(state.prepared?.plan.to).toBe(getAddress(GATE));
@@ -149,6 +149,45 @@ describe("createTransactionSequence: the deposit gate", () => {
     await phase(sequence, "review");
     expect(gate.calls).toHaveLength(2);
     expect(sequence.getState().gateWait).toBeNull();
+  });
+
+  it("waits for the next epoch when too little of this one is left, then confirms in it", async () => {
+    const END = 1_762_500_000n;
+    let seconds = Number(END) - 30;
+    const late = { ...confirmAnswer(), validUntil: END } as GateConfirmation;
+    const gate = scripted(late, confirmAnswer(360_336n));
+    const sleeps: number[] = [];
+    const sleep = async (milliseconds: number) => void (sleeps.push(milliseconds), (seconds += milliseconds / 1000));
+    const sequence = createTransactionSequence({ account: FIXTURE_ACCOUNT, clientFor: () => client(), checkGate: gate.check, sendTransaction: vi.fn(), sleep, now: () => seconds * 1000 });
+    sequence.start(await relayOnly());
+    await phase(sequence, "review");
+    expect(sleeps).toEqual([42_000]);
+    expect(gate.calls).toHaveLength(2);
+    expect(sequence.getState().steps.map((step) => step.gateConfirm?.epoch)).toEqual([360_336n, undefined]);
+  });
+
+  it("shows the epoch that is ending while it waits, and stops after the wait limit", async () => {
+    const END = 1_762_500_000n;
+    const late = { ...confirmAnswer(), validUntil: END } as GateConfirmation;
+    const gate = scripted(late);
+    let release: () => void = () => undefined;
+    const sequence = createTransactionSequence({
+      account: FIXTURE_ACCOUNT,
+      clientFor: () => client(),
+      checkGate: gate.check,
+      sendTransaction: vi.fn(),
+      sleep: () => new Promise<void>((resolve) => (release = resolve)),
+      now: () => (Number(END) - 10) * 1000,
+    });
+    sequence.start(await relayOnly());
+    await phase(sequence, "waiting");
+    expect(sequence.getState().gateWait).toEqual({ chainName: "Ethereum", epoch: 360_335n, seconds: 22, epochSecondsLeft: 10 });
+    for (let waits = 0; waits < GATE_WAIT_LIMIT; waits += 1) {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await phase(sequence, "error");
+    expect(sequence.getState().error).toBe(`The Ethereum deposit gate still ends epoch 360335 in 10 seconds after ${GATE_WAIT_LIMIT} checks. Nothing was sent.`);
   });
 
   it("stops after the wait limit with the numbers", async () => {

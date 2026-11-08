@@ -55,6 +55,13 @@ describe("the signing dialog on the bridge screen", () => {
 
     hookState.current = {
       sequence,
+      state: { phase: "waiting", steps: [relay], stepIndex: 0, prepared: null, submittedHash: null, outcomes: [], error: null, gateWait: { chainName: "Ethereum", epoch: 360_335n, seconds: 22, epochSecondsLeft: 10 } } as SequenceState,
+    };
+    view.rerender(<TransactionDialog steps={[relay]} variant="sheet" onClose={() => undefined} />);
+    expect(screen.getByText("Epoch 360335 of the Ethereum deposit gate ends in 10 seconds, too soon for a confirmation and your send to land in it. Waiting for the next epoch: checking again in 22 seconds.")).toBeInTheDocument();
+
+    hookState.current = {
+      sequence,
       state: {
         phase: "error",
         steps: [confirmStep, relay],

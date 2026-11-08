@@ -4,7 +4,7 @@ import { beaconForkGateAbi, decodeFeeDirector, defaultTip, GateEvidenceError, pr
 import { boundsOf } from "../../src/traffic/plan.ts";
 import { parseTestTokens } from "../../src/traffic/tokens-file.ts";
 import type { TrafficGate } from "../../src/traffic/gate.ts";
-import { createTraffic, GATE_WAITS, type TrafficSide } from "../../src/traffic/traffic.ts";
+import { createTraffic, GATE_EPOCH_DEFERS, GATE_WAITS, RETRYABLE_SKIPS, type TrafficSide } from "../../src/traffic/traffic.ts";
 import { memoryLogger } from "../support/builders.ts";
 import { DOLLAR, PLAIN, copyAddressOf, fakePort, fakeReader, requestLog, tokenFile, type FakePort, type FakeReaderState } from "../support/traffic.ts";
 
@@ -12,6 +12,8 @@ const WALLET = getAddress("0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
 const DOLLAR_UNIT = 10n ** 6n;
 const MESSAGE_ID = `0x${"cd".repeat(32)}` as const;
 const RATE = 10n ** 15n;
+/** The end of the epoch that the gate tests confirm, in unix seconds. */
+const EPOCH_END = 1_793_563_872;
 
 function contractsOf(seed: number, router: boolean) {
   const address = (offset: number) => getAddress(`0x${(seed + offset).toString(16).padStart(2, "0").repeat(20)}`);
@@ -40,7 +42,7 @@ function sideOf(chainId: number, seed: number, options: { router?: boolean; rese
   return { side, port, state };
 }
 
-function world(options: { secondRouter?: boolean; symbols?: readonly string[]; random?: () => number; gate?: TrafficGate; reserve?: bigint; sleep?: (milliseconds: number) => Promise<void> } = {}): World {
+function world(options: { secondRouter?: boolean; symbols?: readonly string[]; random?: () => number; gate?: TrafficGate; reserve?: bigint; sleep?: (milliseconds: number) => Promise<void>; now?: () => number } = {}): World {
   const first = sideOf(1, 0x10, { ...(options.gate === undefined ? {} : { gate: options.gate }), ...(options.reserve === undefined ? {} : { reserve: options.reserve }) });
   const second = sideOf(369, 0x20, { router: options.secondRouter ?? true });
   const settings = { amount: { minimum: "1", maximum: "25" }, balance: { minimum: "1000", maximum: "900000" } };
@@ -58,6 +60,8 @@ function world(options: { secondRouter?: boolean; symbols?: readonly string[]; r
     random: options.random ?? (() => 0),
     logger: logs.logger,
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
+    // Unless a test sets a clock, the epoch of the gate tests has 200 seconds left.
+    now: options.now ?? (() => (EPOCH_END - 200) * 1000),
   });
   return { first, second, logs, traffic };
 }
@@ -309,7 +313,9 @@ describe("the gate of the source chain", () => {
       gasUsed: "50000",
       gasCostWei: "600000",
       validUntil: "2026-11-01T20:11:12.000Z",
+      secondsLeft: 200,
     });
+    expect(eventsNamed(built.logs, "gate_confirm_deferred")).toEqual([]);
     // The second direction leaves from the other chain, which has no gate here.
     await built.traffic.attempt({ direction: "second-to-first", beforeFirstSend: announce() });
     expect(gate.ensure).toHaveBeenCalledTimes(1);
@@ -411,5 +417,96 @@ describe("the gate of the source chain", () => {
     built.first.state.native = 3_000_000n;
     expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ reason: "native-below-reserve" });
     expect(eventsNamed(built.logs, "traffic_skipped")[0]).toMatchObject({ step: "relay", nativeWei: "2400000" });
+  });
+});
+
+describe("the time left in the epoch", () => {
+  const GATE = getAddress(`0x${"16".repeat(20)}`);
+  const confirmUntil = (validUntil: number, epoch = 358_932n): GateConfirmation =>
+    ({ kind: "confirm", call: { to: GATE, data: "0xb5b7d7b1" }, gas: 79_050n, epoch, forkVersion: "0x90000076", shape: 255, validUntil: BigInt(validUntil), evidence: {} as never }) as GateConfirmation;
+  const scripted = (...answers: GateConfirmation[]): TrafficGate & { ensure: ReturnType<typeof vi.fn> } => ({
+    ensure: vi.fn(async () => (answers.length > 1 ? answers.shift()! : answers[0]!)),
+  });
+  const funded = (built: World) => {
+    built.first.state.balances.set(DOLLAR.toLowerCase(), 100_000n * DOLLAR_UNIT);
+    built.first.state.allowances.set(DOLLAR.toLowerCase(), 10n ** 30n);
+  };
+  /** A clock in seconds, moved by the sleeps. */
+  const clock = (startSeconds: number) => {
+    let seconds = startSeconds;
+    const sleeps: number[] = [];
+    return { now: () => seconds * 1000, sleep: async (milliseconds: number) => void (sleeps.push(milliseconds), (seconds += milliseconds / 1000)), sleeps };
+  };
+
+  it("confirms at once, with the seconds left in the log, when a safe part of the epoch remains", async () => {
+    const time = clock(EPOCH_END - 60);
+    const built = world({ gate: scripted(confirmUntil(EPOCH_END)), now: time.now, sleep: time.sleep });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ kind: "sent" });
+    expect(time.sleeps).toEqual([]);
+    expect(eventsNamed(built.logs, "gate_confirmed")[0]).toMatchObject({ secondsLeft: 60 });
+  });
+
+  it("waits for the next epoch when less than the safety window remains, then confirms and sends in it", async () => {
+    const time = clock(EPOCH_END - 59);
+    const next = confirmUntil(EPOCH_END + 384, 358_933n);
+    const gate = scripted(confirmUntil(EPOCH_END), next);
+    const built = world({ gate, now: time.now, sleep: time.sleep });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ kind: "sent" });
+    // The end of the epoch (59 s) plus one block (12 s); nothing was sent before.
+    expect(time.sleeps).toEqual([71_000]);
+    expect(eventsNamed(built.logs, "gate_confirm_deferred")[0]).toMatchObject({ epoch: "358932", secondsLeft: 59, waitSeconds: 71 });
+    expect(gate.ensure).toHaveBeenCalledTimes(2);
+    expect(built.first.port.sent.map((sent) => sent.to)).toEqual([GATE, built.first.side.contracts.mediator]);
+    expect(eventsNamed(built.logs, "gate_confirmed")[0]).toMatchObject({ epoch: "358933", secondsLeft: 384 - 12 });
+  });
+
+  it("waits one block when the epoch of the evidence has ended already, and honours a header that is not there yet", async () => {
+    const time = clock(EPOCH_END + 5);
+    const gate = scripted(confirmUntil(EPOCH_END), { kind: "wait", epoch: 358_933n, headerEpoch: 358_932n, retryAfterSeconds: 12 }, confirmUntil(EPOCH_END + 384, 358_933n));
+    const built = world({ gate, now: time.now, sleep: time.sleep });
+    funded(built);
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ kind: "sent" });
+    expect(time.sleeps).toEqual([12_000, 12_000]);
+    expect(eventsNamed(built.logs, "gate_confirm_deferred")[0]).toMatchObject({ secondsLeft: -5, waitSeconds: 12 });
+  });
+
+  it("skips as gate-epoch-ending, sending nothing, when the node keeps serving the old epoch", async () => {
+    const time = clock(EPOCH_END - 10);
+    const built = world({ gate: scripted(confirmUntil(EPOCH_END)), now: time.now, sleep: time.sleep });
+    funded(built);
+    const beforeFirstSend = announce();
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend })).toMatchObject({ kind: "skipped", reason: "gate-epoch-ending" });
+    expect(time.sleeps).toHaveLength(GATE_EPOCH_DEFERS);
+    expect(beforeFirstSend).not.toHaveBeenCalled();
+    expect(built.first.port.sent).toHaveLength(0);
+    expect(eventsNamed(built.logs, "traffic_skipped")[0]).toMatchObject({ reason: "gate-epoch-ending" });
+  });
+
+  it("redoes the gate once when the epoch rolled over after the confirmation, and sends", async () => {
+    const gate = scripted(confirmUntil(EPOCH_END), confirmUntil(EPOCH_END + 384, 358_933n));
+    const built = world({ gate });
+    funded(built);
+    const selector = encodeErrorResult({ abi: beaconForkGateAbi, errorName: "ForkNotConfirmed", args: [358_933n] }).slice(0, 10);
+    (built.first.port.simulate as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => ({ ok: false, reason: `Execution reverted (revert data ${selector})` }));
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ kind: "sent" });
+    expect(gate.ensure).toHaveBeenCalledTimes(2);
+    expect(built.first.port.sent.map((sent) => sent.to)).toEqual([GATE, GATE, built.first.side.contracts.mediator]);
+    expect(eventsNamed(built.logs, "gate_epoch_rolled")).toHaveLength(1);
+  });
+
+  it("redoes the gate only once: a second ForkNotConfirmed skips as gate-not-confirmed", async () => {
+    const gate = scripted(confirmUntil(EPOCH_END));
+    const built = world({ gate });
+    funded(built);
+    const selector = encodeErrorResult({ abi: beaconForkGateAbi, errorName: "ForkNotConfirmed", args: [358_933n] }).slice(0, 10);
+    (built.first.port.simulate as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ ok: false, reason: `Execution reverted (revert data ${selector})` }));
+    expect(await built.traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() })).toMatchObject({ kind: "skipped", reason: "gate-not-confirmed" });
+    expect(gate.ensure).toHaveBeenCalledTimes(2);
+  });
+
+  it("names the skips that the plan retries", () => {
+    expect([...RETRYABLE_SKIPS].sort()).toEqual(["gate-epoch-ending", "gate-epoch-has-no-header", "gate-not-confirmed"]);
   });
 });

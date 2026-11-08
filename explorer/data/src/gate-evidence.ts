@@ -366,6 +366,30 @@ export type GateConfirmation =
     };
 
 /**
+ * The least time that must remain in an epoch for a confirmation to go ahead in it: three blocks to send and mine it, the
+ * confirmation's expected inclusion time and a margin for the send that follows. A confirmation that is mined in the next
+ * epoch confirms nothing for the send, which then reverts with `ForkNotConfirmed`. Seconds (12 s blocks on Sepolia and Ethereum).
+ */
+export const GATE_SAFETY_SECONDS = 60;
+
+/** The block time that the wait for the next epoch adds, so the first block of the new epoch (and its beacon root) is on chain. */
+export const GATE_BLOCK_SECONDS = 12;
+
+/**
+ * Whether a confirmation has time left in its epoch.
+ *
+ * @param validUntil The `validUntil` of the confirmation: the end of the epoch of the next block, unix seconds.
+ * @param nowMilliseconds The clock now.
+ * @returns `secondsLeft` in the epoch (negative when it has ended), `late` when less than {@link GATE_SAFETY_SECONDS}
+ * remain, and `waitSeconds` until the next epoch has started and has a block (zero when not late).
+ */
+export function gateConfirmWindow(validUntil: bigint, nowMilliseconds: number): { readonly secondsLeft: number; readonly late: boolean; readonly waitSeconds: number } {
+  const secondsLeft = Math.floor(Number(validUntil) - nowMilliseconds / 1000);
+  const late = secondsLeft < GATE_SAFETY_SECONDS;
+  return { secondsLeft, late, waitSeconds: late ? Math.max(secondsLeft, 0) + GATE_BLOCK_SECONDS : 0 };
+}
+
+/**
  * What a sender must do on a gate before a send in the epoch of the next block. It reads the gate; when the epoch needs a
  * confirmation it builds the evidence, checks it natively and simulates `confirm` from the sender. It sends nothing.
  *
