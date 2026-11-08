@@ -257,3 +257,8 @@ export function figuresOf(snapshot: BillingSnapshot, at: number): BillingFigures
     balanceDaysLeft: balanceUsd !== null && average !== null && average > 0 ? round(balanceUsd / average, 1) : null,
   };
 }
+
+/** The billing figures without the account: what RunPod billed and the rate stay public; the balance, the spend limit, the spend now and the days the balance lasts do not. */
+export function publicFiguresOf(figures: BillingFigures): BillingFigures {
+  return { ...figures, balanceUsd: null, balanceAgeSeconds: null, currentSpendPerHr: null, spendLimit: null, balanceDaysLeft: null };
+}

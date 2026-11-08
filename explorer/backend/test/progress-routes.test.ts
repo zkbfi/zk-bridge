@@ -41,8 +41,8 @@ function setup(options: { indexer?: IndexerReads | null; billing?: BillingReader
   const app = new Hono();
   let caller = "10.0.0.1";
   registerProgressRoutes(app, backend.context, { indexer: options.indexer === undefined ? indexer.reads : options.indexer, callerOf: () => caller });
-  const get = async (path: string) => {
-    const answer = await app.request(path);
+  const get = async (path: string, headers: Record<string, string> = {}) => {
+    const answer = await app.request(path, { headers });
     return { status: answer.status, body: (await answer.json()) as Record<string, unknown>, headers: answer.headers };
   };
   return { ...backend, indexer, app, get, as: (next: string) => (caller = next) };
@@ -278,6 +278,14 @@ describe("GET /warmup/summary with RunPod billing (2026-11-07)", () => {
     expect(today).toMatchObject({ billedUsd: 0.76, runpodBilledSeconds: 3600, effectiveUsdPerHour: 0.76 });
     expect(body.total).toMatchObject({ billedUsd: 0.76, runpodBilledSeconds: 3600 });
     expect(JSON.stringify(body)).not.toMatch(/https?:|key|token/i);
+  });
+
+  it("keeps the account (balance, spend limit, spend now, days left) off a request that came through Caddy", async () => {
+    const run = withBilling(snapshot);
+    sessions(run);
+    const body = (await run.get("/warmup/summary", { "x-forwarded-for": "203.0.113.7" })).body as Record<string, any>;
+    expect(body.billing).toMatchObject({ available: true, last24hUsd: 0.38, effectiveUsdPerHour: 0.76, balanceUsd: null, balanceAgeSeconds: null, currentSpendPerHr: null, spendLimit: null, balanceDaysLeft: null });
+    expect(body.total).toMatchObject({ billedUsd: 0.76 });
   });
 
   it("falls back to the assumed rate, and says so, when billing is missing, unread or has no billed time", async () => {

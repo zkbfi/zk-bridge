@@ -5,7 +5,7 @@
  */
 import type { Context, Hono } from "hono";
 import { PROOF_DIRECTIONS, secondsPerSlot, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
-import { figuresOf } from "../billing.ts";
+import { figuresOf, publicFiguresOf } from "../billing.ts";
 import type { BackendModuleContext } from "../module.ts";
 import { findActiveJob, findLatestJob, getJob, listJobsSince, type PlannedJob } from "../requests/jobs.ts";
 import { getTiming, listTimings, recentTimings, statOf } from "../requests/timings.ts";
@@ -228,7 +228,10 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
       rateSource,
       usdPerHour,
       assumptions: { idleTimeoutSeconds, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds },
-      billing: figures,
+      // The account (balance, spend limit, spend now, days left) only for a direct local request, such as the status
+      // service on 127.0.0.1. Caddy adds X-Forwarded-For to every request it passes on, so a request from the internet
+      // never sees them; the backend listens on 127.0.0.1 only.
+      billing: request.req.header("x-forwarded-for") === undefined ? figures : publicFiguresOf(figures),
       total: {
         sessions: sum((day) => day.sessions),
         used: sum((day) => day.used),
