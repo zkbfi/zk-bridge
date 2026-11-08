@@ -19,7 +19,8 @@ ConditionPathExists=/opt/zk-bridge/current/deploy/app-server/proofs.sh
 
 [Service]
 Type=oneshot
-User=root
+# Runs as root without naming it: an explicit User=root together with the sandbox below makes systemd drop the right to
+# change user, and the script's `runuser -u zkb_indexer` then fails with "cannot set user id" (2026-11-07, every night).
 # Off by default. ZKB_PROOFS_PUBLISH=1 here adds the public IPFS publication to each run (proofs.env.example).
 EnvironmentFile=-/etc/zk-bridge/proofs/proofs.env
 ExecStart=/opt/zk-bridge/current/deploy/app-server/proofs.sh export
