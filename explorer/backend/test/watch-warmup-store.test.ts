@@ -25,6 +25,25 @@ describe("the warm-up record", () => {
     expect(record.lead({ ...LEGACY_WARMUP, leadObservations: 21 })).toMatchObject({ seconds: 42 });
   });
 
+  it("knows which predictions had their start: open and ended sessions count, unusable and restart do not, other directions and old rows do not", () => {
+    const { store: record } = store();
+    const open = (prediction?: string, direction: "first-to-second" | "second-to-first" = "first-to-second") =>
+      record.openSession({ direction, why: "message", dueAt: T, leadSeconds: 90, at: T, ...(prediction === undefined ? {} : { prediction }) });
+    expect(record.predictionStarted("first-to-second", "p")).toBe(false);
+    const running = open("p");
+    expect(record.predictionStarted("first-to-second", "p")).toBe(true);
+    expect(record.predictionStarted("second-to-first", "p")).toBe(false);
+    record.endSession(running, "grace", T + 1000, 60);
+    expect(record.predictionStarted("first-to-second", "p")).toBe(true);
+    record.endSession(open("q"), "unusable", T + 1000, 60);
+    expect(record.predictionStarted("first-to-second", "q")).toBe(false);
+    open("r");
+    record.closeOpenSessions(T + 2000);
+    expect(record.predictionStarted("first-to-second", "r")).toBe(false);
+    open();
+    expect(record.predictionStarted("first-to-second", "")).toBe(false);
+  });
+
   it("keeps a bounded number of observations", () => {
     const { store: record, count } = store();
     for (let index = 0; index < OBSERVATIONS_KEPT + 5; index += 1) record.recordObservation({ direction: "first-to-second", source: "ping", seconds: 30, at: T });

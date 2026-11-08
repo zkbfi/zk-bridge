@@ -540,6 +540,98 @@ describe("the direction watcher, warm-ups", () => {
     expect(run.pings).toHaveLength(5);
   });
 
+  it("replays 2026-11-07 02:16: one early start for a late finality, no re-warm until the finality is seen, then a cold start", async () => {
+    const run = setup({ messages: [listed(SENT)], ping: async () => 200 });
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(LEAD + LEGACY_WARMUP.graceSeconds * 1000 + LEGACY_WARMUP.holdIntervalSeconds * 1000);
+    expect(run.named("warmup_wasted")).toMatchObject([{ reason: "grace" }]);
+    const pingsAfterFirst = run.pings.length;
+    // The finality is minutes late. Scans go on; each plan says "due now", but the prediction had its start.
+    for (let step = 1; step <= 6; step += 1) {
+      vi.setSystemTime(expected + (LEGACY_WARMUP.graceSeconds + 40 + step * 40) * 1000);
+      await run.watcher.scan();
+    }
+    expect(run.named("warmup_scheduled")).toHaveLength(1);
+    expect(run.pings).toHaveLength(pingsAfterFirst);
+    expect(run.sessions()).toHaveLength(1);
+    // Logged once, with the reason, the direction and the predicted slot.
+    expect(run.named("early_start_skipped")).toMatchObject([
+      { level: "info", direction: "first-to-second", reason: "already-started-for-this-prediction", why: "message", predictedSlot: expect.any(Number) as number },
+    ]);
+    // The finality is seen at last: the job starts (a cold worker if it must) with no early start before it.
+    const late = observation(Math.floor((SENT + 3 * 32) / 32) * 32 - 64 + 32, 500, 330_000);
+    arrive(late);
+    await run.watcher.observe(late);
+    await run.watcher.settled();
+    expect(run.named("warmup_scheduled")).toHaveLength(1);
+    expect(run.pings).toHaveLength(pingsAfterFirst);
+  });
+
+  it("a new prediction (another message) gets its own early start", async () => {
+    const run = setup({ messages: [listed(SENT)], ping: async () => 200 });
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(LEAD + LEGACY_WARMUP.graceSeconds * 1000 + LEGACY_WARMUP.holdIntervalSeconds * 1000);
+    expect(run.named("warmup_wasted")).toMatchObject([{ reason: "grace" }]);
+    // The first message is delivered; another one waits.
+    run.state.messages = [listed(SENT + 64, "b")];
+    const second = expectedFinalityAt(SENT + 64, facts()) * 1000;
+    vi.setSystemTime(second - LEAD);
+    await run.watcher.scan();
+    expect(run.named("warmup_scheduled")).toHaveLength(2);
+    expect(run.sessions()).toHaveLength(2);
+  });
+
+  it("the daily cap still decides first for a new prediction, and a spent prediction is skipped, not capped", async () => {
+    const run = setup({ messages: [listed(SENT)], ping: async () => 200, warmup: { dailyCapSeconds: 60 } });
+    vi.setSystemTime(expected - LEAD);
+    await run.watcher.scan();
+    await vi.advanceTimersByTimeAsync(LEGACY_WARMUP.holdIntervalSeconds * 2000);
+    expect(run.named("warmup_wasted")).toMatchObject([{ reason: "cap" }]);
+    // The cap is spent and the first prediction had its start: skipped, not logged as capped.
+    vi.setSystemTime(expected + 1000);
+    await run.watcher.scan();
+    expect(run.named("warmup_capped")).toEqual([]);
+    expect(run.named("early_start_skipped")).toHaveLength(1);
+    // A new prediction while the cap is spent: capped.
+    run.state.messages = [listed(SENT + 32, "b")];
+    vi.setSystemTime(expectedFinalityAt(SENT + 32, facts()) * 1000 - 30_000);
+    await run.watcher.scan();
+    expect(run.named("warmup_capped")).toHaveLength(1);
+    expect(run.named("early_start_skipped")).toHaveLength(1);
+  });
+
+  it("survives a restart of the backend: the prediction is read from the database", async () => {
+    const storage = openStorage(":memory:");
+    const first = setup({ storage, messages: [listed(SENT)], ping: async () => 200 });
+    vi.setSystemTime(expected - LEAD);
+    await first.watcher.scan();
+    await vi.advanceTimersByTimeAsync(LEAD + LEGACY_WARMUP.graceSeconds * 1000 + LEGACY_WARMUP.holdIntervalSeconds * 1000);
+    await first.watcher.stop();
+    // A new process: no memory, the same database.
+    const second = setup({ storage, messages: [listed(SENT)], ping: async () => 200 });
+    vi.setSystemTime(expected + (LEGACY_WARMUP.graceSeconds + 20) * 1000);
+    await second.watcher.scan();
+    expect(second.pings).toEqual([]);
+    expect(second.named("early_start_skipped")).toHaveLength(1);
+    expect(storage.database.prepare("SELECT COUNT(*) AS n FROM warmup_sessions").get()).toEqual({ n: 1 });
+  });
+
+  it("a session cut short by a restart may start again for the same prediction", async () => {
+    const storage = openStorage(":memory:");
+    const first = setup({ storage, messages: [listed(SENT)], ping: async () => 204 });
+    vi.setSystemTime(expected - LEAD);
+    await first.watcher.scan();
+    await first.watcher.stop();
+    createWarmupStore(storage).closeOpenSessions(Date.now() + 5_000);
+    const second = setup({ storage, messages: [listed(SENT)], ping: async () => 204 });
+    vi.setSystemTime(expected - LEAD + 10_000);
+    await second.watcher.scan();
+    expect(second.pings).toHaveLength(1);
+    expect(second.named("early_start_skipped")).toEqual([]);
+  });
+
   it("never sends a second ping while one is outstanding, and a job that starts while the worker boots ends the session", async () => {
     const held = heldPing();
     const run = setup({ messages: [listed(SENT)], ping: held.ping });

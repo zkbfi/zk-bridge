@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_WARMUP, IDLE, leadFrom, nextHoldAt, warmupStep, type WarmupSession, type WarmupStepInput, type WarmupTarget } from "../src/watch/warmup.ts";
+import { DEFAULT_WARMUP, IDLE, leadFrom, nextHoldAt, predictionOf, warmupStep, type WarmupSession, type WarmupStepInput, type WarmupTarget } from "../src/watch/warmup.ts";
 
 const config = DEFAULT_WARMUP;
 
@@ -40,7 +40,7 @@ describe("warmupStep", () => {
   const target: WarmupTarget = { at: 10_000, why: "message", keys: ["m1"] };
   const lead = 120;
   const step = (overrides: Partial<WarmupStepInput> = {}) =>
-    warmupStep({ nowSeconds: target.at - lead, targets: [target], live: new Set(["m1"]), session: IDLE, config, leadSeconds: lead, jobActive: false, pingOutstanding: false, capReached: false, ...overrides });
+    warmupStep({ nowSeconds: target.at - lead, targets: [target], live: new Set(["m1"]), session: IDLE, config, leadSeconds: lead, jobActive: false, pingOutstanding: false, capReached: false, predictionStarted: () => false, ...overrides });
   const warming: WarmupSession = { phase: "warming", id: "s", target, startedAt: target.at - lead, lastPingAt: target.at - lead };
   const warm: WarmupSession = { phase: "warm", id: "s", target, startedAt: target.at - lead, readyAt: target.at - 60, lastReadyAt: target.at - 60, lastPingAt: target.at - 60, holds: 0 };
 
@@ -50,6 +50,19 @@ describe("warmupStep", () => {
     // A due time past by less than the grace still starts one; past the grace, nothing.
     expect(step({ nowSeconds: target.at + config.graceSeconds })).toEqual({ kind: "start", target });
     expect(step({ nowSeconds: target.at + config.graceSeconds + 1 })).toEqual({ kind: "none" });
+  });
+
+  it("starts nothing for a prediction that had its early start: skipped, also while the cap is spent", () => {
+    expect(step({ predictionStarted: (candidate) => candidate === target })).toEqual({ kind: "skipped", target });
+    expect(step({ predictionStarted: () => true, capReached: true })).toEqual({ kind: "skipped", target });
+    // Outside the window there is nothing to skip.
+    expect(step({ predictionStarted: () => true, nowSeconds: target.at - lead - 1 })).toEqual({ kind: "none" });
+  });
+
+  it("names a prediction by its reason and its keys, not by its time or the order of the keys", () => {
+    expect(predictionOf({ at: 1, why: "message", keys: ["b", "a"] })).toBe(predictionOf({ at: 99, why: "message", keys: ["a", "b"] }));
+    expect(predictionOf({ at: 1, why: "message", keys: ["a"] })).not.toBe(predictionOf({ at: 1, why: "message", keys: ["a", "b"] }));
+    expect(predictionOf({ at: 1, why: "keep-alive", keys: ["a"] })).not.toBe(predictionOf({ at: 1, why: "message", keys: ["a"] }));
   });
 
   it("the lead time sets the start: a longer cold start starts earlier", () => {

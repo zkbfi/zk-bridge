@@ -16,7 +16,7 @@ import { decideProof, slotAtTime, warmupPlan, type PendingProof, type WaitingMes
 import type { DestinationToken } from "./economics.ts";
 import type { DecisionOutcome, WatchDecision } from "./decisions.ts";
 import type { FinalityObservation } from "./feed.ts";
-import { COLD_START_FLOOR_SECONDS, IDLE, nextHoldAt, warmupStep, type WarmupConfig, type WarmupEnd, type WarmupSession, type WarmupTarget } from "./warmup.ts";
+import { COLD_START_FLOOR_SECONDS, IDLE, nextHoldAt, predictionOf, warmupStep, type WarmupConfig, type WarmupEnd, type WarmupSession, type WarmupTarget } from "./warmup.ts";
 import type { WarmupStore } from "./warmup-store.ts";
 
 /** The caller key of the watcher's requests. The rate limits count it like any caller. */
@@ -121,6 +121,8 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
   /** The target whose start the daily cap refused, logged once. */
   let cappedAt: number | null = null;
+  /** The prediction whose second early start was skipped, logged once. */
+  let skippedPrediction: string | null = null;
   /**
    * The sync-committee period of the source's finality when this watcher last started a keep-alive. Another keep-alive
    * in the same period starts only once the head is older than the keep-alive age: a guard against a planner that keeps
@@ -459,7 +461,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
         ...(batch === undefined ? {} : { batch }),
       });
       const capReached = input.warmupStore.warmSecondsInWindow(nowSeconds * 1000) >= input.warmup.dailyCapSeconds;
-      action = warmupStep({ nowSeconds, targets: plan.targets, live: plan.live, session, config: input.warmup, leadSeconds: lead.seconds, jobActive: input.findActiveJob() !== null, pingOutstanding, capReached });
+      action = warmupStep({ nowSeconds, targets: plan.targets, live: plan.live, session, config: input.warmup, leadSeconds: lead.seconds, jobActive: input.findActiveJob() !== null, pingOutstanding, capReached, predictionStarted: (target) => input.warmupStore.predictionStarted(direction, predictionOf(target)) });
       scanFailing = false;
     } catch (error) {
       if (!scanFailing) logger.warn("watch_scan_failed", { direction, error });
@@ -477,6 +479,15 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
         if (cappedAt !== action.target.at) logger.warn("warmup_capped", { direction, why: action.target.why, dueInSeconds: Math.round(action.target.at - nowSeconds), dailyCapSeconds: input.warmup.dailyCapSeconds });
         cappedAt = action.target.at;
         return;
+      case "skipped": {
+        const prediction = predictionOf(action.target);
+        if (skippedPrediction !== prediction) {
+          const predictedSlot = slotAtTime(action.target.at, (known as NonNullable<typeof known>).facts);
+          logger.info("early_start_skipped", { direction, reason: "already-started-for-this-prediction", why: action.target.why, keys: action.target.keys, predictedSlot, dueAt: iso(action.target.at) });
+        }
+        skippedPrediction = prediction;
+        return;
+      }
       case "start":
         startSession(action.target, nowSeconds, lead);
         return sendPing(ping, "start");
@@ -486,7 +497,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
   }
 
   function startSession(target: WarmupTarget, at: number, lead: ReturnType<WarmupStore["lead"]>): void {
-    const id = input.warmupStore.openSession({ direction, why: target.why, dueAt: target.at * 1000, leadSeconds: lead.seconds, at: at * 1000 });
+    const id = input.warmupStore.openSession({ direction, why: target.why, dueAt: target.at * 1000, leadSeconds: lead.seconds, at: at * 1000, prediction: predictionOf(target) });
     session = { phase: "warming", id, target, startedAt: at, lastPingAt: at };
     logger.info("warmup_scheduled", { direction, why: target.why, dueAt: new Date(target.at * 1000).toISOString(), dueInSeconds: Math.round(target.at - at), leadSeconds: lead.seconds, leadBasis: lead.basis, observations: lead.observations });
   }

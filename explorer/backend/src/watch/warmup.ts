@@ -10,6 +10,14 @@
 /** A time at which a proof is expected to start. `keys` name what the proof is for: message identifiers, or a handoff. */
 export type WarmupTarget = { readonly at: number; readonly why: "message" | "keep-alive"; readonly keys: readonly string[] };
 
+/**
+ * What an early start is for: the reason and the sorted keys it waits for. One direction starts at most one early worker
+ * per prediction, however the predicted time moves (a late finality moves it to "now" again and again).
+ */
+export function predictionOf(target: WarmupTarget): string {
+  return `${target.why}:${[...target.keys].sort().join(",")}`;
+}
+
 /** The warm-up settings (`watch.warmup`). Seconds unless named otherwise. */
 export type WarmupConfig = {
   /** The quantile of the observed times to ready that the lead time takes. */
@@ -119,6 +127,8 @@ export type WarmupAction =
   | { readonly kind: "start"; readonly target: WarmupTarget }
   /** A target is within the lead time, but the daily cap is spent. */
   | { readonly kind: "capped"; readonly target: WarmupTarget }
+  /** A target is within the lead time, but its prediction had an early start already: none follows, the job starts when finality is seen. */
+  | { readonly kind: "skipped"; readonly target: WarmupTarget }
   /** Ping again: no worker is ready yet. */
   | { readonly kind: "repeat" }
   /** Ping a ready worker before its idle timeout. */
@@ -144,6 +154,8 @@ export type WarmupStepInput = {
   readonly pingOutstanding: boolean;
   /** Whether the warm-up seconds of the last 24 hours reached the daily cap. */
   readonly capReached: boolean;
+  /** Whether an early start was made for the target's prediction already ({@link predictionOf}) and spent. */
+  readonly predictionStarted: (target: WarmupTarget) => boolean;
 };
 
 /**
@@ -157,7 +169,8 @@ export type WarmupStepInput = {
  *   sooner than `intervalSeconds` after it.
  * - With no session, no job and no ping outstanding, the first target whose start (due time minus the lead) has come,
  *   and whose due time is not past by the grace, starts a session, unless a ping timed out within `minGapSeconds` or the
- *   cap is spent.
+ *   cap is spent. A target whose prediction had a session already (`predictionStarted`) starts none: `skipped`, and the
+ *   job starts when finality is actually seen.
  */
 export function warmupStep(input: WarmupStepInput): WarmupAction {
   const { nowSeconds: now, session, config } = input;
@@ -178,5 +191,6 @@ export function warmupStep(input: WarmupStepInput): WarmupAction {
   if (session.timedOutAt !== null && now - session.timedOutAt < config.minGapSeconds) return { kind: "none" };
   const target = input.targets.find((candidate) => now >= candidate.at - input.leadSeconds && now <= candidate.at + config.graceSeconds);
   if (target === undefined) return { kind: "none" };
+  if (input.predictionStarted(target)) return { kind: "skipped", target };
   return input.capReached ? { kind: "capped", target } : { kind: "start", target };
 }
