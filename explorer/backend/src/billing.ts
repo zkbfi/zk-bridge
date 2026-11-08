@@ -1,7 +1,7 @@
 /**
  * What RunPod billed, read from RunPod's own billing API: the per-day and per-hour endpoint billing
  * (`GET rest.runpod.io/v1/billing/endpoints`) and the account balance (GraphQL `myself`). One cached reader serves every
- * page view, so a request to `/warmup/summary` never reaches RunPod. A failed refresh keeps the last good value and the
+ * page view, so a request to `/billing` never reaches RunPod. A failed refresh keeps the last good value and the
  * age of it. The key is read from the environment by the caller, sent only in the Authorization header, and never logged.
  */
 import { remoteEndpoints, type BackendConfig, type BackendSecrets } from "./config.ts";

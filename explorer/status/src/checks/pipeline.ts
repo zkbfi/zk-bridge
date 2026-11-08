@@ -55,42 +55,32 @@ const dollars = (value: unknown) => `$${(number(value) ?? 0).toFixed(2)}`;
 const balanceDollars = (value: number) => `$${value >= 10 ? Math.round(value) : value.toFixed(2)}`;
 
 /**
- * What the GPU warm-ups of the last 24 hours cost: `GET /warmup/summary?days=1`. The money is what RunPod billed
- * (`billing`), and the wasted part is the wasted warm-up seconds at the rate RunPod's billing gives; when the backend
- * cannot read RunPod it says so and the check shows the configured price. Degraded when the balance covers fewer than
- * {@link BALANCE_WARNING_DAYS} days at the last 7 days' average spend; otherwise ok, since a wasted warm-up is a cost, not an outage.
+ * GPU billing of the last 24 hours: `GET /billing?days=1`. The total is what RunPod billed, with the balance and the
+ * days it lasts at the last 7 days' average; the workers started before a proof follow, with how many were unused and
+ * what they cost at the rate RunPod's billing gives. When the backend cannot read RunPod it says so and the unused
+ * cost is at the configured price, named as assumed. Degraded when the balance covers fewer than
+ * {@link BALANCE_WARNING_DAYS} days; otherwise ok, since an unused worker is a cost, not an outage.
  */
-export const warmupCheck = (backendBase: string): Spec => ({
-  id: "pipeline-warmup",
-  name: "Prover warm-ups (24 h)",
+export const gpuBillingCheck = (backendBase: string): Spec => ({
+  id: "gpu-billing",
+  name: "GPU billing",
   section: "pipeline",
   async run(run) {
-    const answer = await get(run, `${backendBase}/warmup/summary?days=1`);
-    if (answer.status !== 200) return { state: "down", detail: `answered ${answer.status} on /warmup/summary` };
+    const answer = await get(run, `${backendBase}/billing?days=1`);
+    if (answer.status !== 200) return { state: "down", detail: `answered ${answer.status} on /billing` };
     const body = record(json(answer));
     const total = record(body?.total);
-    if (body === null || total === null) return { state: "down", detail: "answered something that is not the warm-up summary" };
-    const billing = record(body.billing);
-    const spendKnown = billing?.available === true && number(billing.last24hUsd) !== null;
-    const sessions = number(total.sessions) ?? 0;
-    const wasted = number(total.wasted) ?? 0;
-    const parts: string[] = [];
-    if (sessions === 0) parts.push("no warm-up in 24 h");
-    else parts.push(`${count(sessions, "warm-up")} in 24 h, ${number(total.used) ?? 0} used and ${wasted} wasted`);
-    if (spendKnown) {
-      const wastedText = sessions === 0 ? "" : `, about ${dollars(total.wastedCostUsd)} of it wasted`;
-      parts.push(`${dollars(billing?.last24hUsd)} billed by RunPod in 24 h${wastedText}`);
-    } else if (sessions > 0) {
-      const assumed = number(record(body.assumptions)?.gpuUsdPerHour);
-      const rate = assumed === null ? "" : ` at the assumed $${assumed.toFixed(2)}/h`;
-      parts.push(`RunPod billing is not available; about ${dollars(total.estimatedCostUsd)} of GPU time${rate}, ${dollars(total.wastedCostUsd)} of it wasted (${duration(number(total.wastedSeconds) ?? 0)})`);
-    }
-    const age = number(billing?.ageSeconds);
+    if (body === null || total === null) return { state: "down", detail: "answered something that is not the GPU billing" };
+    const billed = number(record(body.last24h)?.billedUsd);
+    const spendKnown = body.available === true && billed !== null;
+    const parts: string[] = [spendKnown ? `${dollars(billed)} billed by RunPod in 24 h` : "RunPod billing is not available"];
+    const age = number(body.ageSeconds);
     if (spendKnown && age !== null && age > BILLING_STALE_SECONDS) parts.push(`RunPod figures are ${duration(age)} old`);
     let state: "ok" | "degraded" = "ok";
-    const balance = number(billing?.balanceUsd);
+    const account = record(body.account);
+    const balance = number(account?.balanceUsd);
     if (balance !== null) {
-      const daysLeft = number(billing?.balanceDaysLeft);
+      const daysLeft = number(account?.daysLeft);
       if (daysLeft === null) parts.push(`balance ${balanceDollars(balance)}, no spend in the last 7 days`);
       else {
         const left = Math.floor(daysLeft);
@@ -99,7 +89,14 @@ export const warmupCheck = (backendBase: string): Spec => ({
         parts.push(`balance ${balanceDollars(balance)}, ${count(left, "day")} left at the 7-day average${low ? ` (under ${BALANCE_WARNING_DAYS})` : ""}`);
       }
     }
-    return { state, detail: parts.join("; ") };
+    const early = record(total.earlyStarts);
+    const sessions = number(early?.sessions) ?? 0;
+    const unused = number(early?.unused) ?? 0;
+    const assumed = number(record(body.assumptions)?.gpuUsdPerHour);
+    const rate = body.rateSource === "assumed" && assumed !== null ? ` at the assumed $${assumed.toFixed(2)}/h` : "";
+    const unusedText = unused === 0 ? "0 unused" : `${unused} unused (about ${dollars(early?.unusedUsd)}${rate})`;
+    const earlyText = sessions === 0 ? "none" : `${sessions}, ${unusedText}`;
+    return { state, detail: `${parts.join("; ")}. Workers started before a proof: ${earlyText}.` };
   },
 });
 
