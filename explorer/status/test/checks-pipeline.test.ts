@@ -65,68 +65,117 @@ describe("gpuBillingCheck", () => {
     return gpuBillingCheck(backend).run(deps);
   };
 
-  const base = (extra: object = {}) => ({
+  const amount = (usd: number) => ({ seconds: usd * 1000, usd });
+  const buckets = (over: Record<string, number | null> = {}) => {
+    const values = { proving: 0.71, idleAfterJob: 0.19, startingUp: 0.14, waitingForProof: 0.1, unusedEarlyStarts: 0.03, unaccounted: 0.03, ...over };
+    return Object.fromEntries(Object.entries(values).map(([key, usd]) => [key, usd === null ? null : amount(usd)]));
+  };
+  const base = (extra: object = {}, billed = 1.2) => ({
     rateSource: "runpod",
     available: true,
     ageSeconds: 120,
-    last24h: { billedUsd: 1.18, billedSeconds: 5400 },
-    account: { balanceUsd: 153.38, daysLeft: 90.2 },
-    total: { earlyStarts: { sessions: 38, used: 34, unused: 4, unusedUsd: 0.1204, unusedSeconds: 570 } },
+    last24h: { billedUsd: billed, billedSeconds: 5400, breakdown: buckets() },
+    account: { balanceUsd: 153.38, daysLeft: 93.4 },
+    total: {},
     ...extra,
   });
   const account = (balanceUsd: number, daysLeft: number | null) => ({ account: { balanceUsd, daysLeft } });
+  const last24h = (billedUsd: number | null, over: Record<string, number | null> = {}) => ({ last24h: { billedUsd, breakdown: buckets(over) } });
 
   it("is the GPU billing check of the pipeline section", () => {
     expect(gpuBillingCheck(backend)).toMatchObject({ id: "gpu-billing", name: "GPU billing", section: "pipeline" });
   });
 
-  it("leads with the total RunPod billed, then the balance, then the workers started before a proof", async () => {
+  it("leads with the total, then the buckets largest first, then the balance", async () => {
     expect(await run({ body: base() })).toEqual({
       state: "ok",
-      detail: "$1.18 billed by RunPod in 24 h; balance $153, 90 days left at the 7-day average. Workers started before a proof: 38, 4 unused (about $0.12).",
+      detail: "$1.20 in 24 h: proving $0.71, idle after jobs $0.19, starting up $0.14, waiting for a proof $0.10, unused early starts $0.03, unaccounted $0.03; balance $153, 93 days left.",
     });
+  });
+
+  it("orders by size, drops buckets that round to $0.00, and shows a negative unaccounted by its size", async () => {
+    const result = await run({ body: base(last24h(1, { proving: 0.2, idleAfterJob: 0.004, startingUp: 0.5, waitingForProof: 0, unusedEarlyStarts: 0.1, unaccounted: -0.22 }) ) });
+    expect(result.detail).toBe("$1.00 in 24 h: starting up $0.50, unaccounted -$0.22, proving $0.20, unused early starts $0.10; balance $153, 93 days left.");
+    expect(result.state).toBe("ok");
+    // Equal sizes keep the order of the list.
+    expect((await run({ body: base(last24h(1, { proving: 0.1, idleAfterJob: 0.1, startingUp: 0, waitingForProof: 0, unusedEarlyStarts: 0, unaccounted: 0 })) })).detail).toContain("proving $0.10, idle after jobs $0.10;");
+  });
+
+  it("keeps the line within 200 characters: the smallest buckets go and +N more says how many", async () => {
+    const result = await run({ body: base({ ...last24h(1.2), ...account(20, 11.76), ageSeconds: 7200 }) });
+    expect(result.detail.length).toBeLessThanOrEqual(200);
+    expect(result.detail).toMatch(/^\$1\.20 in 24 h: proving \$0\.71, idle after jobs \$0\.19, [^;]*\+\d more; RunPod figures are 2 h old; balance \$20, 11 days left \(under 14\)\.$/);
+    expect(result.state).toBe("degraded");
+    // With room to spare nothing is hidden.
+    expect((await run({ body: base() })).detail).not.toContain("more");
   });
 
   it("is degraded when the balance covers fewer than 14 days, and says the days left", async () => {
     const low = await run({ body: base(account(20, 11.76)) });
     expect(low.state).toBe("degraded");
-    expect(low.detail).toContain("balance $20, 11 days left at the 7-day average (under 14)");
+    expect(low.detail).toContain("balance $20, 11 days left (under 14)");
     expect((await run({ body: base(account(23.8, 14)) })).state).toBe("ok");
     expect((await run({ body: base(account(23.7, 13.99)) })).state).toBe("degraded");
-    expect((await run({ body: base({ ...account(153, 3), total: { earlyStarts: { sessions: 0 } } }) })).state).toBe("degraded");
   });
 
   it("says when there is no spend to divide by, and when the figures are old", async () => {
     expect((await run({ body: base(account(153.38, null)) })).detail).toContain("balance $153, no spend in the last 7 days");
-    expect((await run({ body: base({ ageSeconds: 2700 }) })).detail).toContain("$1.18 billed by RunPod in 24 h; RunPod figures are 45 min old; balance");
+    expect((await run({ body: base({ ageSeconds: 2700 }) })).detail).toContain("+1 more; RunPod figures are 45 min old; balance");
     expect((await run({ body: base(account(4.5, 20)) })).detail).toContain("balance $4.50,");
   });
 
-  it("leaves out the account when the request came through Caddy", async () => {
-    expect(await run({ body: base({ account: { balanceUsd: null, daysLeft: null } }) })).toEqual({
-      state: "ok",
-      detail: "$1.18 billed by RunPod in 24 h. Workers started before a proof: 38, 4 unused (about $0.12).",
+  it("is degraded when the unaccounted dollars pass 25% of the bill, and says the numbers", async () => {
+    const mismatch = await run({ body: base(last24h(1, { proving: 0.5, idleAfterJob: 0.1, startingUp: 0, waitingForProof: 0, unusedEarlyStarts: 0, unaccounted: 0.4 })) });
+    expect(mismatch.state).toBe("degraded");
+    expect(mismatch.detail).toBe("$1.00 in 24 h: proving $0.50, unaccounted $0.40 (40% of the $1.00 billed, records do not match the bill), idle after jobs $0.10; balance $153, 93 days left.");
+    // The records claim more than was billed: negative counts the same way.
+    const over = await run({ body: base(last24h(1, { proving: 1.3, idleAfterJob: 0, startingUp: 0, waitingForProof: 0, unusedEarlyStarts: 0, unaccounted: -0.3 })) });
+    expect(over.state).toBe("degraded");
+    expect(over.detail).toContain("unaccounted -$0.30 (30% of the $1.00 billed, records do not match the bill)");
+    // Exactly 25% is still ok; no bill, or no unaccounted figure, cannot be compared.
+    expect((await run({ body: base(last24h(1, { unaccounted: 0.25 })) })).state).toBe("ok");
+    expect((await run({ body: base(last24h(0, { unaccounted: 0.25 })) })).state).toBe("ok");
+    expect((await run({ body: base(last24h(1, { unaccounted: null })) })).state).toBe("ok");
+  });
+
+  it("keeps the flagged unaccounted bucket when the line is shortened", async () => {
+    const result = await run({
+      body: base({ ...last24h(1, { proving: 0.5, idleAfterJob: 0.1, startingUp: 0.05, waitingForProof: 0.05, unusedEarlyStarts: 0.04, unaccounted: 0.26 }), ...account(20, 11.76), ageSeconds: 7200 }),
     });
+    expect(result.detail.length).toBeLessThanOrEqual(200);
+    expect(result.detail).toContain("unaccounted $0.26 (26% of the $1.00 billed, records do not match the bill)");
+    expect(result.detail).toMatch(/\+\d more/);
   });
 
-  it("names the assumed price when RunPod's billing cannot be read", async () => {
-    expect(
-      await run({ body: { rateSource: "assumed", available: false, assumptions: { gpuUsdPerHour: 2.25 }, total: { earlyStarts: { sessions: 6, used: 4, unused: 2, unusedUsd: 0.1 } } } }),
-    ).toEqual({ state: "ok", detail: "RunPod billing is not available. Workers started before a proof: 6, 2 unused (about $0.10 at the assumed $2.25/h)." });
-    expect((await run({ body: { rateSource: "assumed", total: { earlyStarts: { sessions: 1, unused: 1 } } } })).detail).toBe("RunPod billing is not available. Workers started before a proof: 1, 1 unused (about $0.00).");
+  it("leaves out the account when the request came through Caddy", async () => {
+    expect((await run({ body: base({ account: { balanceUsd: null, daysLeft: null } }) })).detail).toBe(
+      "$1.20 in 24 h: proving $0.71, idle after jobs $0.19, starting up $0.14, waiting for a proof $0.10, unused early starts $0.03, unaccounted $0.03.",
+    );
   });
 
-  it("says when no worker was started, or none was unused, and is down on a bad answer", async () => {
-    expect(await run({ body: base({ total: { earlyStarts: { sessions: 0 } } }) })).toMatchObject({ detail: expect.stringContaining("Workers started before a proof: none.") });
-    expect((await run({ body: { total: {} } })).detail).toBe("RunPod billing is not available. Workers started before a proof: none.");
-    expect((await run({ body: base({ total: { earlyStarts: { sessions: 5, unused: 0 } } }) })).detail).toContain("Workers started before a proof: 5, 0 unused.");
+  it("says when RunPod's billing cannot be read, and gives what our records hold at the assumed price", async () => {
+    const records = { rateSource: "assumed", available: false, assumptions: { gpuUsdPerHour: 2.25 }, last24h: { billedUsd: null, breakdown: buckets({ unaccounted: null }) }, total: {} };
+    expect(await run({ body: records })).toEqual({
+      state: "ok",
+      detail: "RunPod billing is not available; our records for 24 h at the assumed $2.25/h: proving $0.71, idle after jobs $0.19, starting up $0.14, waiting for a proof $0.10, unused early starts $0.03.",
+    });
+    expect((await run({ body: { rateSource: "assumed", total: {} } })).detail).toBe("RunPod billing is not available; our records for 24 h.");
+    // Billed but not available: not trusted either.
+    expect((await run({ body: { ...records, available: true, last24h: { billedUsd: 1 } } })).detail).toBe("$1.00 in 24 h.");
+    expect((await run({ body: { ...records, available: false, last24h: { billedUsd: 1, breakdown: buckets() } } })).state).toBe("ok");
+  });
+
+  it("says so when there is no record at all, and is down on a bad answer", async () => {
+    expect((await run({ body: base({ last24h: { billedUsd: 0, breakdown: buckets({ proving: 0, idleAfterJob: 0, startingUp: 0, waitingForProof: 0, unusedEarlyStarts: 0, unaccounted: 0 }) }, ...account(153.38, 93) }) })).detail).toBe(
+      "$0.00 in 24 h; balance $153, 93 days left.",
+    );
     expect(await run({ status: 429 })).toEqual({ state: "down", detail: "answered 429 on /billing" });
     expect(await run({ text: "x" })).toEqual({ state: "down", detail: "answered something that is not the GPU billing" });
   });
 
-  it("keeps the detail within the sanitizer: one line, no URL, under 200 characters", async () => {
+  it("keeps the detail within the sanitizer: one line, no URL, at most 200 characters", async () => {
     const result = await run({ body: base({ ...account(20, 11.76), ageSeconds: 7200 }) });
-    expect(result.detail.length).toBeLessThan(200);
+    expect(result.detail.length).toBeLessThanOrEqual(200);
     expect(result.detail).not.toMatch(/https?:|\n/);
   });
 });

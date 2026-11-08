@@ -8,6 +8,7 @@
  */
 import type { ProofDirection } from "@zk-bridge/shared";
 import type { ProveTiming } from "@zk-bridge/shared/prover";
+import type { JobRecord } from "../billing-breakdown.ts";
 import type { Storage } from "../storage.ts";
 
 /** Rows older than this many milliseconds are deleted when a new one is written. */
@@ -179,4 +180,12 @@ export function statOf(values: ReadonlyArray<number | null>): Stat {
   const sorted = values.filter((value): value is number => value !== null).sort((left, right) => left - right);
   if (sorted.length === 0) return { count: 0, medianMs: null, p90Ms: null };
   return { count: sorted.length, medianMs: Math.round(quantile(sorted, 0.5)), p90Ms: Math.round(quantile(sorted, 0.9)) };
+}
+
+/** The jobs proved from `from` (milliseconds) on, oldest first, with the fields that the billing breakdown reads. */
+export function provedJobsSince(storage: Storage, from: number): JobRecord[] {
+  const rows = storage.database
+    .prepare("SELECT started_at, proved_at, wait_worker_ms, not_ready_count, remote_ms, worker_total_ms FROM job_timings WHERE proved_at IS NOT NULL AND proved_at >= ? ORDER BY proved_at")
+    .all(from) as Array<{ started_at: number | null; proved_at: number; wait_worker_ms: number | null; not_ready_count: number | null; remote_ms: number | null; worker_total_ms: number | null }>;
+  return rows.map((row) => ({ startedAt: row.started_at, provedAt: row.proved_at, waitWorkerMs: row.wait_worker_ms, notReadyCount: row.not_ready_count, remoteMs: row.remote_ms, workerTotalMs: row.worker_total_ms }));
 }

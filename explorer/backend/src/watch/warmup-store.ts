@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import type { ProofDirection } from "@zk-bridge/shared";
 import type { ProveTiming } from "@zk-bridge/shared/prover";
+import type { SessionRecord } from "../billing-breakdown.ts";
 import type { Storage } from "../storage.ts";
 import { leadFrom, type Lead, type WarmupConfig, type WarmupEnd } from "./warmup.ts";
 
@@ -63,6 +64,8 @@ export interface WarmupStore {
   warmSecondsInWindow(at: number): number;
   /** The sessions that ended from `from` (milliseconds) on, summed per UTC day, newest day first. */
   summary(from: number, config: Pick<WarmupConfig, "gpuUsdPerHour" | "idleTimeoutSeconds">): WarmupDay[];
+  /** The sessions that ended and started at `from` (milliseconds) or later, oldest first, for the billing breakdown. */
+  endedSessions(from: number): SessionRecord[];
   /** Whether a session of the direction ran at `at`: then a job's wait for a worker is the warm-up's, not a cold start. */
   sessionAt(direction: ProofDirection, at: number): boolean;
 }
@@ -146,6 +149,12 @@ export function createWarmupStore(storage: Storage): WarmupStore {
         )
         .get(at, at, from, at, from) as { total: number };
       return row.total / 1000;
+    },
+    endedSessions(from) {
+      const rows = database
+        .prepare("SELECT started_at, ready_at, ended_at, outcome, billed_seconds FROM warmup_sessions WHERE ended_at IS NOT NULL AND started_at >= ? ORDER BY started_at")
+        .all(from) as Array<{ started_at: number; ready_at: number | null; ended_at: number; outcome: string | null; billed_seconds: number | null }>;
+      return rows.map((row) => ({ startedAt: row.started_at, readyAt: row.ready_at, endedAt: row.ended_at, outcome: row.outcome, billedSeconds: row.billed_seconds }));
     },
     sessionAt(direction, at) {
       return database.prepare("SELECT 1 FROM warmup_sessions WHERE direction = ? AND started_at <= ? AND (ended_at IS NULL OR ended_at >= ?) LIMIT 1").get(direction, at, at) !== undefined;

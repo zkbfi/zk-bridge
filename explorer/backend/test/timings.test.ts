@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openStorage } from "../src/storage.ts";
-import { getTiming, listTimings, recentTimings, recordBoardPost, recordProveTiming, statOf, TIMING_RETENTION_MILLISECONDS } from "../src/requests/timings.ts";
+import { provedJobsSince, getTiming, listTimings, recentTimings, recordBoardPost, recordProveTiming, statOf, TIMING_RETENTION_MILLISECONDS } from "../src/requests/timings.ts";
 
 const DAY = 86_400_000;
 
@@ -93,3 +93,19 @@ describe("the timings of each proof (2026-11-01)", () => {
     expect(statOf([1.4, 2.6])).toEqual({ count: 2, medianMs: 1, p90Ms: 3 });
   });
 });
+
+describe("the proved jobs read for the billing breakdown (2026-11-07)", () => {
+  it("lists the proved jobs from a time on, oldest first, with the fields the breakdown reads", () => {
+    const storage = openStorage(":memory:");
+    recordProveTiming(storage, { jobId: "b", direction: "first-to-second", startedAt: 2_000, provedAt: 3_000, timing: { wait_worker_ms: 7, not_ready_count: 1, remote_ms: 500, worker_total_ms: 400 } });
+    recordProveTiming(storage, { jobId: "a", direction: "second-to-first", startedAt: 100, provedAt: 900, timing: null });
+    // A row that the board wrote first has no proof time yet.
+    recordBoardPost(storage, { jobId: "c", direction: "first-to-second", storedAt: 1_000, postedAt: 5_000, grindMs: 1 });
+    expect(provedJobsSince(storage, 0)).toEqual([
+      { startedAt: 100, provedAt: 900, waitWorkerMs: null, notReadyCount: null, remoteMs: null, workerTotalMs: null },
+      { startedAt: 2_000, provedAt: 3_000, waitWorkerMs: 7, notReadyCount: 1, remoteMs: 500, workerTotalMs: 400 },
+    ]);
+    expect(provedJobsSince(storage, 901)).toHaveLength(1);
+  });
+});
+

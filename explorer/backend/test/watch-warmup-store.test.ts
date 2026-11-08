@@ -160,3 +160,21 @@ describe("noteJobWorkerWait", () => {
     expect(record.lead(LEGACY_WARMUP)).toMatchObject({ basis: "default" });
   });
 });
+
+describe("the sessions read for the billing breakdown (2026-11-07)", () => {
+  it("lists ended sessions from a time on, oldest first, with their times and billed seconds", () => {
+    const { store: record } = store();
+    const first = record.openSession({ direction: "first-to-second", why: "message", dueAt: T, leadSeconds: 90, at: T });
+    record.markReady(first, T + 30_000);
+    record.endSession(first, "used", T + 70_000, 60);
+    const second = record.openSession({ direction: "second-to-first", why: "message", dueAt: T, leadSeconds: 90, at: T + 500_000 });
+    record.endSession(second, "grace", T + 600_000, 60);
+    record.openSession({ direction: "first-to-second", why: "message", dueAt: T, leadSeconds: 90, at: T + 900_000 });
+    expect(record.endedSessions(T)).toEqual([
+      { startedAt: T, readyAt: T + 30_000, endedAt: T + 70_000, outcome: "used", billedSeconds: 130 },
+      { startedAt: T + 500_000, readyAt: null, endedAt: T + 600_000, outcome: "grace", billedSeconds: 160 },
+    ]);
+    expect(record.endedSessions(T + 1)).toHaveLength(1);
+  });
+});
+
