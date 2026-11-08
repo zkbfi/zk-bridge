@@ -284,7 +284,8 @@ describe("GET /warmup/summary with RunPod billing (2026-11-07)", () => {
     const run = withBilling(snapshot);
     sessions(run);
     const body = (await run.get("/warmup/summary", { "x-forwarded-for": "203.0.113.7" })).body as Record<string, any>;
-    expect(body.billing).toMatchObject({ available: true, last24hUsd: 0.38, effectiveUsdPerHour: 0.76, balanceUsd: null, balanceAgeSeconds: null, currentSpendPerHr: null, spendLimit: null, balanceDaysLeft: null });
+    expect(body.billing).toMatchObject({ available: true, last24hUsd: 0.38, effectiveUsdPerHour: 0.76 });
+    for (const field of ["balanceUsd", "balanceAgeSeconds", "currentSpendPerHr", "spendLimit", "balanceDaysLeft"]) expect(body.billing).not.toHaveProperty(field);
     expect(body.total).toMatchObject({ billedUsd: 0.76 });
   });
 
@@ -363,7 +364,7 @@ describe("GET /billing (2026-11-07)", () => {
   it("keeps the account off a request that came through Caddy", async () => {
     const run = withBilling(snapshot);
     const body = (await run.get("/billing", { "x-forwarded-for": "203.0.113.7" })).body as Record<string, any>;
-    expect(body.account).toEqual({ balanceUsd: null, balanceAgeSeconds: null, spendNowUsdPerHour: null, spendLimitUsd: null, daysLeft: null });
+    expect(body).not.toHaveProperty("account");
     expect(body).toMatchObject({ last24h: { billedUsd: 0.38 }, effectiveUsdPerHour: 0.76 });
   });
 

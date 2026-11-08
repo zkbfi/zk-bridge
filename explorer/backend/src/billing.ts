@@ -258,7 +258,8 @@ export function figuresOf(snapshot: BillingSnapshot, at: number): BillingFigures
   };
 }
 
-/** The billing figures without the account: what RunPod billed and the rate stay public; the balance, the spend limit, the spend now and the days the balance lasts do not. */
-export function publicFiguresOf(figures: BillingFigures): BillingFigures {
-  return { ...figures, balanceUsd: null, balanceAgeSeconds: null, currentSpendPerHr: null, spendLimit: null, balanceDaysLeft: null };
+/** The billing figures without the account: what RunPod billed and the rate stay; the balance, its age, the spend limit, the spend now and the days the balance lasts are left out. */
+export function publicFiguresOf(figures: BillingFigures): Omit<BillingFigures, "balanceUsd" | "balanceAgeSeconds" | "currentSpendPerHr" | "spendLimit" | "balanceDaysLeft"> {
+  const { balanceUsd: _balance, balanceAgeSeconds: _age, currentSpendPerHr: _now, spendLimit: _limit, balanceDaysLeft: _days, ...rest } = figures;
+  return rest;
 }

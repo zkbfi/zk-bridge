@@ -212,8 +212,9 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     // The account (balance, spend limit, spend now, days left) only for a direct local request, such as the status
     // service on 127.0.0.1. Caddy adds X-Forwarded-For to every request it passes on, so a request from the internet
     // never sees them; the backend listens on 127.0.0.1 only.
-    const shown = request.req.header("x-forwarded-for") === undefined ? figures : publicFiguresOf(figures);
-    return { days, at, snapshot, figures, shown, rateSource, usdPerHour, sessionDays, assumptions: { idleTimeoutSeconds, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds } };
+    const local = request.req.header("x-forwarded-for") === undefined;
+    const shown = figures;
+    return { days, at, snapshot, figures, shown, local, rateSource, usdPerHour, sessionDays, assumptions: { idleTimeoutSeconds, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds } };
   }
 
   const money = (value: number) => Math.round(value * 10_000) / 10_000;
@@ -227,7 +228,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
   app.get("/billing", async (request) => {
     const window = await billingWindow(request);
     if ("refused" in window) return window.refused;
-    const { days, at, snapshot, shown, rateSource, usdPerHour, sessionDays, assumptions } = window;
+    const { days, at, snapshot, shown, local, rateSource, usdPerHour, sessionDays, assumptions } = window;
     const earlyOf = new Map(sessionDays.map((day) => [day.day, day]));
     const early = (day: (typeof sessionDays)[number] | undefined) => ({
       sessions: day?.sessions ?? 0,
@@ -274,7 +275,8 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
       last24h: { billedUsd: shown.last24hUsd, billedSeconds: shown.last24hBilledSeconds },
       effectiveUsdPerHour: shown.effectiveUsdPerHour,
       averageDailyUsd7d: shown.averageDailyUsd7d,
-      account: { balanceUsd: shown.balanceUsd, balanceAgeSeconds: shown.balanceAgeSeconds, spendNowUsdPerHour: shown.currentSpendPerHr, spendLimitUsd: shown.spendLimit, daysLeft: shown.balanceDaysLeft },
+      // Left out, not nulled, for a request that came through Caddy.
+      ...(local ? { account: { balanceUsd: shown.balanceUsd, balanceAgeSeconds: shown.balanceAgeSeconds, spendNowUsdPerHour: shown.currentSpendPerHr, spendLimitUsd: shown.spendLimit, daysLeft: shown.balanceDaysLeft } } : {}),
       total: {
         billedUsd,
         billedSeconds,
@@ -289,7 +291,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
   app.get("/warmup/summary", async (request) => {
     const window = await billingWindow(request);
     if ("refused" in window) return window.refused;
-    const { days, snapshot, shown, rateSource, usdPerHour, sessionDays: warmupDays, assumptions } = window;
+    const { days, snapshot, shown, local, rateSource, usdPerHour, sessionDays: warmupDays, assumptions } = window;
     const billedOf = new Map((snapshot.spend?.days ?? []).map((day) => [day.start, day]));
     const byDay = warmupDays.map((day) => {
       const billed = billedOf.get(day.day);
@@ -308,7 +310,8 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
       rateSource,
       usdPerHour,
       assumptions,
-      billing: shown,
+      // The account fields are left out, not nulled, for a request that came through Caddy.
+      billing: local ? shown : publicFiguresOf(shown),
       total: {
         sessions: sum((day) => day.sessions),
         used: sum((day) => day.used),
