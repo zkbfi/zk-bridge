@@ -10,6 +10,13 @@ export const NO_ROUTER_NOTICE =
   "No router is involved. This relay carries no tip and no fee terms, so no router can take a fee. Anyone can deliver it directly on the bridge, for free. It may take longer.";
 
 /**
+ * What the confirm dialog says about the wrap route: the delivery router on this chain wraps the coin and relays it, and
+ * the relay carries no tip, so the router takes nothing.
+ */
+export const WRAP_NO_FEE_NOTICE =
+  "The delivery router wraps the coin you send, then relays it on the bridge. It takes no fee: this relay carries no tip and no fee terms. Anyone can deliver it on the other chain, for free. It may take longer than a relay with a tip.";
+
+/**
  * What a tip means for the delivery and for a direct delivery. Anyone may deliver through the delivery router. The router
  * pays the tip to its own reward address, so a copied delivery gains the copier nothing. A direct delivery on the bridge
  * does not use the router, so it pays no tip and the recipient gets the whole amount.

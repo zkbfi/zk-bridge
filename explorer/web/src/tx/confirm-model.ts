@@ -6,11 +6,12 @@ import { decodeDeliveryCall, decodeFeeDirector, feeModeOf, GAS_MODE_HELP, router
 import { formatUnits, formatRateAsPercent } from "@terminal/format/amounts";
 import type { RouterAddressesReading } from "@terminal/chain/live-reads";
 import { decodeKnownCall } from "@terminal/tx/decode";
+import { shortenHex } from "@terminal/format/text";
 import type { DisplayArgument } from "@terminal/tx/plan";
 import type { DeliveryCall } from "@zk-bridge/shared";
 import { decodeFunctionData, getAddress, isAddress, type AbiFunction, type Address, type Hex } from "viem";
 import type { WebStep } from "./bridge-steps";
-import { NO_ROUTER_NOTICE, TIP_NOTES, routerWarningOf } from "./tip-copy";
+import { NO_ROUTER_NOTICE, TIP_NOTES, WRAP_NO_FEE_NOTICE, routerWarningOf } from "./tip-copy";
 import { confirmableAbis } from "./web-abis";
 
 /** One labelled line of the dialog. */
@@ -43,6 +44,8 @@ export type DeliveryView = {
   readonly certaintyLabel: string;
   readonly summary: string;
   readonly formula: string;
+  /** The most that the tip can take, as an amount: `0.25 zUSDC`. */
+  readonly tipLimitText: string;
   /** The most that the tip can take, as a sentence with the amount. For a gas based tip it names the limit as the price ceiling. */
   readonly tipMaximum: string;
   /** What the gas based mode means (the limit, and the gas choice of the deliverer), or null for another mode. */
@@ -65,6 +68,10 @@ export type DeliveryView = {
 /** The whole dialog for one transaction. */
 export type ConfirmView = {
   readonly title: string;
+  /** The amount that the step moves or allows, read from the bytes: `0.1 SepETH`, `250 USDC`. Null for a step with no amount. */
+  readonly amountText: string | null;
+  /** Where it goes: `to 0x8D43…4Bdd on PulseChain`. Null for a step that sends nothing to the other chain. */
+  readonly destinationText: string | null;
   readonly chainText: string;
   readonly contractText: string;
   readonly functionSignature: string;
@@ -72,7 +79,7 @@ export type ConfirmView = {
   readonly arguments: readonly DisplayArgument[];
   readonly valueText: string;
   readonly delivery: DeliveryView | null;
-  /** For a relay with no tip: a sentence that says that no router is involved. Null otherwise. */
+  /** For a relay with no tip: a sentence that no router is involved, or for the wrap route that the router takes no fee. Null otherwise. */
   readonly noRouterNotice: string | null;
   readonly notes: readonly string[];
   /** Why the signature is blocked, or null when it is allowed. */
@@ -136,11 +143,11 @@ const mergeMeanings = (decoded: readonly DisplayArgument[], planned: readonly Di
     return meaning === undefined || argument.meaning !== undefined ? argument : { ...argument, meaning };
   });
 
-const RELAY_FUNCTIONS: readonly string[] = ["relayTokens", "wrapAndRelayTokens"];
-
+/** The notice of a relay with no tip: a plain relay names no router; the wrap route goes through the router, which takes no fee. */
 const noRouterNoticeOf = (step: WebStep): string | null => {
   if (step.disclosure.delivery !== null) return null;
-  return RELAY_FUNCTIONS.includes(step.plan.functionName) ? NO_ROUTER_NOTICE : null;
+  if (step.plan.functionName === "wrapAndRelayTokens") return WRAP_NO_FEE_NOTICE;
+  return step.plan.functionName === "relayTokens" ? NO_ROUTER_NOTICE : null;
 };
 
 const ADDRESSES_UNREADABLE_WARNING =
@@ -179,6 +186,7 @@ const deliveryViewOf = (step: WebStep, routerAddresses: RouterAddressesReading |
     ...routerAddressesViewOf(routerAddresses),
     tipMode: TIP_MODE_NAMES[description.mode],
     tipNow: description.summary,
+    tipLimitText: withSymbol(delivery.maximumTip, token),
     tipMaximum: tipMaximumOf(description.mode, { limit: withSymbol(delivery.maximumTip, token), atEstimate: withSymbol(description.expectedUnits, token) }),
     gasModeHelp: description.mode === "gas" ? GAS_MODE_HELP : null,
     gasNotice: delivery.notice,
@@ -206,8 +214,10 @@ export const buildConfirmView = (step: WebStep, routerAddresses?: RouterAddresse
   const { plan } = step;
   const decoded = decodeKnownCall(plan.data, confirmableAbis);
   const blockedReason = blockedReasonOf(step, decoded);
+  const headline = decoded === null ? { amountText: null, destinationText: null } : headlineOf(step, decoded.arguments);
   return {
     title: plan.title,
+    ...headline,
     chainText: `${plan.chain.name} (chain ${plan.chain.chainId})`,
     contractText: `${plan.contractLabel} at ${getAddress(plan.to as Address)}`,
     functionSignature: plan.functionSignature,
@@ -218,6 +228,44 @@ export const buildConfirmView = (step: WebStep, routerAddresses?: RouterAddresse
     notes: plan.notes,
     blockedReason,
   };
+};
+
+const valueOf = (decoded: readonly DisplayArgument[], name: string): string | undefined => decoded.find((argument) => argument.name === name)?.value;
+
+/** An amount in base units from the bytes, in the token of the step when the page knows it. */
+const tokenAmountText = (units: string | undefined, token: StepToken | null): string | null => {
+  if (units === undefined) return null;
+  return token === null ? `${units} base units` : withSymbol(BigInt(units), token);
+};
+
+type StepToken = { readonly symbol: string; readonly decimals: number };
+
+/** `to 0x8D43…4Bdd on PulseChain`, or `to your address on …` when the call names no receiver. */
+const destinationOf = (address: string | undefined, chainName: string): string =>
+  `to ${address === undefined ? "your address" : shortenHex(getAddress(address), 4)} on ${chainName}`;
+
+/**
+ * The headline of a step: the amount and where it goes, read from the decoded bytes (not from the plan), so the headline
+ * says what the wallet will sign.
+ */
+const headlineOf = (step: WebStep, decoded: readonly DisplayArgument[]): Pick<ConfirmView, "amountText" | "destinationText"> => {
+  const { plan, disclosure } = step;
+  const chainName = disclosure.destinationChainName ?? "the other chain";
+  switch (plan.functionName) {
+    case "wrapAndRelayTokens":
+      return { amountText: `${formatUnits(plan.value, 18)} ${plan.chain.nativeSymbol}`, destinationText: destinationOf(valueOf(decoded, "receiver"), chainName) };
+    case "relayTokens":
+    case "relayTokensAndCall": {
+      const recipient = disclosure.delivery === null ? valueOf(decoded, "receiver") : disclosure.delivery.director.recipient;
+      return { amountText: tokenAmountText(valueOf(decoded, "value"), disclosure.amountToken), destinationText: destinationOf(recipient, chainName) };
+    }
+    case "approve":
+      return { amountText: tokenAmountText(valueOf(decoded, "amount"), disclosure.amountToken), destinationText: null };
+    case "requireToPassMessage":
+      return { amountText: null, destinationText: destinationOf(valueOf(decoded, "target"), chainName) };
+    default:
+      return { amountText: null, destinationText: null };
+  }
 };
 
 const blockedReasonOf = (step: WebStep, decoded: ReturnType<typeof decodeKnownCall>): string | null => {
