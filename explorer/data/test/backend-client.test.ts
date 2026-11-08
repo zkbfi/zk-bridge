@@ -68,6 +68,16 @@ describe("backend client", () => {
     await expect(clientAnswering({ "/requests": { status: 409, body: {} } }).client.requestProof(request)).rejects.toThrow(/unknown shape/);
   });
 
+  it("requestProof passes on which limit refused, a joined job and why nothing is proved (2026-11-07)", async () => {
+    const request = { pair: "eth-pls", direction: "first-to-second", reason: "user" } as const;
+    const joined = clientAnswering({ "/requests": { status: 202, body: { requestId: "r1", jobId: "j1", joined: true } } });
+    expect(await joined.client.requestProof(request)).toEqual({ requestId: "r1", jobId: "j1", joined: true });
+    const same = clientAnswering({ "/requests": { status: 429, body: { error: "rate-limited", retryAfterSeconds: 300, why: "same-finality", detail: "a job already proves to the newest finality" } } });
+    expect(await same.client.requestProof(request)).toEqual({ refused: "rate-limited", retryAfterSeconds: 300, why: "same-finality", detail: "a job already proves to the newest finality" });
+    const pending = clientAnswering({ "/requests": { status: 409, body: { error: "nothing-to-prove", why: "proof-pending" } } });
+    expect(await pending.client.requestProof(request)).toEqual({ refused: "nothing-to-prove", why: "proof-pending" });
+  });
+
   it("refuses a message identifier of the wrong length in a request status", async () => {
     const status = { ...job, requestId: "r1", reason: "message", messageId: "0x12", requestedAt: 1 };
     const { client } = clientAnswering({ "/requests/r1": { status: 200, body: status } });

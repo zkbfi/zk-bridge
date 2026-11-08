@@ -13,6 +13,8 @@ import { Chevron, GasCan } from "./icons";
 import { iconSubjectOf } from "./image-source";
 import { Num } from "./Num";
 import { settlePending, usePending } from "./pending";
+import { canRequestProof } from "./proof-request";
+import { RequestProof } from "./RequestProof";
 import { selfDeliveryState } from "./self-delivery";
 import { StepList } from "./StepList";
 import { TokenIcon } from "./TokenIcon";
@@ -154,6 +156,7 @@ export const ActivityScreen = () => {
                 <span>{stepWords(row, destination, now)}</span>
                 {group === "in-flight" ? <span className="zb-right zb-left-time">{leftText(secondsLeft(row, pair, now))}</span> : null}
               </div>
+              {canRequestProof(row.status) ? <RequestProof messageId={row.id} direction={row.direction} destinationName={destination.name} /> : null}
               {group === "needs-you" ? (
                 <NeedsYou row={row} destinationChainId={destination.chainId} destinationName={destination.name} nativeSymbol={destination.nativeSymbol} nativeBalance={destinationSnapshot?.status === "ok" ? destinationSnapshot.snapshot.nativeBalance : null} />
               ) : null}

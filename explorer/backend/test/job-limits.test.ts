@@ -1,0 +1,208 @@
+/**
+ * The job limits of 2026-11-07 (owner: "yes to the job limit changes"): one job per new finality and direction, the
+ * epochs of a day as the backstop, a daily GPU budget per direction, and the urgent reasons of a request (a user's
+ * request, and the watcher's deposits-locked) that the minimum interval never holds back.
+ */
+import { describe, expect, it } from "vitest";
+import { DEFAULT_RATE_LIMITS } from "../src/requests/rate-limit.ts";
+import { insertJob, lastJobTargetSlot, recentJobSeconds, updateJob } from "../src/requests/jobs.ts";
+import { createRequestService, type RequestServiceInput } from "../src/requests/service.ts";
+import { recordProveTiming } from "../src/requests/timings.ts";
+import { start as startRequests } from "../src/requests/module.ts";
+import { openStorage, type Storage } from "../src/storage.ts";
+import type { BillingSnapshot } from "../src/billing.ts";
+import { fakeProofNeed, makeBackend, makeClock, makeConfig, memoryLogger, postFrom, controllableProver, seeFinality } from "./support.ts";
+
+const HOUR = 3_600_000;
+
+function build(overrides: Partial<RequestServiceInput> = {}, need = fakeProofNeed()) {
+  const storage = overrides.storage ?? openStorage(":memory:");
+  const clock = makeClock(100 * HOUR);
+  const prover = controllableProver();
+  const log = memoryLogger();
+  const service = createRequestService({ storage, proverForJob: () => prover.binary, readProofNeed: need.read, now: clock.now, limits: DEFAULT_RATE_LIMITS, proverTimeoutMilliseconds: 1_800_000, logger: log.logger, ...overrides });
+  const named = (name: string) => log.lines.map((line) => JSON.parse(line) as Record<string, unknown>).filter((line) => line.event === name);
+  return { storage, clock, prover, service, named, need };
+}
+
+/** A proof of the direction that ran `seconds` on the worker and came back at `provedAt`. */
+function provedJob(storage: Storage, id: string, provedAt: number, seconds: number, direction: "first-to-second" | "second-to-first" = "first-to-second"): void {
+  recordProveTiming(storage, { jobId: id, direction, startedAt: provedAt - seconds * 1000, provedAt, timing: { worker_total_ms: seconds * 1000 } });
+}
+
+const base = { pair: "eth-pls", direction: "first-to-second" as const };
+
+describe("the urgent reasons of a request", () => {
+  it("a deposits-locked request of the watcher starts a job though the indexer shows no need, and says why", async () => {
+    const run = build({}, fakeProofNeed({ needed: false }));
+    // From outside the reason is never `finality`: the flag does nothing there.
+    expect(await run.service.submit({ ...base, caller: "203.0.113.9", reason: "user", urgent: "deposits-locked" })).toEqual({ refused: "nothing-to-prove", why: "no-need" });
+    const started = await run.service.submit({ ...base, caller: "watch", reason: "finality", urgent: "deposits-locked", target: { startSlot: 100, newSlot: 200 } });
+    expect(started).toMatchObject({ jobId: expect.any(String) });
+    expect(run.named("job_started")).toMatchObject([{ why: "deposits-locked", reason: "finality", urgent: ["deposits-locked"] }]);
+  });
+
+  it("a user's request is logged as requested; a plain watcher request names no urgent reason", async () => {
+    const run = build();
+    await run.service.submit({ ...base, caller: "203.0.113.9", reason: "user" });
+    expect(run.named("job_started")).toMatchObject([{ reason: "user", urgent: ["requested"] }]);
+    const other = build();
+    await other.service.submit({ ...base, caller: "watch", reason: "finality", target: { startSlot: 1, newSlot: 2 } });
+    expect(other.named("job_started")[0]).not.toHaveProperty("urgent");
+  });
+
+  it("a request that joins the running job says so", async () => {
+    const run = build();
+    const first = await run.service.submit({ ...base, caller: "a", reason: "user" });
+    expect(first).not.toHaveProperty("joined");
+    expect(await run.service.submit({ ...base, caller: "b", reason: "user" })).toEqual({ requestId: expect.any(String), jobId: (first as { jobId: string }).jobId, joined: true });
+  });
+
+  it("requested: POST /requests proves under watch.minIntervalSeconds 3600 when the finality is new and there is a need", async () => {
+    // Owner: "if a user requests a proof then it should be given one if the finality is new".
+    const backend = makeBackend({ config: makeConfig({ watch: { pairs: { "eth-pls": { minIntervalSeconds: 3600 } } } }) });
+    // The last proof started ten minutes ago, to the finality at slot 200.
+    insertJob(backend.storage, { id: "ten-minutes-ago", direction: "first-to-second", now: backend.clock.now(), target: { startSlot: 100, newSlot: 200 } });
+    updateJob(backend.storage, "ten-minutes-ago", { status: "on-chain", startSlot: "100", newSlot: "200" }, backend.clock.now(), ["queued"]);
+    backend.clock.advance(10 * 60_000);
+    seeFinality(backend.context, "first-to-second", 232, backend.clock.now(), 200);
+    const { init, env } = postFrom("203.0.113.9");
+    const answer = await backend.app.request("/requests", init, env);
+    expect(answer.status).toBe(202);
+    expect(backend.log.lines.map((line) => JSON.parse(line) as Record<string, unknown>).find((line) => line.event === "job_started")).toMatchObject({ reason: "user", urgent: ["requested"] });
+  });
+});
+
+describe("one job per new finality", () => {
+  it("knows the newest finality a job proves to: the slot the prover reported, else the planned one; a failed job does not count", () => {
+    const storage = openStorage(":memory:");
+    expect(lastJobTargetSlot(storage, "first-to-second")).toBeNull();
+    insertJob(storage, { id: "up-to-date", direction: "first-to-second", now: 1 });
+    updateJob(storage, "up-to-date", { status: "on-chain" }, 1, ["queued"]);
+    expect(lastJobTargetSlot(storage, "first-to-second")).toBeNull();
+    insertJob(storage, { id: "planned", direction: "first-to-second", now: 2, target: { startSlot: 10, newSlot: 64 } });
+    expect(lastJobTargetSlot(storage, "first-to-second")).toBe(64);
+    updateJob(storage, "planned", { status: "on-chain" }, 2, ["queued"]);
+    // A request from outside: the prover went further than any plan.
+    insertJob(storage, { id: "outside", direction: "first-to-second", now: 3 });
+    updateJob(storage, "outside", { status: "proving", startSlot: "10", newSlot: "96" }, 3, ["queued"]);
+    expect(lastJobTargetSlot(storage, "first-to-second")).toBe(96);
+    updateJob(storage, "outside", { status: "failed" }, 4, ["proving"]);
+    expect(lastJobTargetSlot(storage, "first-to-second")).toBe(64);
+    expect(lastJobTargetSlot(storage, "second-to-first")).toBeNull();
+  });
+
+  it("refuses a watcher request for a finality a job already proves to as a duplicate", async () => {
+    const run = build();
+    await run.service.submit({ ...base, caller: "watch", reason: "finality", target: { startSlot: 100, newSlot: 200 } });
+    run.prover.settleAll({ kind: "up-to-date" });
+    await run.service.settled();
+    expect(await run.service.submit({ ...base, caller: "watch", reason: "finality", plannedHandoff: true, target: { startSlot: 150, newSlot: 200 } })).toEqual({ refused: "duplicate" });
+    expect(await run.service.submit({ ...base, caller: "watch", reason: "finality", target: { startSlot: 150, newSlot: 232 } })).toMatchObject({ jobId: expect.any(String) });
+  });
+
+  it("caps a day at the epochs of the source chain unless the configuration sets a backstop", async () => {
+    const fill = (storage: Storage, count: number) => {
+      for (let index = 0; index < count; index += 1) {
+        insertJob(storage, { id: `job-${index}`, direction: "first-to-second", now: 100 * HOUR - HOUR + index, target: { startSlot: index, newSlot: index + 1 } });
+        storage.database.prepare("UPDATE jobs SET status = 'published', new_slot = planned_new_slot").run();
+      }
+    };
+    const twelve = build();
+    fill(twelve.storage, 225);
+    expect(await twelve.service.submit({ ...base, caller: "a", reason: "user" })).toMatchObject({ refused: "rate-limited", why: "limit" });
+    const ten = build({ jobsPerDayOf: () => 270 });
+    fill(ten.storage, 225);
+    expect(await ten.service.submit({ ...base, caller: "a", reason: "user" })).toMatchObject({ jobId: expect.any(String) });
+    const set = build({ jobsPerDayOf: () => 270, limits: { ...DEFAULT_RATE_LIMITS, jobsPerDirectionPerDay: 3 } });
+    fill(set.storage, 3);
+    expect(await set.service.submit({ ...base, caller: "a", reason: "user" })).toMatchObject({ refused: "rate-limited", why: "limit" });
+  });
+});
+
+describe("the daily GPU budget per direction", () => {
+  it("prices the worker seconds of each proved job, and the wait for a cold worker", () => {
+    const storage = openStorage(":memory:");
+    recordProveTiming(storage, { jobId: "worker", direction: "first-to-second", startedAt: 0, provedAt: 100_000, timing: { worker_total_ms: 50_000, remote_ms: 60_000 } });
+    recordProveTiming(storage, { jobId: "remote", direction: "first-to-second", startedAt: 0, provedAt: 100_000, timing: { remote_ms: 60_000, not_ready_count: 2, wait_worker_ms: 30_000 } });
+    recordProveTiming(storage, { jobId: "old-prover", direction: "first-to-second", startedAt: 20_000, provedAt: 100_000, timing: { not_ready_count: 1 } });
+    recordProveTiming(storage, { jobId: "other", direction: "second-to-first", startedAt: 0, provedAt: 100_000, timing: null });
+    storage.database.prepare("INSERT INTO job_timings (job_id, direction, proved_at) VALUES ('no-start', 'first-to-second', 100000)").run();
+    expect(recentJobSeconds(storage, "first-to-second", 0).map((job) => job.seconds).sort((a, b) => a - b)).toEqual([0, 50, 80, 90]);
+    expect(recentJobSeconds(storage, "first-to-second", 100_000)).toEqual([]);
+  });
+
+  it("refuses a job once the direction's spend in 24 h reaches the budget, says by how much, and logs it", async () => {
+    const run = build();
+    const now = run.clock.now();
+    // Two hours and a bit at $2.25: $5.04 against the $5.00 budget.
+    provedJob(run.storage, "a", now - 20 * HOUR, 3600);
+    provedJob(run.storage, "b", now - 10 * HOUR, 4464);
+    provedJob(run.storage, "c", now - 25 * HOUR, 3600);
+    const refused = await run.service.submit({ ...base, caller: "a", reason: "user" });
+    expect(refused).toEqual({ refused: "rate-limited", why: "gpu-budget", retryAfterSeconds: 4 * 3600, detail: "the 24 h GPU budget of $5.00 for first-to-second is spent: $5.04" });
+    expect(run.named("gpu_budget_spent")).toMatchObject([{ level: "warn", direction: "first-to-second", budgetUsd: 5, spentUsd: 5.04, usdPerHour: 2.25, retryAfterSeconds: 14_400 }]);
+    // The other direction has its own budget.
+    expect(await run.service.submit({ ...base, direction: "second-to-first", caller: "b", reason: "user" })).toMatchObject({ jobId: expect.any(String) });
+  });
+
+  it("uses the measured rate, and lets a liveness proof past a spent budget with a log line", async () => {
+    const run = build({ readUsdPerHour: async () => 10 }, fakeProofNeed({ needed: false }));
+    provedJob(run.storage, "a", run.clock.now() - HOUR, 1800);
+    // A planned handoff keeps the light client alive: it goes past the budget.
+    expect(await run.service.submit({ ...base, caller: "watch", reason: "finality", plannedHandoff: true, target: { startSlot: 1, newSlot: 2 } })).toMatchObject({ jobId: expect.any(String) });
+    expect(run.named("gpu_budget_bypassed")).toMatchObject([{ spentUsd: 5, usdPerHour: 10, detail: "the 24 h GPU budget of $5.00 for first-to-second is spent: $5.00" }]);
+    // A deposits-locked proof does not.
+    run.prover.settleAll({ kind: "up-to-date" });
+    await run.service.settled();
+    expect(await run.service.submit({ ...base, caller: "watch", reason: "finality", urgent: "deposits-locked", target: { startSlot: 2, newSlot: 3 } })).toMatchObject({ refused: "rate-limited", why: "gpu-budget" });
+  });
+});
+
+describe("the requests module and the job limits", () => {
+  const snapshot = (amountUsd: number, billedSeconds: number, at: number): BillingSnapshot => ({ spend: { days: [{ start: new Date(at).toISOString().slice(0, 10), amountUsd, billedSeconds }], hours: [], readAt: at }, balance: null });
+
+  it("prices the budget at RunPod's measured rate, else at the configured price", async () => {
+    const backend = makeBackend();
+    const now = backend.clock.now();
+    provedJob(backend.storage, "a", now - HOUR, 3600);
+    // RunPod billed $6 for an hour: $6 an hour, over the $5 budget.
+    const measured = { ...backend.context, billing: { read: async () => snapshot(6, 3600, now) } };
+    const app = (await import("../src/app.ts")).createApp({ context: measured, modules: (await import("../src/main.ts")).MODULES, enabled: ["requests"] });
+    const { init, env } = postFrom("203.0.113.9");
+    const refused = await app.request("/requests", init, env);
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toMatchObject({ error: "rate-limited", why: "gpu-budget", detail: "the 24 h GPU budget of $5.00 for first-to-second is spent: $6.00" });
+    // No billed time: the configured price ($2.25 an hour) is under the budget.
+    const unbilled = { ...backend.context, billing: { read: async () => snapshot(0, 0, now) } };
+    const other = (await import("../src/app.ts")).createApp({ context: unbilled, modules: (await import("../src/main.ts")).MODULES, enabled: ["requests"] });
+    expect((await other.request("/requests", init, env)).status).toBe(202);
+  });
+
+  it("caps a day at the source chain's epochs: 225 from Ethereum, 270 from PulseChain", async () => {
+    const backend = makeBackend();
+    for (let index = 0; index < 225; index += 1) {
+      for (const direction of ["first-to-second", "second-to-first"] as const) insertJob(backend.storage, { id: `${direction}-${index}`, direction, now: backend.clock.now() - 1000 + index, target: { startSlot: index, newSlot: index + 1 } });
+      backend.storage.database.prepare("UPDATE jobs SET status = 'published', new_slot = planned_new_slot").run();
+    }
+    const post = (direction: string, caller: string) => {
+      const { init, env } = postFrom(caller, { direction });
+      return backend.app.request("/requests", init, env);
+    };
+    expect((await post("first-to-second", "203.0.113.1")).status).toBe(429);
+    expect((await post("second-to-first", "203.0.113.2")).status).toBe(202);
+  });
+
+  it("loads a file that still sets secondsBetweenJobsPerDirection, ignores it and says so", async () => {
+    const config = makeConfig({ limits: { secondsBetweenJobsPerDirection: 120 }, watch: { enabled: false } });
+    expect(config.limits.secondsBetweenJobsPerDirection).toBe(120);
+    const backend = makeBackend({ config });
+    const stop = await startRequests(backend.context);
+    await stop();
+    const lines = backend.log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines.filter((line) => line.event === "config_deprecated")).toMatchObject([{ level: "warn", key: "limits.secondsBetweenJobsPerDirection" }]);
+    const clean = makeBackend({ config: makeConfig({ watch: { enabled: false } }) });
+    await (await startRequests(clean.context))();
+    expect(clean.log.lines.some((line) => line.includes("config_deprecated"))).toBe(false);
+  });
+});

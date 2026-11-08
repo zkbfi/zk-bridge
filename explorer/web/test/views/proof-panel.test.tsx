@@ -199,13 +199,13 @@ describe("the proof panel", () => {
     const limited = fakeTransport({ get: async () => ({ status: 404, body: null }), post: async () => ({ status: 429, body: { error: "rate-limited", retryAfterSeconds: 30 } }) });
     const first = await renderPanel({ changes: { status: "waiting_for_finality" }, endpoints: endpoints({ backendUrl: BACKEND }), transport: limited.transport });
     await user.click(await screen.findByRole("button", { name: "Request a proof" }));
-    expect(await screen.findByText(/Try again in 30 seconds/)).toBeInTheDocument();
+    expect(await screen.findByText("Too many proof requests right now. Try again in 30 s.")).toBeInTheDocument();
     first.unmount();
 
     const broken = fakeTransport({ get: async () => ({ status: 404, body: null }), post: async () => ({ status: 500, body: null }) });
     const second = await renderPanel({ changes: { status: "waiting_for_finality" }, endpoints: endpoints({ backendUrl: BACKEND }), transport: broken.transport });
     await user.click(await screen.findByRole("button", { name: "Request a proof" }));
-    expect(await screen.findByText(/did not accept the request/)).toBeInTheDocument();
+    expect(await screen.findByText("The prover did not take the request. Try again in 1 min.")).toBeInTheDocument();
     second.unmount();
 
     const unreadable = fakeTransport({ get: async () => ({ status: 500, body: null }), post: async () => ({ status: 202, body: { requestId: "r2", jobId: "j" } }) });
@@ -219,13 +219,13 @@ describe("the proof panel", () => {
     const nothing = fakeTransport({ get: async () => ({ status: 404, body: null }), post: async () => ({ status: 409, body: { error: "nothing-to-prove" } }) });
     const first = await renderPanel({ changes: { status: "waiting_for_finality" }, endpoints: endpoints({ backendUrl: BACKEND }), transport: nothing.transport });
     await user.click(await screen.findByRole("button", { name: "Request a proof" }));
-    expect(await screen.findByText(/The backend sees no message waiting for a proof/)).toBeInTheDocument();
+    expect(await screen.findByText(/^Already covered: the light client on .* holds a head past this transfer\. Delivery follows\.$/)).toBeInTheDocument();
     first.unmount();
 
     const unknown = fakeTransport({ get: async () => ({ status: 404, body: null }), post: async () => ({ status: 503, body: { error: "cannot-check", retryAfterSeconds: 30 } }) });
     await renderPanel({ changes: { status: "waiting_for_finality" }, endpoints: endpoints({ backendUrl: BACKEND }), transport: unknown.transport });
     await user.click(await screen.findByRole("button", { name: "Request a proof" }));
-    expect(await screen.findByText(/could not check whether a proof is needed\. Try again in 30 seconds/)).toBeInTheDocument();
+    expect(await screen.findByText("The prover could not check the chain. Try again in 30 s.")).toBeInTheDocument();
   });
 
   it("shows a failed request with its reason", async () => {

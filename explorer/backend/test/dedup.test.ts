@@ -81,10 +81,10 @@ describe("the request service never re-proves a proof we have", () => {
     const storage = openStorage(":memory:");
     const run = service(storage);
     keepOnBoard(storage, 100, 200, run.clock.now());
-    expect(await run.service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "user", caller: "a" })).toEqual({ refused: "nothing-to-prove" });
+    expect(await run.service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "user", caller: "a" })).toEqual({ refused: "nothing-to-prove", why: "proof-pending" });
     expect(run.named("proof_pending")).toMatchObject([{ startSlot: 100, newSlot: 200, where: "board", reason: "user", detail: "the proof from slot 100 to slot 200 (board) waits to land" }]);
     // The watcher names the head it read: the same check, from that head.
-    expect(await run.service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "finality", caller: "watch", target: { startSlot: 100, newSlot: 260 } })).toEqual({ refused: "nothing-to-prove" });
+    expect(await run.service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "finality", caller: "watch", target: { startSlot: 100, newSlot: 260 } })).toEqual({ refused: "nothing-to-prove", why: "proof-pending" });
     // A proof from another head is applied already, or can no longer land: it holds nothing back.
     expect(await run.service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "finality", caller: "watch", target: { startSlot: 200, newSlot: 260 } })).toMatchObject({ jobId: expect.any(String) });
   });
@@ -95,7 +95,7 @@ describe("the request service never re-proves a proof we have", () => {
     const { init, env } = postFrom("10.0.0.1", { reason: "keep-alive" });
     const answer = await backend.app.request("/requests", init, env);
     expect(answer.status).toBe(409);
-    expect(await answer.json()).toEqual({ error: "nothing-to-prove" });
+    expect(await answer.json()).toEqual({ error: "nothing-to-prove", why: "proof-pending" });
   });
 
   it("lets a new proof start once the pending one waited too long, and says so", async () => {
@@ -111,8 +111,8 @@ describe("the request service never re-proves a proof we have", () => {
     const run = service(storage, { need: { needed: false } });
     insertJob(storage, { id: "handoff", direction: "first-to-second", now: run.clock.now() });
     updateJob(storage, "handoff", { status: "published", startSlot: "100", newSlot: "8300" }, run.clock.now(), ["queued"]);
-    run.clock.advance(DEFAULT_RATE_LIMITS.secondsBetweenJobsPerDirection * 1000);
-    expect(await run.service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "finality", caller: "watch", plannedHandoff: true, target: { startSlot: 100, newSlot: 8400 } })).toEqual({ refused: "nothing-to-prove" });
+    run.clock.advance(120_000);
+    expect(await run.service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "finality", caller: "watch", plannedHandoff: true, target: { startSlot: 100, newSlot: 8400 } })).toEqual({ refused: "nothing-to-prove", why: "proof-pending" });
     expect(run.named("proof_pending")).toMatchObject([{ where: "job", startSlot: 100, newSlot: 8300 }]);
   });
 
@@ -144,7 +144,7 @@ describe("the request service never re-proves a proof we have", () => {
     await run.service.settled();
     const first = storage.database.prepare("SELECT id FROM jobs").get() as { id: string };
     updateJob(storage, first.id, { status: "on-chain" }, run.clock.now(), ["proving"]);
-    run.clock.advance(DEFAULT_RATE_LIMITS.secondsBetweenJobsPerDirection * 1000);
+    run.clock.advance(120_000);
     await run.service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "user", caller: "b" });
     run.prover.settleAll({ kind: "proof", proofPackage: makeProofPackage(10, 42) });
     await run.service.settled();

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { ProverCommandError } from "@zk-bridge/shared/prover";
 import { UNKNOWN_CALLER, callerKey } from "../../src/requests/caller.ts";
 import { start as startRequests } from "../../src/requests/module.ts";
-import { SECRETS, fakeProofNeed, makeBackend, makeConfig, makeProofPackage, postFrom, requestBody } from "../support.ts";
+import { SECRETS, fakeProofNeed, makeBackend, makeConfig, makeProofPackage, postFrom, requestBody, seeFinality } from "../support.ts";
 
 type Backend = ReturnType<typeof makeBackend>;
 
@@ -102,13 +102,16 @@ describe("global limit and GPU spend", () => {
     expect((backend.storage.database.prepare("SELECT count(*) AS n FROM jobs").get() as { n: number }).n).toBe(1);
   });
 
-  it("ATTACK a new job right after a finished one is refused until secondsBetweenJobsPerDirection passed", async () => {
+  it("ATTACK a new job right after a finished one is refused until the source chain finalizes again", async () => {
     const backend = makeBackend();
+    seeFinality(backend.context, "first-to-second", 200, backend.clock.now());
     expect((await post(backend, "198.51.100.1")).status).toBe(202);
     backend.prover.settleAll({ kind: "up-to-date" } as never);
     await tick();
-    backend.clock.advance(119_000);
-    expect((await post(backend, "198.51.100.2")).status).toBe(429);
+    for (let host = 2; host <= 20; host += 1) {
+      backend.clock.advance(30_000);
+      expect((await post(backend, `198.51.100.${host}`)).status).toBe(429);
+    }
     expect(backend.prover.calls).toHaveLength(1);
   });
 

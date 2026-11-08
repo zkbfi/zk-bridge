@@ -36,9 +36,9 @@ export const jobViewSchema = z
 /** One job, as the backend shows it. */
 export type JobView = z.infer<typeof jobViewSchema>;
 
-const requestAcceptedSchema = z.object({ requestId: z.string(), jobId: z.string() }).passthrough();
-const rateLimitedSchema = z.object({ error: z.literal("rate-limited"), retryAfterSeconds: z.number() }).passthrough();
-const nothingToProveSchema = z.object({ error: z.literal("nothing-to-prove") }).passthrough();
+const requestAcceptedSchema = z.object({ requestId: z.string(), jobId: z.string(), joined: z.literal(true).optional() }).passthrough();
+const rateLimitedSchema = z.object({ error: z.literal("rate-limited"), retryAfterSeconds: z.number(), why: z.string().optional(), detail: z.string().optional() }).passthrough();
+const nothingToProveSchema = z.object({ error: z.literal("nothing-to-prove"), why: z.string().optional() }).passthrough();
 const cannotCheckSchema = z.object({ error: z.literal("cannot-check"), retryAfterSeconds: z.number() }).passthrough();
 const requestStatusSchema = jobViewSchema.and(z.object({ requestId: z.string(), reason: z.string(), messageId: hashSchema.nullable(), requestedAt: z.number() }));
 const directionStatusSchema = z.object({ direction: directionSchema, job: jobViewSchema.nullable() }).passthrough();
@@ -81,14 +81,19 @@ export type ProofRequestInput = { pair: string; direction: ProofDirection; reaso
  * The answer to a proof request. The backend starts a job only when the chain indexer shows that the chains need a
  * proof, so a request can be refused without fault:
  *
- * - `rate-limited`: a limit refused it. Ask again after `retryAfterSeconds`.
- * - `nothing-to-prove`: no message waits for a head and the head is fresh. Asking again changes nothing for now.
+ * - accepted with `joined`: a proof of the direction was running already, and the request joined it.
+ * - `rate-limited`: a limit refused it. Ask again after `retryAfterSeconds`. `why` (from a newer backend): `limit` (a
+ *   caller limit, the wait after a failed job, the daily job cap), `same-finality` (a job already proves to the newest
+ *   finality; the next comes in about `retryAfterSeconds`) or `gpu-budget` (the direction's 24 h GPU budget is spent;
+ *   `detail` says by how much).
+ * - `nothing-to-prove`: nothing needs a proof. `why`: `no-need` (no final message waits and the head is fresh) or
+ *   `proof-pending` (a proof already made waits to land). Asking again changes nothing for now.
  * - `cannot-check`: the backend could not ask its chain indexer. Ask again after `retryAfterSeconds`.
  */
 export type ProofRequestAnswer =
-  | { readonly requestId: string; readonly jobId: string }
-  | { readonly refused: "rate-limited"; readonly retryAfterSeconds: number }
-  | { readonly refused: "nothing-to-prove" }
+  | { readonly requestId: string; readonly jobId: string; readonly joined?: true }
+  | { readonly refused: "rate-limited"; readonly retryAfterSeconds: number; readonly why?: string; readonly detail?: string }
+  | { readonly refused: "nothing-to-prove"; readonly why?: string }
   | { readonly refused: "cannot-check"; readonly retryAfterSeconds: number };
 
 function parseAnswer<Schema extends z.ZodType>(schema: Schema, response: JsonResponse, what: string): z.infer<Schema> {
@@ -119,18 +124,19 @@ export function createBackendClient(input: { baseUrl: string; fetchJson: JsonFet
       const response = await input.postJson(`${base}/requests`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) });
       if (response.status === 429) {
         const limited = parseAnswer(rateLimitedSchema, response, "a proof request");
-        return { refused: "rate-limited", retryAfterSeconds: limited.retryAfterSeconds };
+        return { refused: "rate-limited", retryAfterSeconds: limited.retryAfterSeconds, ...(limited.why === undefined ? {} : { why: limited.why }), ...(limited.detail === undefined ? {} : { detail: limited.detail }) };
       }
       if (response.status === 409) {
-        parseAnswer(nothingToProveSchema, response, "a proof request");
-        return { refused: "nothing-to-prove" };
+        const nothing = parseAnswer(nothingToProveSchema, response, "a proof request");
+        return { refused: "nothing-to-prove", ...(nothing.why === undefined ? {} : { why: nothing.why }) };
       }
       if (response.status === 503) {
         const unknown = parseAnswer(cannotCheckSchema, response, "a proof request");
         return { refused: "cannot-check", retryAfterSeconds: unknown.retryAfterSeconds };
       }
       if (response.status !== 202) refuseStatus(response, "a proof request");
-      return parseAnswer(requestAcceptedSchema, response, "a proof request");
+      const accepted = parseAnswer(requestAcceptedSchema, response, "a proof request");
+      return { requestId: accepted.requestId, jobId: accepted.jobId, ...(accepted.joined === true ? { joined: true as const } : {}) };
     },
     /** The state of one request and of its job. */
     async requestStatus(requestId: string) {

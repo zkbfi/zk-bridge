@@ -31,9 +31,8 @@
     "requestsPerUnknownCallerPerMinute": 2,
     "globalRequestsPerMinute": 120,
     "requestRetentionHours": 24,
-    "secondsBetweenJobsPerDirection": 120,
     "secondsBeforeRetryAfterFailure": 60,
-    "jobsPerDirectionPerDay": 96,
+    "gpuBudgetUsdPerDirectionPerDay": 5,
     "keepAliveSeconds": 43200,
     "pendingProofStaleSeconds": 600
   },

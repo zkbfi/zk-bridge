@@ -569,6 +569,9 @@
 .zb-drow > .zb-arow { padding: 11px 0; }
 .zb-dopen { padding: 4px 0 14px; display: grid; gap: 12px; }
 .zb-dopen .zb-pill { justify-self: start; text-decoration: none; }
+.zb-request-proof { margin-top: 8px; }
+.zb-request-proof .zb-pill { cursor: pointer; }
+.zb-request-proof .zb-pill:disabled { cursor: default; color: var(--zb-muted); border-style: dashed; }
 a.zb-go { text-decoration: none; }
 a.zb-go[aria-disabled="true"] { cursor: not-allowed; }
 

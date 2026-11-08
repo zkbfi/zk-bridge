@@ -6,7 +6,7 @@ import { getTiming } from "../src/requests/timings.ts";
 import { openStorage } from "../src/storage.ts";
 import { DEFAULT_WARMUP } from "../src/watch/warmup.ts";
 import { createWarmupStore } from "../src/watch/warmup-store.ts";
-import { makeBackend, makeClock, memoryLogger, makeConfig, makeProofPackage, postFrom, controllableProver, fakeProofNeed } from "./support.ts";
+import { makeBackend, makeClock, memoryLogger, makeConfig, makeProofPackage, postFrom, controllableProver, fakeProofNeed, seeFinality } from "./support.ts";
 
 /** The settings before 2026-11-06 (p90, no margin, 90 s grace, hold 40 s under a 60 s idle timeout): the scenarios of these tests rest on them. */
 const LEGACY_WARMUP = { ...DEFAULT_WARMUP, holdIntervalSeconds: 40, idleTimeoutSeconds: 60, leadP: 0.9, leadMarginSeconds: 0, minLeadSeconds: 30, graceSeconds: 90 };
@@ -76,7 +76,7 @@ describe("whether the chains need a proof", () => {
     for (const reason of ["user", "keep-alive"]) {
       const answer = await post(backend, "10.0.0.1", { reason });
       expect(answer.status).toBe(409);
-      expect(await answer.json()).toEqual({ error: "nothing-to-prove" });
+      expect(await answer.json()).toEqual({ error: "nothing-to-prove", why: "no-need" });
     }
     expect(countJobs(backend.storage)).toBe(0);
     expect(countRequests(backend.storage)).toBe(0);
@@ -101,6 +101,7 @@ describe("whether the chains need a proof", () => {
 
   it("does not ask the indexer for a request that joins an active job, or that a rate limit refuses", async () => {
     const backend = makeBackend({ config: makeConfig({ limits: { requestsPerCallerPerMinute: 1 } }) });
+    seeFinality(backend.context, "first-to-second", 200, backend.clock.now());
     expect((await post(backend, "10.0.0.1")).status).toBe(202);
     expect((await post(backend, "10.0.0.2")).status).toBe(202);
     expect((await post(backend, "10.0.0.1")).status).toBe(429);
@@ -255,19 +256,34 @@ describe("rate limits", () => {
     const callerLimited = await post(backend, "10.0.0.1");
     expect(callerLimited.status).toBe(429);
     expect(callerLimited.headers.get("Retry-After")).toBe("40");
-    expect(await callerLimited.json()).toEqual({ error: "rate-limited", retryAfterSeconds: 40 });
+    expect(await callerLimited.json()).toEqual({ error: "rate-limited", retryAfterSeconds: 40, why: "limit" });
     // Another caller is not affected by the first caller.
     expect((await post(backend, "10.0.0.2")).status).toBe(202);
+  });
 
-    // Per direction: finish the job, then ask for a new one before the two minutes pass.
+  it("starts one job per new finality and direction: a request for a finality a job proves to waits for the next one", async () => {
+    const backend = makeBackend();
+    const seenAt = backend.clock.now();
+    seeFinality(backend.context, "first-to-second", 200, seenAt);
+    expect((await post(backend, "10.0.0.1")).status).toBe(202);
+    // The job is planned to the finality the request proves to.
+    expect(backend.storage.database.prepare("SELECT planned_start_slot AS start, planned_new_slot AS target FROM jobs").get()).toEqual({ start: "100", target: "200" });
     backend.prover.settleAll({ kind: "up-to-date" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     backend.clock.advance(60_000);
-    const directionLimited = await post(backend, "10.0.0.3");
-    expect(directionLimited.status).toBe(429);
-    expect(directionLimited.headers.get("Retry-After")).toBe("40");
-    backend.clock.advance(40_000);
+    // The same finality: no second job. The next finality is expected an epoch (384 s) after the first was seen.
+    const same = await post(backend, "10.0.0.2");
+    expect(same.status).toBe(429);
+    expect(same.headers.get("Retry-After")).toBe("324");
+    expect(await same.json()).toEqual({ error: "rate-limited", retryAfterSeconds: 324, why: "same-finality", detail: "a job already proves to the newest finality (slot 200); the next finality is expected in about 324 s" });
+    // Past the expected time and still no new finality: asked again after a second.
+    backend.clock.advance(400_000);
+    expect((await (await post(backend, "10.0.0.2")).json()).retryAfterSeconds).toBe(1);
+    // A new finality: a new job, at once (no spacing between jobs).
+    seeFinality(backend.context, "first-to-second", 232, backend.clock.now());
     expect((await post(backend, "10.0.0.3")).status).toBe(202);
+    // The other direction has its own finality.
+    expect((await post(backend, "10.0.0.4", { direction: "second-to-first" })).status).toBe(202);
   });
 
   it("a request that joins an active job never asks the direction limit", async () => {
@@ -561,12 +577,13 @@ describe("admitAfterSeconds", () => {
     const clock = makeClock();
     const prover = controllableProver();
     const limits = { ...DEFAULT_RATE_LIMITS, jobsPerDirectionPerDay: 2 };
+    // The backstop is set here; without it the source chain's epochs of a day apply (see the GPU budget tests).
     const service = createRequestService({ storage, proverForJob: () => prover.binary, readProofNeed: fakeProofNeed().read, now: clock.now, limits, proverTimeoutMilliseconds: 1_800_000, logger: memoryLogger().logger });
     const submit = () => service.submit({ pair: "eth-pls", direction: "first-to-second", reason: "user", caller: "a" });
     return { service, clock, prover, submit };
   };
 
-  it("is 0 with no job, the retry wait after a failed job, the spacing after another, and the budget wait once the day is spent", async () => {
+  it("is 0 with no job, the retry wait after a failed job, no wait after another, and the backstop wait once the day is spent", async () => {
     const { service, clock, prover, submit } = build();
     expect(service.admitAfterSeconds("first-to-second")).toBe(0);
     await submit();
@@ -581,7 +598,7 @@ describe("admitAfterSeconds", () => {
     prover.settleAll({ kind: "proof", proofPackage: makeProofPackage(10, 42) });
     await new Promise((resolve) => setTimeout(resolve, 0));
     // Two costly jobs in the day: the third waits until the first is a day old.
-    expect(service.admitAfterSeconds("first-to-second")).toBeGreaterThan(DEFAULT_RATE_LIMITS.secondsBetweenJobsPerDirection);
+    expect(service.admitAfterSeconds("first-to-second")).toBeGreaterThan(86_000);
     expect(service.admitAfterSeconds("second-to-first")).toBe(0);
   });
 });

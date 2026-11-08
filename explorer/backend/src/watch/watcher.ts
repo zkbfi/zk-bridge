@@ -12,7 +12,7 @@ import { pendingFrom, type HeldProof } from "../requests/held-proofs.ts";
 import type { Job } from "../requests/jobs.ts";
 import type { ProofRequest, SubmitResult } from "../requests/service.ts";
 import { usdText, type BatchRule, type Economics } from "./batch.ts";
-import { decideProof, slotAtTime, warmupPlan, type PendingProof, type WaitingMessage } from "./decide.ts";
+import { decideProof, slotAtTime, warmupPlan, type DecisionInput, type DepositsFacts, type PendingProof, type WaitingMessage } from "./decide.ts";
 import type { DestinationToken } from "./economics.ts";
 import type { DecisionOutcome, WatchDecision } from "./decisions.ts";
 import type { FinalityObservation } from "./feed.ts";
@@ -65,6 +65,11 @@ export type DirectionWatcherInput = {
   readonly readLastProofAt: () => number | null;
   /** Seconds until the request service admits a new job of the direction (0: now). */
   readonly readAdmitAfterSeconds: () => number;
+  /**
+   * Reads the deposits of the bridge on the destination chain and whether the light client on the source chain holds a
+   * head (`watch/deposits.ts` caches it and stops reading once the bridge is open). Absent: the deposit rule is off.
+   */
+  readonly readDeposits?: () => Promise<DepositsFacts>;
   /** Values the waiting messages. Only asked when the rule waits. */
   readonly readEconomics: (messages: readonly ListedMessage[]) => Promise<Economics>;
   readonly submit: (request: ProofRequest) => Promise<SubmitResult>;
@@ -129,6 +134,8 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
    * calling for proofs that cannot hand off.
    */
   let keepAlivePeriod: number | null = null;
+  /** Whether the last read of the deposits failed: logged once until a read works again. */
+  let depositsFailing = false;
   /** Wakes the watcher when a batch that waits is due, when no new finality may come before it. */
   let batchTimer: ReturnType<typeof setTimeout> | null = null;
   let valued: { key: string; at: number; economics: Economics } | null = null;
@@ -167,6 +174,21 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       enqueue(observation, 0);
     }, Math.max(0, seconds * 1000 - now()));
     batchTimer.unref();
+  }
+
+  /** The deposits of the destination bridge, or null when the rule is off. A failed read is unknown, and holds nothing back. */
+  async function depositsOf(): Promise<DepositsFacts | null> {
+    const read = input.readDeposits;
+    if (read === undefined) return null;
+    try {
+      const deposits = await read();
+      depositsFailing = false;
+      return deposits;
+    } catch (error) {
+      if (!depositsFailing) logger.warn("watch_deposits_read_failed", { direction, error });
+      depositsFailing = true;
+      return { open: null, remoteHasHead: null };
+    }
   }
 
   const toWaiting = (messages: readonly ListedMessage[], facts: LightClientFacts): WaitingMessage[] =>
@@ -213,7 +235,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
     }
     const pendingProof = pendingAt(facts.headSlot);
     const batch = await batchOf(listed, facts);
-    const decision = decideProof({
+    const ask = (urgent?: DecisionInput["urgent"]) => decideProof({
       finalizedSlot: observation.finalizedSlot,
       participants: observation.participants,
       minParticipants: input.minParticipants,
@@ -225,7 +247,19 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       nowSeconds,
       pendingStaleSeconds: input.pendingStaleSeconds,
       ...(batch === undefined ? {} : { batch }),
+      ...(urgent === undefined ? {} : { urgent }),
     });
+    let decision = ask();
+    // The urgent facts are read only when they could change the answer: when nothing else makes a proof due now. So a
+    // due proof never waits for a chain read, and an open bridge is not asked on every finality.
+    let deposits: DepositsFacts | null = null;
+    if (!decision.due && (decision.why === "min-interval" || decision.why === "nothing-due")) {
+      deposits = await depositsOf();
+      if (deposits !== null) {
+        const lastProofAt = input.readLastProofAt();
+        decision = ask({ deposits, lastProofAt: lastProofAt === null ? null : lastProofAt / 1000 });
+      }
+    }
     const base: WatchDecision = {
       at: now(),
       finalizedSlot: observation.finalizedSlot,
@@ -235,6 +269,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       due: decision.due,
       why: decision.why,
       detail: decision.detail,
+      ...(deposits === null ? {} : { deposits }),
     };
     const note = (extra: Partial<WatchDecision>): void => input.onDecision?.({ ...base, ...extra });
     const noteOutcome = (outcome: DecisionOutcome): void => note({ ...dueFacts, outcome });
@@ -299,7 +334,14 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       direction,
       reason: "finality",
       caller: WATCH_CALLER,
-      ...(decision.why === "message" ? { messageId: decision.messageIds[0] as Hex } : decision.handoff ? { plannedHandoff: true } : {}),
+      ...(decision.why === "message"
+        ? { messageId: decision.messageIds[0] as Hex }
+        : decision.why === "keep-alive"
+          ? decision.handoff
+            ? { plannedHandoff: true }
+            : {}
+          : // An urgent proof: the watcher read the chain, so the service takes it past the indexer's need.
+            { urgent: decision.why }),
       since: observation.receivedAt,
       // The proof this finality calls for: from the head to this slot. The service never starts it twice.
       target: { startSlot: facts.headSlot, newSlot: observation.finalizedSlot },

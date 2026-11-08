@@ -9,7 +9,7 @@
 # It runs as the backend's user, so it reads the backend's settings (pair, deployment file, rpcUrls, beaconUrls,
 # limits.keepAliveSeconds) and judges with the same endpoints and keep-alive age that the backend uses. It asks for
 # proofs through the backend's public API only (POST /requests, reason keep-alive): it holds no key, starts no prover
-# itself, and every backend limit (secondsBetweenJobsPerDirection, jobsPerDirectionPerDay, the indexer check) applies.
+# itself, and every backend limit (one job per finality, jobsPerDirectionPerDay, the GPU budget, the indexer check) applies.
 #
 # Alerting: the unit fails when the march exits non-zero (stranded 12, read failure 3, failed or refused proof near
 # the deadline 13); keep-alive (10) and stepping (11) only appear with the dry run. Each problem also logs a line that

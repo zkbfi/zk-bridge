@@ -115,22 +115,39 @@ job only when the chain indexer (`indexerUrl`) shows that the direction needs a 
   checks and marches the light clients through this API (docs/testnet-run.md, "Keeping the light clients alive").
 
 The reason in the request (`message`, `keep-alive`, `user`, and the backend's own `finality`) does not change this. The backend asks the indexer only after
-the caller limits, the wait of the direction and the daily budget passed, and one answer serves a direction for 15
-seconds. The answers:
+the caller limits, the finality rule, the retry wait and the daily backstop passed, and one answer serves a direction
+for 15 seconds. A request from outside never waits for the watcher's minimum interval (`watch.minIntervalSeconds`): it
+starts a job when the finality is new and the indexer shows a need (the urgent reason `requested`, logged as
+`job_started` `urgent: ["requested"]`; see "Proving now"). The answers:
 
 | Status | Body | Meaning |
 | --- | --- | --- |
-| 202 | `{ requestId, jobId }` | The request joined a job or started one. |
-| 409 | `{ error: "nothing-to-prove" }` | No message waits and the head is fresh, or a proof we already have waits to land (see "Proofs we already have"). Asking again changes nothing until a message waits or that proof lands. |
-| 429 | `{ error: "rate-limited", retryAfterSeconds }` | A limit refused it. `Retry-After` says when to ask again. |
+| 202 | `{ requestId, jobId, joined? }` | The request started a job, or joined the running one (`joined: true`). |
+| 409 | `{ error: "nothing-to-prove", why }` | `why: "no-need"`: no message waits and the head is fresh. `why: "proof-pending"`: a proof we already have waits to land (see "Proofs we already have"). Asking again changes nothing until a message waits or that proof lands. |
+| 429 | `{ error: "rate-limited", retryAfterSeconds, why, detail? }` | A limit refused it. `why: "limit"` (a caller limit, the retry wait after a failed job, the daily backstop), `"same-finality"` (a job already proves to the newest finality; `retryAfterSeconds` is when the next one is expected), `"gpu-budget"` (the direction's 24 h GPU budget is spent; `detail` says by how much). `Retry-After` says when to ask again. |
 | 503 | `{ error: "cannot-check", retryAfterSeconds }` | The indexer did not answer in 5 seconds, or answered an error or an unknown shape. The backend starts no paid job it cannot justify. |
 
-Two limits remain as a backstop when the indexer reports wrong facts:
+The job limits (owner, 2026-11-07: "yes to the job limit changes"):
 
-- `secondsBetweenJobsPerDirection` (default 120) between the start of two jobs of a direction, and
-  `secondsBeforeRetryAfterFailure` (default 60) after a failed job.
-- `jobsPerDirectionPerDay` (default 96) jobs that may pay for a proof, per direction, in any 24 hours. A job that found
-  the chain up to date paid nothing and does not count.
+- **One job per new finality and direction.** A job starts only for a finalized slot newer than the newest one a job
+  of the direction proves to (the slot its prover reported, else the one planned for it; a failed job does not count).
+  The watcher names its finality in the request; a request from outside proves to the newest finality the watcher
+  handled, and is refused (`same-finality`) while a job already proves to it. That is at most 225 jobs a day from
+  Ethereum or Sepolia (epochs of 6.4 minutes) and 270 from PulseChain (5.33 minutes). Without a watcher the finality
+  is not known, and a request from outside starts a job without one; the backstops below bound it.
+- `secondsBeforeRetryAfterFailure` (default 60) after a failed job.
+- `jobsPerDirectionPerDay`: a backstop of jobs that may pay for a proof, per direction, in any 24 hours. Default: the
+  epochs per day of the direction's source chain (225 or 270). A job that found the chain up to date paid nothing and
+  does not count.
+- `gpuBudgetUsdPerDirectionPerDay` (default 5): before a job starts, the spend of the direction's jobs proved in the
+  last 24 hours must be under it. The spend is each job's worker seconds (`worker_total_ms`, else `remote_ms`, else
+  its start to its proof, plus the wait for a cold worker) at the GPU rate RunPod billed over the last 7 days
+  (`GET /billing`, `effectiveUsdPerHour`), or at `watch.warmup.gpuUsdPerHour` while that cannot be read. A spent budget
+  is refused with `why: "gpu-budget"` and a `detail` such as "the 24 h GPU budget of $5.00 for first-to-second is spent:
+  $5.04", and logged as `gpu_budget_spent`. A handoff or a keep-alive of the age rule keeps the light client alive and
+  goes past it, logged as `gpu_budget_bypassed`. Idle tails and unused warm-ups are not counted (see `GET /billing`).
+- `secondsBetweenJobsPerDirection` is deprecated and ignored: one job per finality replaced it. A file that still sets
+  it loads, and the start logs `config_deprecated`.
 
 ### Proofs we already have
 
@@ -309,6 +326,29 @@ was in a previous hour"):
   as `trigger: "max-wait"` with `fallbackAt` (the `dueAt`), and `GET /progress/:messageId` as the service
   `batch-max-wait`, so the web app's readers stay as they are. The `decision` object carries the new names.
 
+### Proving now
+
+Owner, 2026-11-07: "3600 is fine for a minimum, but we should have code in place that can say, oh, yes, we should
+create a proof for this situation - especially when we are waiting for deposits to be enabled". An urgent reason
+(`urgentReasons` in `src/watch/decide.ts`, a list of rules: add a situation by adding a rule) proves before the
+minimum interval ends. Everything else still applies: a finality newer than the covered head, 342 signers, no pending
+proof from the head, and the request service's gates (one job per finality, the retry wait, the backstop, the GPU
+budget).
+
+| Reason | When | Where |
+| --- | --- | --- |
+| `deposits-locked` | The bridge on the destination chain of the direction reports `depositsOpen() == false`, the light client on the source chain holds a head, and the direction's last proof started at least 600 s ago (`DEPOSITS_LOCKED_RETRY_SECONDS`; the first new finality after a quiet spell proves at once, and a failed opening is not retried every finality). | The watcher. It reads the deposits only when nothing else makes a proof due, so a due proof never waits for the read. `proof_due` `why: "deposits-locked"`; the request carries `urgent`, which takes it past the indexer's need like `plannedHandoff`. |
+| `requested` | A user asked through `POST /requests`, the finality is new and the indexer shows a need. | The request service. That path never had the batch rule, so the interval never held it back; `job_started` logs `urgent: ["requested"]`. |
+
+The mapping of `deposits-locked` (the runner's opener, `explorer/bots/src/runner/opener.ts`): the direction S to D
+proves blocks of S to the light client on D. The bridge on D names that light client as its own and the light client on
+S as its remote one, and `openDeposits` on D proves that the light client on D stored a block of S in whose state the
+light client on S already held a head. So the bridge on D opens only after an update of the S to D light client, made
+from a finality of S after the light client on S got its first head. The watcher of S to D reads `depositsOpen()` of
+the bridge on D (from the deployment file) and the head of the light client on S, each at most once a minute, and stops
+reading once the bridge is open (`src/watch/deposits.ts`). A failed read counts as unknown and holds nothing back
+(`watch_deposits_read_failed`, once). The warm-up does not plan for it: such a proof meets a cold worker.
+
 
 ## Pipeline reads
 
@@ -390,7 +430,10 @@ pair), 503 when the indexer is not configured or cannot be read.
 }
 ```
 
-`batch` is null unless the watcher's latest decision is `min-interval`. `job` is the queued or proving job, or
+`deposits` is `{ open, remoteHasHead, waiting, proofDue }` when the latest decision read the destination bridge:
+`waiting` while it waits for an update of this direction's light client to open deposits, `proofDue` when that
+decision started a proof for it (`decision.why` "deposits-locked"); null when it did not read them (another reason made
+a proof due, or no watcher runs). `batch` is null unless the watcher's latest decision is `min-interval`. `job` is the queued or proving job, or
 null. `latestProof` is the proof that reaches furthest among the msgboard indexer's, the webhook's and the newest job's
 that did not fail. `head` is null when the indexer cannot be read. `decision` carries the `why` and `detail` of
 `proof_due` / `proof_not_due`, and for a due proof `trigger`, `batchSize`, `feesUsd`, `costUsd` and `outcome`

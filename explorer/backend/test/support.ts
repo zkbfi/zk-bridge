@@ -7,6 +7,7 @@ import { createApp } from "../src/app.ts";
 import { MODULES } from "../src/main.ts";
 import { openStorage, type Storage } from "../src/storage.ts";
 import type { ProofNeed, ProofNeedReader } from "../src/requests/proof-need.ts";
+import { decisionBoardOf } from "../src/watch/decisions.ts";
 
 const address = (digit: string): `0x${string}` => `0x${digit.repeat(40)}`;
 
@@ -186,3 +187,11 @@ export const isNodeRequest = (init: RequestInit | undefined): boolean => init?.m
 
 /** The nodes of the two chains of the pair, for a test of the archive. */
 export const ARCHIVE_RPC_URLS = { "1": "https://rpc-1.example.org/", "369": "https://rpc-369.example.org/" };
+
+/**
+ * Tells the request service of a backend that the watcher handled a finality of a direction (its decision board), as a
+ * running watch would: a user request then proves to it, once per finality. 12 s slots: the next one is 384 s later.
+ */
+export function seeFinality(context: object, direction: "first-to-second" | "second-to-first", finalizedSlot: number, at: number, headSlot = 100): void {
+  decisionBoardOf(context).record(direction, { at, finalizedSlot, headSlot, genesisTime: 0, secondsPerSlot: 12, due: false, why: "nothing-due", detail: "test" });
+}

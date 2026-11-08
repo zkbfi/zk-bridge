@@ -3,6 +3,7 @@
  * `GET /progress/:messageId`. A restart forgets it; the next finality writes it again.
  */
 import type { ProofDirection } from "@zk-bridge/shared";
+import type { DepositsFacts } from "./decide.ts";
 
 /** A batch that waits: how many messages, what they are worth, and when the proof is expected. Times in ms since 1970. */
 export type WaitingBatch = {
@@ -46,6 +47,12 @@ export type WatchDecision = {
   /** For `min-interval`: the batch that waits. */
   readonly batch?: WaitingBatch;
   readonly outcome?: DecisionOutcome;
+  /**
+   * The deposits of the bridge on the destination chain, as the decision read them: `open` false means the bridge
+   * waits for an update of this direction's light client to open (`why` "deposits-locked" when a proof is due for it).
+   * Absent when the watcher does not read them.
+   */
+  readonly deposits?: DepositsFacts;
 };
 
 /** The latest decision per direction. */

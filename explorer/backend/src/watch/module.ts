@@ -5,7 +5,7 @@
  */
 import { createPublicClient, http, type Hex } from "viem";
 import { z } from "zod";
-import { PROOF_DIRECTIONS, secondsPerSlot, type ContractCaller, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
+import { PROOF_DIRECTIONS, messageBridgeAbi, secondsPerSlot, type ContractCaller, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
 import { BackendConfigError, type BackendConfig } from "../config.ts";
 import { DEFAULT_POLICY, type LightClientFacts } from "../keepalive/plan.ts";
 import { fetchJsonGet, readHistory, readLightClient, type JsonGet } from "../keepalive/sources.ts";
@@ -17,6 +17,7 @@ import { batchRuleFor, deprecatedBatchKeys } from "./batch.ts";
 import { MIN_PARTICIPANTS, SLOTS_PER_EPOCH } from "./decide.ts";
 import { createEconomicsReader, type DestinationToken } from "./economics.ts";
 import { createFinalityFeed } from "./feed.ts";
+import { createDepositsReader } from "./deposits.ts";
 import { decisionBoardOf } from "./decisions.ts";
 import { createDirectionWatcher, type ListedMessage } from "./watcher.ts";
 import { createWarmupStore } from "./warmup-store.ts";
@@ -112,6 +113,8 @@ export type WatchDependencies = {
   readonly fetchFunction?: () => typeof fetch;
   /** Reads the light client on the destination side. Default: viem over the side's RPC endpoint. */
   readonly readLightClient?: (side: PairSide) => Promise<LightClientFacts>;
+  /** Reads `depositsOpen()` of the bridge on a side. Default: viem over the side's RPC endpoint (`chainClient`). */
+  readonly readDepositsOpen?: (side: PairSide) => Promise<boolean>;
   /** The execution client of a side, for the prices and the base fee of a batch. Default: viem over the side's RPC endpoint. */
   readonly chainClient?: (side: PairSide) => ChainClient;
 };
@@ -142,6 +145,8 @@ export async function startWatch(input: { context: BackendModuleContext; service
     logger.warn("config_deprecated", { key, detail: `read as ${key.replace(/maxWaitSeconds$/, "minIntervalSeconds")}, the minimum time from the direction's last proof; rename it` });
   }
   const chainClient = input.dependencies?.chainClient ?? ((side: PairSide) => createPublicClient({ transport: http(side.rpcUrl) }) as unknown as ChainClient);
+  const readDepositsOpen =
+    input.dependencies?.readDepositsOpen ?? (async (side: PairSide) => (await chainClient(side).readContract({ address: side.contracts.bridge, abi: messageBridgeAbi, functionName: "depositsOpen" })) === true);
   // The prices are PulseX's: read on PulseChain when the pair has it. A testnet pair needs none.
   const pulseSide = pair.sides.find((side) => side.chainId === 369);
   const pulsechain = pulseSide === undefined ? null : chainClient(pulseSide);
@@ -155,6 +160,13 @@ export async function startWatch(input: { context: BackendModuleContext; service
     const beaconUrl = source.beaconUrl as string;
     const batchRule = batchRuleFor(config.watch, config.pair, direction, SLOTS_PER_EPOCH * secondsPerSlot(source.chainId));
     const destinationClient = chainClient(destination);
+    // The deposit rule of this direction S to D reads the bridge on D (its opening needs an update of the light client
+    // on D, which this direction feeds) and the light client on S (it must hold a head first): see `DepositsFacts`.
+    const readDeposits = createDepositsReader({
+      readOpen: () => readDepositsOpen(destination),
+      readRemoteHeadSlot: async () => (await readFacts(source)).headSlot,
+      now: context.now,
+    });
     const watcher = createDirectionWatcher({
       pairName: config.pair,
       direction,
@@ -166,6 +178,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
       readHeldProofs: () => readHeldProofs(context.storage, direction),
       readLastProofAt: () => lastProofStartedAt(context.storage, direction),
       readAdmitAfterSeconds: () => service.admitAfterSeconds(direction),
+      readDeposits,
       pendingStaleSeconds: config.limits.pendingProofStaleSeconds,
       batchRule,
       readEconomics: createEconomicsReader({

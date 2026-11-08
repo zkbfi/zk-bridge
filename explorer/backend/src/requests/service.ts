@@ -7,19 +7,25 @@ import { UNKNOWN_CALLER } from "./caller.ts";
 import type { Storage } from "../storage.ts";
 import { describeHeld, isStale, pendingFrom, readHeldProofs } from "./held-proofs.ts";
 import type { ProofNeed, ProofNeedReader } from "./proof-need.ts";
+import { urgentReasons, type WatchUrgentReason } from "../watch/decide.ts";
 import {
   CALLER_WINDOW_MILLISECONDS,
   JOB_BUDGET_WINDOW_MILLISECONDS,
   jobBudgetWaitSeconds,
   windowWaitSeconds,
   directionWaitSeconds,
+  epochsPerDay,
+  gpuBudgetWait,
   type RateLimits,
 } from "./rate-limit.ts";
+import { DEFAULT_WARMUP } from "../watch/warmup.ts";
 import {
   findActiveJob,
   findJobByTarget,
   findLatestJob,
   insertJob,
+  lastJobTargetSlot,
+  recentJobSeconds,
   jobsWithSlots,
   insertRequest,
   listActiveJobs,
@@ -52,6 +58,13 @@ export type ProofRequest = {
    */
   readonly plannedHandoff?: boolean;
   /**
+   * The watcher read the chain and found a situation that needs a proof now (`urgentReasons` in `watch/decide.ts`):
+   * `deposits-locked`, the destination bridge waits for an update of this light client to open deposits. The indexer
+   * knows nothing of it. Taken only with reason `finality`, which no HTTP request can carry; every other check still
+   * applies (the caller limits, one job per direction, the spacing between jobs, the daily budget, a pending proof).
+   */
+  readonly urgent?: WatchUrgentReason;
+  /**
    * The proof the watcher plans: from the head it read to the finalized slot it acts on. The service starts one job per
    * target and direction, ever: a second request for it is refused as `duplicate`, also after a restart or a failure.
    */
@@ -60,9 +73,19 @@ export type ProofRequest = {
 
 /** The answer of {@link RequestService.submit}. */
 export type SubmitResult =
-  | { readonly requestId: string; readonly jobId: string }
-  | { readonly refused: "rate-limited"; readonly retryAfterSeconds: number }
-  | { readonly refused: "nothing-to-prove" }
+  /** `joined`: a job of the direction was running already, and the request joined it. */
+  | { readonly requestId: string; readonly jobId: string; readonly joined?: true }
+  /**
+   * `why`: `limit` (a caller limit, the retry wait after a failed job, or the daily job backstop), `same-finality` (a
+   * job of the direction already proves to the newest finality the backend knows; the next finality comes in about
+   * `retryAfterSeconds`), `gpu-budget` (the direction's 24 h GPU budget is spent; `detail` says by how much).
+   */
+  | { readonly refused: "rate-limited"; readonly retryAfterSeconds: number; readonly why?: "limit" | "same-finality" | "gpu-budget"; readonly detail?: string }
+  /**
+   * `why`: `no-need`, the chain indexer shows no final message waiting and a fresh head; `proof-pending`, a proof we
+   * have from the head waits to land, and the next proof starts from the head it makes.
+   */
+  | { readonly refused: "nothing-to-prove"; readonly why: "no-need" | "proof-pending" }
   /** A job for the same target ran already. Only a request that names a target gets it. */
   | { readonly refused: "duplicate" }
   | { readonly refused: "cannot-check"; readonly retryAfterSeconds: number };
@@ -87,8 +110,8 @@ export interface RequestService {
    */
   recover(): void;
   /**
-   * Seconds until a new job of the direction is admitted: the wait after the newest job (the shorter retry wait after a
-   * failed one), or for the daily budget. 0 when one may start now. The caller limits are not counted. The watcher
+   * Seconds until a new job of the direction is admitted: the retry wait after a failed job, or the wait for the daily
+   * job backstop. 0 when one may start now. The caller limits, the finality rule and the GPU budget are not counted. The watcher
    * asks it so that the warm-up never wakes the prover for a proof the service would refuse.
    */
   admitAfterSeconds(direction: ProofDirection): number;
@@ -97,6 +120,12 @@ export interface RequestService {
   /** Resolves when no job runs in the background. A test awaits it. */
   settled(): Promise<void>;
 }
+
+/**
+ * The newest finality of a direction the backend knows (the watcher's latest decision): its finalized slot, the light
+ * client head it read, and when the next finality is expected (milliseconds since 1970).
+ */
+export type KnownFinality = { readonly finalizedSlot: number; readonly headSlot: number; readonly nextAt: number };
 
 /** Input of {@link createRequestService}. */
 export interface RequestServiceInput {
@@ -118,6 +147,16 @@ export interface RequestServiceInput {
    * Told of each proof the prover made, with its `prove_timing` fields (null from an older prover). The warm-up learns
    * from it how long a cold worker takes. `startedAt`: when the job started proving, in milliseconds since 1970.
    */
+  /**
+   * The newest finality of a direction, or null when none is known (no watcher, or none seen since the start). A request
+   * without a target proves to it, and starts a job only when no job of the direction proves to it or further. Unknown:
+   * the request starts a job without a target, and the daily backstop bounds it. Default: unknown.
+   */
+  readonly finality?: (direction: ProofDirection) => KnownFinality | null;
+  /** The daily job backstop of a direction when `limits.jobsPerDirectionPerDay` is not set. Default: 225 (12 s slots). */
+  readonly jobsPerDayOf?: (direction: ProofDirection) => number;
+  /** The price of a GPU hour in USD, for the GPU budget. Default: `watch.warmup.gpuUsdPerHour`'s default (2.25). */
+  readonly readUsdPerHour?: () => Promise<number>;
   readonly onProved?: (event: { readonly jobId: string; readonly direction: ProofDirection; readonly startedAt: number; readonly timing: ProveTiming | null }) => void;
 }
 
@@ -137,6 +176,8 @@ function stored(request: ProofRequest) {
 export function createRequestService(input: RequestServiceInput): RequestService {
   const { storage, now, limits, logger } = input;
   const running = new Set<Promise<void>>();
+  const jobsPerDay = (direction: ProofDirection) => limits.jobsPerDirectionPerDay ?? input.jobsPerDayOf?.(direction) ?? epochsPerDay(12);
+  const readUsdPerHour = input.readUsdPerHour ?? (async () => DEFAULT_WARMUP.gpuUsdPerHour);
 
   async function runJob(jobId: string, direction: ProofDirection): Promise<void> {
     // A job that is no longer queued (or proving without a proof after a restart) must not start the prover.
@@ -192,7 +233,7 @@ export function createRequestService(input: RequestServiceInput): RequestService
    * The checks that need no indexer, run inside a transaction: the caller and global limits, joining an active job,
    * the wait of the direction and its daily budget. Null means that a new job may start if the chains need a proof.
    */
-  function admit(request: ProofRequest, current: number): Decision | null {
+  function admit(request: ProofRequest, current: number, finality: KnownFinality | null): Decision | null {
     const since = current - CALLER_WINDOW_MILLISECONDS;
     const callerLimit = request.caller === UNKNOWN_CALLER ? limits.requestsPerUnknownCallerPerMinute : limits.requestsPerCallerPerMinute;
     const ofCaller = recentRequestsOfCaller(storage, request.caller, since);
@@ -202,24 +243,51 @@ export function createRequestService(input: RequestServiceInput): RequestService
       windowWaitSeconds({ recent: ofCaller, now: current, limit: callerLimit }),
       ofCaller.count > 0 ? 0 : windowWaitSeconds({ recent: recentCallersOfAll(storage, since), now: current, limit: limits.globalRequestsPerMinute }),
     );
-    if (callerWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: callerWait }, startedJobId: null };
+    if (callerWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: callerWait, why: "limit" }, startedJobId: null };
     const active = findActiveJob(storage, request.direction);
     if (active !== null) {
       const requestId = randomUUID();
       insertRequest(storage, { ...stored(request), id: requestId, jobId: active.id, now: current });
-      return { result: { requestId, jobId: active.id }, startedJobId: null };
+      return { result: { requestId, jobId: active.id, joined: true }, startedJobId: null };
     }
     if (request.target !== undefined && findJobByTarget(storage, request.direction, request.target) !== null) return { result: { refused: "duplicate" }, startedJobId: null };
+    // One job per new finality: a job that proves to this finality or a newer one exists already.
+    const lastTarget = lastJobTargetSlot(storage, request.direction);
+    const asked = request.target?.newSlot ?? finality?.finalizedSlot ?? null;
+    if (asked !== null && lastTarget !== null && asked <= lastTarget) {
+      if (request.target !== undefined) return { result: { refused: "duplicate" }, startedJobId: null };
+      const next = Math.max(1, Math.ceil(((finality as KnownFinality).nextAt - current) / 1000));
+      return { result: { refused: "rate-limited", retryAfterSeconds: next, why: "same-finality", detail: `a job already proves to the newest finality (slot ${lastTarget}); the next finality is expected in about ${next} s` }, startedJobId: null };
+    }
     const directionWait = directionWaitSeconds({ latest: findLatestJob(storage, request.direction), now: current, limits });
-    if (directionWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: directionWait }, startedJobId: null };
+    if (directionWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: directionWait, why: "limit" }, startedJobId: null };
     // A backstop behind the indexer check: it bounds what remote proofs cost even when the indexer reports wrong facts.
     const budgetWait = jobBudgetWaitSeconds({
       recent: recentCostlyJobs(storage, request.direction, current - JOB_BUDGET_WINDOW_MILLISECONDS),
       now: current,
-      limit: limits.jobsPerDirectionPerDay,
+      limit: jobsPerDay(request.direction),
     });
-    if (budgetWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: budgetWait }, startedJobId: null };
+    if (budgetWait > 0) return { result: { refused: "rate-limited", retryAfterSeconds: budgetWait, why: "limit" }, startedJobId: null };
     return null;
+  }
+
+  /**
+   * The GPU budget of the direction: refused while the spend of its jobs in the last 24 hours reaches it. A liveness
+   * proof (a planned handoff, or a keep-alive of the age rule) goes past it, logged.
+   */
+  async function overBudget(request: ProofRequest, need: Extract<ProofNeed, { needed: true }>, current: number): Promise<SubmitResult | null> {
+    const usdPerHour = await readUsdPerHour();
+    const budgetUsd = limits.gpuBudgetUsdPerDirectionPerDay;
+    const spent = gpuBudgetWait({ jobs: recentJobSeconds(storage, request.direction, current - JOB_BUDGET_WINDOW_MILLISECONDS), usdPerHour, budgetUsd, now: current });
+    if (spent === null) return null;
+    const detail = `the 24 h GPU budget of $${budgetUsd.toFixed(2)} for ${request.direction} is spent: $${spent.spentUsd.toFixed(2)}`;
+    const fields = { direction: request.direction, reason: request.reason, budgetUsd, spentUsd: Math.round(spent.spentUsd * 10_000) / 10_000, usdPerHour, detail };
+    if (need.why === "keep-alive") {
+      logger.warn("gpu_budget_bypassed", { ...fields, why: "liveness: the proof keeps the light client alive" });
+      return null;
+    }
+    logger.warn("gpu_budget_spent", { ...fields, retryAfterSeconds: spent.retryAfterSeconds });
+    return { refused: "rate-limited", retryAfterSeconds: spent.retryAfterSeconds, why: "gpu-budget", detail };
   }
 
   // One read of the chain indexer serves every request of its direction for PROOF_NEED_REUSE_MILLISECONDS, and the
@@ -242,7 +310,9 @@ export function createRequestService(input: RequestServiceInput): RequestService
     async submit(request) {
       failLostJobs();
       const asked = now();
-      const first = storage.transaction(() => admit(request, asked));
+      // A watcher request names its finality in its target; any other request proves to the newest one known.
+      const finality = request.target === undefined ? (input.finality?.(request.direction) ?? null) : null;
+      const first = storage.transaction(() => admit(request, asked, finality));
       if (first !== null) return first.result;
       let need: ProofNeed;
       try {
@@ -252,7 +322,8 @@ export function createRequestService(input: RequestServiceInput): RequestService
         return { refused: "cannot-check", retryAfterSeconds: CANNOT_CHECK_RETRY_SECONDS };
       }
       if (!need.needed && request.reason === "finality" && request.plannedHandoff === true) need = { needed: true, why: "keep-alive" };
-      if (!need.needed) return { refused: "nothing-to-prove" };
+      if (!need.needed && request.reason === "finality" && request.urgent !== undefined) need = { needed: true, why: request.urgent };
+      if (!need.needed) return { refused: "nothing-to-prove", why: "no-need" };
       // Never prove again what a proof we have can still land: it starts at the head, and the next proof starts from
       // the head it makes. Only a proof that waited past its time lets a new one start from the same head.
       const headSlot = request.target?.startSlot ?? need.headSlot ?? null;
@@ -261,23 +332,29 @@ export function createRequestService(input: RequestServiceInput): RequestService
         const fields = { direction: request.direction, startSlot: pending.startSlot, newSlot: pending.newSlot, where: pending.where, reason: request.reason };
         if (!isStale(pending, asked, limits.pendingProofStaleSeconds)) {
           logger.info("proof_pending", { ...fields, detail: `${describeHeld(pending)} waits to land` });
-          return { refused: "nothing-to-prove" };
+          return { refused: "nothing-to-prove", why: "proof-pending" };
         }
         logger.warn("proof_pending_stale", { ...fields, waitedSeconds: Math.round((asked - pending.since) / 1000) });
       }
+      const refusedForBudget = await overBudget(request, need, asked);
+      if (refusedForBudget !== null) return refusedForBudget;
       // Another request may have made a job while the indexer answered, so every check runs again with the insert.
       const current = now();
+      // A request without a target proves to the newest finality known: that is the job's planned target.
+      const target = request.target ?? (finality === null ? undefined : { startSlot: finality.headSlot, newSlot: finality.finalizedSlot });
       const { result, startedJobId } = storage.transaction((): Decision => {
-        const decided = admit(request, current);
+        const decided = admit(request, current, finality);
         if (decided !== null) return decided;
-        const job = insertJob(storage, { id: randomUUID(), direction: request.direction, now: current, ...(request.target === undefined ? {} : { target: request.target }) });
+        const job = insertJob(storage, { id: randomUUID(), direction: request.direction, now: current, ...(target === undefined ? {} : { target }) });
         const requestId = randomUUID();
         insertRequest(storage, { ...stored(request), id: requestId, jobId: job.id, now: current });
         return { result: { requestId, jobId: job.id }, startedJobId: job.id };
       });
       if (startedJobId !== null) {
         const latency = request.since === undefined ? {} : { latencyMs: current - request.since };
-        logger.info("job_started", { jobId: startedJobId, direction: request.direction, why: need.why, reason: request.reason, ...latency });
+        // The reasons that started it before the watcher's minimum interval: a user's request never waits for it.
+        const urgent = [...(request.urgent === undefined ? [] : [request.urgent]), ...urgentReasons({ nowSeconds: current / 1000, requested: request.reason !== "finality" })];
+        logger.info("job_started", { jobId: startedJobId, direction: request.direction, why: need.why, reason: request.reason, ...latency, ...(urgent.length === 0 ? {} : { urgent }) });
         start(startedJobId, request.direction);
       }
       return result;
@@ -291,7 +368,7 @@ export function createRequestService(input: RequestServiceInput): RequestService
     admitAfterSeconds(direction) {
       const current = now();
       const directionWait = directionWaitSeconds({ latest: findLatestJob(storage, direction), now: current, limits });
-      const budgetWait = jobBudgetWaitSeconds({ recent: recentCostlyJobs(storage, direction, current - JOB_BUDGET_WINDOW_MILLISECONDS), now: current, limit: limits.jobsPerDirectionPerDay });
+      const budgetWait = jobBudgetWaitSeconds({ recent: recentCostlyJobs(storage, direction, current - JOB_BUDGET_WINDOW_MILLISECONDS), now: current, limit: jobsPerDay(direction) });
       return Math.max(directionWait, budgetWait);
     },
     prune() {
