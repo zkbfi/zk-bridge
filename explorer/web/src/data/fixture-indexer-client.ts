@@ -76,6 +76,7 @@ const detailOf = (item: FeedItem, pair: PairConfig): MessageDetail => {
             value: item.amount,
             deliveredValue: item.deliveredAt === null ? null : item.amount,
             hasCallback: false,
+            delivery: null,
           },
     data: payloadOf(item),
     costs: sampleCosts(item, from.chainId, to.chainId, !(item.status === "sent" || item.status === "waiting_for_finality")),

@@ -44,7 +44,7 @@ curl -s 'localhost:42069/api/feed?status=sent,covered&limit=20'
 | Variable | Meaning | Default |
 |---|---|---|
 | `EXPLORER_PAIR` | Pair name. Known: `eth-pls` (chain 1 and chain 369), `sepolia-pls943` (chain 11155111 and chain 943). | `eth-pls` |
-| `EXPLORER_DEPLOYMENT_FILE` | Deployment JSON: one section per chain with `chain_id`, `bridge`, `mediator`, `token_factory`, `wrapped_native`, `gate`, `light_client`, `start_block`, and optional `delivery_router` and `fork_registry`. A section matches a side by `chain_id`. `rpc_url` in the file is a fallback. | `../deployments/<pair>.json` |
+| `EXPLORER_DEPLOYMENT_FILE` | Deployment JSON: one section per chain with `chain_id`, `bridge`, `mediator`, `token_factory`, `wrapped_native`, `gate`, `light_client`, `start_block`, and optional `delivery_router` (the router the frontends send through now), `delivery_routers` (a list of earlier routers of the same mediator, which still receive the messages sent to them) and `fork_registry`. A section matches a side by `chain_id`. `rpc_url` in the file is a fallback. | `../deployments/<pair>.json` |
 | `EXPLORER_RPC_URL_<chainId>` | Execution endpoint. Comes from the environment because URLs can carry keys. | the `rpc_url` of the file |
 | `EXPLORER_BEACON_URL_<chainId>` | Beacon node endpoint of that chain. Optional. Used for the finalized slot in `/api/heads`. | none |
 | `EXPLORER_FINALITY_SECONDS_<chainId>` | Seconds before a send counts as `waiting_for_finality`. | 768 (chains 369 and 943: 640) |
@@ -294,7 +294,7 @@ Ponder writes the tables into the schema that `--schema` names (default for `pon
 | Table | Key | Content |
 |---|---|---|
 | `messages` | `message_id` | One row per message: ids, chains, `direction`, `kind`, `status`, sender, executor, gas, data, send and delivery facts, `covered_by_head_slot`, `release_failed`. |
-| `transfers` | `message_id` | Token view of a `token` message: tokens, sender, recipient, `value`, `delivered_value`, `paid_to`, `source_is_native`. |
+| `transfers` | `message_id` | Token view of a `token` message: tokens, sender, recipient, `value`, `delivered_value`, `paid_to`, `source_is_native`, and for a router delivery `delivery_router`, `router_amount`, `fee`, `received`, `deliverer`, `final_recipient`, `fee_source`. |
 | `tokens` | `chain_id, address` | Metadata, `is_bridged_copy`, home chain and home token. |
 | `escrow` | `chain_id, token` | `balance` of a native token. |
 | `bridged_supply` | `chain_id, token` | `minted`, `burned`, `supply` of a copy. |
@@ -358,6 +358,7 @@ publication.
 - Coverage: a `HeadUpdated` event on the destination reads `executionBlockNumber(hash)` from the light client. Every uncovered message of that direction with `sent_block_number <= executionBlockNumber` becomes covered. A send that arrives later checks the stored head.
 - Clock: a block handler runs every few blocks on each chain. It stores the chain time and moves old `sent` rows to `waiting_for_finality`.
 - Escrow: after each mediator event that can change it, the handler reads `mediatorBalance` from the contract at that block. The contract is the authority.
+- Delivery fee: when `TokensBridged` pays one of the side's delivery routers (`delivery_router` and `delivery_routers` of the deployment file), the handler reads the receipt of the delivery transaction and the router's `rewardAddress()` at that block, and takes the logs after `TokensBridged` up to the next log of the bridge or the mediator (so each delivery of a batch reads only its own). A router with the `Delivered` event (deployed after 2026-11-07) gives the amount, the fee, the payout and the recipient directly (`fee_source` `event`). An older router emits nothing on success, so the fee is the token's `Transfer` from the router to the reward address and the payout the other `Transfer`s from the router (`logs`); a `DeliveryFailed` makes `received` 0. An older router that unwrapped to the native coin sends the coin with no log: the amount is the wrapped token's `Withdrawal`, and the API completes the fee from the sender's terms in the message (a fixed fee or a share; `terms`), or leaves it null for a gas based fee. A delivery transaction sent to the bridge itself took no fee. The API serves `fee`, `received`, `deliverer`, `feeSource`, `routerAmount`, `finalRecipient` and `deliveryRouter` on each transfer (`/api/feed`, `/api/browse/messages`, `/api/messages/:id`), and the address filters match `final_recipient` too.
 - Supply: from `Transfer` events of bridged copies that go from or to the zero address. The copies are found through `NewTokenRegistered`.
 
 ## Tests

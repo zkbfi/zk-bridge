@@ -3,6 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { Shell } from "../../src/app/Shell";
 import { connectedWallet, renderWithWallet } from "../app/support";
+import { buildTestServices } from "../render";
+import { FIXTURE_TOKENS } from "@terminal/data/fixtures";
+import type { FeedItem } from "@terminal/model/types";
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -26,6 +29,30 @@ describe("Explore's top", () => {
     expect(screen.getByRole("heading", { name: /Services/ })).toBeInTheDocument();
     // Icons on the orange map sit on a plate.
     expect(container.querySelectorAll(".zb-xmap .zb-tok-icon.zb-on-accent")).toHaveLength(2);
+  });
+
+  it("shows the delivery fee under a latest transfer that a delivery router delivered", async () => {
+    const base = buildTestServices();
+    const token = FIXTURE_TOKENS[0]!;
+    const unit = 10n ** BigInt(token.decimals);
+    const now = Math.floor(Date.now() / 1000);
+    const delivered = {
+      id: `0x${"05".repeat(32)}`,
+      kind: "token",
+      direction: "first-to-second",
+      status: "delivered",
+      sender: "0x52908400098527886E0F7030069857D2E4169EE7",
+      recipient: "0x52908400098527886E0F7030069857D2E4169EE7",
+      token,
+      amount: (123n * unit) / 10n,
+      sentAt: now - 3600,
+      deliveredAt: now - 3000,
+      sourceTransactionHash: `0x${"11".repeat(32)}`,
+      destinationTransactionHash: `0x${"22".repeat(32)}`,
+      delivery: { token, fee: (123n * unit) / 10_000n, received: (122_877n * unit) / 10_000n },
+    } as FeedItem;
+    renderWithWallet(<Shell />, { wallet: connectedWallet(), services: { dataSource: { ...base.dataSource, getFeed: async () => ({ items: [delivered], hasMore: false }) } } });
+    expect(await screen.findByText(/^12\.3 \S+ sent · 0\.0123 \S+ fee \(0\.1%\) · 12\.2877 \S+ received$/)).toBeInTheDocument();
   });
 
   it("puts the in-flight orbits, one loop for the pair, after the search band and before the browse rows", async () => {

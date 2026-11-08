@@ -96,6 +96,72 @@ describe("TokenMediator:TokensBridged", () => {
   });
 });
 
+describe("TokenMediator:TokensBridged to a delivery router", () => {
+  const ROUTER = "0x00000000000000000000000000000000000000e7";
+  const OLD_ROUTER = "0x00000000000000000000000000000000000000e8";
+  const REWARD = addressOf("77");
+  const RECIPIENT = addressOf("88");
+  const BRIDGE = "0x00000000000000000000000000000000000000b2";
+  const word = (value: bigint) => `0x${value.toString(16).padStart(64, "0")}` as `0x${string}`;
+  const topic = (address: string) => `0x${address.slice(2).padStart(64, "0")}` as `0x${string}`;
+  const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+  const transferLog = (logIndex: number, from: string, to: string, value: bigint) => ({ address: token, topics: [TRANSFER, topic(from), topic(to)], data: word(value), logIndex });
+  const bridgedLog = { address: MEDIATOR_ON_PULSECHAIN, topics: ["0x01"], data: "0x", logIndex: 1 };
+  const routerAnswers = (call: ReadCall) => (call.functionName === "rewardAddress" ? REWARD : answers()(call));
+
+  it("records the fee and what the recipient received from the transfer logs of a router without the event", async () => {
+    const { database, client, context } = createContext(369, routerAnswers);
+    client.getTransactionReceipt.mockResolvedValue({
+      logs: [transferLog(0, ZERO, OLD_ROUTER, 12_300n), bridgedLog, transferLog(2, OLD_ROUTER, REWARD, 12n), transferLog(3, OLD_ROUTER, RECIPIENT, 12_288n)],
+    });
+    const event = createEvent(
+      { token, recipient: OLD_ROUTER, value: 12_300n, messageId },
+      { transaction: { hash: hashOf("aa"), from: addressOf("f0"), to: OLD_ROUTER }, log: { address: MEDIATOR_ON_PULSECHAIN, logIndex: 1 } },
+    );
+    await callHandler("TokenMediator:TokensBridged", { event, context });
+    expect(database.row(transfers, { messageId })).toMatchObject({
+      paidTo: OLD_ROUTER,
+      deliveredValue: 12_300n,
+      deliveryRouter: OLD_ROUTER,
+      routerAmount: 12_300n,
+      fee: 12n,
+      received: 12_288n,
+      deliverer: REWARD,
+      finalRecipient: RECIPIENT,
+      feeSource: "logs",
+    });
+    expect(client.readContract).toHaveBeenCalledWith(expect.objectContaining({ address: OLD_ROUTER, functionName: "rewardAddress", blockNumber: 100n }));
+  });
+
+  it("records the router alone when the receipt shows no trace of its callback, and reads on when the router does not answer", async () => {
+    const { database, client, context } = createContext(369, (call) => {
+      if (call.functionName === "rewardAddress") throw new Error("reverted");
+      return answers()(call);
+    });
+    client.getTransactionReceipt.mockResolvedValue({ logs: [bridgedLog] });
+    const event = createEvent({ token, recipient: ROUTER, value: 5n, messageId }, { transaction: { hash: hashOf("aa"), from: addressOf("f0"), to: BRIDGE }, log: { address: MEDIATOR_ON_PULSECHAIN, logIndex: 1 } });
+    await callHandler("TokenMediator:TokensBridged", { event, context });
+    expect(database.row(transfers, { messageId })).toMatchObject({ deliveryRouter: ROUTER, routerAmount: null, fee: null, feeSource: null });
+  });
+
+  it("falls back to the order of the transfers when the router answers no address, and allows a fee for a transaction with no to", async () => {
+    const { database, client, context } = createContext(369, (call) => (call.functionName === "rewardAddress" ? "not an address" : answers()(call)));
+    client.getTransactionReceipt.mockResolvedValue({
+      logs: [bridgedLog, transferLog(2, ROUTER, REWARD, 3n), transferLog(3, ROUTER, RECIPIENT, 97n)],
+    });
+    const event = createEvent({ token, recipient: ROUTER, value: 100n, messageId }, { transaction: { hash: hashOf("aa"), from: addressOf("f0") }, log: { address: MEDIATOR_ON_PULSECHAIN, logIndex: 1 } });
+    await callHandler("TokenMediator:TokensBridged", { event, context });
+    expect(database.row(transfers, { messageId })).toMatchObject({ fee: 3n, received: 97n, deliverer: REWARD, feeSource: "logs" });
+  });
+
+  it("reads no receipt for a payment to an account that is not a router", async () => {
+    const { database, client, context } = createContext(369, answers());
+    await callHandler("TokenMediator:TokensBridged", { event: createEvent({ token, recipient: account, value: 41n, messageId }), context });
+    expect(client.getTransactionReceipt).not.toHaveBeenCalled();
+    expect(database.row(transfers, { messageId })).toMatchObject({ deliveryRouter: null, fee: null });
+  });
+});
+
 describe("TokenMediator:NewTokenRegistered", () => {
   it("stores the bridged copy with its home token and the registration facts", async () => {
     const { database, context } = createContext(369, answers());

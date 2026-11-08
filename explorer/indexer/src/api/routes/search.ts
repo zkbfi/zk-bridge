@@ -84,7 +84,7 @@ const readers = (): NonNullable<SearchSources["indexer"]> => {
       const [row] = await db
         .select({ count: sql<number>`count(*)::int` })
         .from(transfers)
-        .where(or(eq(transfers.sender, address as `0x${string}`), eq(transfers.recipient, address as `0x${string}`), eq(transfers.paidTo, address as `0x${string}`)));
+        .where(or(eq(transfers.sender, address as `0x${string}`), eq(transfers.recipient, address as `0x${string}`), eq(transfers.paidTo, address as `0x${string}`), eq(transfers.finalRecipient, address as `0x${string}`)));
       return row?.count ?? 0;
     },
   };

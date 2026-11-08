@@ -1,6 +1,7 @@
 import { ponder } from "ponder:registry";
 import { bridgedSupply, releaseEvents, tokens } from "ponder:schema";
-import { otherSide } from "@zk-bridge/shared";
+import { deliveryRoutersOf, otherSide, sideOf } from "@zk-bridge/shared";
+import { routerDeliveryPatch, type RouterDeliveryClient } from "../lib/router-delivery";
 import { refreshEscrow } from "../lib/escrow";
 import { writeMessage } from "../lib/message-store";
 import { pair } from "../lib/pair";
@@ -45,16 +46,35 @@ ponder.on("TokenMediator:TokensBridgingInitiated", async ({ event, context }) =>
   });
 });
 
-/** A delivery paid an account on this chain. */
+/**
+ * A delivery paid an account on this chain. When the account is one of the side's delivery routers, the handler also
+ * records the split of the router: what it received, the fee and what the recipient received.
+ */
 ponder.on("TokenMediator:TokensBridged", async ({ event, context }) => {
   const chainId = context.chain.id;
   const sourceChainId = otherSide(pair, chainId).chainId;
+  const side = sideOf(pair, chainId);
+  const router = deliveryRoutersOf(side).find((address: string) => address === event.args.recipient.toLowerCase()) ?? null;
+  const split =
+    router === null
+      ? {}
+      : await routerDeliveryPatch({
+          client: context.client as unknown as RouterDeliveryClient,
+          side,
+          router,
+          token: event.args.token,
+          value: event.args.value,
+          transactionHash: event.transaction.hash,
+          transactionTo: event.transaction.to ?? null,
+          logIndex: event.log.logIndex,
+          blockNumber: event.block.number,
+        });
   await writeTransfer({
     database: context.db,
     messageId: event.args.messageId,
     sourceChainId,
     destinationChainId: chainId,
-    patch: { destinationToken: event.args.token, paidTo: event.args.recipient, deliveredValue: event.args.value },
+    patch: { destinationToken: event.args.token, paidTo: event.args.recipient, deliveredValue: event.args.value, ...split },
   });
   await refreshEscrow({
     database: context.db,

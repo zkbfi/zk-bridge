@@ -93,7 +93,7 @@ export const buildIndexerSpec = (): OpenApiDocument => {
         get: get("Release events", "Unlocks and mints for an address.", [query("address", "Recipient address.", ADDRESS), limit(500, 50)], json(open("The release events."), "The events."), badRequest),
       },
       "/api/feed": {
-        get: get("Transfer and message feed", "Sent messages and their transfers, newest first.", [...feedFilters, limit(200, 50), cursor], json(ref("Page"), "A page of items."), badRequest),
+        get: get("Transfer and message feed", "Sent messages and their transfers, newest first.", [...feedFilters, limit(200, 50), cursor], json(ref("MessagePage"), "A page of items."), badRequest),
       },
       "/api/counts": { get: get("All-time counts", "Totals over the whole tables: messages per status, direction and kind, in flight, light client updates and tokens per chain, unique addresses, contracts, gates and escrow entries. Cached for ten seconds.", [], json(open("The counts."), "The counts.")) },
       "/api/browse/messages": {
@@ -109,7 +109,7 @@ export const buildIndexerSpec = (): OpenApiDocument => {
             offset,
             asOf,
           ],
-          json(open("items, total, limit, offset and asOf."), "A page of items."),
+          json(list("items", ref("Message"), { total: { type: "integer" }, limit: { type: "integer" }, offset: { type: "integer" }, asOf: { type: "integer" } }), "A page of items."),
           badRequest,
         ),
       },
@@ -141,7 +141,7 @@ export const buildIndexerSpec = (): OpenApiDocument => {
         ),
       },
       "/api/messages/{messageId}": {
-        get: get("One message", "A message with its transfer, data and the step costs.", [path("messageId", "32 byte message identifier.", HASH)], json(open("The message."), "The message."), { ...badRequest, ...notFound }),
+        get: get("One message", "A message with its transfer, data and the step costs.", [path("messageId", "32 byte message identifier.", HASH)], json(ref("Message"), "The message, with its data and step costs."), { ...badRequest, ...notFound }),
       },
       "/api/history": {
         get: get(
@@ -198,6 +198,35 @@ export const buildIndexerSpec = (): OpenApiDocument => {
       schemas: {
         Error: ERROR_SCHEMA,
         Page: list("items", open("One item."), { nextCursor: { type: ["string", "null"], description: "Pass as cursor for the next page; null on the last page." } }),
+        MessagePage: list("items", ref("Message"), { nextCursor: { type: ["string", "null"], description: "Pass as cursor for the next page; null on the last page." } }),
+        Message: {
+          type: "object",
+          description: "A message with its direction, steps and, for a token message, its transfer.",
+          properties: { messageId: HASH, kind: { type: "string", enum: ["token", "message"] }, status: { type: "string", enum: [...MESSAGE_STATUSES] }, transfer: { oneOf: [ref("Transfer"), { type: "null" }] } },
+          additionalProperties: true,
+        },
+        Transfer: {
+          type: "object",
+          description:
+            "The token side of a message. Amounts are decimal strings of base units. When the mediator paid a delivery router, the delivery fee fields say what the router received, what went to the deliverer and what the recipient received; they are null for a transfer that no router delivered, and until the delivery.",
+          properties: {
+            value: { type: ["string", "null"], description: "Locked or burned on the source chain." },
+            deliveredValue: { type: ["string", "null"], description: "Paid by the mediator on the destination chain (to the router, for a router delivery)." },
+            paidTo: { oneOf: [ADDRESS, { type: "null" }], description: "The account that the mediator paid." },
+            deliveryRouter: { oneOf: [ADDRESS, { type: "null" }], description: "The delivery router that the mediator paid." },
+            routerAmount: { type: ["string", "null"], description: "What the router received and could deliver." },
+            fee: { type: ["string", "null"], description: "The delivery fee to the deliverer, in the destination token; null when it cannot be known (a gas based fee of an older router paid in the native coin)." },
+            received: { type: ["string", "null"], description: "What the recipient received after the fee; 0 when the router handed the amount off." },
+            deliverer: { oneOf: [ADDRESS, { type: "null" }], description: "The account that received the fee (the router's reward address); null when no fee was paid." },
+            finalRecipient: { oneOf: [ADDRESS, { type: "null" }], description: "The account that the router paid." },
+            feeSource: {
+              type: ["string", "null"],
+              enum: ["event", "logs", "terms", null],
+              description: "event: the router's Delivered event. logs: the token transfers from the router in the delivery transaction (routers without the event). terms: an older router's native payout, with the fee from the sender's terms.",
+            },
+          },
+          additionalProperties: true,
+        },
       },
     },
   };

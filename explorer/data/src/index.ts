@@ -35,6 +35,7 @@ export {
   finalityVariableName,
   type LoadPairOptions,
   loadPair,
+  deliveryRoutersOf,
   otherSide,
   sideOf,
   describePair,
@@ -70,6 +71,16 @@ export {
   type MediatorMessage,
   decodeMediatorMessage,
 } from "./mediator-message.js";
+export {
+  type FeeSource,
+  type PayoutKind as RouterPayoutKind,
+  type RouterDelivery,
+  type DeliveryLog,
+  type RouterDeliveryInput,
+  type DeliveryFeeFacts,
+  routerDeliveryFromLogs,
+  resolveTermsFee,
+} from "./router-delivery.js";
 export {
   type DecodedSend,
   decodeSend,
@@ -188,6 +199,7 @@ export {
   tokenView,
   tokenListItemView,
   feedItemView,
+  deliveryFeeView,
   escrowView,
   supplyView,
   headUpdateView,

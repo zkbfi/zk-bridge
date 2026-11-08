@@ -84,6 +84,8 @@ describe('ABI fragments against the contracts', () => {
       Swept: 'Swept(address,uint256)',
       HandOffRefused: 'HandOffRefused(address,uint256)',
       CallFailed: 'CallFailed(address,address,uint256)',
+      // The enum PaidAs is a uint8 on the wire.
+      Delivered: 'Delivered(address,address,address,uint256,uint256,uint256,uint8,address)',
     } as const
     expect([...selectors.keys()].sort()).toEqual(Object.keys(declared).sort())
     for (const [name, signature] of Object.entries(declared)) {

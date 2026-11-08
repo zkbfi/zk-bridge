@@ -80,6 +80,18 @@ describe('indexer data source', () => {
     expect(result.hasMore).toBe(false)
   })
 
+  test('reads the delivery fee of a router delivery, and none for a transfer that no router delivered', async () => {
+    const routed = {
+      ...feedItem,
+      transfer: { ...feedItem.transfer, destinationToken: { chainId: 369, address: usdcHome, symbol: 'zUSDC', decimals: 6 }, deliveryRouter: '0x00000000000000000000000000000000000000e7', fee: '12300', received: '12287700' },
+    }
+    const unknown = { ...feedItem, transfer: { ...feedItem.transfer, deliveryRouter: '0x00000000000000000000000000000000000000e7', fee: null } }
+    const result = await source({ '/api/feed': { items: [routed, unknown, feedItem], nextCursor: null } }).getFeed('eth-pls', {}, 50)
+    expect(result.items[0]?.delivery).toMatchObject({ fee: 12_300n, received: 12_287_700n, token: { symbol: 'zUSDC', decimals: 6 } })
+    expect(result.items[1]?.delivery).toEqual({ token: null, fee: null, received: null })
+    expect(result.items[2]?.delivery).toBeNull()
+  })
+
   test('refuses an amount that arrives as a JSON number, because digits may be lost', async () => {
     const lossy = { ...feedItem, transfer: { ...feedItem.transfer, value: 9007199254740993 } }
     await expect(source({ '/api/feed': { items: [lossy], nextCursor: null } }).getFeed('eth-pls', {}, 50)).rejects.toBeInstanceOf(IndexerResponseError)

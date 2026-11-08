@@ -2,6 +2,7 @@ import type { Hex } from "viem";
 import type { AuditResult } from "./audit.js";
 import type { MessageRow } from "./message-merge.js";
 import type { PairSide } from "./pairs.js";
+import { resolveTermsFee } from "./router-delivery.js";
 
 /**
  * The shapes of the explorer HTTP API. The indexer builds its answers with these functions from database rows. The RPC
@@ -59,6 +60,24 @@ export type TransferRow = {
   /** True when the source token is native on the source chain (lock) and false when it is a bridged copy (burn). */
   readonly sourceIsNative: boolean | null;
   readonly sentTimestamp: bigint | null;
+  /**
+   * The delivery fee, when the mediator paid a configured `DeliveryRouter` (see `router-delivery.ts`). All of these are
+   * null for a transfer that no router delivered, and until the delivery. Amounts are base units of the destination token.
+   */
+  /** The router that the mediator paid. */
+  readonly deliveryRouter: Hex | null;
+  /** What the router received and could deliver. */
+  readonly routerAmount: bigint | null;
+  /** The fee to the deliverer, or null when it is unknown. */
+  readonly fee: bigint | null;
+  /** What the recipient received, or null when it is unknown. Zero when the router handed the amount off. */
+  readonly received: bigint | null;
+  /** The account that received the fee (the router's reward address), or null when no fee was paid. */
+  readonly deliverer: Hex | null;
+  /** The account that the router paid. */
+  readonly finalRecipient: Hex | null;
+  /** `event`, `logs` or `terms`: where the fee was read. */
+  readonly feeSource: string | null;
 };
 
 /** The mediator balance of a native token on its home chain. */
@@ -195,6 +214,34 @@ export const tokenListItemView = (row: TokenRow, index: TokenIndex) => ({
   registeredTimestamp: numberOf(row.registeredTimestamp),
 });
 
+/**
+ * The delivery fee of a transfer as the API shows it. A fee of the `terms` source is completed from the terms of the
+ * message here, so it does not matter which chain the indexer read first.
+ */
+export const deliveryFeeView = (message: MessageRow, transfer: TransferRow) => {
+  const facts = resolveTermsFee(
+    {
+      deliveryRouter: transfer.deliveryRouter,
+      routerAmount: transfer.routerAmount,
+      fee: transfer.fee,
+      received: transfer.received,
+      deliverer: transfer.deliverer,
+      finalRecipient: transfer.finalRecipient,
+      feeSource: transfer.feeSource,
+    },
+    message.data,
+  );
+  return {
+    deliveryRouter: facts.deliveryRouter,
+    routerAmount: amountOf(facts.routerAmount),
+    fee: amountOf(facts.fee),
+    received: amountOf(facts.received),
+    deliverer: facts.deliverer,
+    finalRecipient: facts.finalRecipient,
+    feeSource: facts.feeSource,
+  };
+};
+
 /** One feed item: a message with its transfer, when it has one. */
 export const feedItemView = (message: MessageRow, transfer: TransferRow | null, index: TokenIndex) => ({
   messageId: message.messageId,
@@ -246,6 +293,7 @@ export const feedItemView = (message: MessageRow, transfer: TransferRow | null, 
           deploysCopy: transfer.deploysCopy,
           hasCallback: transfer.hasCallback,
           sourceIsNative: transfer.sourceIsNative,
+          ...deliveryFeeView(message, transfer),
         },
 });
 

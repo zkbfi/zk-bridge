@@ -643,3 +643,7 @@ a.zb-go[aria-disabled="true"] { cursor: not-allowed; }
 .zb .zb-pill-outline { background: transparent; color: inherit; }
 .zb .zb-pill-solid { background: var(--zb-ink); color: var(--zb-page); border-color: var(--zb-ink); }
 .zb .zb-pill-solid:disabled { opacity: .5; }
+.zb-price-note { margin: 4px 0 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
+
+/* The delivery fee of a delivered transfer in Activity. */
+.zb-dopen .zb-fee-line { margin: 4px 0 8px; color: var(--zb-muted); overflow-wrap: anywhere; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PAIR_NAME, PAIR_DEFINITIONS, beaconVariableName, describePair, finalityVariableName, loadPair, otherSide, rpcVariableName, sideOf } from "../src/pairs.js";
+import { DEFAULT_PAIR_NAME, PAIR_DEFINITIONS, beaconVariableName, deliveryRoutersOf, describePair, finalityVariableName, loadPair, otherSide, rpcVariableName, sideOf } from "../src/pairs.js";
 
 const section = (chainId: number, seed: string) => ({
   name: `chain-${chainId}`,
@@ -109,6 +109,15 @@ describe("the optional contracts of a chain section", () => {
     const pair = loadPair({ environment: {}, deployment: withOptional({ delivery_router: `0x${"AB".repeat(20)}`, fork_registry: `0x${"CD".repeat(20)}` }) });
     expect(pair.sides[0].contracts.deliveryRouter).toBe(`0x${"ab".repeat(20)}`);
     expect(pair.sides[0].contracts.forkRegistry).toBe(`0x${"cd".repeat(20)}`);
+  });
+
+  it("reads the earlier routers of delivery_routers, and lists every router once, the current one first", () => {
+    const pair = loadPair({ environment: {}, deployment: withOptional({ delivery_router: `0x${"AB".repeat(20)}`, delivery_routers: [`0x${"CD".repeat(20)}`, `0x${"ab".repeat(20)}`] }) });
+    expect(pair.sides[0].contracts.deliveryRouters).toEqual([`0x${"cd".repeat(20)}`, `0x${"ab".repeat(20)}`]);
+    expect(deliveryRoutersOf(pair.sides[0])).toEqual([`0x${"ab".repeat(20)}`, `0x${"cd".repeat(20)}`]);
+    expect(loadPair({ environment: {}, deployment }).sides[0].contracts.deliveryRouters).toEqual([]);
+    expect(deliveryRoutersOf(loadPair({ environment: {}, deployment }).sides[0])).toEqual([]);
+    expect(deliveryRoutersOf({ contracts: { deliveryRouter: null } })).toEqual([]);
   });
 });
 

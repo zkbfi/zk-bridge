@@ -29,7 +29,7 @@ const messageConditions = (query: BrowseMessagesQuery) => {
     isNotNull(messages.sentTimestamp),
     ...messageConditionsOf(query),
     sender === null ? undefined : or(eq(messages.sender, sender), eq(transfers.sender, sender)),
-    recipient === null ? undefined : or(eq(transfers.recipient, recipient), eq(transfers.paidTo, recipient)),
+    recipient === null ? undefined : or(eq(transfers.recipient, recipient), eq(transfers.paidTo, recipient), eq(transfers.finalRecipient, recipient)),
     from === null ? undefined : gte(messages.sentTimestamp, from),
     to === null ? undefined : lte(messages.sentTimestamp, to),
     asOf === null ? undefined : lte(messages.sentTimestamp, asOf),

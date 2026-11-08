@@ -100,6 +100,19 @@ describe("the Activity screen", () => {
     expect(screen.getByRole("link", { name: "Bridge again" })).toBeInTheDocument();
   });
 
+  it("opens a delivered row to its delivery fee line when a delivery router delivered it", async () => {
+    window.history.replaceState(null, "", "#/activity");
+    const base = buildTestServices();
+    const token = FIXTURE_TOKENS[0]!;
+    const unit = 10n ** BigInt(token.decimals);
+    const delivered = [
+      item({ id: `0x${"05".repeat(32)}`, status: "delivered", amount: (123n * unit) / 10n, sentAt: NOW - 3600, deliveredAt: NOW - 3000, delivery: { token, fee: (123n * unit) / 10_000n, received: (122_877n * unit) / 10_000n } }),
+    ];
+    renderWithWallet(<Shell />, { wallet: connectedWallet(), services: { dataSource: { ...base.dataSource, getFeed: async () => ({ items: delivered, hasMore: false }) } } });
+    await userEvent.click(await screen.findByRole("button", { expanded: false, name: /ago/ }));
+    expect(await screen.findByText(/^12\.3 \S+ sent · 0\.0123 \S+ fee \(0\.1%\) · 12\.2877 \S+ received$/)).toBeInTheDocument();
+  });
+
   it("shows a just-submitted transfer as sent before the indexer has it", async () => {
     addPending({ sourceTransactionHash: `0x${"99".repeat(32)}`, direction: "first-to-second", token: FIXTURE_TOKENS[0]!, amount: 5n * 10n ** 18n, sentAt: NOW });
     renderActivity();

@@ -38,6 +38,28 @@ describe("useDefaultFee", () => {
   });
 });
 
+describe("useDefaultFee without a price", () => {
+  const unpricedFee = (input: Partial<Parameters<typeof useDefaultFee>[0]>) =>
+    renderHook(() => useDefaultFee({ amountUsd: null, costUsd: null, costDefaultUsd: null, capPercent: 1, ...input })).result.current;
+
+  it("is the automatic maximum when the price cannot be derived, and the rule's 0.1% only when no amount is typed", () => {
+    expect(unpricedFee({ unpriced: true }).auto).toEqual({ binding: "no-price", shareWad: DEFAULT_CAP_WAD, feeUsd: null });
+    expect(unpricedFee({ unpriced: true }).auto.shareWad).toBe(10n ** 16n);
+    expect(unpricedFee({}).auto.shareWad).toBe(10n ** 15n);
+  });
+
+  it("follows the automatic cap in force, not a second 1%", () => {
+    expect(unpricedFee({ unpriced: true, capPercent: 0.5 }).auto.shareWad).toBe(5n * 10n ** 15n);
+    expect(unpricedFee({ unpriced: true, capPercent: 1.5 }).auto.shareWad).toBe(15n * 10n ** 15n);
+    expect(unpricedFee({ unpriced: true, capPercent: Number.NaN }).auto.shareWad).toBe(DEFAULT_CAP_WAD);
+  });
+
+  it("leaves a priced fee alone", () => {
+    const priced = unpricedFee({ unpriced: true, amountUsd: 1_000n * USD, costUsd: 1n * USD, costDefaultUsd: 1n * USD });
+    expect(priced.auto.binding).not.toBe("no-price");
+  });
+});
+
 describe("useFeeWarnings", () => {
   const input = { amountUsd: 1_000n * USD, capWad: DEFAULT_CAP_WAD, feeUsd: 1n * USD, costUsd: 5n * USD, costDefaultUsd: 5n * USD, shareWithoutPriceWad: null, belowBreakEven: false, gasBased: false, expandedCostUsd: null };
 

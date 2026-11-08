@@ -32,6 +32,7 @@ export const messageConditionsOf = (filters: MessageFilters) => {
           eq(transfers.sender, address),
           eq(transfers.recipient, address),
           eq(transfers.paidTo, address),
+          eq(transfers.finalRecipient, address),
         ),
   ];
 };

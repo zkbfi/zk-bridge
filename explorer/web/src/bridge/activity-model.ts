@@ -6,6 +6,8 @@ import { NEEDS_YOU_AFTER_SECONDS, groupOf as groupOfStatus, positionOf, stepOf, 
 import type { ChainConfig, FeedItem, PairConfig } from "@terminal/model/types";
 import { chainsFor, transferSteps } from "./bridge-model";
 import type { Step } from "./StepList";
+import { nativeSymbolOf } from "@zk-bridge/shared";
+import { feeSummaryText } from "../data/fee-summary";
 
 /** Block explorers of the chains zkb.fi serves. */
 const EXPLORERS: Readonly<Record<number, string>> = {
@@ -81,4 +83,25 @@ export const relativeTime = (unix: number, now: number): string => {
 export const dayOf = (unix: number, now: number): string => {
   const days = Math.floor(now / 86_400) - Math.floor(unix / 86_400);
   return days === 0 ? "Today" : days === 1 ? "Yesterday" : new Date(unix * 1000).toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+};
+
+/**
+ * The delivery fee of a delivered transfer in one line ("12.3 tTKN sent · 0.0123 tTKN fee (0.1%) · 12.2877 tTKN
+ * received"), or null when no delivery router delivered it, or the indexer has not read its fee.
+ *
+ * @param item The transfer.
+ */
+export const feeLineOf = (item: FeedItem): string | null => {
+  const delivery = item.delivery ?? null;
+  if (delivery === null || delivery.fee === null || item.token === null || item.amount === null) return null;
+  const token = delivery.token ?? item.token;
+  return feeSummaryText({
+    sent: item.amount,
+    sentDecimals: item.token.decimals,
+    sentSymbol: nativeSymbolOf(item.token),
+    fee: delivery.fee,
+    received: delivery.received,
+    decimals: token.decimals,
+    symbol: nativeSymbolOf(token),
+  });
 };

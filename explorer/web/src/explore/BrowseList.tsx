@@ -13,6 +13,7 @@ import { useTokens } from "../app/queries";
 import { useServices } from "../app/services";
 import { relativeTime } from "../bridge/activity-model";
 import { amountText } from "../bridge/bridge-model";
+import { feeSummaryText } from "../data/fee-summary";
 import { Num } from "../bridge/Num";
 import { TokenIcon } from "../bridge/TokenIcon";
 import { chainNamer } from "./ExploreScreen";
@@ -99,6 +100,14 @@ const sortOptionsOf = (kind: ListKind, state: ListState): readonly Option[] =>
     return { value, label: waiting ? "Waiting longest first" : needsToken ? `${sortLabels[value]} (choose a token)` : (sortLabels[value] as string), disabled: needsToken };
   });
 
+/** The fee line of a transfer in the list, when a delivery router delivered it and the indexer read the fee. */
+const feeLineOfBrowse = (item: BrowseMessage): string | null => {
+  const sent = item.token;
+  const received = item.destinationToken ?? item.token;
+  if (item.fee === null || item.amount === null || sent === null || received === null || sent.decimals === null || received.decimals === null) return null;
+  return feeSummaryText({ sent: item.amount, sentDecimals: sent.decimals, sentSymbol: sent.symbol ?? "", fee: item.fee, received: item.received, decimals: received.decimals, symbol: received.symbol ?? "" });
+};
+
 const rowsOf = (fetched: Fetched, pair: PairConfig, now: number): ReactNode => {
   const names = chainNamer(pair);
   const sideOf = (chainId: number): "first" | "second" => (chainId === pair.first.chainId ? "first" : "second");
@@ -116,6 +125,7 @@ const rowsOf = (fetched: Fetched, pair: PairConfig, now: number): ReactNode => {
             <>
               <RouteIcons from={item.sourceChainId} to={item.destinationChainId} names={names} />
               {item.sentAt === null ? null : <span>{relativeTime(item.sentAt, now)}</span>}
+              {feeLineOfBrowse(item) === null ? null : <span className="zb-fee-line">{feeLineOfBrowse(item)}</span>}
             </>
           }
           status={statusWord(item.status)}

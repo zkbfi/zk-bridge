@@ -160,6 +160,18 @@ export interface FeedItem {
   readonly deliveredAt: number | null
   readonly sourceTransactionHash: Hex
   readonly destinationTransactionHash: Hex | null
+  /** What a delivery router took and paid, when one delivered the transfer and the indexer read it. */
+  readonly delivery?: FeedDelivery | null
+}
+
+/** The delivery fee of a transfer: in base units of the destination token. */
+export interface FeedDelivery {
+  /** The token on the destination chain. */
+  readonly token: TokenInfo | null
+  /** The fee to the deliverer, or null when the indexer could not read it. */
+  readonly fee: bigint | null
+  /** What the recipient received, or null when unknown. */
+  readonly received: bigint | null
 }
 
 /** The time ranges that the feed header offers. */

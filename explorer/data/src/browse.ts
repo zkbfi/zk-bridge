@@ -243,6 +243,14 @@ export type BrowseMessage = {
   readonly token: { readonly chainId: number; readonly address: Address; readonly symbol: string | null; readonly decimals: number | null } | null;
   /** In base units of `token`. */
   readonly amount: bigint | null;
+  /** The token on the destination chain, in which `fee` and `received` are counted. */
+  readonly destinationToken: { readonly chainId: number; readonly address: Address; readonly symbol: string | null; readonly decimals: number | null } | null;
+  /** The delivery fee to the deliverer, when a delivery router delivered and the fee is known. */
+  readonly fee: bigint | null;
+  /** What the recipient received after the fee, when known. */
+  readonly received: bigint | null;
+  /** Where the fee was read: `event`, `logs` or `terms`. */
+  readonly feeSource: string | null;
   readonly sentAt: number | null;
   readonly deliveredAt: number | null;
   readonly sourceTransactionHash: Hex | null;
@@ -340,9 +348,16 @@ export const parseBrowseMessages = (body: unknown): BrowsePage<BrowseMessage> =>
       sourceChainId: integer(direction.sourceChainId, "sourceChainId"),
       destinationChainId: integer(direction.destinationChainId, "destinationChainId"),
       sender: transfer === null ? orNull(item.sender, addressOf, "sender") : (orNull(transfer.sender, addressOf, "transfer sender") ?? orNull(item.sender, addressOf, "sender")),
-      recipient: transfer === null ? orNull(item.executor, addressOf, "executor") : (orNull(transfer.recipient, addressOf, "recipient") ?? orNull(transfer.paidTo, addressOf, "paidTo")),
+      recipient:
+        transfer === null
+          ? orNull(item.executor, addressOf, "executor")
+          : (orNull(transfer.finalRecipient, addressOf, "finalRecipient") ?? orNull(transfer.recipient, addressOf, "recipient") ?? orNull(transfer.paidTo, addressOf, "paidTo")),
       token: transfer === null ? null : tokenOfView(transfer.sourceToken),
       amount: transfer === null ? null : orNull(transfer.value, amount, "value"),
+      destinationToken: transfer === null ? null : tokenOfView(transfer.destinationToken),
+      fee: transfer === null ? null : orNull(transfer.fee, amount, "fee"),
+      received: transfer === null ? null : orNull(transfer.received, amount, "received"),
+      feeSource: transfer === null ? null : textOrNull(transfer.feeSource, "feeSource"),
       sentAt: sent === null ? null : orNull(sent.timestamp, integer, "sent timestamp"),
       deliveredAt: delivered === null ? null : orNull(delivered.timestamp, integer, "delivered timestamp"),
       sourceTransactionHash: sent === null ? null : orNull(sent.transactionHash, hexOf, "sent transactionHash"),

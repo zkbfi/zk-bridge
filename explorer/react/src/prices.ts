@@ -3,7 +3,7 @@
  * PulseChain. The pool reader is the host's (its RPC, its transport); nothing here builds a client or names an endpoint.
  * Every quote carries the block it was read at.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Address } from "viem";
 import { nativeSymbolOf, type PriceQuote } from "@zkb/core";
 import { nativeUsd, plsUsd, resolvePricingAddress, tokenUsd, type PoolReader } from "@zkb/data";
@@ -35,6 +35,24 @@ export const tokenPriceKey = (token: Pick<PriceableToken, "side" | "address">): 
 
 /** The key of a chain's native coin in a {@link PriceMap}. */
 export const nativePriceKey = (chainId: number): string => `native:${chainId}`;
+
+/**
+ * Why a price is or is not known, per key of a {@link PriceMap}. `known`: read at the latest block. `stale`: the source
+ * cannot be reached now, the last price read is `ageSeconds` old and no older than {@link STALE_PRICE_MAX_SECONDS}, and
+ * it is still in the map. `no-market`: the source answered and there is no price for it (no pool deep enough, a testnet
+ * token). `unreachable`: the source could not be read and there is no last price recent enough, or there is no source.
+ */
+export type PriceState =
+  | { readonly kind: "known" }
+  | { readonly kind: "stale"; readonly ageSeconds: number }
+  | { readonly kind: "no-market" }
+  | { readonly kind: "unreachable" };
+
+/** {@link PriceState} by the key of the {@link PriceMap}; a key that is absent has not been read yet. */
+export type PriceStates = ReadonlyMap<string, PriceState>;
+
+/** The oldest last-known price that is still used when the source cannot be read: 10 minutes. */
+export const STALE_PRICE_MAX_SECONDS = 600;
 
 /** The tooltip on every dollar value. */
 export const PRICE_NOTE = "From PulseX pools on PulseChain, through your RPC, at one block. Display only: never used for amounts or the fee you sign; it only picks the default fee and its warnings.";
@@ -90,13 +108,29 @@ export const loadPrices = async (tokens: readonly PriceableToken[], pair: Pricea
   return new Map([...entries, ...natives]);
 };
 
+/** A pool reader that can say it met a failure of the source (a dropped request) as opposed to an answer of "no pool". */
+export type CountingPoolReader = PoolReader & { readonly failures?: () => number };
+
+/**
+ * Prices the way {@link loadPrices} does, and throws when the reader met a failure of its source while reading, since a
+ * pool read that failed reads as "no pool" and would pass for "no market".
+ */
+const loadCheckedPrices = async (tokens: readonly PriceableToken[], pair: PriceablePair, reader: CountingPoolReader): Promise<PriceMap> => {
+  const prices = await loadPrices(tokens, pair, reader);
+  if ((reader.failures?.() ?? 0) > 0) throw new Error("the price source failed while reading pools");
+  return prices;
+};
+
+/** The keys that {@link usePrices} reports on: each token and each chain's native coin. */
+const wantedKeys = (tokens: readonly PriceableToken[], pair: PriceablePair): string[] => [...tokens.map(tokenPriceKey), nativePriceKey(pair.first.chainId), nativePriceKey(pair.second.chainId)];
+
 /**
  * Where the prices come from. `sample` reads nothing. `live` calls `poolReader` for a reader pinned to the latest block
  * of PulseChain; `id` names the endpoint behind it without carrying the URL, so the prices are read again when it changes.
  */
 export type PriceSource =
   | { readonly mode: "sample" }
-  | { readonly mode: "live"; readonly id: string; readonly poolReader: () => Promise<PoolReader> };
+  | { readonly mode: "live"; readonly id: string; readonly poolReader: () => Promise<CountingPoolReader> };
 
 /** Options of {@link usePrices}. */
 export type UsePricesOptions = {
@@ -106,12 +140,19 @@ export type UsePricesOptions = {
   readonly source: PriceSource | null;
   /** How often the prices are read again; default 30 s. */
   readonly refreshMilliseconds?: number;
+  /** The clock in milliseconds, for the age of the last prices; default `Date.now`. */
+  readonly now?: () => number;
 };
 
 /** What {@link usePrices} gives. */
 export type PricesState = {
   /** The latest good prices; kept when a later read fails. Undefined before the first read, and for another source or token list. */
   readonly data: PriceMap | undefined;
+  /**
+   * Why each price is known or not (see {@link PriceState}). Empty before the first read; "unreachable" for every key
+   * when there is no source; "no-market" for a key the source answered null for.
+   */
+  readonly states: PriceStates;
   /** The error of the latest read, or null. */
   readonly error: unknown;
   readonly isError: boolean;
@@ -122,30 +163,101 @@ export type PricesState = {
 /** The default time between two reads, in milliseconds. */
 export const PRICE_REFRESH_MILLISECONDS = 30_000;
 
+type Held = {
+  readonly key: string | null;
+  /** The quotes in use: the latest read, or the last good quotes that are not yet older than the limit. */
+  readonly data: PriceMap | undefined;
+  readonly states: PriceStates;
+  /** When each key last had a price, in milliseconds. */
+  readonly seenAt: ReadonlyMap<string, number>;
+  readonly error: unknown;
+};
+
+/** After a good read: a price is known, its absence is a missing market. */
+const afterRead = (key: string, data: PriceMap, now: number): Held => {
+  const states = new Map<string, PriceState>();
+  const seenAt = new Map<string, number>();
+  for (const [name, quote] of data) {
+    states.set(name, quote === null ? { kind: "no-market" } : { kind: "known" });
+    if (quote !== null) seenAt.set(name, now);
+  }
+  return { key, data, states, seenAt, error: null };
+};
+
+/** After a failed read: last prices up to the limit are kept as stale; every other key is unreachable. */
+const afterFailure = (key: string, before: Held | undefined, wanted: readonly string[], now: number, error: unknown): Held => {
+  const kept = before !== undefined && before.key === key ? before : undefined;
+  const states = new Map<string, PriceState>();
+  const quotes = new Map<string, PriceQuote | null>();
+  const seenAt = new Map<string, number>();
+  for (const name of wanted) {
+    const at = kept?.seenAt.get(name);
+    const quote = kept?.data?.get(name) ?? null;
+    const age = at === undefined ? Number.POSITIVE_INFINITY : Math.max(0, Math.floor((now - at) / 1000));
+    if (quote !== null && age <= STALE_PRICE_MAX_SECONDS) {
+      states.set(name, { kind: "stale", ageSeconds: age });
+      quotes.set(name, quote);
+      seenAt.set(name, at!);
+    } else if (kept?.states.get(name)?.kind === "no-market") {
+      // The source answered before that there is no market; a failed read later does not change that.
+      states.set(name, { kind: "no-market" });
+      quotes.set(name, null);
+    } else {
+      states.set(name, { kind: "unreachable" });
+    }
+  }
+  return { key, data: quotes.size === 0 ? undefined : quotes, states, seenAt, error };
+};
+
+/** The price among the ones asked about that the fee cannot rely on, or that is old: its key and its state. */
+export type PriceProblem = { readonly key: string; readonly state: Exclude<PriceState, { kind: "known" }> };
+
+/**
+ * Which of these prices is the problem: an unreachable one first, then one with no market, then a stale one (the fee
+ * can still use that); null when all are known or not yet read. Keys never read are not a problem here.
+ *
+ * @param states The states of {@link usePrices}.
+ * @param keys The prices the fee needs.
+ */
+export const priceProblemOf = (states: PriceStates, keys: readonly string[]): PriceProblem | null => {
+  for (const kind of ["unreachable", "no-market", "stale"] as const) {
+    for (const key of keys) {
+      const state = states.get(key);
+      if (state !== undefined && state.kind === kind) return { key, state };
+    }
+  }
+  return null;
+};
+
+const NOTHING: PriceStates = new Map();
+
 /**
  * The prices of the tokens and of each chain's native coin, read now and again every 30 s while mounted. Display only.
+ * `states` says, per price, whether it is known, stale (the source failed, the last price is at most
+ * {@link STALE_PRICE_MAX_SECONDS} old and still in `data`), absent because there is no market, or absent because the
+ * source cannot be reached (also the state of every price while there is no source).
  *
  * @param options The tokens, the pair and the source.
  */
-export const usePrices = ({ tokens, pair, source, refreshMilliseconds = PRICE_REFRESH_MILLISECONDS }: UsePricesOptions): PricesState => {
+export const usePrices = ({ tokens, pair, source, refreshMilliseconds = PRICE_REFRESH_MILLISECONDS, now = Date.now }: UsePricesOptions): PricesState => {
   const key = source === null || tokens.length === 0 ? null : [source.mode === "sample" ? "sample" : source.id, pair.first.chainId, pair.second.chainId, tokens.map(tokenPriceKey).join(",")].join("|");
-  const [state, setState] = useState<{ readonly key: string | null; readonly data: PriceMap | undefined; readonly error: unknown }>({ key, data: undefined, error: null });
+  const [state, setState] = useState<Held>({ key, data: undefined, states: NOTHING, seenAt: new Map(), error: null });
   const [fetching, setFetching] = useState(false);
-  const latest = useRef({ tokens, pair, source });
-  latest.current = { tokens, pair, source };
+  const latest = useRef({ tokens, pair, source, now });
+  latest.current = { tokens, pair, source, now };
   useEffect(() => {
     if (key === null) return;
     let stopped = false;
     const read = async (): Promise<void> => {
-      const { tokens: wanted, pair: chains, source: from } = latest.current;
+      const { tokens: wanted, pair: chains, source: from, now: clock } = latest.current;
       setFetching(true);
       try {
-        const data = from!.mode === "sample" ? samplePrices(wanted, chains) : await loadPrices(wanted, chains, await from!.poolReader());
+        const data = from!.mode === "sample" ? samplePrices(wanted, chains) : await loadCheckedPrices(wanted, chains, await from!.poolReader());
         if (stopped) return;
-        setState({ key, data, error: null });
+        setState(afterRead(key, data, clock()));
       } catch (error) {
         if (stopped) return;
-        setState((before) => ({ key, data: before.key === key ? before.data : undefined, error }));
+        setState((before) => afterFailure(key, before, wantedKeys(wanted, chains), clock(), error));
       } finally {
         if (!stopped) setFetching(false);
       }
@@ -159,5 +271,14 @@ export const usePrices = ({ tokens, pair, source, refreshMilliseconds = PRICE_RE
     };
   }, [key, refreshMilliseconds]);
   const current = key !== null && state.key === key;
-  return { data: current ? state.data : undefined, error: current ? state.error : null, isError: current && state.error !== null, isFetching: key !== null && fetching };
+  // No source (no endpoint): nothing can be read, which is not the same as no market.
+  const noSource = key === null && source === null && tokens.length > 0;
+  const unreachable: PriceStates = useMemo(() => (noSource ? new Map(wantedKeys(tokens, pair).map((name): [string, PriceState] => [name, { kind: "unreachable" }])) : NOTHING), [noSource, tokens, pair]);
+  return {
+    data: current ? state.data : undefined,
+    states: current ? state.states : unreachable,
+    error: current ? state.error : null,
+    isError: current && state.error !== null,
+    isFetching: key !== null && fetching,
+  };
 };

@@ -45,6 +45,13 @@ const transferRow = (messageId: `0x${string}`) => ({
   hasCallback: false,
   sourceIsNative: true,
   sentTimestamp: 1_000n,
+  deliveryRouter: null,
+  routerAmount: null,
+  fee: null,
+  received: null,
+  deliverer: null,
+  finalRecipient: null,
+  feeSource: null,
 });
 
 /** A feed row: the message joined to its transfer, or to nothing. */
@@ -102,6 +109,8 @@ describe("GET /api/feed", () => {
       lowercase,
       lowercase,
       lowercase,
+      // The account the router paid matches too.
+      lowercase,
       10n,
       20n,
       1_500n,
@@ -141,6 +150,37 @@ describe("GET /api/messages/:messageId", () => {
     const { status, body } = await get(`/api/messages/${id}`);
     expect(status).toBe(200);
     expect(body).toMatchObject({ messageId: id, status: "sent", data: "0x1234", transfer: { value: "42" } });
+  });
+
+  it("shows the delivery fee of a router delivery: what the router received, the fee, what the recipient received", async () => {
+    const router = "0x00000000000000000000000000000000000000e7";
+    const delivered = {
+      ...transferRow(id),
+      value: 12_300_000_000_000_000_000n,
+      deliveredValue: 12_300_000_000_000_000_000n,
+      paidTo: router,
+      deliveryRouter: router,
+      routerAmount: 12_300_000_000_000_000_000n,
+      fee: 12_300_000_000_000_000n,
+      received: 12_287_700_000_000_000_000n,
+      deliverer: addressOf("77"),
+      finalRecipient: addressOf("88"),
+      feeSource: "logs",
+    };
+    serve([], [{ messages: { ...sentMessageRow(id, 100n), data: "0x1234" }, transfers: delivered }]);
+    const { body } = await get(`/api/messages/${id}`);
+    expect(body.transfer).toMatchObject({
+      value: "12300000000000000000",
+      deliveredValue: "12300000000000000000",
+      paidTo: router,
+      deliveryRouter: router,
+      routerAmount: "12300000000000000000",
+      fee: "12300000000000000",
+      received: "12287700000000000000",
+      deliverer: addressOf("77"),
+      finalRecipient: addressOf("88"),
+      feeSource: "logs",
+    });
   });
 
   it("looks the identifier up in lowercase, whatever case the request has", async () => {

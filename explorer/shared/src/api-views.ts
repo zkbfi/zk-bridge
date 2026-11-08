@@ -17,6 +17,7 @@ export {
   tokenView,
   tokenListItemView,
   feedItemView,
+  deliveryFeeView,
   escrowView,
   supplyView,
   headUpdateView,

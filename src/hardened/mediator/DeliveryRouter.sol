@@ -66,6 +66,8 @@ import {ExactGasCall} from "./ExactGasCall.sol";
 /// - An unwrap flag on a token that is not the wrapped native token is ignored: the
 ///   recipient gets the token. The 20 byte legacy form pays the token to the receiver for any token that is not the
 ///   wrapped native token, and it never reverts for that reason.
+/// - Every delivery that pays its recipient emits `Delivered`, with what the router received, the fee, what the
+///   recipient received and how. An explorer reads the fee from it, so the router keeps no record of its own.
 ///
 /// Nothing is owed and nothing is recorded. The mediator calls `onTokenBridged` after it paid the router, and it keeps no
 /// hold on a failed call: the tokens stay with the router. So a revert in the callback would strand them, and the router
@@ -141,6 +143,16 @@ contract DeliveryRouter is ReentrancyGuard {
         Native
     }
 
+    /// @notice How the recipient received a payout. `None` is never emitted: it means that the payout failed and the
+    /// router handed the amount off. `Wrapped`: the unwrap was asked for, the recipient refused the native coin, and
+    /// it received the wrapped token instead.
+    enum PaidAs {
+        None,
+        Token,
+        Native,
+        Wrapped
+    }
+
     /// @dev Which price a gas based fee uses.
     enum GasPrice {
         Transaction,
@@ -157,8 +169,9 @@ contract DeliveryRouter is ReentrancyGuard {
     uint256 public constant MULTIPLIER_OF_TOTAL = 8;
     /// @notice Gas added to the measured gas of a token payout, for the transfers after the measure and a margin.
     uint256 public constant TOKEN_GAS_OVERHEAD = 100_000;
-    /// @notice Gas added to the measured gas of a native coin payout.
-    uint256 public constant NATIVE_GAS_OVERHEAD = 100_000;
+    /// @notice Gas added to the measured gas of a native coin payout. It covers two coin sends to new accounts and the
+    /// `Delivered` event (about 101,000 gas measured as an upper bound).
+    uint256 public constant NATIVE_GAS_OVERHEAD = 105_000;
 
     /// @notice The gas that the router gives an account that receives the native coin: the recipient or the reward address. It
     /// is enough for the `receive` function of a smart-contract wallet, and it is a bound: a receiver cannot burn more,
@@ -216,6 +229,27 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @notice Emitted when the call after a delivery fails with the gas that the sender gave it. `gasGiven` is that
     /// gas, the `callGas` of the director.
     event CallFailed(address indexed target, address indexed recipient, uint256 gasGiven);
+    /// @notice Emitted on every successful delivery: the recipient received its payout. It is emitted after the
+    /// payments and before the call that follows, so a failed call adds `CallFailed` after it.
+    /// @param token The token that the mediator released to the router (the wrapped native token for an unwrap).
+    /// @param recipient The recipient that the terms (or the 20 byte legacy data) named.
+    /// @param feeTo The account that received the fee: `rewardAddress`, or the zero address when no fee was paid.
+    /// @param amount What the router received for this delivery: `fee + paidOut`.
+    /// @param fee What `feeTo` received. Zero when the message ran on the bridge directly, when the terms ask for no
+    /// fee, for the legacy data, and when the reward address refused the fee (it then stays with the recipient).
+    /// @param paidOut What the recipient received.
+    /// @param paidAs As the token, the native coin, or the wrapped token after a refused coin.
+    /// @param callTarget The target of the call that follows, or the zero address when no call follows.
+    event Delivered(
+        address indexed token,
+        address indexed recipient,
+        address indexed feeTo,
+        uint256 amount,
+        uint256 fee,
+        uint256 paidOut,
+        PaidAs paidAs,
+        address callTarget
+    );
 
     /// @notice The mediator on this chain.
     ITokenMediator public immutable bridge;
@@ -359,9 +393,29 @@ contract DeliveryRouter is ReentrancyGuard {
         uint256 startingGas = _startingGas();
         uint256 toRecipient =
             startingGas > NOT_RUNNING ? _takeFee(token, payout, value, director, startingGas, request) : value;
-        if (toRecipient == 0) return;
-        if (!_payRecipient(token, payout, director.recipient, toRecipient)) return;
-        if (request == CallRequest.Requested) _callTarget(director.recipient, data, director.callGas);
+        if (toRecipient == 0) {
+            _emitDelivered(token, director.recipient, value, 0, payout == Payout.Native ? PaidAs.Native : PaidAs.Token, address(0));
+            return;
+        }
+        PaidAs paidAs = _payRecipient(token, payout, director.recipient, toRecipient);
+        if (paidAs == PaidAs.None) return;
+        address target = request == CallRequest.Requested ? _target(data) : address(0);
+        _emitDelivered(token, director.recipient, value, toRecipient, paidAs, target);
+        if (request == CallRequest.Requested) _callTarget(target, director.recipient, data, director.callGas);
+    }
+
+    /// @dev Emits `Delivered`. The fee is what the recipient did not get: the router pays the reward address first, and
+    /// a refused fee stays with the recipient.
+    function _emitDelivered(
+        address token,
+        address recipient,
+        uint256 value,
+        uint256 paidOut,
+        PaidAs paidAs,
+        address target
+    ) private {
+        uint256 fee = value - paidOut;
+        emit Delivered(token, recipient, fee == 0 ? address(0) : rewardAddress, value, fee, paidOut, paidAs, target);
     }
 
     /// @dev The hand-off of a callback that arrives while another callback runs. The router pays nobody then: it takes
@@ -407,14 +461,17 @@ contract DeliveryRouter is ReentrancyGuard {
     /// bytes after the director, with the call data that follows. It reads no answer, so a target cannot spend gas on a
     /// large one. It gets exactly `callGas` (`ExactGasCall`, with `CALL_GAS_RESERVE` kept for the work after it): too
     /// little gas reverts, and a failure with `callGas` emits `CallFailed` and changes nothing else.
-    function _callTarget(address recipient, bytes memory data, uint256 callGas) private {
-        uint256 targetOffset = 32 + DIRECTOR_LENGTH;
-        address target;
-        assembly ("memory-safe") {
-            target := shr(96, mload(add(data, targetOffset)))
-        }
+    function _callTarget(address target, address recipient, bytes memory data, uint256 callGas) private {
         if (!ExactGasCall.callWithExactGas(target, callGas, CALL_GAS_RESERVE, data, CALL_DATA_OFFSET)) {
             emit CallFailed(target, recipient, callGas);
+        }
+    }
+
+    /// @dev The target of the call: the 20 bytes after the director.
+    function _target(bytes memory data) private pure returns (address target) {
+        uint256 targetOffset = 32 + DIRECTOR_LENGTH;
+        assembly ("memory-safe") {
+            target := shr(96, mload(add(data, targetOffset)))
         }
     }
 
@@ -479,33 +536,33 @@ contract DeliveryRouter is ReentrancyGuard {
     }
 
     /// @dev Pays the recipient as the payout says.
-    /// @return Whether the recipient received the amount.
-    function _payRecipient(address token, Payout payout, address recipient, uint256 amount) private returns (bool) {
+    /// @return How the recipient received the amount, or `None` when the router handed it off.
+    function _payRecipient(address token, Payout payout, address recipient, uint256 amount) private returns (PaidAs) {
         if (payout == Payout.Native) return _payNative(recipient, amount);
-        return _payToken(token, recipient, amount);
+        return _payToken(token, recipient, amount) ? PaidAs.Token : PaidAs.None;
     }
 
     /// @dev Sends the unwrapped coin. A receiver that refuses it gets the wrapped token. A receiver that refuses both,
     /// and an invalid recipient, cause a hand-off of the wrapped token.
-    /// @return Whether the recipient received the coin or the wrapped token.
-    function _payNative(address recipient, uint256 amount) private returns (bool) {
+    /// @return How the recipient received the amount (the coin or the wrapped token), or `None` after a hand-off.
+    function _payNative(address recipient, uint256 amount) private returns (PaidAs) {
         if (!_canReceive(recipient)) {
             wNative.deposit{value: amount}();
             _handOff(address(wNative), recipient, amount, Reason.InvalidTerms);
-            return false;
+            return PaidAs.None;
         }
-        if (_trySendNative(recipient, amount)) return true;
-        _handOff(address(wNative), recipient, amount, Reason.PayoutRefused);
-        return false;
+        PaidAs paidAs = _trySendNative(recipient, amount);
+        if (paidAs == PaidAs.None) _handOff(address(wNative), recipient, amount, Reason.PayoutRefused);
+        return paidAs;
     }
 
-    /// @dev Sends the coin, and on a refusal wraps it again and sends the wrapped token. When it returns false the
+    /// @dev Sends the coin, and on a refusal wraps it again and sends the wrapped token. When it returns `None` the
     /// router holds the amount as the wrapped token.
-    function _trySendNative(address to, uint256 amount) private returns (bool) {
+    function _trySendNative(address to, uint256 amount) private returns (PaidAs) {
         (bool sent,) = to.call{value: amount, gas: NATIVE_SEND_GAS}("");
-        if (sent) return true;
+        if (sent) return PaidAs.Native;
         wNative.deposit{value: amount}();
-        return IERC20(address(wNative)).trySafeTransfer(to, amount);
+        return IERC20(address(wNative)).trySafeTransfer(to, amount) ? PaidAs.Wrapped : PaidAs.None;
     }
 
     /// @dev Pays a token. An invalid recipient, or a token that refuses the recipient, causes a hand-off.
@@ -523,12 +580,14 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @dev The legacy form: the receiver gets the coin for the wrapped native token, and the token itself for any
     /// other token, with no fee in both cases.
     function _payLegacy(address token, address receiver, uint256 value) private {
+        PaidAs paidAs;
         if (token != address(wNative)) {
-            _payToken(token, receiver, value);
-            return;
+            paidAs = _payToken(token, receiver, value) ? PaidAs.Token : PaidAs.None;
+        } else {
+            wNative.withdraw(value);
+            paidAs = _payNative(receiver, value);
         }
-        wNative.withdraw(value);
-        _payNative(receiver, value);
+        if (paidAs != PaidAs.None) _emitDelivered(token, receiver, value, value, paidAs, address(0));
     }
 
     /// @dev An account that can own a payout: not the zero address and not the router, which has no way to pay itself.

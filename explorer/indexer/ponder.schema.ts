@@ -75,10 +75,29 @@ export const transfers = onchainTable(
     /** True when the source token is native on the source chain (lock) and false when it is a bridged copy (burn). */
     sourceIsNative: t.boolean(),
     sentTimestamp: t.bigint(),
+    /**
+     * The delivery fee, when `paidTo` is a configured delivery router (`deliveryRoutersOf`). Read from the router's
+     * `Delivered` event, or for a router without it from the transfer logs of the delivery transaction, or (an unwrap of
+     * an older router) completed from the terms at query time. See `router-delivery.ts` in `@zkb/data`.
+     */
+    deliveryRouter: t.hex(),
+    /** What the router received and could deliver. Base units of the destination token. */
+    routerAmount: t.bigint(),
+    /** The fee to the deliverer, or null when unknown. */
+    fee: t.bigint(),
+    /** What the recipient received after the fee, or null when unknown. Zero after a hand-off. */
+    received: t.bigint(),
+    /** The account that received the fee (the router's reward address). */
+    deliverer: t.hex(),
+    /** The account that the router paid. */
+    finalRecipient: t.hex(),
+    /** `event`, `logs` or `terms`. */
+    feeSource: t.text(),
   }),
   (table) => ({
     sourceTokenIndex: index().on(table.sourceToken),
     recipientIndex: index().on(table.recipient),
+    finalRecipientIndex: index().on(table.finalRecipient),
   }),
 );
 

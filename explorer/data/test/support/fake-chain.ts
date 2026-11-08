@@ -46,7 +46,7 @@ export const createFakeChain = (scenario: Scenario, chainId: number, options: Fa
   let head = scenario.head[chainId] as bigint;
   const block = (number: bigint): ChainBlock => ({ number, timestamp: scenario.timestampOf(chainId, number), baseFeePerGas: options.baseFeePerGas === undefined ? 7n : options.baseFeePerGas });
   const sideOf = scenario.pair.sides.find((side) => side.chainId === chainId)!;
-  const addressOf = (contract: string): string => (sideOf.contracts as Record<string, string | null>)[{ bridge: "bridge", mediator: "mediator", lightClient: "lightClient", gate: "gate" }[contract] as string] as string;
+  const addressOf = (contract: string): string => (sideOf.contracts as unknown as Record<string, string | null>)[{ bridge: "bridge", mediator: "mediator", lightClient: "lightClient", gate: "gate" }[contract] as string] as string;
   return {
     calls,
     setHead: (blockNumber) => void (head = blockNumber),

@@ -41,20 +41,31 @@ export type DefaultFeeInput = {
   readonly costDefaultUsd: bigint | null;
   /** The automatic fee's cap, in percent of the amount. */
   readonly capPercent: number;
+  /**
+   * True when the transfer has an amount but the price (of the token or of the destination's coin) cannot be derived:
+   * there is no market for it, or the source cannot be read and no recent price is held. The default fee is then the
+   * automatic maximum.
+   */
+  readonly unpriced?: boolean;
 };
 
 /**
  * The default fee: the larger of the default curve and twice the cost, held at the cap. A level above the default adds its
  * extra expected cost on top of the curve, so the fee rises with the bars.
  *
- * @param input The amount, the costs and the cap.
+ * When the price cannot be derived (`unpriced`) the fee cannot be valued, so it is the automatic maximum: the share of
+ * the automatic cap in force (`capPercent`, which is 1% unless the user moved it, and never above the hard cap), not
+ * the rule's 0.1% for an amount that is merely not typed yet (owner: "use 1% - the frontend's auto maximum whenever
+ * the frontend cannot determine the price").
+ *
+ * @param input The amount, the costs, the cap and whether the price is missing.
  */
-export const useDefaultFee = ({ amountUsd, costUsd, costDefaultUsd, capPercent }: DefaultFeeInput): { readonly capWad: bigint; readonly auto: DefaultFee } => {
+export const useDefaultFee = ({ amountUsd, costUsd, costDefaultUsd, capPercent, unpriced = false }: DefaultFeeInput): { readonly capWad: bigint; readonly auto: DefaultFee } => {
   const capWad = capWadOf(capPercent, DEFAULT_CAP_WAD);
-  return useMemo(
-    () => ({ capWad, auto: defaultFee({ amountUsd, costUsd, capWad, ...(costUsd === null || costDefaultUsd === null ? {} : { levelExtraUsd: costUsd - costDefaultUsd }) }) }),
-    [amountUsd, costUsd, costDefaultUsd, capWad],
-  );
+  return useMemo(() => {
+    const auto = defaultFee({ amountUsd, costUsd, capWad, ...(costUsd === null || costDefaultUsd === null ? {} : { levelExtraUsd: costUsd - costDefaultUsd }) });
+    return { capWad, auto: unpriced && auto.binding === "no-price" ? { ...auto, shareWad: capWad } : auto };
+  }, [amountUsd, costUsd, costDefaultUsd, capWad, unpriced]);
 };
 
 /** The warnings, with the line that a tip should stay under, as a percent number and as text. */

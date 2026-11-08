@@ -7,7 +7,7 @@ import { useDeliveryCost, useSnapshots } from "../app/queries";
 import { formatRoute } from "../app/route";
 import { useServices } from "../app/services";
 import { useWallet } from "../wallet/wallet-port";
-import { dayOf, groupOf, positionOf, relativeTime, stepsOf, stepWords, type ActivityGroup } from "./activity-model";
+import { dayOf, feeLineOf, groupOf, positionOf, relativeTime, stepsOf, stepWords, type ActivityGroup } from "./activity-model";
 import { amountText, chainsFor } from "./bridge-model";
 import { Chevron, GasCan } from "./icons";
 import { iconSubjectOf } from "./image-source";
@@ -190,6 +190,7 @@ export const ActivityScreen = () => {
                       {isOpen ? (
                         <div className="zb-dopen">
                           <ActivityPulse position={1} label={`Delivered to ${destination.name}`} />
+                          {feeLineOf(row) === null ? null : <p className="zb-small zb-fee-line">{feeLineOf(row)}</p>}
                           <StepList steps={detail.steps} current={detail.current} />
                           <a className="zb-pill" href={formatRoute({ name: "bridge", pairId: pair.id, dir: row.direction, ...(row.token === null ? {} : { form: { token: `${row.token.side}:${row.token.address}` } }) })}>
                             Bridge again

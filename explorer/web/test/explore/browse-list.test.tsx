@@ -25,6 +25,10 @@ const message = (n: number, overrides: Partial<BrowseMessage> = {}): BrowseMessa
   recipient: ADDRESS,
   token: { chainId: pair.first.chainId, address: ADDRESS, symbol: "USDT", decimals: 6 },
   amount: 46_610_000n,
+  destinationToken: null,
+  fee: null,
+  received: null,
+  feeSource: null,
   sentAt: NOW - 3600,
   deliveredAt: NOW - 1800,
   sourceTransactionHash: hash(1000 + n),
@@ -91,6 +95,16 @@ const lastRequest = (fn: ReturnType<typeof vi.fn>) => fn.mock.calls.at(-1)?.[0] 
 beforeEach(() => window.localStorage.clear());
 
 describe("the transfers list", () => {
+  it("shows the delivery fee under a transfer that a delivery router delivered, with the tokens, and none where the fee is unknown", async () => {
+    const delivered = message(3, { amount: 12_300_000n, destinationToken: { chainId: pair.second.chainId, address: ADDRESS, symbol: "zUSDT", decimals: 6 }, fee: 12_300n, received: 12_287_700n, feeSource: "logs" });
+    const sameToken = message(4, { amount: 5_000_000n, fee: 0n, received: 5_000_000n, feeSource: "event" });
+    const unknown = message(5, { amount: 7_000_000n, fee: null, received: null, feeSource: "terms" });
+    open("#/explore/browse/transfers", { messages: vi.fn(async () => page([delivered, sameToken, unknown], 3)) });
+    expect(await screen.findByText("12.3 USDT sent · 0.0123 zUSDT fee (0.1%) · 12.2877 zUSDT received")).toBeTruthy();
+    expect(screen.getByText("5 USDT sent · 0 USDT fee (0%) · 5 USDT received")).toBeTruthy();
+    expect(screen.queryByText(/7 USDT sent/)).toBeNull();
+  });
+
   it("shows the total in the header, each row linking to its transaction, and a message without a transaction linking to the message", async () => {
     open("#/explore/browse/transfers");
     const amount = await screen.findByRole("link", { name: /46\.61 USDT/ });
