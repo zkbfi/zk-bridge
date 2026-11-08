@@ -13,7 +13,7 @@ const receiver = getAddress(`0x${"cd".repeat(20)}`);
 const relayStep = async (options: Partial<typeof DEFAULT_DELIVERY_OPTIONS> = {}): Promise<WebStep> => {
   const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
   const draft = computeBridgeDraft(
-    { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", gasLimit: "" },
+    { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", callGas: "", callbackGas: "" },
     { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "1", mode: "none", ...options },
     { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
   );
@@ -50,7 +50,7 @@ describe("buildConfirmView", () => {
     expect(view.delivery?.directorLines.map((line) => line.label)).toEqual(["Recipient after the fee", "Settings", "Limit", "Multiplier"]);
     expect(view.delivery?.directorLines[0]?.text).toBe(receiver);
     expect(view.delivery?.directorLines[1]?.text).toBe("8 (percentage of the transfer; flags MULTIPLIER_OF_TOTAL)");
-    expect(view.functionSignature).toBe("relayTokensAndCall(address,address,uint256,bytes)");
+    expect(view.functionSignature).toBe("relayTokensAndCall(address,address,uint256,bytes,uint256)");
   });
 
   it("shows the router, the tip mode, the tip now and its maximum, and the facts about who delivers", async () => {
@@ -69,12 +69,12 @@ describe("buildConfirmView", () => {
   it("names the tip now as an estimate, with its maximum, for a gas multiplier", async () => {
     const view = buildConfirmView(await relayStep({ mode: "gas-multiplier", senderPriceText: "3000" }));
     expect(view.delivery?.tipMode).toBe("gas based, up to the limit");
-    expect(view.delivery?.tipNow).toMatch(/^about [\d.]+ zUSDC now \(estimate, at most [\d.]+ zUSDC\)$/);
+    expect(view.delivery?.tipNow).toMatch(/^about [\d.]+ zUSDC now \(estimate, expected about [\d.]+ zUSDC, at most [\d.]+ zUSDC\)$/);
   });
 
   it("names the limit of a gas based tip as the price ceiling, and says that the deliverer's gas choice decides", async () => {
     const delivery = buildConfirmView(await relayStep({ mode: "gas-multiplier", senderPriceText: "3000" })).delivery!;
-    expect(delivery.tipMaximum).toMatch(/^The limit is [\d.]+ zUSDC\. It is the price ceiling.*Expect the tip to reach it\./);
+    expect(delivery.tipMaximum).toMatch(/^The tip is expected to be about [\d.]+ zUSDC at the gas estimate\. The most it can take is [\d.]+ zUSDC, the limit/);
     expect(delivery.gasModeHelp).toBe(GAS_MODE_HELP);
     expect(delivery.gasNotice).toBeNull();
   });
@@ -83,7 +83,7 @@ describe("buildConfirmView", () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     const noBaseFeePair = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, baseFee: "none" as const } };
     const draft = computeBridgeDraft(
-      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", gasLimit: "" },
+      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", callGas: "", callbackGas: "" },
       { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "3000" },
       { pair: noBaseFeePair, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
     );
@@ -114,18 +114,19 @@ describe("buildConfirmView", () => {
     expect(buildConfirmView(await relayStep({ mode: "percentage" })).noRouterNotice).toBeNull();
   });
 
-  it("lists the gas limit overload of a plain relay and says that no router is involved", async () => {
+  it("lists the callback gas of a relay with a call to a receiver of the user's choice", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     const draft = computeBridgeDraft(
-      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", gasLimit: "900000" },
+      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "call", data: "0xabcd", callGas: "", callbackGas: "900000" },
       { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "1", mode: "none" },
       { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
     );
     if (draft.status !== "ready") throw new Error(draft.reason ?? "not ready");
     const view = buildConfirmView(draft.steps.at(-1)!);
-    expect(view.functionSignature).toBe("relayTokens(address,address,uint256,uint256)");
-    expect(view.arguments.map((argument) => argument.name)).toEqual(["token", "receiver", "value", "gasLimit"]);
-    expect(view.noRouterNotice).toMatch(/^No router is involved/);
+    expect(view.functionSignature).toBe("relayTokensAndCall(address,address,uint256,bytes,uint256)");
+    expect(view.arguments.map((argument) => argument.name)).toEqual(["token", "receiver", "value", "data", "callbackGas"]);
+    expect(view.arguments.at(-1)?.value).toBe("900000");
+    expect(view.delivery).toBeNull();
   });
 
   it("shows no tip lines for a plain relay", async () => {
@@ -144,7 +145,7 @@ describe("buildConfirmView", () => {
   it("shows the fees of the relay on the allowance step too, marked as the fees of the next transaction, and does not block it", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 0n });
     const draft = computeBridgeDraft(
-      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", gasLimit: "" },
+      { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", callGas: "", callbackGas: "" },
       { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "1", mode: "percentage" },
       { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
     );

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { signerFromPrivateKeyText } from "../../../terminal/src/signing/key-sources.ts";
 import { BotConfigError, parseBotConfig } from "../../src/config/bot-config.ts";
 import { LockHeldError } from "../../src/runtime/lock-file.ts";
-import { gateBeaconUrlOf, ignoredScheduleSettings, newCopyGasLimitOf, startTraffic, tipRateOf, type TrafficOverrides } from "../../src/traffic/service.ts";
+import { gateBeaconUrlOf, ignoredScheduleSettings, startTraffic, tipRateOf, type TrafficOverrides } from "../../src/traffic/service.ts";
 import { HOUR_MILLISECONDS } from "../../src/traffic/schedule.ts";
 import { seeded } from "../support/seeded.ts";
 import { createServiceWorld, type ServiceWorld } from "../support/service-world.ts";
@@ -250,10 +250,8 @@ describe("startTraffic", () => {
     expect(() => parseBotConfig({ schemaVersion: 1, stateDirectory: "/s", ...trafficSection({ directory: "/d" }, { gateBeaconUrls: { "1": "not a url" } }) })).toThrow();
   });
 
-  it("reads the gas limit for a new copy by destination chain", () => {
-    const parsed = parseBotConfig({ schemaVersion: 1, stateDirectory: "/s", ...trafficSection({ directory: "/d" }, { newCopyGasLimit: { "1": "9000000" } }) }).traffic!;
-    expect(newCopyGasLimitOf(parsed, 1)).toBe(9_000_000n);
-    expect(newCopyGasLimitOf(parsed, 369)).toBeNull();
+  it("accepts and ignores the removed newCopyGasLimit setting: a send needs no gas number for a copy", () => {
+    expect(() => parseBotConfig({ schemaVersion: 1, stateDirectory: "/s", ...trafficSection({ directory: "/d" }, { newCopyGasLimit: { "1": "9000000" } }) })).not.toThrow();
   });
 
   it("raises the tip on chain 369 to its minimum and uses a fixed priority fee where one is set", async () => {

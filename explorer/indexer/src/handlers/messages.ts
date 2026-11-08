@@ -59,7 +59,6 @@ ponder.on("MessageBridge:AffirmationCompleted", async ({ event, context }) => {
       deliveredTransactionHash: event.transaction.hash,
       deliveredBlockNumber: event.block.number,
       deliveredTimestamp: event.block.timestamp,
-      deliveredSuccess: event.args.status,
       executedBy: event.transaction.from,
     },
   });

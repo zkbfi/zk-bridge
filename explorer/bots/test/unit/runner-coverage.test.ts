@@ -29,8 +29,7 @@ import {
   proofMessage,
   proofPayload,
   word,
-  TEST_PROOF_CHECK_GAS,
-  FEED_REQUIRED_GAS,
+  TEST_DELIVERY_GAS_FALLBACK,
 } from "../support/builders.ts";
 
 /** One call costs 300,000 gas at a base fee of 10 wei. */
@@ -66,7 +65,7 @@ function world(options: WorldOptions = {}) {
   chain.executionGas = 300_000n - BATCH_ITEM_OVERHEAD_GAS;
   const items = options.items ?? (options.ids ?? []).map((id) => feedItem({ id, token: WRAPPED_NATIVE }));
   chain.messageIdOfPosition = (position) => (([...items].reverse()[position]?.messageId ?? word(position + 1)) as Hex);
-  const offer = feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n }, value: 1000n, token: WRAPPED_NATIVE });
+  const offer = feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n, callGas: 0n }, value: 1000n, token: WRAPPED_NATIVE });
   const indexer = fakeIndexer(items, Object.fromEntries(items.map((item) => [item.messageId, offer])));
   const prover = fakeProver();
   // The proofs differ by the slot of the anchor header, which is the identifier of the item.
@@ -92,7 +91,7 @@ function world(options: WorldOptions = {}) {
       maximumLossPercent: 20,
       deliverWithoutOffer: false,
       tokenValuationsWei: {},
-      proofCheckGas: TEST_PROOF_CHECK_GAS,
+      deliveryGasFallback: TEST_DELIVERY_GAS_FALLBACK,
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: 300_000n,
       maximumPrerequisiteSpendPerSweepWei: 10n ** 18n,

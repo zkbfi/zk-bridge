@@ -92,7 +92,7 @@ export const coveringProof = (detail: Pick<MessageDetail, "destinationChainId" |
 
 /**
  * The steps of a message: sent, the block final on the source chain, the proof posted to the destination, and the
- * delivery (or the call that reverted, or the release that failed). Each step that happened opens a drawer.
+ * delivery (or the release that failed). Each step that happened opens a drawer.
  *
  * @param detail The message.
  * @param pair The pair.
@@ -104,8 +104,9 @@ export const messageSteps = (detail: MessageDetail, pair: PairConfig, proofs: re
   const covered = detail.coveredByHeadSlot !== null || detail.deliveredAt !== null;
   const proof = coveringProof(detail, proofs);
   const delivered = detail.deliveredAt !== null;
-  const failed = delivered && (detail.deliverySucceeded === false || detail.releaseFailed);
-  const deliveryLabel = !failed ? `Delivered on ${destination}` : detail.releaseFailed ? `Release failed on ${destination}` : `Call reverted on ${destination}`;
+  const failed = delivered && detail.releaseFailed;
+  // A delivery that fails reverts as a whole and leaves no log, so the page never shows a failed bridge call. A callback that failed still delivers.
+  const deliveryLabel = failed ? `Release failed on ${destination}` : detail.callbackFailed ? `Delivered on ${destination}, the call after it failed` : `Delivered on ${destination}`;
   return [
     {
       label: `Sent on ${source}`,

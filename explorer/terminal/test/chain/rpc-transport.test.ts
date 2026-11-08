@@ -173,33 +173,11 @@ describe('request count of a snapshot poll', () => {
     }
   }
 
-  test('the second poll does not read the relay gas facts again', async () => {
+  test('a poll reads the native balance and each token\'s balance and allowance, nothing else', async () => {
     const client = countingClient()
     await readChainSnapshot(client, { chain, account, tokens })
-    const first = client.reads.length
-    expect(first).toBe(1 + tokens.length * 4)
-    await readChainSnapshot(client, { chain, account, tokens })
-    expect(client.reads.length - first).toBe(1 + tokens.length * 2)
-    expect(client.reads.slice(first).filter((name) => name === 'nativeTokenAddress')).toHaveLength(0)
-  })
-
-  test('a failed fact read is read again on the next poll', async () => {
-    let fail = true
-    const client: ReadClient = {
-      async getBalance() {
-        return 1n
-      },
-      async readContract({ functionName }) {
-        if (functionName === 'nativeTokenAddress') {
-          if (fail) throw new Error('429')
-          return '0x0000000000000000000000000000000000000001'
-        }
-        return 5n
-      },
-    }
-    expect((await readChainSnapshot(client, { chain, account, tokens })).status).toBe('error')
-    fail = false
-    expect((await readChainSnapshot(client, { chain, account, tokens })).status).toBe('ok')
+    expect(client.reads.length).toBe(1 + tokens.length * 2)
+    expect(client.reads.filter((name) => name === 'nativeTokenAddress' || name === 'isBridgedTokenDeployAcknowledged')).toHaveLength(0)
   })
 
   test('over a real viem client, N tokens are a handful of HTTP requests (multicall + batching)', async () => {
@@ -227,8 +205,7 @@ describe('request count of a snapshot poll', () => {
       batch: CLIENT_BATCH,
     })
     const result = await readChainSnapshot(client as unknown as ReadClient, { chain, account, tokens })
-    // Every token's balanceOf, allowance and nativeTokenAddress plus the native balance fold into one aggregate3 eth_call.
-    // (The fake answers every token as a copy, so no second round is needed.)
+    // Every token's balanceOf and allowance plus the native balance fold into one aggregate3 eth_call.
     expect(result.status).toBe('ok')
     expect(requests).toEqual([['eth_call']])
   })

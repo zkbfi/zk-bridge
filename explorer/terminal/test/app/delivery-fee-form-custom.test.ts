@@ -41,19 +41,19 @@ describe('a custom fee', () => {
     const chosen = chosenOf({ ...customValues, feeCustomKind: 'fixed', feeCustomLimit: '2.5' })
     if (chosen.kind !== 'ready') throw new Error(`chosen is ${chosen.kind}`)
     expect(chosen.mode).toBe('custom')
-    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'fixed' }), limit: 2_500_000n, multiplier: 0n })
+    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'fixed' }), limit: 2_500_000n, multiplier: 0n, callGas: 0n })
   })
 
   test('with no kind chosen the kind is fixed, and a blank limit is zero', () => {
     const chosen = chosenOf(customValues)
     if (chosen.kind !== 'ready') throw new Error(`chosen is ${chosen.kind}`)
-    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'fixed' }), limit: 0n, multiplier: 0n })
+    expect(chosen.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'fixed' }), limit: 0n, multiplier: 0n, callGas: 0n })
   })
 
   test('a share keeps the multiplier, drops the limit, and allows exactly one', () => {
     const half = chosenOf({ ...customValues, feeCustomKind: 'share', feeCustomMultiplier: '0.5', feeCustomLimit: '9' })
     if (half.kind !== 'ready') throw new Error(`chosen is ${half.kind}`)
-    expect(half.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 5n * 10n ** 17n })
+    expect(half.director).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 5n * 10n ** 17n, callGas: 0n })
     const whole = chosenOf({ ...customValues, feeCustomKind: 'share', feeCustomMultiplier: '1' })
     expect(whole.kind).toBe('ready')
   })
@@ -68,7 +68,7 @@ describe('a custom fee', () => {
   test('a gas based fee keeps the limit and the multiplier, and the basis sets the flag', () => {
     const transaction = chosenOf({ ...customValues, feeCustomKind: 'gas', feeCustomMultiplier: '1.2', feeCustomLimit: '3', feeCustomBasis: 'transaction' })
     if (transaction.kind !== 'ready') throw new Error(`chosen is ${transaction.kind}`)
-    expect(transaction.director).toEqual({ recipient: getAddress(receiver), settings: 0n, limit: 3_000_000n, multiplier: 12n * 10n ** 17n })
+    expect(transaction.director).toEqual({ recipient: getAddress(receiver), settings: 0n, limit: 3_000_000n, multiplier: 12n * 10n ** 17n, callGas: 0n })
     const baseOnly = chosenOf({ ...customValues, feeCustomKind: 'gas', feeCustomMultiplier: '1.2', feeCustomBasis: 'base-fee-only' })
     if (baseOnly.kind !== 'ready') throw new Error(`chosen is ${baseOnly.kind}`)
     expect(baseOnly.director.settings).toBe(settingsOf({ mode: 'gas', gasPrice: 'base-fee-only' }))

@@ -102,7 +102,7 @@ export const scanHistory = async (input: HistoryScanInput): Promise<HistoryScan>
   const allLogs = scans.flatMap(({ logs }) => logs);
   const outcomes = new Map<Hex, MessageStatus>();
   for (const log of allLogs) {
-    if (log.eventName === "AffirmationCompleted") outcomes.set(log.args.messageId as Hex, log.args.status === true ? "delivered" : "failed_call");
+    if (log.eventName === "AffirmationCompleted") outcomes.set(log.args.messageId as Hex, "delivered");
   }
   // A failed release is final and wins over the delivery that it followed, whichever log comes first.
   for (const log of allLogs) {

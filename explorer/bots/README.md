@@ -57,12 +57,12 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `runner.maximumLossPercent` | A whole number from 0 to 100. A delivery is a loss only when its fee is below its cost. A delivery at break-even (fee equal to cost, including a zero cost with a zero fee) always delivers, even at a limit of 0. Below the cost, the runner leaves out a delivery whose loss is this share of its cost or more. The cost includes the share of the light client update that the delivery carries. A left-out message stays deliverable by anyone. Default 20. A configuration that still names `minimumMarginWei` is refused. |
 | `runner.acceptOracleProof` | Take proofs in the oracle form (message version 2, a 65 byte proof). For local testing only: set it only when the destination light client uses the oracle stand-in as its verifier. Never on a live deployment. Default off. |
 | `runner.deliverWithoutOffer` | Deliver items with no fee offer, for the gas cost alone. Default off. |
-| `runner.deliveryRouter` | Default: `delivery_router` of the deployment file. At start the runner reads `DeliveryRouter.rewardAddress()` from it and logs the value. The runner uses that address only for its accounting and its display. The router decides where each tip goes, so the configuration names no reward address. When the read fails, the runner stops with an error that names the router and the chain. |
+| `runner.deliveryRouter` | Default: `delivery_router` of the deployment file. This is the operator's allowlist, not a rule of the protocol: no contract of the bridge or the mediator names a router, and anyone may deploy one. The runner delivers to this router and to no other. At start the runner reads `DeliveryRouter.rewardAddress()` from it and logs the value. The runner uses that address only for its accounting and its display. The router decides where each tip goes, so the configuration names no reward address. When the read fails, the runner stops with an error that names the router and the chain. |
 | `runner.multicall3` | The Multicall3 contract that batches the deliveries. Default `0xcA11bde05977b3631167028862bE2a173976CA11`, the canonical address. At start the runner refuses to run when the address holds no code. |
 | `runner.maximumBatchSize` | The most items in one batch transaction. Default 5. |
-| `runner.maximumBatchGas` | The most gas that the assumed gas of the items of one batch may add up to. A message whose own assumed gas is above it is sent alone, with the gas it needs, and is never cut. Default 6000000. |
+| `runner.maximumBatchGas` | The most gas that the estimates of the items of one batch, with the light client update, may add up to. A delivery whose own estimate is above it is sent alone, with the gas it needs, and is never cut. Default 6000000. |
 | `runner.tokenValuationsWei` | Wei value of one whole token, by token address. A fee in the wrapped native token needs none. |
-| `runner.proofCheckGas` | Gas of the light client proof check inside a delivery, on top of the gas limit of the message. The assumed gas of an item is the gas that the bridge requires for its message limit, plus this number. Default 400000 (the bridge test measures 290,655, plus the entry of the router). A configuration that still names `executionGasFallback` is refused. |
+| `runner.deliveryGasFallback` | The gas that the runner assumes for one whole delivery (proof check, bridge, mediator, router) when it cannot estimate it: the first fee check runs before the proof exists, and a delivery that needs the light client update of its own batch cannot be estimated alone. A delivery that can be estimated (`eth_estimateGas` of `executeMessage`) uses its estimate. Default 1500000. A configuration that still names `proofCheckGas` or `executionGasFallback` is refused. |
 | `runner.minimumPriorityFeeWei` | The smallest priority fee in wei, by chain id. A smaller fee, set by `priorityFeeWei` or suggested by the node, is raised to it, and the fee cap rises by the same amount. Chains 943 and 369 default to 10000000 (0.01 gwei): their validators skip a tip of 0.001 gwei or less, and such a transaction waits in the pool for good and holds back every later nonce of the runner. A chain id in this map wins over the default. |
 | `runner.maximumPrerequisiteRounds` | The most layout calls that one delivery sends. Default 4. |
 | `runner.prerequisiteGasFallback` | Gas that the runner assumes for a layout call that it cannot simulate before the call before it is mined. Default 300000. |
@@ -119,17 +119,16 @@ For each direction:
 3. Keep the proof for the sweep (see step 6). The runner posts `update(proof, publicValues)` on its own only when no batch
    carries it. It simulates first. A revert means that another party posted first: skip.
    - Read the call data of the message. A fee offer is a message to the mediator whose recipient is the delivery router and whose
-     callback data is a `FeeDirector` (recipient, settings, limit, multiplier). No offer: skip, unless `deliverWithoutOffer`.
+     callback data is a `FeeDirector` (recipient, settings, limit, multiplier, callGas). No offer: skip, unless `deliverWithoutOffer`.
    - Compute the fee with `DeliveryRouter.feeInfo(token, value, gasUsed, director)` at the current fee quote. Convert it to wei
      (the wrapped native token one for one, other tokens through `tokenValuationsWei`; no price means skip).
-   - Read the gas limit of the message from the feed item. When the indexer has none (a row first seen from the destination
-     side), skip with `gas-limit-unknown`. The runner never guesses a limit. The assumed gas of the item is the gas that a
-     delivery must supply for that limit (`requiredDeliveryGas`: the limit, one sixty-third of it, one unit and 100000 of
-     overhead) plus `proofCheckGas`.
+   - A message has no gas limit of its own: the bridge forwards all the gas it gets, and a delivery that runs out of gas
+     reverts and leaves the message undelivered, so anyone can try it again. Until the delivery can be estimated, the assumed
+     gas of the item is `deliveryGasFallback`.
    - Gas cost = gas × (base fee + priority fee). Deliver only when the loss is under the limit: (cost − fee) × 100 is less
      than `maximumLossPercent` × cost. A fee at or above the cost always delivers, so a zero cost with a zero fee delivers. A fee below the cost is a loss. A loss of exactly the limit is left out, so a limit of 0
-     delivers at break-even and not below. Otherwise skip with `loss-at-or-above-limit`. The first check uses the assumed gas and needs no evidence. The
-     second check uses the gas of the simulation.
+     delivers at break-even and not below. Otherwise skip with `loss-at-or-above-limit`. The first check uses the assumed gas (`deliveryGasFallback`) and needs no evidence. The
+     second check uses the gas of the estimate.
    - Build the evidence with `zk-bridge-prover evidence`. The log index inside the receipt comes from the source receipt.
      Skip when the bridge shows the message as delivered.
    - Before the first layout call, estimate the gas of every layout call: simulate the first, and use
@@ -148,9 +147,12 @@ For each direction:
      replaces it with `gasUsed` times `effectiveGasPrice` when the receipt arrives. A send that throws, or a receipt that
      never arrives, leaves the worst case charged, because the transaction may be in the pool.
    - An item with a fee offer that passed the steps above waits as ready. After the sweep prepared all items, the ready
-     items go to the delivery router in as few batches as `maximumBatchSize` and `maximumBatchGas` allow, oldest first. The
-     assumed gas of the items of a batch adds up to at most `maximumBatchGas`. An item whose own assumed gas is above that
-     maximum is never packed: it goes alone in a transaction of its own, after the batches, with exactly the gas it needs.
+     items go to the delivery router in as few batches as `maximumBatchSize` and `maximumBatchGas` allow, oldest first. Each
+     item counts with its estimate: `eth_estimateGas` of `executeMessage(proof)` at the router, once the layout calls are
+     done, plus 20000 for the call and the result of Multicall3. An item whose delivery cannot be estimated alone (it may
+     need the light client update of its batch) counts with `deliveryGasFallback`. The counted gas of the items of a batch
+     adds up to at most `maximumBatchGas`. An item whose own estimate is above that
+     maximum is never packed: it goes alone in a transaction of its own, after the batches, with the gas it needs.
      When the node refuses to run it (the block gas limit), the item skips with `message-gas-above-batch-maximum`. An item
      without an offer (`deliverWithoutOffer`) is not batched: it goes straight to the bridge with its own simulation.
 5. Send a batch through Multicall3 (`aggregate3`, failure allowed on each call). The first call is `update(proof, publicValues)`
@@ -160,19 +162,22 @@ For each direction:
    Before the send the runner simulates the batch and drops what cannot go:
    - It reads the result that the simulated call returns for every call. A message that the bridge shows as delivered
      (`AlreadyDelivered`) is dropped and final (`already-delivered`). A message whose anchor the light client has not stored
-     (`AnchorNotStored`) is dropped with `anchor-not-stored`, and the next sweep tries it again. `InsufficientGas` is dropped
-     with `insufficient-gas`. Any other revert is dropped with `simulation-reverted`, the name of the error and the hash of
+     (`AnchorNotStored`) is dropped with `anchor-not-stored`, and the next sweep tries it again. A delivery that ran out of gas (`InsufficientGas`,
+     `CallOutOfGas`, `ReleaseOutOfGas`) reverts and leaves the message undelivered: it is dropped with `insufficient-gas` and
+     tried again in a later sweep. A delivery whose simulation reverts is a skip with a reason, never a final failure. Any other revert is dropped with `simulation-reverted`, the name of the error and the hash of
      the revert data.
    - It measures each remaining item at the router (`executeMessage`, sent to the router itself). The gas estimate of
      the batch is no use, because a call that fails does not revert the batch, so an estimate settles on a gas amount at
      which calls fail. The gas of an item in a batch is its single gas plus 20000 (the call and the result of Multicall3).
+   - It adds up the measured gas of the items and of the update. Items at the end of the batch that would take the sum
+     over `maximumBatchGas` leave the batch with `batch-gas-above-maximum` and are tried again later. The first item always
+     stays.
    - It splits the gas of the update among the items by their gas, so that each item carries its share of the update in its
      cost. It judges the fee of each item again at that gas against that cost. Items whose loss reaches the limit leave the
      batch. When the set changed, the runner simulates the smaller batch again, at most three times, and the update is
      split among the items that stay.
-   - The gas limit is the sum of the gas of the items and of the update, plus 30 percent, and never below the sum of the
-     required delivery gas of the items plus the update. No setting cuts it. The runner reads the result once more under
-     this limit, so that a limit that is too short shows as failed calls.
+   - The gas limit is the sum of the estimates of the items and of the update, plus 30 percent. No setting cuts it. The
+     runner reads the result once more under this limit, so that a limit that is too short shows as failed calls.
    - It sends only a batch in which every remaining call succeeds and every item pays. A single item uses Multicall3 too.
    Before the send the runner reserves the worst case of the whole transaction in the state file (list `deliverySpend`) and
    replaces it at the receipt with the actual cost. A send that throws leaves the reservation charged. This list appears in
@@ -208,7 +213,7 @@ For each direction:
 
 **Outcomes.** Every decision is a log line (`delivery_outcome`, `delivery_skipped`, `update_posted`, `update_skipped`) and a
 line in `stateDirectory/outcomes-<pair>.jsonl`. Fields: `time`, `kind` (`delivery` or `update`), `pair`, `direction`,
-`status` (`delivered`, `skipped`, `failed`, `posted`), `reason` (new: `insufficient-gas`, `anchor-not-stored`, `batch-did-not-settle`, `batch-result-missing`), `messageId`, `transactionHash`, `gasUsed`, `gasCostWei`,
+`status` (`delivered`, `skipped`, `failed`, `posted`), `reason` (new: `insufficient-gas`, `batch-gas-above-maximum`, `anchor-not-stored`, `batch-did-not-settle`, `batch-result-missing`), `messageId`, `transactionHash`, `gasUsed`, `gasCostWei`,
 `prerequisiteCostWei`, `feeWei`, `feeExpectedWei`, `feeReceivedTokens`, `path` (`delivery-router` or `bridge`). Amounts are
 decimal strings. A skip is written once for each change of reason, not once for each pass. The state file
 `runner-<pair>-<direction>.json` holds the items that need no second look, the layout spend and losses of the last 24 hours,
@@ -371,13 +376,15 @@ The old keys `intervalSeconds`, `jitterSeconds` and `directions.*.offsetSeconds`
    deliveries and updates never need a confirmation.
 5. Relays with `relayTokensAndCall` to the delivery router of the destination, with the dapp's default tip:
    `defaultTip` of `@zk-bridge/shared` (the share mode, 0.1 percent of the amount, `tipPercent`), the traffic wallet as
-   recipient. When the copy does not exist on the destination yet, the delivery deploys it: the send asks for
-   `newCopyGasLimit` of the destination chain when one is set. Sepolia needs one: a copy took 6,971,380 gas there in an estimate on 2026-11-01, and the mediator's default is 2,750,000 with the callback. A delivery that runs out of gas is final.
+   recipient. The terms carry no follow-up call, so the send passes `routerCallbackGas({})` as `callbackGas`: the gas that
+   the router gets on the destination for its own work. When the copy does not exist on the destination yet, the delivery
+   deploys it, and the send needs no gas number for that: whoever delivers brings the gas. A delivery that runs out of gas
+   reverts and stays undelivered.
 6. Simulates each transaction first and keeps `minimumNativeWei` of the chain: a send whose worst case (gas limit times
    maximum fee) would take the native balance below it does not go.
 
 Every attempt is a log line: `traffic_sent` (direction, symbol, kind, `tokenAddress`, amount, `transactionHash`, `messageId`,
-`deployMessage`, `deploysCopy`, `messageGasLimit`, gas), `traffic_approved`, `traffic_skipped` with a reason, or `traffic_failed` (an error, for example
+`deployMessage`, `deploysCopy`, `callbackGas`, gas), `traffic_approved`, `traffic_skipped` with a reason, or `traffic_failed` (an error, for example
 an endpoint that does not answer; the next poll tries again). At start `traffic_tokens` lists each test token with the
 address of its copy on the other chain: the runner's `tokenValuationsWei` needs all of them, because the runner prices
 a tip only in a token it has a value for.
@@ -417,7 +424,7 @@ loads; its old fields are dropped.
 | `directions` | `first-to-second` and `second-to-first`, each `{ "enabled" }`. Default: both on. |
 | `intervalSeconds`, `jitterSeconds`, `directions.*.offsetSeconds` | Removed. Accepted, ignored, `config_ignored` warning. |
 | `tipPercent` | The tip as a percentage of the amount. Default `0.1`, the dapp's default. |
-| `newCopyGasLimit` | By destination chain id: the gas limit of a send that deploys a copy there, at most the bridge's `maxGasPerTx` (10,000,000). Set `"11155111": "9000000"` on the testnet. |
+| `newCopyGasLimit` | Removed. A send passes no gas limit. A configuration that still names it loads, and the value is ignored. |
 | `gateBeaconUrls` | By chain id: the beacon API whose state proofs confirm the gate. It needs the compact multiproof endpoint of Lodestar; the public `https://lodestar-sepolia.chainsafe.io` serves it. Default: the beacon URL of the pair (`EXPLORER_BEACON_URL_<chain id>`). Set `"11155111"` on the testnet. |
 | `minimumNativeWei` | Required, by chain id, for each chain of the pair. |
 | `priorityFeeWei`, `minimumPriorityFeeWei`, `receiptTimeoutSeconds` | As in the runner. Chains 943 and 369 never tip below 0.01 gwei. |
@@ -454,7 +461,7 @@ chain exists on the local stack), the prover (a script), the msgboard node (in t
 - Dependencies: `explorer/terminal` keeps its own lockfile and is not a workspace dependency. The runner imports the
   signers of the terminal by path (`src/signing/open-signer.ts`). Move them to `explorer/shared` when the terminal joins
   the workspace.
-- The first fee check assumes the gas limit of the message plus `proofCheckGas`. Calibrate `proofCheckGas` from `gasUsed` in the outcome file.
+- The first fee check assumes `deliveryGasFallback` for the whole delivery. Calibrate it from `gasUsed` in the outcome file.
 - A fee paid in the native coin (unwrap) has no receipt log, so `feeReceivedTokens` is null. `feeExpectedWei` still holds the promise of `feeInfo`.
 - The runner posts `update` without a fee check. It costs gas and earns nothing by itself.
 - A real delivery needs the prover to build evidence against a beacon node and the source chain node, which must serve `eth_getRawTransactionByHash`.

@@ -6,7 +6,7 @@ import type { FeedItem, LightClientHead, PairConfig } from "@terminal/model/type
 
 /** A status in one word, for the pill at the right of a row (owner: "delivered, waiting, proving, mining, etc."). */
 export const statusWord = (status: FeedItem["status"]): string =>
-  ({ sent: "sent", waiting_for_finality: "waiting", covered: "proven", delivered: "delivered", failed_call: "failed", release_failed: "failed" })[status];
+  ({ sent: "sent", waiting_for_finality: "waiting", covered: "proven", delivered: "delivered", release_failed: "failed" })[status];
 
 /** A duration as short text: "48 s", "14 min", "26 h", "3 d". */
 export const durationText = (seconds: number): string => {
@@ -28,7 +28,7 @@ export const median = (values: readonly number[]): number | null => {
 export const exploreNumbers = (feed: readonly FeedItem[], now: number): { readonly transfers24h: number; readonly medianSeconds: number | null; readonly inFlight: number } => ({
   transfers24h: feed.filter((item) => item.sentAt >= now - 86_400).length,
   medianSeconds: median(feed.filter((item) => item.deliveredAt !== null).map((item) => item.deliveredAt! - item.sentAt)),
-  inFlight: feed.filter((item) => item.status !== "delivered" && item.status !== "failed_call" && item.status !== "release_failed").length,
+  inFlight: feed.filter((item) => item.status !== "delivered" && item.status !== "release_failed").length,
 });
 
 /** A light-client card: which chain checks which, how far behind it is, and how far it has verified. */

@@ -16,7 +16,7 @@ const usdc = FIXTURE_TOKENS[0]!;
 const stepsOf = async (input: { readonly allowance: bigint; readonly delivery: boolean }): Promise<readonly WebStep[]> => {
   const { context, tokens } = await buildFixtureContext({ allowance: input.allowance });
   const draft = computeBridgeDraft(
-    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", gasLimit: "" },
+    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", callGas: "", callbackGas: "" },
     { ...DEFAULT_DELIVERY_OPTIONS, mode: input.delivery ? "percentage" : "none", senderPriceText: "1" },
     { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
   );
@@ -27,7 +27,7 @@ const stepsOf = async (input: { readonly allowance: bigint; readonly delivery: b
 const gasStepsOf = async (pair: typeof FIXTURE_PAIR): Promise<readonly WebStep[]> => {
   const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
   const draft = computeBridgeDraft(
-    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", gasLimit: "" },
+    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", callGas: "", callbackGas: "" },
     { ...DEFAULT_DELIVERY_OPTIONS, senderPriceText: "3000" },
     { pair, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
   );
@@ -40,7 +40,7 @@ const callTarget = getAddress(`0x${"ab".repeat(20)}`);
 const callStepsOf = async (): Promise<readonly WebStep[]> => {
   const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
   const draft = computeBridgeDraft(
-    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", gasLimit: "", callTarget, callData: "0xABCD" },
+    { token: `first:${usdc.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", callGas: "200000", callbackGas: "", callTarget, callData: "0xABCD" },
     { ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage", senderPriceText: "1" },
     { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
   );
@@ -64,7 +64,7 @@ describe("the confirm dialog: the default gas based tip", () => {
     renderPage(<TransactionDialog steps={await gasStepsOf(FIXTURE_PAIR)} onClose={() => undefined} />, {});
     const delivery = await screen.findByTestId("confirm-delivery");
     expect(within(delivery).getByText("gas based, up to the limit")).toBeInTheDocument();
-    expect(within(delivery).getByTestId("confirm-tip-maximum")).toHaveTextContent(/^The limit is [\d.]+ zUSDC\. It is the price ceiling/);
+    expect(within(delivery).getByTestId("confirm-tip-maximum")).toHaveTextContent(/^The tip is expected to be about [\d.]+ zUSDC at the gas estimate\. The most it can take is [\d.]+ zUSDC, the limit/);
     expect(within(delivery).getByTestId("confirm-gas-mode-help")).toHaveTextContent(GAS_MODE_HELP);
     expect(within(delivery).queryByTestId("confirm-gas-notice")).toBeNull();
   });
@@ -84,7 +84,7 @@ describe("the confirm dialog", () => {
     const review = await screen.findByTestId("confirm-review");
     expect(within(review).getByText("Ethereum (chain 1)")).toBeInTheDocument();
     expect(within(review).getByText(/^ERC-20 mediator at 0x/)).toBeInTheDocument();
-    expect(within(review).getByText("relayTokensAndCall(address,address,uint256,bytes)")).toBeInTheDocument();
+    expect(within(review).getByText("relayTokensAndCall(address,address,uint256,bytes,uint256)")).toBeInTheDocument();
     expect(within(review).getByText("Value sent").nextSibling).toHaveTextContent("0 ETH");
     expect(within(review).getByText("value")).toBeInTheDocument();
     expect(within(review).getByText("250000000")).toBeInTheDocument();

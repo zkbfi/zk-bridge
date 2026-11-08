@@ -15,7 +15,7 @@ const sendLog = (input: { messageId: Hex; topicId?: Hex; data?: Hex; chain?: "fi
   const encodedData =
     input.data ??
     encodeAmbMessage({
-      header: { messageId: input.messageId, sender: addressOf("11"), executor: destination.contracts.mediator, gasLimit: 1, dataType: 0, sourceChainId: BigInt(source.chainId), destinationChainId: BigInt(destination.chainId) },
+      header: { messageId: input.messageId, sender: addressOf("11"), executor: destination.contracts.mediator, reservedGas: 0, dataType: 0, sourceChainId: BigInt(source.chainId), destinationChainId: BigInt(destination.chainId) },
       data: call,
     });
   return {
@@ -69,7 +69,7 @@ describe("a send to an arbitrary executor", () => {
   it("is a message with no transfer and names no token", () => {
     const id = buildMessageId(1n, first.contracts.bridge, 3n);
     const data = encodeAmbMessage({
-      header: { messageId: id, sender: addressOf("11"), executor: addressOf("33"), gasLimit: 1, dataType: 0, sourceChainId: 1n, destinationChainId: 369n },
+      header: { messageId: id, sender: addressOf("11"), executor: addressOf("33"), reservedGas: 0, dataType: 0, sourceChainId: 1n, destinationChainId: 369n },
       data: "0xabcd",
     });
     const logs = new Map<number, readonly ChainLog[]>([

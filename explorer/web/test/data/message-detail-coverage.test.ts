@@ -28,7 +28,6 @@ describe("parseMessageDetail, the optional parts", () => {
       destinationChainId: 369,
       sender: CHECKSUM,
       executor: CHECKSUM,
-      gasLimit: null,
       sentAt: 100,
       sentBlockNumber: 12,
       sourceTransactionHash: TRANSACTION,
@@ -37,7 +36,6 @@ describe("parseMessageDetail, the optional parts", () => {
       deliveredAt: null,
       destinationTransactionHash: null,
       deliveredBlockNumber: null,
-      deliverySucceeded: null,
       costs: null,
       executedBy: null,
       callbackFailed: false,
@@ -57,13 +55,14 @@ describe("parseMessageDetail, the optional parts", () => {
   });
 
   it("reads a delivered part with all its fields", () => {
-    const detail = parseMessageDetail({ ...base, delivered: { timestamp: 300, transactionHash: TRANSACTION.toUpperCase().replace("0X", "0x"), success: false, executedBy: ADDRESS } });
-    expect(detail).toMatchObject({ deliveredAt: 300, destinationTransactionHash: TRANSACTION, deliverySucceeded: false, executedBy: CHECKSUM });
+    const detail = parseMessageDetail({ ...base, delivered: { timestamp: 300, transactionHash: TRANSACTION.toUpperCase().replace("0X", "0x"), executedBy: ADDRESS } });
+    expect(detail).toMatchObject({ deliveredAt: 300, destinationTransactionHash: TRANSACTION, executedBy: CHECKSUM });
+    expect(detail).not.toHaveProperty("deliverySucceeded");
   });
 
-  it("gives null for a delivered part whose hash, success flag or executor have the wrong type", () => {
-    const detail = parseMessageDetail({ ...base, delivered: { timestamp: 300, transactionHash: 5, success: "yes", executedBy: 7 } });
-    expect(detail).toMatchObject({ deliveredAt: 300, destinationTransactionHash: null, deliverySucceeded: null, executedBy: null });
+  it("gives null for a delivered part whose hash or executor have the wrong type", () => {
+    const detail = parseMessageDetail({ ...base, delivered: { timestamp: 300, transactionHash: 5, executedBy: 7 } });
+    expect(detail).toMatchObject({ deliveredAt: 300, destinationTransactionHash: null, executedBy: null });
   });
 
   it("reads the two flags only from the value true", () => {
@@ -89,9 +88,8 @@ describe("parseMessageDetail, the optional parts", () => {
     expect(() => parseMessageDetail({ ...base, data: "zz" })).toThrow("The data is not hex.");
   });
 
-  it("reads a gas limit, or null when it is not an integer", () => {
-    expect(parseMessageDetail({ ...base, gasLimit: 90 }).gasLimit).toBe(90);
-    expect(parseMessageDetail({ ...base, gasLimit: "90" }).gasLimit).toBeNull();
+  it("keeps no header gas limit: the field is always zero on chain and means nothing", () => {
+    expect(parseMessageDetail({ ...base, gasLimit: 90 })).not.toHaveProperty("gasLimit");
   });
 });
 

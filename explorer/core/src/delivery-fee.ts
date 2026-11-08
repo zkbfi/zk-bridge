@@ -134,7 +134,7 @@ export const suggestPercentage = (input: SuggestPercentageInput): FeeDirector =>
   const settings = settingsOf({ mode: "share", payout: input.payout });
   if (input.costWei === 0n) {
     requirePrice(input);
-    return { recipient: input.recipient, settings, limit: 0n, multiplier: 0n };
+    return { recipient: input.recipient, settings, limit: 0n, multiplier: 0n, callGas: 0n };
   }
   const costUnits = weiToTokenUnitsCeiling(input.costWei, input);
   const feeUnits = divideRoundingUp(costUnits * (RATE_SCALE + input.marginRate), RATE_SCALE);
@@ -142,7 +142,7 @@ export const suggestPercentage = (input: SuggestPercentageInput): FeeDirector =>
     throw new RangeError("the transfer is too small to pay for its delivery");
   }
   const multiplier = divideRoundingUp(feeUnits * RATE_SCALE, input.transferValue);
-  return { recipient: input.recipient, settings, limit: 0n, multiplier };
+  return { recipient: input.recipient, settings, limit: 0n, multiplier, callGas: 0n };
 };
 
 /**
@@ -160,7 +160,7 @@ export const suggestFixed = (input: SuggestPercentageInput): FeeDirector => {
   const costUnits = input.costWei === 0n ? 0n : weiToTokenUnitsCeiling(input.costWei, input);
   const limit = divideRoundingUp(costUnits * (RATE_SCALE + input.marginRate), RATE_SCALE);
   if (limit > input.transferValue) throw new RangeError("the transfer is too small to pay for its delivery");
-  return { recipient: input.recipient, settings, limit, multiplier: 0n };
+  return { recipient: input.recipient, settings, limit, multiplier: 0n, callGas: 0n };
 };
 
 /**
@@ -202,6 +202,7 @@ export const defaultTip = (recipient: Address, payout?: PayoutKind): FeeDirector
   settings: settingsOf({ mode: "share", payout }),
   limit: 0n,
   multiplier: DEFAULT_TIP_PERCENTAGE_MULTIPLIER,
+  callGas: 0n,
 });
 
 /** Input of {@link suggestGasMultiplier}. */
@@ -216,6 +217,8 @@ export interface SuggestGasMultiplierInput {
   readonly baseFeeCeilingWei: bigint;
   /** The gas that the router measures for the delivery. */
   readonly deliveryGas: bigint;
+  /** The gas of the follow-up call, when the delivery makes one. The router counts it in the tip, so it is in the limit. Default: zero (no call). */
+  readonly callGas?: bigint;
   /** The gas that the router adds. Default: the overhead of the payout. */
   readonly overheadGas?: bigint;
   /** The priority fee that the ceiling allows, in wei per gas. Ignored with `base-fee-only`. Default: zero. */
@@ -246,8 +249,8 @@ export const gasMultiplierOf = (senderPrice: SenderPrice, margin: bigint): bigin
  * Suggests a gas based fee with a cap. The multiplier carries the sender's price (see {@link gasMultiplierOf}), so the
  * fee is in token units for any token. The limit is the fee at the ceiling base fee, in base units of the token and
  * rounded up. The router takes the lesser of its gas based fee and the limit, so a spike in the base fee cannot take
- * more than the limit. The router measures the gas that the deliverer's transaction makes available, and the deliverer
- * chooses the gas limit of that transaction, so expect the tip to reach the limit: the limit is the price ceiling.
+ * more than the limit. The router measures the gas that the delivery used up to its callback and adds the call gas
+ * (when a call is requested) and the overhead, so the limit is the price ceiling that the sender signs.
  *
  * @param input The sender's price, the margin, the ceiling and the gas.
  * @throws When the price or the margin is not above zero, or an input is out of range.
@@ -260,8 +263,10 @@ export const suggestGasMultiplier = (input: SuggestGasMultiplierInput): FeeDirec
   const multiplier = gasMultiplierOf(input.senderPrice, input.margin);
   const priorityFeeCeilingWei = gasPrice === "base-fee-only" ? 0n : (input.priorityFeeCeilingWei ?? 0n);
   requireNonNegative("priorityFeeCeilingWei", priorityFeeCeilingWei);
-  const gas = input.deliveryGas + (input.overheadGas ?? gasOverheadOf(payout));
+  const callGas = input.callGas ?? 0n;
+  requireNonNegative("callGas", callGas);
+  const gas = input.deliveryGas + callGas + (input.overheadGas ?? gasOverheadOf(payout));
   const limit = divideRoundingUp(gas * multiplier * (input.baseFeeCeilingWei + priorityFeeCeilingWei), RATE_SCALE);
   const settings = settingsOf({ mode: "gas", payout, gasPrice });
-  return { recipient: input.recipient, settings, limit, multiplier };
+  return { recipient: input.recipient, settings, limit, multiplier, callGas };
 };

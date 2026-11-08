@@ -3,9 +3,10 @@
  * {@link PlannedTransaction}. Nothing here reads a chain, signs, or sends, and nothing imports the terminal library,
  * so the later web interface can reuse this file as it is.
  */
-import { checkRequestedGasLimit, messageKindOfRelay, decodeDeliveryCall, decodeFeeDirector, type DeliveryCall, type FeeDataSource, type FeeDescription, type FeeDirector, type RelayGasFacts } from '@zk-bridge/shared'
+import { MAX_CALLBACK_GAS, decodeDeliveryCall, decodeFeeDirector, routerCallbackGas, type DeliveryCall, type FeeDataSource, type FeeDirector } from '@zk-bridge/shared'
 import { encodeFunctionData, erc20Abi, getAddress, isAddress, isHex, type Address, type Hex } from 'viem'
 import { formatUnits } from '../format/amounts'
+import type { FeeDescriptionWithExpected } from '../app/worst-case-fee'
 import type { ChainConfig, TokenInfo } from '../model/types'
 import type { RouterAddressesReading } from '../chain/live-reads'
 import { deliveryRouterAbi, messageBridgeAbi, tokenMediatorAbi } from './abis'
@@ -34,7 +35,7 @@ export interface DeliveryFeeReview {
   /** The token that the fee is paid in, on the destination chain. */
   readonly token: { readonly symbol: string; readonly decimals: number }
   /** The amount now, the maximum and the label (`exact` or `estimate, at most X`). */
-  readonly description: FeeDescription
+  readonly description: FeeDescriptionWithExpected
   /** The gas and the base fee that the amount now uses. */
   readonly dataSource: FeeDataSource
   /** What the router on the destination chain says about the address that receives the tip and the address that receives what it cannot deliver. */
@@ -97,25 +98,6 @@ export function planApproval(input: ApprovalInput): PlannedTransaction {
   }
 }
 
-/** The note under a plan that sets a gas limit. */
-const GAS_LIMIT_NOTE =
-  'The gas limit must be at least the default for this kind of message and at most the bridge maximum. Leave it empty for the default.'
-
-/**
- * Refuses a gas limit that the mediator would refuse. The kind of the message comes from the facts that the mediator
- * gave for the token: a copy, or a native token with a proof, sends a release; a native token with no proof sends a
- * deploy, whose minimum grows with the name and the symbol.
- *
- * @throws PlanInputError when the gas limit is below the minimum of its kind or above the bridge maximum.
- */
-export const requireGasLimitInRange = (gasLimit: bigint, options: { withCall: boolean; relayGas: RelayGasFacts }): void => {
-  const kind = messageKindOfRelay(options.relayGas, { withCall: options.withCall })
-  const check = checkRequestedGasLimit({ kind, requested: gasLimit })
-  if (check.ok) return
-  const side = check.reason === 'below-minimum' ? `at least ${check.minimum}, the default for this kind of message` : `at most ${check.maximum}, the bridge maximum`
-  throw new PlanInputError(`The gas limit must be ${side}. Leave it empty for the default.`)
-}
-
 /** Input of {@link planRelay}. */
 export interface RelayInput {
   readonly chain: ChainConfig
@@ -125,16 +107,11 @@ export interface RelayInput {
   readonly amount: bigint
   readonly mode: RelayMode
   /**
-   * The gas limit that the request asks for on the other chain. When it is set, the plan uses the overload with a
-   * trailing gas limit. The mediator refuses a value below the default of the kind of message and a value above the
-   * bridge maximum. When it is absent, the plan uses the function without a gas limit.
+   * The exact gas that `onTokenBridged` gets on the other chain. A relay with a call needs it, and the mediator refuses
+   * zero. A plain relay has no gas number and refuses one here. For a delivery router, pass `routerCallbackGas` of the
+   * call gas of the director.
    */
-  readonly gasLimit?: bigint
-  /**
-   * What the mediator says about the token, which sets the minimum of the gas limit. Absent means a release, the lowest
-   * minimum.
-   */
-  readonly relayGas?: RelayGasFacts
+  readonly callbackGas?: bigint
   /**
    * The delivery fee. The mode must be `call` with the encoded director as data, and the receiver must be the fee
    * router. The plan refuses any other combination, so a review never shows a fee that the data does not hold.
@@ -143,20 +120,21 @@ export interface RelayInput {
 }
 
 /**
- * Plans `relayTokens` or `relayTokensAndCall` on the token mediator, with a trailing gas limit when the input has one.
+ * Plans `relayTokens` or `relayTokensAndCall` on the token mediator. A plain relay carries no gas number. A relay with a
+ * call carries the callback gas: the exact gas that `onTokenBridged` gets on the other chain.
  *
  * The mediator takes no fee: the other chain receives the whole amount.
  *
- * @throws PlanInputError for a zero amount, a zero receiver, or a gas limit that is zero, below the default of its kind or
- * above the bridge maximum.
+ * @throws PlanInputError for a zero amount, a zero receiver, a plain relay that names a callback gas, a relay with a call
+ * and no callback gas, or a delivery fee whose callback gas cannot cover the router.
  */
 export function planRelay(input: RelayInput): PlannedTransaction {
   const { chain, token, receiver, amount, mode } = input
   if (amount <= 0n) throw new PlanInputError('The amount must be above zero.')
   requireAddress(receiver, 'receiver')
-  if (input.gasLimit !== undefined && input.gasLimit <= 0n) throw new PlanInputError('The gas limit must be above zero.')
-  if (input.gasLimit !== undefined) requireGasLimitInRange(input.gasLimit, { withCall: mode.kind === 'call', relayGas: input.relayGas ?? { kind: 'acknowledged' } })
-  if (input.deliveryFee !== undefined) requireDeliveryFeeMatch(input.deliveryFee, receiver, mode)
+  if (mode.kind === 'plain' && input.callbackGas !== undefined) throw new PlanInputError('A plain relay has no callback, so it has no callback gas.')
+  const callbackGas = mode.kind === 'call' ? requireCallbackGas(input.callbackGas) : undefined
+  if (input.deliveryFee !== undefined) requireDeliveryFeeMatch(input.deliveryFee, receiver, mode, callbackGas)
   const common = { chain, to: chain.contracts.tokenMediator, contractLabel: 'ERC-20 mediator', value: 0n }
   const tokenArgument = { name: 'token', type: 'address', value: getAddress(token.address), meaning: token.symbol }
   const receiverArgument = { name: 'receiver', type: 'address', value: getAddress(receiver) }
@@ -167,47 +145,47 @@ export function planRelay(input: RelayInput): PlannedTransaction {
     meaning: amountMeaning(amount, token),
   }
 
-  const gasLimitArguments: readonly DisplayArgument[] =
-    input.gasLimit === undefined ? [] : [{ name: 'gasLimit', type: 'uint256', value: input.gasLimit.toString() }]
-  const gasLimitNotes = input.gasLimit === undefined ? [] : [GAS_LIMIT_NOTE]
-
   if (mode.kind === 'plain') {
-    const baseArguments = [token.address, receiver, amount] as const
-    const { gasLimit } = input
     return {
       ...common,
       title: `Relay ${token.symbol} to the other chain`,
-      functionSignature: gasLimit === undefined ? 'relayTokens(address,address,uint256)' : 'relayTokens(address,address,uint256,uint256)',
+      functionSignature: 'relayTokens(address,address,uint256)',
       functionName: 'relayTokens',
-      data:
-        gasLimit === undefined
-          ? encodeFunctionData({ abi: tokenMediatorAbi, functionName: 'relayTokens', args: baseArguments })
-          : encodeFunctionData({ abi: tokenMediatorAbi, functionName: 'relayTokens', args: [...baseArguments, gasLimit] }),
-      arguments: [tokenArgument, receiverArgument, amountArgument, ...gasLimitArguments],
-      notes: ['If the receiver cannot take the release there, the release is final: the tokens stay in the mediator and nobody can claim them. Check the receiver first.', ...gasLimitNotes],
+      data: encodeFunctionData({ abi: tokenMediatorAbi, functionName: 'relayTokens', args: [token.address, receiver, amount] }),
+      arguments: [tokenArgument, receiverArgument, amountArgument],
+      notes: ['If the receiver cannot take the release there, the release is final: the tokens stay in the mediator and nobody can claim them. Check the receiver first.'],
     }
   }
 
-  const callArguments = [token.address, receiver, amount, mode.data] as const
-  const { gasLimit } = input
   return {
     ...common,
     title: `Relay ${token.symbol} and call the receiver`,
-    functionSignature:
-      gasLimit === undefined ? 'relayTokensAndCall(address,address,uint256,bytes)' : 'relayTokensAndCall(address,address,uint256,bytes,uint256)',
+    functionSignature: 'relayTokensAndCall(address,address,uint256,bytes,uint256)',
     functionName: 'relayTokensAndCall',
-    data:
-      gasLimit === undefined
-        ? encodeFunctionData({ abi: tokenMediatorAbi, functionName: 'relayTokensAndCall', args: callArguments })
-        : encodeFunctionData({ abi: tokenMediatorAbi, functionName: 'relayTokensAndCall', args: [...callArguments, gasLimit] }),
-    arguments: [tokenArgument, receiverArgument, amountArgument, bytesArgument('data', mode.data), ...gasLimitArguments],
+    data: encodeFunctionData({ abi: tokenMediatorAbi, functionName: 'relayTokensAndCall', args: [token.address, receiver, amount, mode.data, callbackGas as bigint] }),
+    arguments: [
+      tokenArgument,
+      receiverArgument,
+      amountArgument,
+      bytesArgument('data', mode.data),
+      { name: 'callbackGas', type: 'uint256', value: (callbackGas as bigint).toString(), meaning: 'the exact gas that onTokenBridged gets on the other chain' },
+    ],
     notes: [
       ...(input.deliveryFee === undefined ? [] : deliveryFeeNotes(input.deliveryFee)),
-      'The receiver gets a call to onTokenBridged with this data, even when the data is empty.',
-      ...gasLimitNotes,
+      'The receiver gets a call to onTokenBridged with this data, even when the data is empty, and with exactly the callback gas above. When the delivery has too little gas, it reverts and the message waits: anyone can deliver it again with more gas.',
     ],
     ...(input.deliveryFee === undefined ? {} : { deliveryFee: input.deliveryFee }),
   }
+}
+
+/**
+ * A relay with a call needs a callback gas above zero (the mediator refuses zero and has no default) and no more than
+ * {@link MAX_CALLBACK_GAS}: no delivery could give more, so the message would wait for good.
+ */
+function requireCallbackGas(callbackGas: bigint | undefined): bigint {
+  if (callbackGas === undefined || callbackGas <= 0n) throw new PlanInputError('A relay with a call needs the callback gas: the exact gas that onTokenBridged gets, above zero.')
+  if (callbackGas > MAX_CALLBACK_GAS) throw new PlanInputError(`The callback gas is above ${MAX_CALLBACK_GAS}, the most that a delivery can carry.`)
+  return callbackGas
 }
 
 /** Input of {@link planWrapAndRelay}. */
@@ -244,15 +222,12 @@ export interface SendMessageInput {
   readonly chain: ChainConfig
   readonly target: Address
   readonly data: Hex
-  /** The gas that the message gets on the other chain. */
-  readonly gas: bigint
 }
 
-/** Plans `requireToPassMessage(target, data, gas)` on the message bridge. */
+/** Plans `requireToPassMessage(target, data, gas)` on the message bridge. The bridge ignores the gas number, so the plan sends zero. */
 export function planSendMessage(input: SendMessageInput): PlannedTransaction {
-  const { chain, target, data, gas } = input
+  const { chain, target, data } = input
   requireAddress(target, 'target')
-  if (gas <= 0n) throw new PlanInputError('The gas must be above zero.')
   return {
     title: 'Send a message to the other chain',
     chain,
@@ -260,14 +235,14 @@ export function planSendMessage(input: SendMessageInput): PlannedTransaction {
     contractLabel: 'MessageBridge',
     functionSignature: 'requireToPassMessage(address,bytes,uint256)',
     functionName: 'requireToPassMessage',
-    data: encodeFunctionData({ abi: messageBridgeAbi, functionName: 'requireToPassMessage', args: [target, data, gas] }),
+    data: encodeFunctionData({ abi: messageBridgeAbi, functionName: 'requireToPassMessage', args: [target, data, 0n] }),
     value: 0n,
     arguments: [
       { name: 'target', type: 'address', value: getAddress(target) },
       bytesArgument('data', data),
-      { name: 'gas', type: 'uint256', value: gas.toString() },
+      { name: 'gas', type: 'uint256', value: '0', meaning: 'not used: the target gets all the gas of the delivery' },
     ],
-    notes: ['The target contract on the other chain receives this call from the bridge. Delivery happens once.'],
+    notes: ['The target contract on the other chain receives this call from the bridge, with all the gas of the delivery. When the call fails, the delivery reverts and the message waits: anyone can deliver it again. Delivery happens once.'],
   }
 }
 
@@ -297,12 +272,16 @@ export function parseAddress(text: string, name: string): Address {
 }
 
 /** Refuses a delivery fee that the receiver or the call data does not carry. */
-function requireDeliveryFeeMatch(deliveryFee: DeliveryFeeReview, receiver: Address, mode: RelayMode): void {
+function requireDeliveryFeeMatch(deliveryFee: DeliveryFeeReview, receiver: Address, mode: RelayMode, callbackGas: bigint | undefined): void {
   if (mode.kind !== 'call') throw new PlanInputError('A delivery fee needs relayTokensAndCall.')
   if (getAddress(receiver) !== getAddress(deliveryFee.router)) {
     throw new PlanInputError('A delivery fee needs the router of the other chain as the receiver.')
   }
   if (!holdsTerms(mode.data, deliveryFee)) throw new PlanInputError('The call data does not hold the fee terms and the call that the review shows.')
+  const needed = routerCallbackGas({ callGas: deliveryFee.director.callGas })
+  if (callbackGas === undefined || callbackGas < needed) {
+    throw new PlanInputError(`The callback gas is too low for the router. It needs at least ${needed}: the router's own work and the gas of the call.`)
+  }
 }
 
 /** True when the data holds the director and the call that the review shows. The guard of the builders has already refused invalid terms. */
@@ -319,7 +298,8 @@ function holdsDirector(decoded: FeeDirector, director: FeeDirector): boolean {
     decoded.recipient.toLowerCase() === director.recipient.toLowerCase() &&
     decoded.settings === director.settings &&
     decoded.limit === director.limit &&
-    decoded.multiplier === director.multiplier
+    decoded.multiplier === director.multiplier &&
+    decoded.callGas === director.callGas
   )
 }
 

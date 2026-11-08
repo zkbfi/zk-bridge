@@ -78,7 +78,8 @@ pub struct MessageSummary {
     pub sender: String,
     /// The target contract on the destination chain.
     pub executor: String,
-    /// The gas that the target gets.
+    /// The gas field of the message header. The bridge writes zero there and gives the target all the gas of the
+    /// delivery: the field is kept for the OmniBridge layout and is not a limit.
     pub gas_limit: u32,
     /// The data type byte of the message: 0 for `requireToPassMessage`, 128 for `requireToConfirmMessage`.
     pub data_type: u8,
@@ -114,8 +115,8 @@ pub struct EvidenceDestination {
     pub light_client: String,
 }
 
-/// What the destination bridge records about a message. Delivery is final: the bridge marks the message before it calls
-/// the target, and the mark stays whether the call succeeds or reverts.
+/// What the destination bridge records about a message. A delivery whose call to the target fails reverts, so the
+/// bridge records only a delivery that succeeded; a message whose deliveries all reverted is still not delivered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DeliveryStatus {
@@ -123,8 +124,6 @@ pub enum DeliveryStatus {
     NotDelivered,
     /// The bridge executed the message and the call to the target succeeded.
     Succeeded,
-    /// The bridge executed the message and the call to the target failed. The delivery cannot repeat.
-    Failed,
 }
 
 /// The evidence for one message, with everything a server needs to send it.
@@ -468,31 +467,21 @@ fn require_proven_message(
 
 /// Reads what the destination bridge records about a message.
 ///
-/// The bridge has no public view of its delivery state, so this reads two views that together give it.
-/// `messageCallStatus` is true only after a call that succeeded. A call that failed leaves `failedMessageDataHash`, the
-/// keccak256 of the call data, which is never zero. Neither view tells a message in progress from one that was never
-/// delivered. That state lasts only inside the call to the target, so an `eth_call` at the latest block never sees it.
+/// `messageCallStatus` is true once the message was delivered. A delivery whose call failed reverted and left no mark,
+/// so false means not delivered yet. The in-progress state lasts only inside the call to the target, so an `eth_call`
+/// at the latest block never sees it.
 fn read_delivery_status(request: &EvidenceRequest<'_>, message_id: B256) -> Result<DeliveryStatus> {
-    let bridge = request.destination_bridge;
     let succeeded = request.destination.view(
-        bridge,
+        request.destination_bridge,
         MessageBridgeContract::messageCallStatusCall {
             messageId: message_id,
         },
     )?;
-    if succeeded {
-        return Ok(DeliveryStatus::Succeeded);
-    }
-    let failed_data_hash = request.destination.view(
-        bridge,
-        MessageBridgeContract::failedMessageDataHashCall {
-            messageId: message_id,
-        },
-    )?;
-    if failed_data_hash != B256::ZERO {
-        return Ok(DeliveryStatus::Failed);
-    }
-    Ok(DeliveryStatus::NotDelivered)
+    Ok(if succeeded {
+        DeliveryStatus::Succeeded
+    } else {
+        DeliveryStatus::NotDelivered
+    })
 }
 
 /// The anchor: the requested stored header, or else the head of the light client.

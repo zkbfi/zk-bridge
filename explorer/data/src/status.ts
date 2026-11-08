@@ -5,8 +5,9 @@
  * - `waiting_for_finality`: the send is older than the finality window and no stored head covers it.
  * - `covered`: the destination light client stored a head whose execution block is at or after the source block.
  *   Anyone can now prove and deliver the message.
- * - `delivered`: the destination bridge executed the message and the call succeeded.
- * - `failed_call`: the destination bridge executed the message and the call to the target reverted. Final.
+ * - `delivered`: the destination bridge executed the message. A delivery that fails (the target reverts, or the gas runs out)
+ *   reverts as a whole and leaves no log, so the message stays `covered` until someone delivers it again. There is no
+ *   status for a delivery that failed.
  * - `release_failed`: the destination bridge executed the message, but the recipient could not take the tokens
  *   (blocked recipient, paused token, reverting token, flow limiter refusal). The mediator emitted `ReleaseFailed`.
  *   Final: the mediator keeps no claim record, and the tokens stay in the mediator.
@@ -16,15 +17,14 @@ export const MESSAGE_STATUSES = [
   "waiting_for_finality",
   "covered",
   "delivered",
-  "failed_call",
   "release_failed",
 ] as const;
 
 /** One status value. */
 export type MessageStatus = (typeof MESSAGE_STATUSES)[number];
 
-/** The outcome of the destination call, or `none` while the message is not delivered. */
-export type DeliveryOutcome = "none" | "succeeded" | "failed";
+/** Whether the destination bridge executed the message. A failed delivery reverts, so it is never an outcome. */
+export type DeliveryOutcome = "none" | "succeeded";
 
 /** The facts that decide a status. */
 export type StatusFacts = {
@@ -48,7 +48,6 @@ export type StatusFacts = {
  * @param facts The facts about the message.
  */
 export const deriveStatus = (facts: StatusFacts): MessageStatus => {
-  if (facts.delivery === "failed") return "failed_call";
   if (facts.delivery === "succeeded") return deliveredStatus(facts);
   if (facts.coveredByHead) return "covered";
   const age = facts.latestSourceTimestamp - facts.sentTimestamp;

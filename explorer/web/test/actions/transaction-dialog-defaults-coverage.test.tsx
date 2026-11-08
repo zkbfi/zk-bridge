@@ -20,7 +20,7 @@ describe("the confirm dialog with a state that has no fees and no hash", () => {
   it("shows zero for the missing fees and omits the hash", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 12n });
     const draft = computeBridgeDraft(
-      { token: `first:${FIXTURE_TOKENS[0]!.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", gasLimit: "" },
+      { token: `first:${FIXTURE_TOKENS[0]!.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", callGas: "", callbackGas: "" },
       { ...DEFAULT_DELIVERY_OPTIONS, mode: "none" },
       { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
     );

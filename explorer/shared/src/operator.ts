@@ -59,7 +59,6 @@ export type EvidenceSummary = {
   readonly messageId: Hex;
   readonly sender: Address;
   readonly executor: Address;
-  readonly gasLimit: bigint;
   readonly sourceTransactionHash: Hex;
   readonly sourceSlot: bigint;
   readonly anchorSlot: bigint;
@@ -206,7 +205,6 @@ export const planMessageExecution = (
   requireEqual(readHexField(file, "sourceTransactionHash", "evidence").toLowerCase(), proven.sourceTransactionHash, "sourceTransactionHash in the file", "the transaction hash in the proof");
   requireEqual(readAddressField(message, "sender", "evidence.message"), proven.sender, "sender in the file", "sender in the proof");
   requireEqual(readAddressField(message, "executor", "evidence.message"), proven.executor, "executor in the file", "executor in the proof");
-  requireEqual(BigInt(readSafeInteger(message, "gasLimit", "evidence.message")), proven.gasLimit, "gasLimit in the file", "gasLimit in the proof");
 
   const anchor = readObject(file.anchor, "evidence.anchor");
   const summary: EvidenceSummary = {
@@ -214,7 +212,6 @@ export const planMessageExecution = (
     messageId: proven.messageId,
     sender: proven.sender,
     executor: proven.executor,
-    gasLimit: proven.gasLimit,
     sourceTransactionHash: proven.sourceTransactionHash,
     sourceSlot: readSlot(message, "sourceSlot", "evidence.message"),
     anchorSlot: readSlot(anchor, "slot", "evidence.anchor"),
@@ -238,13 +235,12 @@ export const planMessageExecution = (
         { name: "message.messageId", type: "bytes32", value: summary.messageId },
         { name: "message.sender", type: "address", value: summary.sender },
         { name: "message.executor", type: "address", value: summary.executor },
-        { name: "message.gasLimit", type: "uint256", value: summary.gasLimit.toString() },
         { name: "sourceTransactionHash", type: "bytes32", value: summary.sourceTransactionHash },
         ...executeCall.arguments,
       ],
       notes: [
-        "The bridge checks the evidence itself. No proof is needed. The message runs once, even if the call reverts.",
-        `The target ${summary.executor} receives the call with ${summary.gasLimit} gas.`,
+        "The bridge checks the evidence itself. No proof is needed.",
+        `The target ${summary.executor} receives the call with all the gas that is left. If the call fails or the gas runs out, the whole delivery reverts and the message stays undelivered, so anyone can send it again.`,
       ],
     },
   };

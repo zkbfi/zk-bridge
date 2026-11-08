@@ -95,9 +95,9 @@ contract GenerateAmbVectors is Script {
         address recipient = 0x90F79bf6EB2c4f870365E785982E1f101E93b906;
         _payload("handleNativeTokens", abi.encodeWithSelector(TokenMediator.handleNativeTokens.selector, token, recipient, 5 ether));
         _payload("handleBridgedTokens", abi.encodeWithSelector(TokenMediator.handleBridgedTokens.selector, token, recipient, 123));
-        _payload("handleNativeTokensAndCall", abi.encodeWithSelector(TokenMediator.handleNativeTokensAndCall.selector, token, recipient, 99, hex"c0ffee"));
+        _payload("handleNativeTokensAndCall", abi.encodeWithSelector(TokenMediator.handleNativeTokensAndCall.selector, token, recipient, 99, hex"c0ffee", 750_000));
         _payload("deployAndHandleBridgedTokens", abi.encodeWithSelector(TokenMediator.deployAndHandleBridgedTokens.selector, token, "Tether USD", "USDT", uint8(6), recipient, 1_000_000));
-        _payload("deployAndHandleBridgedTokensAndCall", abi.encodeWithSelector(TokenMediator.deployAndHandleBridgedTokensAndCall.selector, token, "Wrapped Ether", "WETH", uint8(18), recipient, 7, hex"aabb"));
+        _payload("deployAndHandleBridgedTokensAndCall", abi.encodeWithSelector(TokenMediator.deployAndHandleBridgedTokensAndCall.selector, token, "Wrapped Ether", "WETH", uint8(18), recipient, 7, hex"aabb", 1_500_000));
     }
 
     function _payload(string memory handler, bytes memory data) private {

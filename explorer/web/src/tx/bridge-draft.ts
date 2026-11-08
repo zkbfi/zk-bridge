@@ -7,13 +7,13 @@
  * delivery router) is a plain relay, and the draft says why, as the terminal does.
  */
 import { formatUnits, getAddress, type Address } from "viem";
-import { DEFAULT_GAS_MARGIN, defaultTipChoiceOf, UINT256_MAXIMUM, type DeliveryCostReport, type PayoutKind, type SenderPrice } from "@zk-bridge/shared";
+import { DEFAULT_GAS_MARGIN, MAX_CALL_GAS, defaultTipChoiceOf, UINT256_MAXIMUM, type DeliveryCostReport, type PayoutKind, type SenderPrice } from "@zk-bridge/shared";
 import { bridgeSourceOf, type BridgeContext } from "@terminal/app/actions";
 import { DEFAULT_TIP_PERCENT_TEXT, resolveDeliveryTarget, senderPriceText, type DeliveryTarget } from "@terminal/app/delivery-fee-form";
 import type { ChainSide, PairConfig, TokenInfo } from "@terminal/model/types";
 import { AmountParseError, parsePercentAsRate, parseUnits, RATE_SCALE } from "@terminal/format/amounts";
 import { PlanInputError } from "@terminal/tx/plan";
-import { planBridgeSteps, type BridgeFormValues, type WebStep } from "./bridge-steps";
+import { hasCallText, planBridgeSteps, type BridgeFormValues, type WebStep } from "./bridge-steps";
 import { selectDelivery, type DeliveryMode, type DeliverySelection } from "./delivery-selection";
 
 /** What the user chose for the tip: one of the three modes, or no tip. */
@@ -156,6 +156,8 @@ const tipNoticeOf = (options: DeliveryOptions, tip: TipStatus, defaultPriceText:
 
 type TipInputs = {
   readonly router: Address;
+  /** The exact gas of the follow-up call: zero when the form names no call. */
+  readonly callGas: bigint;
   readonly percentageRate: bigint;
   readonly fixedAmount: bigint | null;
   readonly marginRate: bigint;
@@ -185,9 +187,23 @@ const routerOf = (options: DeliveryOptions, target: DeliveryTarget): Parsed<Addr
   return { ok: true, value: getAddress(text) };
 };
 
-const readTipInputs = (options: DeliveryOptions, target: DeliveryTarget, defaultPriceText: string): Parsed<TipInputs> => {
+/**
+ * Reads the call gas. A delivery with no call carries zero. A call needs a whole number above zero: the router gives the
+ * call exactly that much gas, and the page has no default to offer.
+ */
+const callGasOf = (values: BridgeFormValues): Parsed<bigint> => {
+  if (!hasCallText(values)) return { ok: true, value: 0n };
+  const text = values.callGas.trim();
+  if (!/^\d+$/.test(text) || BigInt(text) === 0n) return failure("Enter the call gas: the exact gas the call gets, as a whole number above zero.");
+  if (BigInt(text) > MAX_CALL_GAS) return failure(`The call gas is above ${MAX_CALL_GAS}, the most that a delivery can carry.`);
+  return { ok: true, value: BigInt(text) };
+};
+
+const readTipInputs = (values: BridgeFormValues, options: DeliveryOptions, target: DeliveryTarget, defaultPriceText: string): Parsed<TipInputs> => {
   const router = routerOf(options, target);
   if (!router.ok) return router;
+  const callGas = callGasOf(values);
+  if (!callGas.ok) return callGas;
   const percentageRate = parsePercentText(options.percentText.trim() === "" ? DEFAULT_TIP_PERCENT : options.percentText);
   if (percentageRate === null) return failure("The percentage must be a number such as 0.1.");
   const margin = parsePercentText(options.marginPercentText);
@@ -203,7 +219,7 @@ const readTipInputs = (options: DeliveryOptions, target: DeliveryTarget, default
   if (fixedAmount !== null && fixedAmount > UINT256_MAXIMUM) return failure("The fixed amount is too large: it must fit in 256 bits.");
   const price = priceOf(options.senderPriceText ?? defaultPriceText, target.token.decimals);
   if (!price.ok) return price;
-  return { ok: true, value: { router: router.value, percentageRate, fixedAmount, marginRate: margin, gasMargin, baseFeeCeilingWei, ...price.value } };
+  return { ok: true, value: { router: router.value, callGas: callGas.value, percentageRate, fixedAmount, marginRate: margin, gasMargin, baseFeeCeilingWei, ...price.value } };
 };
 
 const buildDelivery = (input: {
@@ -220,7 +236,7 @@ const buildDelivery = (input: {
   if (data.priorityFeeWei === null) return { delivery: null, problem: "The priority fee of the destination chain has not loaded yet." };
   const receiver = values.receiver.trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(receiver)) return { delivery: null, problem: "Enter the receiver first." };
-  const inputs = readTipInputs(options, target, defaultPriceText);
+  const inputs = readTipInputs(values, options, target, defaultPriceText);
   if (!inputs.ok) return { delivery: null, problem: inputs.problem };
   const payout: PayoutKind = target.isWrappedNative && options.payoutNative ? "native" : "token";
   const selection = selectDelivery(
@@ -242,6 +258,7 @@ const buildDelivery = (input: {
       fixedAmount: inputs.value.fixedAmount,
       marginRate: inputs.value.marginRate,
       gasMargin: inputs.value.gasMargin,
+      callGas: inputs.value.callGas,
       baseFeeCeilingWei: inputs.value.baseFeeCeilingWei,
       ...(options.gasCapRate === undefined ? {} : { gasLimitCapUnits: (amount * options.gasCapRate) / RATE_SCALE }),
     },

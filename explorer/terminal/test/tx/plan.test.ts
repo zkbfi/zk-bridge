@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-import type { RelayGasFacts } from '@zk-bridge/shared'
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
 import {
   PlanInputError,
@@ -11,9 +10,10 @@ import {
   planWrapAndRelay,
 } from '../../src/tx/plan'
 import { decodeKnownCall } from '../../src/tx/decode'
+import { MAX_CALLBACK_GAS } from '@zk-bridge/shared'
 
 // The expected calldata below was produced by Foundry `cast calldata`, an independent encoder, for these inputs:
-// token 0x...1001 (USDC, 6 decimals), receiver 0x...0abc, 2.5 tokens (2500000 base units), gas limit 300000.
+// token 0x...1001 (USDC, 6 decimals), receiver 0x...0abc, 2.5 tokens (2500000 base units), callback gas 1000000.
 const usdc = FIXTURE_TOKENS[0]!
 const chain = FIXTURE_PAIR.first
 const receiver = '0x0000000000000000000000000000000000000abc'
@@ -22,12 +22,9 @@ const AMOUNT = 2_500_000n
 const EXPECTED = {
   relay:
     '0xad58bdd100000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a0',
-  call: '0xd740548100000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a000000000000000000000000000000000000000000000000000000000000000800000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000',
-  relayWithGasLimit:
-    '0xba4636d600000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a000000000000000000000000000000000000000000000000000000000000493e0',
-  callWithGasLimit:
+  call:
     '0x9223413400000000000000000000000000000000000000000000000000000000000010010000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000002625a000000000000000000000000000000000000000000000000000000000000000a000000000000000000000000000000000000000000000000000000000000f42400000000000000000000000000000000000000000000000000000000000000004deadbeef00000000000000000000000000000000000000000000000000000000',
-  pass: '0xdc8601b30000000000000000000000000000000000000000000000000000000000000abc00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000030d4000000000000000000000000000000000000000000000000000000000000000021234000000000000000000000000000000000000000000000000000000000000',
+  pass: '0xdc8601b30000000000000000000000000000000000000000000000000000000000000abc0000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000021234000000000000000000000000000000000000000000000000000000000000',
   wrap: '0xf52cbf0e0000000000000000000000000000000000000000000000000000000000000abc',
   approve:
     '0x095ea7b300000000000000000000000000000000000000000000000000000000000000a100000000000000000000000000000000000000000000000000000000002625a0',
@@ -42,73 +39,46 @@ describe('planRelay', () => {
     expect(plan.value).toBe(0n)
   })
 
-  test('relay and call encodes the data as bytes', () => {
+  test('relay and call encodes the data as bytes and ends with the callback gas', () => {
     const plan = planRelay({
       chain,
       token: usdc,
       receiver,
       amount: AMOUNT,
       mode: { kind: 'call', data: '0xdeadbeef' },
+      callbackGas: 1_000_000n,
     })
     expect(plan.data).toBe(EXPECTED.call as `0x${string}`)
     expect(plan.functionName).toBe('relayTokensAndCall')
-  })
-
-  test('a plain relay with a gas limit plans the four-argument overload', () => {
-    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 300_000n })
-    expect(plan.data).toBe(EXPECTED.relayWithGasLimit as `0x${string}`)
-    expect(plan.functionSignature).toBe('relayTokens(address,address,uint256,uint256)')
-    expect(plan.arguments.map((argument) => argument.name)).toEqual(['token', 'receiver', 'value', 'gasLimit'])
-    expect(plan.arguments.find((argument) => argument.name === 'gasLimit')?.value).toBe('300000')
-  })
-
-  test('a call relay with a gas limit plans the five-argument overload', () => {
-    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'call', data: '0xdeadbeef' }, gasLimit: 1_000_000n })
-    expect(plan.data).toBe(EXPECTED.callWithGasLimit as `0x${string}`)
     expect(plan.functionSignature).toBe('relayTokensAndCall(address,address,uint256,bytes,uint256)')
-    expect(plan.arguments.map((argument) => argument.name)).toEqual(['token', 'receiver', 'value', 'data', 'gasLimit'])
+    expect(plan.arguments.map((argument) => argument.name)).toEqual(['token', 'receiver', 'value', 'data', 'callbackGas'])
+    expect(plan.arguments.find((argument) => argument.name === 'callbackGas')?.value).toBe('1000000')
+    expect(plan.notes.join(' ')).toContain('exactly the callback gas')
   })
 
-  test('without a gas limit the plan keeps the old function', () => {
-    const plain = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' } })
-    const call = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'call', data: '0xdeadbeef' } })
-    expect(plain.data).toBe(EXPECTED.relay as `0x${string}`)
-    expect(call.data).toBe(EXPECTED.call as `0x${string}`)
+  test('a plain relay has no gas number: it plans the three-argument function and refuses a callback gas', () => {
+    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' } })
+    expect(plan.arguments.map((argument) => argument.name)).toEqual(['token', 'receiver', 'value'])
+    expect(() => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, callbackGas: 1n })).toThrow(/no callback gas/)
   })
 
-  test('refuses a gas limit of zero', () => {
-    expect(() => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 0n })).toThrow(PlanInputError)
+  test('a relay with a call refuses a missing or zero callback gas, because the mediator refuses zero and has no default', () => {
+    const call = { kind: 'call', data: '0xdeadbeef' } as const
+    expect(() => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: call })).toThrow(PlanInputError)
+    expect(() => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: call, callbackGas: 0n })).toThrow(/needs the callback gas/)
   })
 
-  test('plan refuses a gas limit below the default of the kind', () => {
-    const plainBelow = () => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 249_999n })
-    const callBelow = () => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'call', data: '0xdeadbeef' }, gasLimit: 999_999n })
-    expect(plainBelow).toThrow(PlanInputError)
-    expect(plainBelow).toThrow(/at least 250000/)
-    expect(callBelow).toThrow(/at least 1000000/)
-    const atDefault = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 250_000n })
-    expect(atDefault.arguments.find((argument) => argument.name === 'gasLimit')?.value).toBe('250000')
+  test('a relay with a call refuses a callback gas above the most a delivery can carry, on every path', () => {
+    const call = { kind: 'call', data: '0xdeadbeef' } as const
+    expect(() => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: call, callbackGas: MAX_CALLBACK_GAS + 1n })).toThrow(
+      new PlanInputError(`The callback gas is above ${MAX_CALLBACK_GAS}, the most that a delivery can carry.`),
+    )
+    expect(planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: call, callbackGas: MAX_CALLBACK_GAS }).functionName).toBe('relayTokensAndCall')
   })
 
-  test('plan refuses a gas limit above the bridge maximum', () => {
-    const above = () => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 10_000_001n })
-    expect(above).toThrow(/at most 10000000/)
-    const atMaximum = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 10_000_000n })
-    expect(atMaximum.arguments.find((argument) => argument.name === 'gasLimit')?.value).toBe('10000000')
-  })
-
-  test('plan names the deploy minimum for a native token with no proof, and uses the name and symbol length', () => {
-    const relay = (relayGas: RelayGasFacts, gasLimit: bigint) => () => planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit, relayGas })
-    expect(relay({ kind: 'unacknowledged', nameAndSymbolBytes: 8 }, 300_000n)).toThrow(/at least 2000000/)
-    expect(relay({ kind: 'unacknowledged', nameAndSymbolBytes: 500 }, 2_000_000n)).toThrow(/at least 2100000/)
-    expect(relay({ kind: 'unacknowledged', nameAndSymbolBytes: 500 }, 2_100_000n)).not.toThrow()
-    expect(relay({ kind: 'acknowledged' }, 300_000n)).not.toThrow()
-    expect(relay({ kind: 'copy' }, 249_999n)).toThrow(/at least 250000/)
-  })
-
-  test('the gas limit plan decodes back to its arguments', () => {
-    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'plain' }, gasLimit: 300_000n })
-    expect(decodeKnownCall(plan.data)?.arguments.map((argument) => argument.value).at(-1)).toBe('300000')
+  test('the relay with a call decodes back to its arguments', () => {
+    const plan = planRelay({ chain, token: usdc, receiver, amount: AMOUNT, mode: { kind: 'call', data: '0xdeadbeef' }, callbackGas: 1_000_000n })
+    expect(decodeKnownCall(plan.data)?.arguments.map((argument) => argument.value).at(-1)).toBe('1000000')
   })
 
   test('the mediator takes no fee: the plan names the whole amount and carries no fee note', () => {
@@ -144,8 +114,9 @@ describe('other plans', () => {
   })
 
   test('send message encodes requireToPassMessage on the message bridge', () => {
-    const plan = planSendMessage({ chain, target: receiver, data: '0x1234', gas: 200_000n })
+    const plan = planSendMessage({ chain, target: receiver, data: '0x1234' })
     expect(plan.data).toBe(EXPECTED.pass as `0x${string}`)
+    expect(plan.arguments.find((argument) => argument.name === 'gas')?.value).toBe('0')
     expect(plan.to).toBe(chain.contracts.messageBridge)
   })
 

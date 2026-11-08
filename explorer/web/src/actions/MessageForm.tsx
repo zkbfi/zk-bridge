@@ -17,10 +17,10 @@ export type MessageFormProps = {
   readonly onReview: (steps: readonly WebStep[]) => void;
 };
 
-type Values = { readonly chain: "first" | "second"; readonly target: string; readonly data: string; readonly gas: string };
+type Values = { readonly chain: "first" | "second"; readonly target: string; readonly data: string };
 
 /** The defaults: the message goes from the first chain (Ethereum, or Sepolia) to the second. */
-const DEFAULT_VALUES: Values = { chain: "first", target: "", data: "", gas: "200000" };
+const DEFAULT_VALUES: Values = { chain: "first", target: "", data: "" };
 
 const valuesOf = (query: MessageQuery): Values => ({ ...DEFAULT_VALUES, ...query });
 
@@ -29,7 +29,6 @@ const queryOf = (values: Values): MessageQuery => ({
   ...(values.chain === DEFAULT_VALUES.chain ? {} : { chain: values.chain }),
   ...(values.target === DEFAULT_VALUES.target ? {} : { target: values.target }),
   ...(values.data === DEFAULT_VALUES.data ? {} : { data: values.data }),
-  ...(values.gas === DEFAULT_VALUES.gas ? {} : { gas: values.gas }),
 });
 
 const NO_DISCLOSURE = { feesApplyTo: "this-transaction", amountToken: null, destinationNativeSymbol: null, destinationChainId: null, delivery: null } as const;
@@ -81,9 +80,9 @@ export const MessageForm = ({ pair, query, onQuery, onReview }: MessageFormProps
         <Field label="Call data" hint="Hex, such as 0xabcd. Empty is allowed.">
           {(id) => <TextAreaInput id={id} spellCheck={false} value={values.data} onChange={(event) => setValues({ ...values, data: event.target.value })} />}
         </Field>
-        <Field label={`Gas for the call on ${destination.name}`} hint="A whole number. The call runs once, even if it fails.">
-          {(id) => <TextInput id={id} inputMode="numeric" value={values.gas} onChange={(event) => setValues({ ...values, gas: event.target.value })} />}
-        </Field>
+        <Text fontSize="sm" color="fg.muted">
+          The call gets all the gas of the delivery, so there is no gas number to set. If the call fails, the delivery reverts and the message waits: anyone can deliver it again.
+        </Text>
         <Flex alignItems="center" gap="3" flexWrap="wrap">
           <Button type="submit" colorPalette="blue" disabled={planned.problem !== null} aria-describedby="message-form-reason">
             Review transaction

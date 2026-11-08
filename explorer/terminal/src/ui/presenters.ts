@@ -28,7 +28,6 @@ export const STATUS_LABELS: Readonly<Record<FeedStatus, string>> = {
   waiting_for_finality: 'waiting',
   covered: 'covered',
   delivered: 'delivered',
-  failed_call: 'failed',
   release_failed: 'rel-fail',
 }
 

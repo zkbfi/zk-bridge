@@ -68,13 +68,12 @@ Read the `status`. These are the values of `MESSAGE_STATUSES` in `@zkb/data`, in
 | `sent` | The send is on the source chain and younger than the finality window. | "Sent · waiting for finality" |
 | `waiting_for_finality` | The send is older than the finality window and no stored head covers it yet. The bridge is waiting for a proof. | "Final soon · waiting for the proof" |
 | `covered` | The destination light client stored a head whose execution block is at or after the send. Anyone can now deliver it. | "Proven · waiting for a deliverer" (with the wait, such as "for 12 min") |
-| `delivered` | The destination bridge executed it and the call succeeded. | "Delivered to <chain>" |
-| `failed_call` | Executed, but the call to the target reverted. Final. | "Delivered, but the call after it failed" |
+| `delivered` | The destination bridge executed it and the call succeeded. A delivery whose call fails reverts as a whole, so the message stays `covered` and anyone can deliver it again with more gas. | "Delivered to <chain>" |
 | `release_failed` | Executed, but the recipient could not take the tokens. Final: the tokens stay in the token mediator. | "The release failed" |
 
 - In flight means `sent`, `waiting_for_finality` or `covered`.
 - The finality window is two epochs of 32 slots: 768 seconds on Ethereum and Sepolia (12 s slots), 640 seconds on PulseChain and PulseChain testnet v4 (10 s slots).
-- A transfer normally takes about 13 to 15 minutes end to end. In the dapp, a `covered` transfer that is still undelivered after 30 minutes moves to the **Needs you** tab, and so do `failed_call` and `release_failed`.
+- A transfer normally takes about 13 to 15 minutes end to end. In the dapp, a `covered` transfer that is still undelivered after 30 minutes moves to the **Needs you** tab, and so does `release_failed`.
 
 ## If it fails
 
@@ -82,7 +81,8 @@ Read the `status`. These are the values of `MESSAGE_STATUSES` in `@zkb/data`, in
 - **The send was made but Activity shows it as `sent` for a long time.** Compare the time since sending with the finality window above. Inside the window, nothing is wrong.
 - **`waiting_for_finality` for much longer than the window.** The destination light client has no head that covers the send. A proof is needed. See `deliver-it-yourself` (it covers requesting a proof) and check the light client heads with `read-bridge-data` (`/api/heads`, field `lagSeconds`).
 - **`covered` and not delivered.** No bot delivered it. This usually means the fee was below what a bot needs at today's gas price. See `deliver-it-yourself`.
-- **`failed_call` or `release_failed`.** Final; the bridge never runs a message twice. The dapp has no retry for a reverted call ("Not available yet: the dapp has no retry path for a reverted call"). For `release_failed`, the tokens stay in the mediator with no claim and no fallback address.
+- **`release_failed`.** Final; the bridge never runs a message twice. The tokens stay in the mediator with no claim and no fallback address.
+- **A delivery reverted.** Not a status: a delivery that runs out of gas, or whose call fails, reverts and leaves the message `covered`. Deliver it again with more gas (see `deliver-it-yourself`).
 - **The search finds only a `transaction` and no message.** The hash may belong to a light client update, or to a transaction the indexer does not store. A result with `confirmed: false` means only the shape fits.
 
 <!-- TODO: confirm that https://indexer.zkb.fi is the public, stable address to document for the indexer API; it is taken from ZKB_SITES in explorer/data/src/search.ts and answered correctly when tested on 2026-11-06. -->

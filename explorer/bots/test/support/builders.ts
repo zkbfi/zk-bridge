@@ -6,7 +6,6 @@ import {
   deliveryRouterAbi,
   encodeFeeDirector,
   messageBridgeAbi,
-  requiredDeliveryGas,
   tokenFactoryAbi,
   tokenMediatorAbi,
   type DeliveryCall,
@@ -65,21 +64,17 @@ export function feeOfferData(options: { director: FeeDirector; value: bigint; re
   return encodeFunctionData({
     abi: tokenMediatorAbi,
     functionName: options.handler === "bridged" ? "handleBridgedTokensAndCall" : "handleNativeTokensAndCall",
-    args: [options.token ?? OTHER_TOKEN, options.recipient ?? DELIVERY_ROUTER, options.value, callback],
+    args: [options.token ?? OTHER_TOKEN, options.recipient ?? DELIVERY_ROUTER, options.value, callback, 400_000n],
   });
 }
 
-/** The gas limit of a feed item in the tests, unless a test names another. */
-export const FEED_GAS_LIMIT = 100_000;
-/** The gas that a delivery of a default feed item must supply, from the rule of the bridge. */
-export const FEED_REQUIRED_GAS = requiredDeliveryGas(BigInt(FEED_GAS_LIMIT));
-/** The assumed gas of a default feed item in the tests: the required gas plus the proof check gas of the test settings. */
+/** The assumed gas of a default feed item in the tests: its estimate (`chain.executionGas`) plus the batch overhead. */
 export const FEED_ASSUMED_GAS = 300_000n;
-/** The proof check gas of the test settings. It makes the assumed gas of a default feed item {@link FEED_ASSUMED_GAS}. */
-export const TEST_PROOF_CHECK_GAS = FEED_ASSUMED_GAS - FEED_REQUIRED_GAS;
+/** The delivery gas fallback of the test settings, used before an estimate exists. */
+export const TEST_DELIVERY_GAS_FALLBACK = FEED_ASSUMED_GAS;
 
-/** A covered token item as the indexer lists it. A null `gasLimit` is a row that the indexer saw first from the destination side. */
-export function feedItem(options: { id?: number; token?: Address; decimals?: number; sourceHash?: Hex; gasLimit?: number | null } = {}): FeedItem {
+/** A covered token item as the indexer lists it. */
+export function feedItem(options: { id?: number; token?: Address; decimals?: number; sourceHash?: Hex } = {}): FeedItem {
   const id = options.id ?? 1;
   return {
     messageId: word(id),
@@ -88,7 +83,6 @@ export function feedItem(options: { id?: number; token?: Address; decimals?: num
     direction: { sourceChainId: 1, destinationChainId: 369 },
     sender: address(0x01),
     executor: address(0x02),
-    gasLimit: options.gasLimit === undefined ? FEED_GAS_LIMIT : options.gasLimit,
     sent: { transactionHash: options.sourceHash ?? word(0xa0 + id), blockNumber: 10, timestamp: 1_790_000_000 },
     transfer: {
       sourceToken: { chainId: 1, address: address(0x55), symbol: "SRC", decimals: options.decimals ?? 18 },
@@ -118,7 +112,7 @@ export function fakeIndexer(items: readonly FeedItem[], data: Readonly<Record<st
 
 /**
  * The prover as the runner meets it: the evidence names the message of the feed item that was sent in the requested
- * transaction, with the data and the gas limit that the indexer lists for it, as the real prover reads them from the
+ * transaction, with the data that the indexer lists for it, as the real prover reads them from the
  * source chain. The answers still come from `prover`, so a test may set `prover.evidence` after this call.
  */
 export function feedProver(prover: ProverBinary, items: readonly FeedItem[], data: Readonly<Record<string, Hex>>): ProverBinary {
@@ -129,7 +123,7 @@ export function feedProver(prover: ProverBinary, items: readonly FeedItem[], dat
       const evidence = await prover.evidence(request);
       const item = items.find((candidate) => candidate.sent?.transactionHash === request.transactionHash);
       if (item === undefined) return evidence;
-      const message = { ...evidence.message, messageId: item.messageId, data: data[item.messageId] ?? "0x", gasLimit: item.gasLimit ?? evidence.message.gasLimit };
+      const message = { ...evidence.message, messageId: item.messageId, data: data[item.messageId] ?? "0x" };
       return { ...evidence, message };
     },
   };
@@ -158,8 +152,12 @@ export const EXECUTED: ItemResultInput = { success: true, returnData: "0x" };
 export const SKIPPED_ALREADY_DELIVERED: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: messageBridgeAbi, errorName: "AlreadyDelivered", args: [word(1)] }) };
 /** The bridge refuses the message because the light client has not stored its anchor header. */
 export const SKIPPED_ANCHOR_NOT_STORED: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: messageBridgeAbi, errorName: "AnchorNotStored", args: [100n, word(2)] }) };
-/** The bridge refuses the message because the gas left is too little. */
-export const SKIPPED_INSUFFICIENT_GAS: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: messageBridgeAbi, errorName: "InsufficientGas", args: [1n, 2n] }) };
+/** The delivery reverts because the gas left is too little for the exact gas of a call. */
+export const SKIPPED_INSUFFICIENT_GAS: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: deliveryRouterAbi, errorName: "InsufficientGas", args: [1n, 2n] }) };
+/** The delivery reverts because a call ran out of its gas. */
+export const SKIPPED_CALL_OUT_OF_GAS: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: deliveryRouterAbi, errorName: "CallOutOfGas", args: [1n] }) };
+/** The delivery reverts because the release of the tokens ran out of gas. */
+export const SKIPPED_RELEASE_OUT_OF_GAS: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: tokenMediatorAbi, errorName: "ReleaseOutOfGas", args: [address(0x77)] }) };
 /** The bridge reverts for another reason. */
 export const FAILED_IN_BRIDGE: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: messageBridgeAbi, errorName: "IndexMismatch", args: [1n, 2n] }) };
 /** The light client refuses the update because its head is at or past it. */
@@ -222,6 +220,8 @@ export interface FakeChain extends TransactionPort {
    * measures each item at the single entry, and adds the overhead of the batch entry to it.
    */
   executionGas: bigint | null;
+  /** Replaces `executionGas` with a gas that depends on the anchor slot of the proof of the single entry call. */
+  executionGasOfSlot: ((slot: bigint) => bigint) | null;
   /** The identifier of the message at a position of the batch, for the `AffirmationCompleted` log of the mined batch. Default: `word(position + 1)`. */
   messageIdOfPosition: (position: number) => Hex;
   /** What the read-only call of the batch returns for the item at a position. Default: executed. */
@@ -281,6 +281,14 @@ const PREDICT_ADDRESS = toFunctionSelector("predictAddress(uint256,address)");
 /** The selector of `decimals()` of a token. */
 const DECIMALS = toFunctionSelector("decimals()");
 
+/** The gas of a simulation of the single entry: per anchor slot when the test sets it, else `executionGas`, else `gas`. */
+function singleGasOf(chain: FakeChain, request: CallRequest): bigint {
+  if (chain.executionGasOfSlot === null) return chain.executionGas ?? chain.gas;
+  const decoded = decodeFunctionData({ abi: deliveryRouterAbi, data: request.data });
+  const slot = decoded.functionName === "executeMessage" ? decoded.args[0].anchorHeader.slot : 0n;
+  return chain.executionGasOfSlot(slot);
+}
+
 export function fakeChain(): FakeChain {
   const log: FakeChain["log"] = [];
   const batchLogs = (request: CallRequest): ReceiptLog[] => {
@@ -308,6 +316,7 @@ export function fakeChain(): FakeChain {
     feeTokensOf: null,
     receiptSuccess: true,
     executionGas: null,
+    executionGasOfSlot: null,
     messageIdOfPosition: (position) => word(position + 1),
     batchResult: () => EXECUTED,
     updateResult: EXECUTED,
@@ -322,7 +331,7 @@ export function fakeChain(): FakeChain {
       log.push({ kind: "simulate", request });
       const isSingle = request.data.startsWith(EXECUTE_MESSAGE_SINGLE);
       const isUpdate = request.data.startsWith(UPDATE_SELECTOR);
-      const gas = isSingle ? (chain.executionGas ?? chain.gas) : isUpdate ? (chain.updateGas ?? chain.gas) : chain.gas;
+      const gas = isSingle ? singleGasOf(chain, request) : isUpdate ? (chain.updateGas ?? chain.gas) : chain.gas;
       return chain.simulateOverride?.(request) ?? { ok: true, gas };
     },
     async call(request) {

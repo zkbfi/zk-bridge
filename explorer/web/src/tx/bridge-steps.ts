@@ -1,18 +1,18 @@
 /**
  * The steps of the bridge form for the web page. The plain path is the terminal's own builder (`buildBridgeSteps`), so
- * the calldata of an approval, a relay, a relay with a call, and the same two with a gas limit is the same as the terminal
+ * the calldata of an approval, a relay, and a relay with a call (with its callback gas) is the same as the terminal
  * builds for the same inputs. The tip path changes only three inputs: the receiver becomes the router of the
  * destination chain (the default delivery router, or the one that the user named), the mode becomes "call", and the
  * data becomes the encoded fee director. The page then adds the disclosure that the confirm dialog shows. The wrap route
  * carries no call data, so it never carries a tip.
  */
 import { getAddress, isAddress, type Address, type Hex } from "viem";
-import type { DeliveryCall, RelayGasFacts } from "@zk-bridge/shared";
-import { buildBridgeSteps, NATIVE_CHOICE, relayGasFactsOf, type BridgeContext } from "@terminal/app/actions";
+import { routerCallbackGas, type DeliveryCall } from "@zk-bridge/shared";
+import { buildBridgeSteps, NATIVE_CHOICE, type BridgeContext } from "@terminal/app/actions";
 import { parseUnits, AmountParseError } from "@terminal/format/amounts";
 import type { ChainSide, TokenInfo } from "@terminal/model/types";
 import { encodeDirectorFor } from "@terminal/tx/fee-terms-guard";
-import { PlanInputError, parseAddress, requireGasLimitInRange, type DisplayArgument, type PlannedTransaction } from "@terminal/tx/plan";
+import { PlanInputError, parseAddress, type DisplayArgument, type PlannedTransaction } from "@terminal/tx/plan";
 import type { FlowStep } from "@terminal/flow/transaction-flow";
 import type { DeliverySelection } from "./delivery-selection";
 
@@ -50,12 +50,16 @@ export type BridgeFormValues = {
   readonly mode: "plain" | "call";
   readonly data: string;
   /**
-   * The gas limit of the delivery, as text. Empty means no request: the mediator then uses the default for the message
-   * kind. A number plans the overload of `relayTokens` or `relayTokensAndCall` with a trailing gas limit. The number
-   * must be at least the default of the kind of message (release or deploy, read from the mediator) and at most the
-   * bridge maximum.
+   * The exact gas that the follow-up call of a delivery router gets, as text. It counts only for a tipped relay with a
+   * call, where it is the fifth word of the fee terms; a call needs a number above zero. The callback gas that the
+   * relay passes is worked out from it, never typed.
    */
-  readonly gasLimit: string;
+  readonly callGas: string;
+  /**
+   * The exact gas that `onTokenBridged` gets on the other chain, as text, for a relay with a call that carries no tip.
+   * A plain relay has no gas number, and a tipped relay works the callback gas out from the call gas.
+   */
+  readonly callbackGas: string;
   /**
    * The contract that the delivery router calls after it pays the recipient, as text. Absent or empty means no call. It
    * counts only for a tipped relay to a delivery router.
@@ -91,20 +95,9 @@ const explainRouterReceiver = (argument: DisplayArgument, input: { chainName: st
   return { ...argument, meaning: `${owner} on ${input.chainName}: pays the tip to its reward address, then sends the rest to ${input.recipient}` };
 };
 
-/**
- * Reads the gas limit text of the form. Empty text gives null, which plans the function with no gas limit.
- *
- * @throws PlanInputError when the text is not a whole number above zero, is below the minimum of its kind of message
- * (release, or deploy for a native token with no proof yet, plus the callback gas for a relay with a call), or is above
- * the bridge maximum.
- */
-const parseGasLimitText = (text: string, options: { withCall: boolean; relayGas: RelayGasFacts }): string | null => {
-  const trimmed = text.trim();
-  if (trimmed === "") return null;
-  if (!/^\d+$/.test(trimmed) || BigInt(trimmed) === 0n) throw new PlanInputError("The gas limit must be a whole number above zero, or empty.");
-  requireGasLimitInRange(BigInt(trimmed), options);
-  return trimmed;
-};
+/** True when the form names a call after the delivery: a target or call data, not just spaces. */
+export const hasCallText = (values: Pick<BridgeFormValues, "callTarget" | "callData">): boolean =>
+  (values.callTarget ?? "").trim() !== "" || (values.callData ?? "").trim() !== "";
 
 /**
  * Reads the call fields of the form. Empty target and empty data give null: no call.
@@ -127,14 +120,14 @@ export const parseDeliveryCallText = (values: Pick<BridgeFormValues, "callTarget
 };
 
 /**
- * The values that the terminal builder reads. The gas limit key is present only when the user typed one, and it never
- * rides on the wrap route, which has no such overload. The call fields never go to the terminal builder: the call rides
- * inside the encoded data of a tip.
+ * The values that the terminal builder reads. The callback gas rides only on a relay with a call, never on the wrap route
+ * or a plain relay. The call fields and the call gas never go to the terminal builder: the call rides inside the encoded
+ * data of a tip, and the callback gas of a tip is worked out from the call gas.
  */
-const terminalValuesOf = (values: BridgeFormValues, input: { gasLimit: string | null; isNative: boolean }): Record<string, string> => {
-  const { gasLimit: _text, callTarget: _target, callData: _data, ...rest } = values;
-  if (input.gasLimit === null || input.isNative) return rest;
-  return { ...rest, gasLimit: input.gasLimit };
+const terminalValuesOf = (values: BridgeFormValues, input: { isNative: boolean }): Record<string, string> => {
+  const { callGas: _gas, callbackGas, callTarget: _target, callData: _data, ...rest } = values;
+  if (input.isNative || values.mode === "plain" || callbackGas.trim() === "") return rest;
+  return { ...rest, callbackGas };
 };
 
 /**
@@ -154,7 +147,7 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
   const amount = parseAmountText(values.amount, token === null || token === undefined ? 18 : token.decimals);
   const receiver = parseAddress(values.receiver, "receiver");
   const call = parseDeliveryCallText(values);
-  const terminalValues = terminalValuesOf(values, { gasLimit: parseGasLimitText(values.gasLimit, { withCall: values.mode === "call" || delivery !== null, relayGas: relayGasFactsOf(values, tokens, context) }), isNative });
+  const terminalValues = terminalValuesOf(values, { isNative });
   const amountToken = token === null || token === undefined ? { symbol: `wrapped ${sourceChain.nativeSymbol}`, decimals: 18 } : { symbol: token.symbol, decimals: token.decimals };
 
   if (delivery === null) {
@@ -169,7 +162,9 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
   // The guard of the router runs on the whole data, and it refuses a zero, router, mediator or bridge target.
   const data = encodeDirectorFor(delivery.director, context.pair, { router: delivery.router, destination: destinationChain, destinationToken }, call ?? undefined);
   const deployed = getAddress(delivery.router) === getAddress(delivery.defaultRouter);
-  const steps = buildBridgeSteps({ ...terminalValues, receiver: delivery.router, mode: "call", data }, tokens, context);
+  // The callback gas of a router is worked out here, from the call gas in the terms. The relay passes it as the mediator wants it.
+  const callbackGas = String(routerCallbackGas(call === null ? {} : { callGas: delivery.director.callGas }));
+  const steps = buildBridgeSteps({ ...terminalValues, receiver: delivery.router, mode: "call", data, callbackGas }, tokens, context);
   const adjusted = steps.map((step): FlowStep => ({
     ...step,
     plan:

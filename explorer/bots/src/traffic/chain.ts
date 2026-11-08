@@ -60,14 +60,11 @@ export function approvalData(spender: Address): Hex {
 }
 
 /**
- * The relay with fee terms: the tokens go to the delivery router of the destination, with the encoded director. With a
- * gas limit the relay asks for it (the overload with five arguments); without one the mediator picks its default.
+ * The relay with fee terms: the tokens go to the delivery router of the destination, with the encoded director.
+ * `callbackGas` is the gas that the router gets on the destination; the mediator reverts when it is zero.
  */
-export function relayData(input: { readonly token: Address; readonly router: Address; readonly amount: bigint; readonly terms: Hex; readonly gasLimit?: bigint | null }): Hex {
-  if (input.gasLimit === undefined || input.gasLimit === null) {
-    return encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [input.token, input.router, input.amount, input.terms] });
-  }
-  return encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [input.token, input.router, input.amount, input.terms, input.gasLimit] });
+export function relayData(input: { readonly token: Address; readonly router: Address; readonly amount: bigint; readonly terms: Hex; readonly callbackGas: bigint }): Hex {
+  return encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [input.token, input.router, input.amount, input.terms, input.callbackGas] });
 }
 
 /**

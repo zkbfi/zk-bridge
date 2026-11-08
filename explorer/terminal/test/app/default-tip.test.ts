@@ -126,13 +126,13 @@ describe('the default tip of the form', () => {
   test('the encoding of the default director is abi.encode of the recipient, 4, the limit and the multiplier', () => {
     const director = directorOf(defaultValues)
     const context = { router: FIXTURE_PAIR.second.contracts.deliveryRouter!, protectedAddresses: [], destinationToken: null, destinationWrappedNative: null }
-    const expected = encodeAbiParameters(parseAbiParameters('address, uint256, uint256, uint256'), [getAddress(receiver), 4n, director.limit, director.multiplier])
+    const expected = encodeAbiParameters(parseAbiParameters('address, uint256, uint256, uint256, uint256'), [getAddress(receiver), 4n, director.limit, director.multiplier, 0n])
     expect(encodeFeeDirector(director, context)).toBe(expected)
   })
 
   test('percentage and fixed stay selectable and keep their own numbers', () => {
     const percentage = directorOf({ ...defaultValues, feeMode: 'percentage' })
-    expect(percentage).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 10n ** 15n })
+    expect(percentage).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 10n ** 15n, callGas: 0n })
     const fixed = directorOf({ ...defaultValues, feeMode: 'fixed' })
     expect(fixed.settings).toBe(settingsOf({ mode: 'fixed' }))
     expect(fixed.limit).toBeGreaterThan(0n)

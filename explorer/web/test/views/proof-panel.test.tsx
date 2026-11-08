@@ -130,7 +130,6 @@ describe("messageStage", () => {
     ["waiting_for_finality", null, null, "waiting-for-finality"],
     ["covered", null, null, "covered"],
     ["delivered", null, null, "delivered"],
-    ["failed_call", null, null, "delivered"],
     ["release_failed", null, null, "delivered"],
     ["sent", 10n, 10n, "covered"],
     ["waiting_for_finality", 11n, 10n, "covered"],

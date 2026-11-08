@@ -57,12 +57,9 @@ describe("the traffic calls", () => {
   });
 
   it("relays with the fee terms to the router", () => {
-    const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: relayData({ token: DOLLAR, router: ROUTER, amount: 25n, terms: "0x1234" }) });
+    const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: relayData({ token: DOLLAR, router: ROUTER, amount: 25n, terms: "0x1234", callbackGas: 300_000n }) });
     expect(decoded.functionName).toBe("relayTokensAndCall");
-    expect(decoded.args).toEqual([DOLLAR, ROUTER, 25n, "0x1234"]);
-    expect(relayData({ token: DOLLAR, router: ROUTER, amount: 25n, terms: "0x1234", gasLimit: null })).toBe(relayData({ token: DOLLAR, router: ROUTER, amount: 25n, terms: "0x1234" }));
-    const withLimit = decodeFunctionData({ abi: tokenMediatorAbi, data: relayData({ token: DOLLAR, router: ROUTER, amount: 25n, terms: "0x1234", gasLimit: 9_000_000n }) });
-    expect(withLimit.args).toEqual([DOLLAR, ROUTER, 25n, "0x1234", 9_000_000n]);
+    expect(decoded.args).toEqual([DOLLAR, ROUTER, 25n, "0x1234", 300_000n]);
   });
 
   it("finds the message identifier of the bridge's log", () => {

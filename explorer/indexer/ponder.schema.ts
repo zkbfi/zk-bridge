@@ -22,7 +22,6 @@ export const messages = onchainTable(
     status: t.text().notNull(),
     sender: t.hex(),
     executor: t.hex(),
-    gasLimit: t.integer(),
     dataType: t.integer(),
     data: t.hex(),
     sentTransactionHash: t.hex(),
@@ -33,8 +32,6 @@ export const messages = onchainTable(
     deliveredTransactionHash: t.hex(),
     deliveredBlockNumber: t.bigint(),
     deliveredTimestamp: t.bigint(),
-    /** True when the destination call succeeded, false when it reverted, null before delivery. */
-    deliveredSuccess: t.boolean(),
     /** The account that sent the execution transaction. */
     executedBy: t.hex(),
     /** The slot of the first stored head that covered this message, or null. */

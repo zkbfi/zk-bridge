@@ -88,11 +88,7 @@ The destination light client stored a head at or after the block of your send. A
 
 ### Delivered
 
-The destination bridge ran the message, and the call succeeded. For a token transfer, the tokens reached the recipient.
-
-### Failed call
-
-The destination bridge ran the message, but the call to the target reverted. This outcome is final. The bridge does not retry and does not refund. The page Sending messages explains why.
+The destination bridge ran the message. For a token transfer, the tokens reached the recipient. A delivery that fails, because the target reverts or the gas runs out, reverts as a whole and leaves no record, so the message stays Covered until someone delivers it again. There is no failed-delivery status. If only the call after the delivery fails, the delivery still completes and the recipient keeps the tokens.
 
 ### Release failed
 

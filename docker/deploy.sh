@@ -6,7 +6,7 @@
 #   2. Install the EIP-4788 contract on chain A, so the deposit gate there can run in Enforcing mode.
 #   3. Deploy a wrapped native token, a test token and the oracle verifier on each chain.
 #   4. Run script/hardened/DeployBridge.s.sol with a configuration made from docker/bridge.config.template.json.
-#      It deploys the light client, the gate, the message bridge, the token mediator (which creates its token factory)
+#      It deploys the light client, the gate, the libraries, the message bridge, the token factory, the token mediator
 #      and the native coin router on each chain.
 #   5. Read every relationship back from the chains.
 #   6. Write /state/deployment.json.
@@ -151,18 +151,19 @@ BRIDGE_CONFIG="$config" forge script script/hardened/DeployBridge.s.sol --tc Dep
   || { cat "$STATE_DIR/forge-script.log" >&2; fail "the deploy script failed"; }
 
 # Both chains have no fork registry (chain A enforces, chain B only detects), so the script deploys in this order: the
-# light client at the nonce, then the gate, the message bridge and the token mediator. The local configuration deploys no
-# delivery router. The mediator creates the token factory as its first contract, so the factory takes no nonce of the deployer.
+# light client at the nonce, then the gate, the three libraries of the bridge (ReceiptProofLib, OpeningProofLib,
+# BeaconLayoutLib), the message bridge, the library of the mediator (MediatorPayloads), the token factory and the token
+# mediator. The local configuration deploys no delivery router. The table is in script/hardened/DeployBridge.s.sol.
 LIGHT_CLIENT_A="$(compute_address "$DEPLOYER" "$NONCE_A")"
 GATE_A="$(compute_address "$DEPLOYER" $((NONCE_A + 1)))"
-BRIDGE_A="$(compute_address "$DEPLOYER" $((NONCE_A + 2)))"
-MEDIATOR_A="$(compute_address "$DEPLOYER" $((NONCE_A + 3)))"
-FACTORY_A="$(compute_address "$MEDIATOR_A" 1)"
+BRIDGE_A="$(compute_address "$DEPLOYER" $((NONCE_A + 5)))"
+FACTORY_A="$(compute_address "$DEPLOYER" $((NONCE_A + 7)))"
+MEDIATOR_A="$(compute_address "$DEPLOYER" $((NONCE_A + 8)))"
 LIGHT_CLIENT_B="$(compute_address "$DEPLOYER" "$NONCE_B")"
 GATE_B="$(compute_address "$DEPLOYER" $((NONCE_B + 1)))"
-BRIDGE_B="$(compute_address "$DEPLOYER" $((NONCE_B + 2)))"
-MEDIATOR_B="$(compute_address "$DEPLOYER" $((NONCE_B + 3)))"
-FACTORY_B="$(compute_address "$MEDIATOR_B" 1)"
+BRIDGE_B="$(compute_address "$DEPLOYER" $((NONCE_B + 5)))"
+FACTORY_B="$(compute_address "$DEPLOYER" $((NONCE_B + 7)))"
+MEDIATOR_B="$(compute_address "$DEPLOYER" $((NONCE_B + 8)))"
 # A name is a hypothesis: read each relationship back from the chain. Each bridge names the bridge and the light client
 # of the OTHER chain, and starts locked: it refuses sends until a stateful server opens it with `openDeposits`. Each
 # mediator names its bridge and its twin on the other chain.

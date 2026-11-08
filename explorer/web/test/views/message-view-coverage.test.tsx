@@ -11,9 +11,9 @@ import { never, renderWithServices } from "./support";
 const feed = buildFixtureFeed(FIXTURE_NOW);
 const fixtureClient = createFixtureIndexerClient();
 
-// 16.89 USDC from Ethereum to PulseChain, delivered; and a plain call that reverted on delivery.
+// 16.89 USDC from Ethereum to PulseChain, delivered; and a plain call that was delivered.
 const tokenItem = feed.find((item) => item.kind === "token" && item.status === "delivered" && item.direction === "first-to-second")!;
-const callItem = feed.find((item) => item.kind === "message" && item.status === "failed_call")!;
+const callItem = feed.find((item) => item.kind === "message" && item.status === "delivered")!;
 
 const detailOf = async (id: MessageDetail["id"]): Promise<MessageDetail> => (await fixtureClient.message(id))!;
 
@@ -137,7 +137,7 @@ describe("the message page, a token transfer", () => {
     expect(within(row("Target app")).getByRole("link")).toHaveAttribute("href", `#/explore/contract/${FIXTURE_PAIR.second.chainId}/${FIXTURE_PAIR.second.contracts.tokenMediator}`);
     expect(container.textContent).not.toMatch(/token ?mediator/i);
     expect(row("Nonce")).toHaveTextContent("—");
-    expect(row("Gas limit")).toHaveTextContent("2,000,000");
+    expect(screen.queryByText("Gas limit")).toBeNull();
   });
 
   it("opens the delivery step to its transaction and what it paid out, and the payload to its bytes", async () => {
@@ -157,15 +157,14 @@ describe("the message page, a token transfer", () => {
     expect(screen.getByText(detail.data!)).toBeInTheDocument();
   });
 
-  it("shows — for what the indexer did not record: the user, the delivered amount and block, who delivered, the gas limit and the payload", async () => {
+  it("shows — for what the indexer did not record: the user, the delivered amount and block, who delivered and the payload", async () => {
     const detail = await detailOf(tokenItem.id);
-    renderDetail({ ...detail, gasLimit: null, executedBy: null, data: null, destinationTransactionHash: null, transfer: { ...detail.transfer!, sender: null, deliveredValue: null } });
+    renderDetail({ ...detail, executedBy: null, data: null, destinationTransactionHash: null, transfer: { ...detail.transfer!, sender: null, deliveredValue: null } });
     await screen.findByText("Token transfer");
     expect(row("From")).toHaveTextContent(/^From—$/);
     expect(row(/^Received on/).querySelector(".zb-xv")).toHaveTextContent(/^—$/);
     expect(within(row(/^Received on/)).queryByRole("link")).toBeNull();
     expect(row("Delivered by")).toHaveTextContent(/^Delivered by—$/);
-    expect(row("Gas limit")).toHaveTextContent(/^Gas limit—$/);
     expect(row("Payload")).toHaveTextContent(/^Payload—$/);
     const step = screen.getByRole("button", { name: /Delivered on PulseChain/ });
     await userEvent.click(step);
@@ -174,7 +173,7 @@ describe("the message page, a token transfer", () => {
 
   it("waits on the steps not reached, offers to prove and deliver it, and names a target that is not the deployment's by its address", async () => {
     const detail = await detailOf(tokenItem.id);
-    renderDetail({ ...detail, status: "waiting_for_finality", coveredByHeadSlot: null, coveredAt: null, deliveredAt: null, destinationTransactionHash: null, deliverySucceeded: null, executedBy: null, executor: tokenItem.recipient, transfer: { ...detail.transfer!, deliveredValue: null } });
+    renderDetail({ ...detail, status: "waiting_for_finality", coveredByHeadSlot: null, coveredAt: null, deliveredAt: null, destinationTransactionHash: null, executedBy: null, executor: tokenItem.recipient, transfer: { ...detail.transfer!, deliveredValue: null } });
     expect(await screen.findByRole("region", { name: "Proof and delivery" })).toBeInTheDocument();
     expect(screen.getAllByText("waiting", { selector: ".zb-step-time" })).toHaveLength(3);
     expect(row("Target app")).toHaveTextContent(/^Target app0x00000000…ABC0$/);
@@ -188,7 +187,6 @@ describe("the message page, a token transfer", () => {
     expect(await screen.findByText("Release failed on PulseChain")).toBeInTheDocument();
     expect(screen.getByText("Reason").nextSibling).toHaveTextContent("the mediator could not release the tokens; final");
     expect(container.querySelector('.zb-trail-drawer[data-tone="error"]')).not.toBeNull();
-    expect(screen.queryByRole("button", { name: /Retry with more gas/ })).toBeNull();
   });
 
   it("names a chain that is not in the pair by its identifier", async () => {
@@ -258,7 +256,7 @@ describe("the message page, a contract call", () => {
     renderDetail(detail);
     expect(await screen.findByText("Contract call")).toBeInTheDocument();
     expect(screen.getByText("Message", { selector: ".zb-xband-big" })).toBeInTheDocument();
-    expect(screen.getByText("failed", { selector: ".zb-xtag" })).toBeInTheDocument();
+    expect(screen.getByText("delivered", { selector: ".zb-xtag" })).toBeInTheDocument();
     expect(within(row("From")).getByRole("link")).toHaveAttribute("href", `#/explore/address/${callItem.sender}`);
     expect(within(row("Calls")).getByRole("link")).toHaveAttribute("href", `#/explore/address/${callItem.recipient}`);
     expect(row("Function")).toHaveTextContent(detail.data!.slice(0, 10));
@@ -273,31 +271,36 @@ describe("the message page, a contract call", () => {
     const first = renderDetail({ ...detail, data: transfer.data });
     expect(await screen.findByText(/^handleBridgedTokens\(/)).toBeInTheDocument();
     first.unmount();
-    renderDetail({ ...detail, data: null, gasLimit: null });
+    renderDetail({ ...detail, data: null });
     await screen.findByText("Contract call");
-    for (const key of ["Function", "Arguments", "Gas limit", "Payload"]) expect(row(key)).toHaveTextContent(/—$/);
+    for (const key of ["Function", "Arguments", "Payload"]) expect(row(key)).toHaveTextContent(/—$/);
   });
 
-  it("opens the reverted step with a red top line and its reason, and offers a retry that is not wired yet", async () => {
-    const detail = await detailOf(callItem.id);
-    const { container } = renderDetail(detail);
-    const step = await screen.findByRole("button", { name: /Call reverted on PulseChain/ });
+  it("opens a failed release with a red top line and its reason, and shows the gas that the delivery used", async () => {
+    const detail = await detailOf(tokenItem.id);
+    const { container } = renderDetail({ ...detail, status: "release_failed", releaseFailed: true });
+    const step = await screen.findByRole("button", { name: /Release failed on PulseChain/ });
     expect(step).toHaveAttribute("aria-expanded", "true");
     expect(step.closest("li")).toHaveAttribute("data-state", "now");
     expect(container.querySelector('.zb-trail-drawer[data-tone="error"]')).not.toBeNull();
-    expect(screen.getByText("Reason").nextSibling).toHaveTextContent("—");
-    expect(screen.getByText("Gas used").nextSibling).toHaveTextContent("210,000 of 2,000,000");
-    expect(screen.getByRole("button", { name: /Retry with more gas/ })).toBeDisabled();
-    expect(screen.getByRole("link", { name: "Open the call" })).toHaveAttribute("href", `#/explore/tx/${FIXTURE_PAIR.second.chainId}/${callItem.destinationTransactionHash}`);
+    expect(screen.getByText("Reason").nextSibling).toHaveTextContent("the mediator could not release the tokens; final");
+    expect(screen.getByText("Gas used").nextSibling).toHaveTextContent(/^210,000$/);
   });
 
-  it("leaves out the link to the call while its transaction is unknown, and the gas limit from the reason", async () => {
-    const detail = await detailOf(callItem.id);
-    renderDetail({ ...detail, destinationTransactionHash: null, gasLimit: null, costs: null });
-    await screen.findByText("Contract call");
+  it("shows — for the gas and the cost of a failed release that the indexer has no costs for", async () => {
+    const detail = await detailOf(tokenItem.id);
+    renderDetail({ ...detail, status: "release_failed", releaseFailed: true, destinationTransactionHash: null, costs: null });
+    await screen.findByText("Release failed on PulseChain");
     await waitFor(() => expect(screen.getByText("Gas used").nextSibling).toHaveTextContent(/^—$/));
-    const reverted = [...document.querySelectorAll("button.zb-trail-row")].find((button) => /Call reverted/.test(button.textContent ?? ""))!;
-    expect(within(reverted.closest("li")!).getByText("Cost").nextSibling).toHaveTextContent(/^—$/);
-    expect(screen.queryByRole("link", { name: "Open the call" })).toBeNull();
+    const failed = [...document.querySelectorAll("button.zb-trail-row")].find((button) => /Release failed/.test(button.textContent ?? ""))!;
+    expect(within(failed.closest("li")!).getByText("Cost").nextSibling).toHaveTextContent(/^—$/);
+  });
+
+  it("says that the call after the delivery failed, and still counts the transfer as delivered", async () => {
+    const detail = await detailOf(tokenItem.id);
+    renderDetail({ ...detail, callbackFailed: true });
+    const step = await screen.findByRole("button", { name: /Delivered on PulseChain, the call after it failed/ });
+    expect(step.closest("li")).not.toHaveAttribute("data-state", "now");
+    expect(document.querySelector('.zb-trail-drawer[data-tone="error"]')).toBeNull();
   });
 });

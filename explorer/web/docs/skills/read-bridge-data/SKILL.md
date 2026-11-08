@@ -48,7 +48,7 @@ Conventions: every endpoint is a GET and answers JSON; errors answer `{ "error":
 | `GET /api/history`, `/api/tx/:chainId/:hash`, `/api/gate`, `/api/registry`, `/api/tokens`, `/api/escrow`, `/api/audit`, `/api/release-events`, `/api/light-client-costs` | History events, one transaction's cost, deposit gate state, fork versions, tokens, escrow balances, the escrow audit, failed releases, update costs. The full contract is in the indexer's readme in the source repository. |
 | `GET /health`, `/ready`, `/status`, `/metrics` | Ponder's own endpoints. |
 
-Statuses are `sent`, `waiting_for_finality`, `covered`, `delivered`, `failed_call` and `release_failed` (see `check-transfer-status` for each meaning). In flight is the first three.
+Statuses are `sent`, `waiting_for_finality`, `covered`, `delivered` and `release_failed` (see `check-transfer-status` for each meaning). In flight is the first three.
 
 Search (`GET /api/search?q=<text>`): `q` is 1 to 200 characters. A 32 byte value is read as a message id and a transaction hash; a 20 byte value as an address (a deployment contract by role, a bridged token, or an address with its transfer count); `0x` and 6 to 63 hex digits as a prefix; a word as a token symbol or name; digits as a proof, slot or block; `bafy...` or `Qm...` as a release CID; a name such as `name.eth` gives `unsupported: "name"`. Each result is `{ id, kind, title, subtitle, confirmed, chainId, addressType, target, links, rank }`; `confirmed` is false when only the shape fits.
 
@@ -123,7 +123,7 @@ const resolution = await resolve(messageId, {
 ## Expected result
 
 - `/api/feed?limit=50` returns up to 50 items and a `nextCursor` string, or `null` on the last page.
-- A feed item has `messageId`, `kind`, `status`, `direction`, `sender`, `executor`, `gasLimit`, `sentLogIndex`, `sent`, `covered`, `delivered`, `callbackFailed`, `releaseFailed` and `transfer`. `sent`, `covered`, `delivered` and `transfer` are null when they do not apply.
+- A feed item has `messageId`, `kind`, `status`, `direction`, `sender`, `executor`, `sentLogIndex`, `sent`, `covered`, `delivered`, `callbackFailed`, `releaseFailed` and `transfer`. `sent`, `covered`, `delivered` and `transfer` are null when they do not apply.
 - `/api/heads` returns `{ heads: [...] }` with one entry for each side. `lagSeconds` of a few thousand on the testnet pair was normal on 2026-11-06 (2,360 s and 4,152 s).
 - `resolve` of a message id returns a result of kind `message` with `confirmed: true` when the indexer knows it.
 

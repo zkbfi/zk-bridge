@@ -31,22 +31,19 @@ describe("the message form", () => {
     renderForm();
     await userEvent.selectOptions(screen.getByLabelText("Send from"), "second");
     expect(screen.getByLabelText("Target contract on Ethereum")).toBeInTheDocument();
-    expect(screen.getByLabelText("Gas for the call on Ethereum")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Gas for the call/)).toBeNull();
     await pasteTarget(TARGET);
     expect(await screen.findByText("Sends from PulseChain. You see every detail before your wallet opens.")).toBeInTheDocument();
   });
 
-  it("plans the call on the chain of the sender, with the data and the gas that the user typed", async () => {
+  it("plans the call on the chain of the sender, with the data that the user typed and no gas number", async () => {
     const { onReview } = renderForm();
     await userEvent.selectOptions(screen.getByLabelText("Send from"), "second");
     await pasteTarget(TARGET);
     await userEvent.click(screen.getByLabelText("Call data"));
     await userEvent.paste("0xabcd");
-    const gas = screen.getByLabelText(/^Gas for the call on/);
-    await userEvent.clear(gas);
-    await userEvent.type(gas, "300000");
     expect(screen.getByLabelText("Call data")).toHaveValue("0xabcd");
-    expect(gas).toHaveValue("300000");
+    expect(screen.getByText(/The call gets all the gas of the delivery, so there is no gas number to set/)).toBeInTheDocument();
     const review = screen.getByRole("button", { name: "Review transaction" });
     await waitFor(() => expect(review).toBeEnabled());
     await userEvent.click(review);
@@ -54,17 +51,8 @@ describe("the message form", () => {
     expect(steps).toHaveLength(1);
     expect(steps[0]!.plan.chain.chainId).toBe(FIXTURE_PAIR.second.chainId);
     expect(steps[0]!.plan.functionName).toBe("requireToPassMessage");
+    expect(steps[0]!.plan.arguments.find((argument) => argument.name === "gas")?.value).toBe("0");
     expect(steps[0]!.disclosure.delivery).toBeNull();
-  });
-
-  it("disables Review and says why when the gas is not a whole number", async () => {
-    renderForm();
-    await pasteTarget(TARGET);
-    const gas = screen.getByLabelText(/^Gas for the call on/);
-    await userEvent.clear(gas);
-    await userEvent.type(gas, "12.5");
-    expect(screen.getByRole("button", { name: "Review transaction" })).toBeDisabled();
-    expect(screen.getByText("The gas must be a whole number.")).toBeInTheDocument();
   });
 
   it("disables Review and shows the reason when the target is not an address", async () => {

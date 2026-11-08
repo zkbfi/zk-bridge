@@ -15,7 +15,7 @@ import {MessageRecorder} from "./utils/MessageTargets.sol";
 /// agree: deliver when Rust accepts (the target sees the data and the context), reject when Rust rejects.
 ///
 /// The fixtures carry a fixed fork schedule, while the bridge validates its layouts from stored light-client data. The
-/// test therefore seeds the bridge's three layout tables directly in storage (slots 6, 7 and 8), with the slot ranges
+/// test therefore seeds the bridge's three layout tables directly in storage (slots 4, 5 and 6), with the slot ranges
 /// that the schedule implies. The self-validation itself is covered by `ForkLayout.t.sol`.
 ///
 /// Every fixture runs against a new bridge, so no delivery mark carries over. The target sits at the address that the
@@ -27,9 +27,9 @@ contract LightClientFixturesTest is Test {
     string internal constant DIRECTORY = "light-client/tests/fixtures/message";
     /// @dev The storage slots of the layout tables of `MessageBridge`, as `forge inspect MessageBridge storage-layout`
     /// reports them. `test_R2_04_layoutSlotsAreThoseOfTheBridge` pins them.
-    uint256 internal constant STATE_LAYOUTS_SLOT = 6;
-    uint256 internal constant BODY_LAYOUTS_SLOT = 7;
-    uint256 internal constant HISTORICAL_LAYOUTS_SLOT = 8;
+    uint256 internal constant STATE_LAYOUTS_SLOT = 4;
+    uint256 internal constant BODY_LAYOUTS_SLOT = 5;
+    uint256 internal constant HISTORICAL_LAYOUTS_SLOT = 6;
     /// @dev The number of fixture files the Rust reference writes. A change in the set must be a deliberate change here.
     uint256 internal constant EXPECTED_FIXTURE_COUNT = 100;
     /// @dev The bridge never calls its deposit gate during `executeMessage`, so any non-zero address stands in for it.
@@ -158,8 +158,7 @@ contract LightClientFixturesTest is Test {
             string.concat("transaction hash in ", path)
         );
         assertEq(last.dataHash, keccak256(vm.parseJsonBytes(json, string.concat(message, ".data"))), string.concat("data in ", path));
-        uint256 gasLimit = vm.parseUint(vm.parseJsonString(json, string.concat(message, ".gasLimit")));
-        assertLe(last.gasAtEntry, gasLimit, string.concat("target gas within the limit in ", path));
+        // The gas field of the fixture is not a limit any more: the target gets all the gas that is left.
         assertTrue(bridge.messageCallStatus(id), string.concat("call status true in ", path));
         assertEq(bridge.failedMessageDataHash(id), bytes32(0), string.concat("no failure record in ", path));
     }
@@ -288,7 +287,6 @@ contract LightClientFixturesTest is Test {
     ) internal returns (MessageBridge) {
         return new MessageBridge(
             address(client),
-            localChain,
             remoteChain,
             remoteBridge,
             MessageBridge.BridgeTerms(0, makeAddr("remote light client"), gloasForkSlot),

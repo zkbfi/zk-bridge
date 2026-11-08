@@ -91,7 +91,7 @@ const PAGE_SIZE = 100;
  * Skip reasons that the next sweep can settle at once: they compare numbers that change with each block, or (anchor not
  * stored) wait for a light client update that may land any moment.
  */
-const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit", "gas-limit-unknown", "no-price-for-fee-token", "anchor-not-stored"]);
+const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit", "no-price-for-fee-token", "anchor-not-stored"]);
 
 /** Builds the runner. It keeps in memory only caches that a restart may lose; the state file keeps what must last. */
 export function createRunner(dependencies: RunnerDependencies): Runner {

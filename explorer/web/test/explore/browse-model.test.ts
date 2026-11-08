@@ -68,7 +68,7 @@ describe("the request a state makes", () => {
     const query = `from=second&status=failed&kind=message&since=7d&token=${TOKEN}&account=${ADDRESS}`;
     expect(request("transfers", query)).toMatchObject({
       direction: `${pair.second.chainId}>${pair.first.chainId}`,
-      status: "failed_call,release_failed",
+      status: "release_failed",
       kind: "message",
       token: ADDRESS,
       address: ADDRESS,

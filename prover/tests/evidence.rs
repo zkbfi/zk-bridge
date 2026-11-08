@@ -357,13 +357,8 @@ fn serve_destination(world: &World, state: DestinationState) -> String {
                 )
             }
             MessageBridgeContract::failedMessageDataHashCall::SELECTOR => {
-                // A failed call leaves the keccak256 of its data. Nothing else leaves a value.
-                let hash = if state.delivery == DeliveryStatus::Failed {
-                    keccak256(message_fields().data)
-                } else {
-                    B256::ZERO
-                };
-                MessageBridgeContract::failedMessageDataHashCall::abi_encode_returns(&hash)
+                // The bridge keeps no failure record: a failed delivery reverts. The view always answers zero.
+                MessageBridgeContract::failedMessageDataHashCall::abi_encode_returns(&B256::ZERO)
             }
             MessageBridgeContract::stateLayoutsCall::SELECTOR => {
                 MessageBridgeContract::stateLayoutsCall::abi_encode_returns(&state.state_rows)
@@ -576,17 +571,13 @@ fn the_evidence_names_the_message_and_carries_the_execute_calldata() {
     );
 }
 
-/// Claim: a message that the bridge executed is reported with its status, and the rest of the evidence is unchanged. A
-/// success and a failure both count as delivered, because the mark is final. The status reads from `messageCallStatus` and
-/// `failedMessageDataHash`.
+/// Claim: a message that the bridge executed is reported with its status, and the rest of the evidence is unchanged. The
+/// status reads from `messageCallStatus`: a delivery whose call failed reverted, so there is no failed status.
 /// Why it matters: a server that sends the proof of an executed message wastes gas on a revert.
 #[test]
 fn an_executed_message_is_reported_with_its_status() {
     let world = world();
-    for (delivery, word) in [
-        (DeliveryStatus::Succeeded, "succeeded"),
-        (DeliveryStatus::Failed, "failed"),
-    ] {
+    for (delivery, word) in [(DeliveryStatus::Succeeded, "succeeded")] {
         let state = DestinationState {
             delivery,
             ..DestinationState::complete()

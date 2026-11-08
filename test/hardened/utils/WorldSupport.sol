@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {MediatorBuild} from "./MediatorBuild.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {BeaconLightClient} from "../../../src/hardened/BeaconLightClient.sol";
 import {AmbMessageCodec} from "../../../src/hardened/AmbMessageCodec.sol";
@@ -59,34 +60,33 @@ abstract contract WorldSupport is GateSupport, DynamicProofs {
     /// @param gateOfB The gate that the bridge of chain B calls on every send.
     function _deployWorld(address gateOfA, address gateOfB) internal {
         uint256 nonce = vm.getNonce(address(this));
+        // Each mediator takes two creations: its factory, then itself (`MediatorBuild`).
         address predictedBridgeA = vm.computeCreateAddress(address(this), nonce);
-        address predictedMediatorA = vm.computeCreateAddress(address(this), nonce + 1);
-        address predictedBridgeB = vm.computeCreateAddress(address(this), nonce + 2);
-        address predictedMediatorB = vm.computeCreateAddress(address(this), nonce + 3);
+        address predictedMediatorA = MediatorBuild.predictMediator(address(this), nonce + 1);
+        address predictedBridgeB = vm.computeCreateAddress(address(this), nonce + 1 + MediatorBuild.CREATIONS);
+        address predictedMediatorB = MediatorBuild.predictMediator(address(this), nonce + 2 + MediatorBuild.CREATIONS);
 
         vm.chainId(CHAIN_A);
         bridgeA = new MessageBridge(
             address(lightClientForA),
-            CHAIN_A,
             CHAIN_B,
             predictedBridgeB,
             MessageBridge.BridgeTerms(0, address(lightClientForB), type(uint64).max),
             DEFAULT_CAPELLA_ERA,
             gateOfA
         );
-        mediatorA = new TokenMediator(_mediatorTerms(address(bridgeA), predictedMediatorB, CHAIN_B));
+        mediatorA = MediatorBuild.deploy(_mediatorTerms(address(bridgeA), predictedMediatorB), "Chain B");
 
         vm.chainId(CHAIN_B);
         bridgeB = new MessageBridge(
             address(lightClientForB),
-            CHAIN_B,
             CHAIN_A,
             predictedBridgeA,
             MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max),
             DEFAULT_CAPELLA_ERA,
             gateOfB
         );
-        mediatorB = new TokenMediator(_mediatorTerms(address(bridgeB), predictedMediatorA, CHAIN_A));
+        mediatorB = MediatorBuild.deploy(_mediatorTerms(address(bridgeB), predictedMediatorA), "Chain A");
 
         assertEq(address(bridgeA), predictedBridgeA, "the nonce order of the world: bridge A");
         assertEq(address(mediatorA), predictedMediatorA, "the nonce order of the world: mediator A");
@@ -99,15 +99,13 @@ abstract contract WorldSupport is GateSupport, DynamicProofs {
     }
 
     /// @dev Mediator terms with no flow limiter.
-    function _mediatorTerms(address bridge_, address remoteMediator, uint256 remoteChainId)
+    function _mediatorTerms(address bridge_, address remoteMediator)
         internal
         pure
         returns (TokenMediator.MediatorTerms memory terms)
     {
         terms.bridge = bridge_;
         terms.remoteMediator = remoteMediator;
-        terms.remoteChainId = remoteChainId;
-        terms.remoteChainName = remoteChainId == CHAIN_A ? "Chain A" : "Chain B";
     }
 
     // ---------------------------------------------------------------- proofs and delivery

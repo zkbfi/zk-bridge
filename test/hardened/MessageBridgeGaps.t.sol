@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {MediatorBuild} from "./utils/MediatorBuild.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
@@ -251,10 +252,10 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
         vm.chainId(CHAIN_B);
         MessageBridge.BridgeTerms memory terms = MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max);
         MessageBridge zero = new MessageBridge(
-            address(lightClientForB), CHAIN_B, CHAIN_A, MessageFixtures.REMOTE_BRIDGE, terms, 0, address(gateB)
+            address(lightClientForB), CHAIN_A, MessageFixtures.REMOTE_BRIDGE, terms, 0, address(gateB)
         );
         MessageBridge later = new MessageBridge(
-            address(lightClientForB), CHAIN_B, CHAIN_A, MessageFixtures.REMOTE_BRIDGE, terms, 758, address(gateB)
+            address(lightClientForB), CHAIN_A, MessageFixtures.REMOTE_BRIDGE, terms, 758, address(gateB)
         );
         assertEq(zero.capellaEra(), 0);
         assertEq(later.capellaEra(), 758);
@@ -301,7 +302,7 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
 
     // ================================================================ the order of the checks of a send
 
-    /// Claim: a send checks in this order: the lock, the cutoff, the gas range, the selector, the gate. Shows: with every
+    /// Claim: a send checks in this order: the lock, the cutoff, the selector, the gate. Shows: with every
     /// check failing at once, the errors come one by one as each earlier check is satisfied: closed lock, then cutoff
     /// reached, then gas out of range, then a forbidden selector, then the refusal of the gate. The gate is never
     /// called before it. Matters: the order is part of the contract. The retired vault ran the gate FIRST. The message
@@ -311,7 +312,7 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
         gate.setRefusing(true);
         bytes memory forbidden = abi.encodePacked(bytes4(0xa9059cbb), new bytes(64));
 
-        // Lock first: closed, cutoff reached, bad gas, bad selector, refusing gate.
+        // Lock first: closed, cutoff reached, bad selector, refusing gate.
         uint64 cutoff = uint64(block.timestamp + 100);
         MessageBridge closing = _deploySourceBridge(cutoff, address(gate));
         vm.warp(cutoff);
@@ -323,14 +324,10 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
         vm.expectRevert(abi.encodeWithSelector(MessageBridge.SendCutoffReached.selector, cutoff));
         closing.requireToPassMessage(address(0), forbidden, 5);
 
-        // Gas range third: no cutoff, bad gas, bad selector, refusing gate.
+        // Selector third: no cutoff, any gas (the bridge reads none), bad selector, refusing gate.
         MessageBridge open = _redeployWithGate(address(gate));
-        vm.expectRevert(abi.encodeWithSelector(MessageBridge.GasOutOfRange.selector, 5, 100, 10_000_000));
-        open.requireToPassMessage(address(0), forbidden, 5);
-
-        // Selector fourth: good gas, bad selector, refusing gate.
         vm.expectRevert(abi.encodeWithSelector(MessageBridge.ForbiddenSelector.selector, bytes4(0xa9059cbb)));
-        open.requireToPassMessage(address(0), forbidden, 100_000);
+        open.requireToPassMessage(address(0), forbidden, 5);
 
         // The gate last: everything else is fine.
         assertEq(gate.calls(), 0, "no earlier check reached the gate");
@@ -364,8 +361,8 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
         gated.requireToConfirmMessage(MessageFixtures.TARGET_RECORDER, hex"c0ffee", 100);
         gated.requireToPassMessage(address(0), abi.encodePacked(bytes4(0x12345678), hex"c0ffee0102"), 500_000);
 
-        vm.expectRevert(abi.encodeWithSelector(MessageBridge.GasOutOfRange.selector, 5, 100, 10_000_000));
-        gated.requireToPassMessage(address(0), "", 5);
+        vm.expectRevert(abi.encodeWithSelector(MessageBridge.ForbiddenSelector.selector, bytes4(0xa9059cbb)));
+        gated.requireToPassMessage(address(0), abi.encodePacked(bytes4(0xa9059cbb)), 5);
 
         assertEq(gate.admissionCount(), 4, "one admission per successful send and none for the failed one");
         for (uint256 i = 0; i < 4; i++) {
@@ -403,7 +400,6 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
         vm.chainId(CHAIN_B);
         second = new MessageBridge(
             address(lightClientForB),
-            CHAIN_B,
             CHAIN_A,
             MessageFixtures.REMOTE_BRIDGE,
             MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max),
@@ -470,8 +466,8 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
     }
 
     /// Claim: the token mediator refuses a handler call from a second bridge. Shows: a message to the mediator that
-    /// the second bridge delivers fails (the delivery is marked failed, with the data hash and the receiver, and the
-    /// mediator changed nothing); a direct call from the second bridge reverts with `NotBridge` and the address of
+    /// the second bridge delivers reverts with `NotBridge` (the message stays undelivered there, and the mediator
+    /// changed nothing); a direct call from the second bridge reverts with `NotBridge` and the address of
     /// that bridge; the same message through the bridge that the mediator trusts is accepted and changes the mediator.
     /// Matters: the message layer cannot tell a target which bridge to trust. The mediator checks `msg.sender` against its own
     /// bridge, so a bridge that anyone deployed cannot reach its handlers.
@@ -481,9 +477,7 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
         TokenMediator.MediatorTerms memory terms;
         terms.bridge = address(bridge);
         terms.remoteMediator = MessageFixtures.SENDER;
-        terms.remoteChainId = CHAIN_A;
-        terms.remoteChainName = "Chain A";
-        TokenMediator mediator = new TokenMediator(terms);
+        TokenMediator mediator = MediatorBuild.deploy(terms, "Chain A");
         MessageBridge second = _secondBridge();
 
         bytes memory handler = abi.encodeCall(TokenMediator.handleNativeTokens, (address(token), address(0xB0B), 0));
@@ -501,10 +495,9 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
         vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotBridge.selector, address(second)));
         mediator.handleNativeTokens(address(token), address(0xB0B), 0);
 
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.NotBridge.selector, address(second)));
         second.executeMessage(proof);
-        assertFalse(second.messageCallStatus(id), "the call from the second bridge failed");
-        assertEq(second.failedMessageReceiver(id), address(mediator));
-        assertEq(second.failedMessageDataHash(id), keccak256(handler));
+        assertFalse(second.messageCallStatus(id), "the delivery through the second bridge reverted and left nothing");
         assertFalse(mediator.isBridgedTokenDeployAcknowledged(address(token)), "the mediator changed nothing");
 
         bridge.executeMessage(proof);

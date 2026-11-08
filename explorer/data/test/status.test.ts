@@ -27,8 +27,9 @@ describe("deriveStatus", () => {
   it("delivery wins even when the covering head arrived after the delivery in indexing order", () => {
     expect(deriveStatus(facts({ delivery: "succeeded", coveredByHead: false }))).toBe("delivered");
   });
-  it("is failed_call when the target reverted, and the failure is final", () => {
-    expect(deriveStatus(facts({ delivery: "failed", releaseFailed: true }))).toBe("failed_call");
+  it("has no failed_call status: a delivery that fails reverts and leaves the message undelivered", () => {
+    expect(MESSAGE_STATUSES).not.toContain("failed_call");
+    expect(deriveStatus(facts({ delivery: "none", coveredByHead: true }))).toBe("covered");
   });
   it("has no fallback_used status: the mediator pays only the recipient", () => {
     expect(MESSAGE_STATUSES).not.toContain("fallback_used");

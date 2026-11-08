@@ -13,6 +13,8 @@ import {ITokenParameters} from "./ITokenParameters.sol";
 contract TokenFactory is ITokenParameters {
     /// @notice Only the mediator may deploy.
     error NotMediator(address caller);
+    /// @notice The name of the home chain is longer than 32 bytes, so it does not fit in one immutable word.
+    error HomeChainNameTooLong(uint256 length);
 
     /// @dev What the token constructor reads while a deployment runs.
     struct Parameters {
@@ -24,17 +26,32 @@ contract TokenFactory is ITokenParameters {
     /// @notice The only account that may call `deploy`, and the only account that may mint and burn the copies.
     address public immutable mediator;
 
-    /// @notice The name of the chain where the native tokens of this factory live. The mediator adds it to the name of
-    /// each copy. It is set in the constructor and nothing changes it.
-    string public homeChainName;
+    /// @dev The name of the chain where the native tokens of this factory live, left aligned in one word, and its
+    /// length. Both are immutable: they are part of the code, not of the storage.
+    bytes32 private immutable _homeChainNameWord;
+    uint256 private immutable _homeChainNameLength;
 
     Parameters private _pending;
 
     /// @param mediator_ The mediator that owns the factory.
-    /// @param homeChainName_ The name of the other chain, where the native tokens live.
+    /// @param homeChainName_ The name of the other chain, where the native tokens live. At most 32 bytes.
     constructor(address mediator_, string memory homeChainName_) {
+        uint256 length = bytes(homeChainName_).length;
+        if (length > 32) revert HomeChainNameTooLong(length);
         mediator = mediator_;
-        homeChainName = homeChainName_;
+        _homeChainNameWord = bytes32(bytes(homeChainName_));
+        _homeChainNameLength = length;
+    }
+
+    /// @notice The name of the chain where the native tokens of this factory live. The mediator adds it to the name of
+    /// each copy. It is set in the constructor and nothing changes it.
+    function homeChainName() external view returns (string memory) {
+        bytes memory name = abi.encodePacked(_homeChainNameWord);
+        uint256 length = _homeChainNameLength;
+        assembly ("memory-safe") {
+            mstore(name, length)
+        }
+        return string(name);
     }
 
     /// @notice Deploys the copy of `nativeToken`. It reverts when the copy exists.

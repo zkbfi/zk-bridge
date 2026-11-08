@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
+import {ReceiptProofLib} from "../../src/hardened/ReceiptProofLib.sol";
 import {RLPReader} from "../../src/hardened/vendor/optimism/rlp/RLPReader.sol";
 import {ReceiptBuilder} from "./utils/ReceiptBuilder.sol";
 import {MessageScenes} from "./utils/MessageScenes.sol";
@@ -20,27 +21,27 @@ contract VerifierDecodingHarness is MessageBridge {
         BridgeTerms memory terms,
         uint64 capellaEraValue,
         address gate
-    ) MessageBridge(lightClient, localChainId, remoteChainId, remoteBridgeAddress, terms, capellaEraValue, gate) {}
+    ) MessageBridge(lightClient, remoteChainId, remoteBridgeAddress, terms, capellaEraValue, gate) {}
 
     function headerRoot(bytes calldata headerRlp, uint256 field) external pure returns (bytes32) {
-        return _headerRoot(RLPReader.readList(headerRlp), field);
+        return ReceiptProofLib.headerRoot(RLPReader.readList(headerRlp), field);
     }
 
     /// @dev The raw bytes of the log that `_receiptLog` returns.
     function receiptLog(bytes memory receipt, uint256 logIndex) external pure returns (bytes memory) {
-        return RLPReader.readRawBytes(_receiptLog(receipt, logIndex));
+        return RLPReader.readRawBytes(ReceiptProofLib.receiptLog(receipt, logIndex));
     }
 
     function logFieldCount(bytes memory log) external pure returns (uint256) {
-        return _logFields(RLPReader.toRLPItem(log)).length;
+        return ReceiptProofLib.logFieldsOf(RLPReader.toRLPItem(log)).length;
     }
 
     function requireEmitter(bytes memory emitterItem, address expected) external pure {
-        _requireEmitter(RLPReader.toRLPItem(emitterItem), expected);
+        ReceiptProofLib.requireEmitter(RLPReader.toRLPItem(emitterItem), expected);
     }
 
     function toBytes32(bytes memory value) external pure returns (bytes32) {
-        return _toBytes32(value);
+        return ReceiptProofLib.toBytes32(value);
     }
 }
 

@@ -43,7 +43,6 @@ export type MessageDetail = {
   readonly destinationChainId: number;
   readonly sender: Address;
   readonly executor: Address;
-  readonly gasLimit: number | null;
   readonly sentAt: number;
   readonly sentBlockNumber: number;
   readonly sourceTransactionHash: Hex;
@@ -55,7 +54,6 @@ export type MessageDetail = {
   /** The block of the delivery on the destination chain, or null while undelivered or when the answer does not carry it. */
   readonly deliveredBlockNumber: number | null;
   /** True when the destination call succeeded, false when it failed, null while undelivered. */
-  readonly deliverySucceeded: boolean | null;
   readonly executedBy: Address | null;
   readonly callbackFailed: boolean;
   /** True when the mediator could not release the tokens to the recipient. The failure is final. */
@@ -122,7 +120,6 @@ export const parseMessageDetail = (value: unknown): MessageDetail => {
     destinationChainId: readInteger(direction.destinationChainId, "direction.destinationChainId"),
     sender: readAddress(item.sender, "sender"),
     executor: readAddress(item.executor, "executor"),
-    gasLimit: readNullableInteger(item.gasLimit),
     sentAt: readInteger(sent.timestamp, "sent.timestamp"),
     sentBlockNumber: readInteger(sent.blockNumber, "sent.blockNumber"),
     sourceTransactionHash: readHex(sent.transactionHash, "sent.transactionHash"),
@@ -132,7 +129,6 @@ export const parseMessageDetail = (value: unknown): MessageDetail => {
     destinationTransactionHash:
       delivered === null || typeof delivered.transactionHash !== "string" ? null : readHex(delivered.transactionHash, "delivered.transactionHash"),
     deliveredBlockNumber: delivered === null ? null : readNullableInteger(delivered.blockNumber),
-    deliverySucceeded: delivered === null || typeof delivered.success !== "boolean" ? null : delivered.success,
     executedBy: delivered === null || typeof delivered.executedBy !== "string" ? null : readAddress(delivered.executedBy, "delivered.executedBy"),
     callbackFailed: item.callbackFailed === true,
     releaseFailed: item.releaseFailed === true,

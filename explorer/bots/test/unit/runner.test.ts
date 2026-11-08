@@ -1,5 +1,5 @@
 import { decodeFunctionData, keccak256, toFunctionSelector, type Hex } from "viem";
-import { beaconLightClientAbi, deliveryRouterAbi, messageBridgeAbi, multicall3Abi, requiredDeliveryGas } from "@zk-bridge/shared";
+import { beaconLightClientAbi, deliveryRouterAbi, messageBridgeAbi, multicall3Abi } from "@zk-bridge/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { Simulation } from "../../src/chain/transactions.ts";
 import type { FeedItem } from "../../src/indexer/client.ts";
@@ -26,6 +26,8 @@ import {
   SKIPPED_ALREADY_DELIVERED,
   SKIPPED_ANCHOR_NOT_STORED,
   SKIPPED_HEAD_ADVANCED,
+  SKIPPED_CALL_OUT_OF_GAS,
+  SKIPPED_RELEASE_OUT_OF_GAS,
   SKIPPED_INSUFFICIENT_GAS,
   WRAPPED_NATIVE,
   address,
@@ -44,8 +46,7 @@ import {
   proofPayload,
   transferLog,
   word,
-  TEST_PROOF_CHECK_GAS,
-  FEED_REQUIRED_GAS,
+  TEST_DELIVERY_GAS_FALLBACK,
 } from "../support/builders.ts";
 
 const selectorOf = (name: string) => toFunctionSelector(deliveryRouterAbi.find((entry) => entry.type === "function" && entry.name === name) as never);
@@ -56,7 +57,7 @@ const EXECUTE_BATCH = toFunctionSelector(multicall3Abi.find((entry) => entry.typ
 const UPDATE = toFunctionSelector(beaconLightClientAbi.find((entry) => entry.type === "function" && entry.name === "update") as never);
 
 /** A fixed fee: bit 0 of `settings`, with the fee in `limit`. */
-const fixedFee = (fee: bigint) => ({ recipient: address(0x12), settings: 1n, limit: fee, multiplier: 0n });
+const fixedFee = (fee: bigint) => ({ recipient: address(0x12), settings: 1n, limit: fee, multiplier: 0n, callGas: 0n });
 
 function memoryState(): StateStore<RunnerState> & { current: RunnerState } {
   const state = {
@@ -153,7 +154,7 @@ function world(options: WorldOptions = {}) {
       maximumLossPercent: options.maximumLossPercent ?? 20,
       deliverWithoutOffer: options.deliverWithoutOffer ?? false,
       tokenValuationsWei: options.valuations ?? {},
-      proofCheckGas: options.assumedGas === undefined ? TEST_PROOF_CHECK_GAS : options.assumedGas - FEED_REQUIRED_GAS,
+      deliveryGasFallback: options.assumedGas ?? TEST_DELIVERY_GAS_FALLBACK,
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: options.prerequisiteGasFallback ?? 300_000n,
       maximumPrerequisiteSpendPerSweepWei: options.maximumPrerequisiteSpendPerSweepWei ?? 10n ** 18n,
@@ -311,13 +312,12 @@ describe("delivery decisions", () => {
   const offerData = (token = WRAPPED_NATIVE) => ({ [word(OFFER_ID)]: feeOfferData({ director: fixedFee(10n), value: 1000n, token }) });
   const COST = 3_000_000n;
 
-  it("asks the router for the fee at the execution gas plus the gas of the user call, and at the execution gas without a call", async () => {
+  it("asks the router for the fee at the execution gas plus the callGas of the user call, and at the execution gas without a call", async () => {
     const asked: bigint[] = [];
     const ask = async (call?: { target: `0x${string}`; data: `0x${string}` }) => {
       asked.length = 0;
-      const data = { [word(OFFER_ID)]: feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE, ...(call === undefined ? {} : { call }) }) };
-      // The first check uses the fallback gas. The planned gas adds the send buffer of 30 percent: at 900,000 it leaves 270,000 for the call.
-      const w = world({ items: [offerItem()], data, assumedGas: 900_000n });
+      const data = { [word(OFFER_ID)]: feeOfferData({ director: { ...fixedFee(10n), callGas: call === undefined ? 0n : 50_000n }, value: 1000n, token: WRAPPED_NATIVE, ...(call === undefined ? {} : { call }) }) };
+      const w = world({ items: [offerItem()], data });
       w.chain.feeTokensOf = ({ gasUsed }) => {
         asked.push(gasUsed);
         return 10n ** 18n;
@@ -328,8 +328,8 @@ describe("delivery decisions", () => {
     const withoutCall = await ask();
     const withCall = await ask({ target: address(0x21), data: "0xabcdef01" });
     expect(withCall).toBeGreaterThan(withoutCall);
-    // The allowance is the planned gas less the execution gas, less the overhead of 100,000 and the reserve of 10,000.
-    expect(withCall - withoutCall).toBe(270_000n - 110_000n);
+    // The call gets exactly the callGas of the director, and the router counts exactly that much.
+    expect(withCall - withoutCall).toBe(50_000n);
   });
 
   it("delivers when the fee covers the cost, through the delivery router, with the proof only", async () => {
@@ -368,18 +368,6 @@ describe("delivery decisions", () => {
     expect((w.prover as { evidenceRuns: number }).evidenceRuns).toBe(0);
     expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
     // The item is not marked as final, so the next sweep looks at it again.
-    expect(w.state.current.finished).toEqual({});
-  });
-
-  it("a feed item with a null gasLimit is skipped with gas-limit-unknown, and nothing is guessed or sent", async () => {
-    const w = world({ items: [feedItem({ id: OFFER_ID, token: WRAPPED_NATIVE, gasLimit: null })], data: offerData() });
-    w.chain.feeTokens = COST * 10n;
-    const summary = await w.runner.sweep();
-    expect(summary).toMatchObject({ delivered: 0, skipped: 1 });
-    expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "gas-limit-unknown" });
-    expect((w.prover as { evidenceRuns: number }).evidenceRuns).toBe(0);
-    expect(w.chain.log).toEqual([]);
-    // The indexer may learn the limit later, so the item is not final and not made to wait.
     expect(w.state.current.finished).toEqual({});
   });
 
@@ -462,7 +450,7 @@ describe("delivery decisions", () => {
     expect((await w.runner.sweep()).delivered).toBe(1);
     const order = w.chain.log.filter((entry) => entry.kind !== "call").map((entry) => `${entry.kind}:${entry.request.data.slice(0, 10)}`);
     // The first simulation estimates the cost before anything is sent. The second one guards the send itself.
-    expect(order).toEqual(["simulate:0xdeadbeef", "simulate:0xdeadbeef", "send:0xdeadbeef", `simulate:${EXECUTE_BATCH}`, `simulate:${EXECUTE_SINGLE}`, `send:${EXECUTE_BATCH}`]);
+    expect(order).toEqual(["simulate:0xdeadbeef", "simulate:0xdeadbeef", "send:0xdeadbeef", `simulate:${EXECUTE_SINGLE}`, `simulate:${EXECUTE_BATCH}`, `simulate:${EXECUTE_SINGLE}`, `send:${EXECUTE_BATCH}`]);
     expect(w.chain.unsimulatedSends()).toEqual([]);
   });
 
@@ -852,7 +840,8 @@ describe("batch delivery", () => {
     // The first read has no limit of its own. The second one runs with exactly the gas limit of the transaction.
     expect(calls.map((entry) => (entry.request as { gas?: bigint }).gas)).toEqual([undefined, terms?.gas]);
     const singles = w.chain.log.filter((entry) => entry.kind === "simulate" && entry.request.data.startsWith(EXECUTE_SINGLE));
-    expect(singles).toHaveLength(2);
+    // Each item is estimated twice: when it is prepared (to size the batch plan), and again when the batch is evaluated.
+    expect(singles).toHaveLength(4);
     // The gas of an item is measured at the router itself, not through Multicall3.
     expect(singles.every((entry) => entry.request.to === DELIVERY_ROUTER)).toBe(true);
     // Multicall3 lets a call fail, so the estimate of the batch cannot size the limit. The limit is the sum of the gas of
@@ -922,45 +911,72 @@ describe("batch delivery", () => {
     expect(w.chain.sentTerms.map((terms) => terms.gas)).toEqual([780_000n, 390_000n]);
   });
 
-  describe("the gas limit of the transaction follows the gas limit of the message", () => {
+  describe("the batch follows the estimated gas of its items", () => {
     const BIG_FEE = 10n ** 12n;
-    /** A batch world whose items carry the given message gas limits, oldest first by id. */
-    function gasWorld(gasLimits: readonly number[], options: WorldOptions = {}) {
-      const items = gasLimits.map((gasLimit, index) => feedItem({ id: index + 1, token: WRAPPED_NATIVE, gasLimit }));
+    /** A batch world whose items estimate the given gas at the single entry, oldest first by id (the estimate of item `n` is `gases[n - 1]`). */
+    function gasWorld(gases: readonly bigint[], options: WorldOptions = {}) {
+      const items = gases.map((_, index) => feedItem({ id: index + 1, token: WRAPPED_NATIVE }));
       const data = Object.fromEntries(items.map((item) => [item.messageId, feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE })]));
       const w = world({ items, data, ...options });
       w.chain.feeTokens = BIG_FEE;
+      w.chain.executionGasOfSlot = (slot) => gases[Number(slot) - 1] ?? 0n;
       w.prover.evidence = async (request: { transactionHash: Hex }) => evidenceFor({ executeData: emptyExecuteMessage(BigInt(Number.parseInt(request.transactionHash.slice(2, 4), 16) - 0xa0)) });
       return w;
     }
 
-    it("the transaction gas limit is at least the sum of required delivery gas of its items", async () => {
-      const w = gasWorld([1_000_000, 2_000_000]);
+    it("the transaction gas limit is the sum of the estimates of its items with the margin", async () => {
+      const w = gasWorld([1_000_000n, 2_000_000n]);
       expect(await w.runner.sweep()).toMatchObject({ delivered: 2 });
       expect(sentSlots(w)).toHaveLength(1);
-      const required = requiredDeliveryGas(1_000_000n) + requiredDeliveryGas(2_000_000n);
-      // The simulated gas of each item is 280,000, so the buffered limit alone would be far below the need of the bridge.
-      expect(w.chain.sentTerms[0]?.gas).toBe(required);
+      const sum = 1_000_000n + 2_000_000n + 2n * BATCH_ITEM_OVERHEAD_GAS;
+      expect(w.chain.sentTerms[0]?.gas).toBe(sum + (sum * 30n) / 100n);
     });
 
-    it("packs by the message limit, not by one assumed number: a large message leaves room for fewer companions", async () => {
-      const w = gasWorld([1_000_000, 1_000_000, 4_000_000]);
+    it("packs by the estimates: a large delivery leaves room for fewer companions", async () => {
+      const w = gasWorld([1_000_000n, 1_000_000n, 4_000_000n]);
       expect(await w.runner.sweep()).toMatchObject({ delivered: 3 });
-      // 4,000,000 and 1,000,000 assume about 5.7 million together. A third item would pass 6,000,000.
+      // 4,000,000 and 1,000,000 estimate about 5.04 million together. A third item would pass 6,000,000.
       expect(sentSlots(w)).toEqual([[3, 2], [1]]);
     });
 
-    it("sends a message above the batch maximum alone, with exactly the gas it needs and never truncated", async () => {
-      const w = gasWorld([100_000, 7_000_000, 100_000]);
+    it("sends a delivery above the batch maximum alone, with the gas it needs and never truncated", async () => {
+      const w = gasWorld([100_000n, 7_000_000n, 100_000n]);
       expect(await w.runner.sweep()).toMatchObject({ delivered: 3 });
       // The two small items share a batch. The large one follows in a transaction of its own.
       expect(sentSlots(w)).toEqual([[3, 1], [2]]);
-      expect(w.chain.sentTerms[1]?.gas).toBe(requiredDeliveryGas(7_000_000n));
-      expect(w.chain.sentTerms[1]?.gas).toBeGreaterThan(6_000_000n);
+      expect(w.chain.sentTerms[1]?.gas).toBeGreaterThan(7_000_000n);
     });
 
-    it("skips a message above the batch maximum with message-gas-above-batch-maximum when the node refuses to run it", async () => {
-      const w = gasWorld([7_000_000]);
+    it("plans with the configured fallback for a delivery that cannot be estimated alone, and the batch decides", async () => {
+      const w = gasWorld([100_000n, 100_000n], { assumedGas: 4_000_000n });
+      // The estimate fails at the single entry before the batch (the delivery may need the update of its batch), then works.
+      let estimates = 0;
+      w.chain.simulateOverride = (request) => {
+        if (!request.data.startsWith(EXECUTE_SINGLE)) return undefined;
+        estimates += 1;
+        return estimates <= 2 ? { ok: false, reason: "AnchorNotStored" } : undefined;
+      };
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 2 });
+      // 4,000,000 each does not fit two in 6,000,000, so the plan made two batches of one.
+      expect(sentSlots(w)).toEqual([[2], [1]]);
+    });
+
+    it("moves the items that pass the maximum at their measured gas to a later sweep, and sends the rest", async () => {
+      // The plan counted 100,000 each (fits), but at the batch the second item measures 5,900,000.
+      const w = gasWorld([100_000n, 100_000n, 100_000n]);
+      let calls = 0;
+      w.chain.executionGasOfSlot = (slot) => {
+        calls += 1;
+        return calls > 3 && slot === 2n ? 5_900_000n : 100_000n;
+      };
+      expect(await w.runner.sweep()).toMatchObject({ delivered: 2, skipped: 1 });
+      expect(sentSlots(w)).toEqual([[3, 1]]);
+      expect(w.outcomes.records.find((record) => record.messageId === word(2))).toMatchObject({ status: "skipped", reason: "batch-gas-above-maximum" });
+      expect(w.state.current.finished[word(2)]).toBeUndefined();
+    });
+
+    it("skips a delivery above the batch maximum with message-gas-above-batch-maximum when the node refuses to run it", async () => {
+      const w = gasWorld([7_000_000n]);
       w.chain.simulateOverride = (request) => (request.data.startsWith(EXECUTE_BATCH) ? { ok: false, reason: "intrinsic gas too high" } : undefined);
       expect(await w.runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
       expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "message-gas-above-batch-maximum" });
@@ -968,8 +984,8 @@ describe("batch delivery", () => {
       expect(w.chain.log.some((entry) => entry.kind === "send")).toBe(false);
     });
 
-    it("skips a message above the batch maximum when the node refuses the read at its gas limit", async () => {
-      const w = gasWorld([7_000_000]);
+    it("skips a delivery above the batch maximum when the node refuses the read at its gas limit", async () => {
+      const w = gasWorld([7_000_000n]);
       const original = w.chain.call.bind(w.chain);
       // Only the read under the gas limit of the transaction names a gas limit.
       w.chain.call = async (request) => {
@@ -978,6 +994,19 @@ describe("batch delivery", () => {
       };
       await w.runner.sweep();
       expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "message-gas-above-batch-maximum" });
+    });
+
+    it.each([
+      ["InsufficientGas", SKIPPED_INSUFFICIENT_GAS],
+      ["CallOutOfGas", SKIPPED_CALL_OUT_OF_GAS],
+      ["ReleaseOutOfGas", SKIPPED_RELEASE_OUT_OF_GAS],
+    ])("a delivery that reverts with %s at the batch simulation is skipped with a reason and left undelivered, not failed", async (name, result) => {
+      const w = gasWorld([300_000n]);
+      w.chain.batchResult = () => result;
+      await w.runner.sweep();
+      expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "insufficient-gas" });
+      expect(String(w.outcomes.records[0]?.detail)).toContain(name);
+      expect(w.state.current.finished).toEqual({});
     });
   });
 

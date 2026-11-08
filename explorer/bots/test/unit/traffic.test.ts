@@ -1,6 +1,6 @@
 import { decodeFunctionData, encodeErrorResult, getAddress, type Address } from "viem";
 import { describe, expect, it, vi } from "vitest";
-import { beaconForkGateAbi, decodeFeeDirector, defaultTip, GateEvidenceError, protectedAddressesOf, tokenMediatorAbi, type GateConfirmation } from "@zk-bridge/shared";
+import { beaconForkGateAbi, decodeFeeDirector, defaultTip, GateEvidenceError, protectedAddressesOf, routerCallbackGas, tokenMediatorAbi, type GateConfirmation } from "@zk-bridge/shared";
 import { boundsOf } from "../../src/traffic/plan.ts";
 import { parseTestTokens } from "../../src/traffic/tokens-file.ts";
 import type { TrafficGate } from "../../src/traffic/gate.ts";
@@ -25,7 +25,7 @@ interface World {
   readonly traffic: ReturnType<typeof createTraffic>;
 }
 
-function sideOf(chainId: number, seed: number, options: { router?: boolean; reserve?: bigint; newCopyGasLimit?: bigint; gate?: TrafficGate } = {}) {
+function sideOf(chainId: number, seed: number, options: { router?: boolean; reserve?: bigint; gate?: TrafficGate } = {}) {
   const state: FakeReaderState = { native: 10n ** 18n, balances: new Map(), allowances: new Map() };
   const port = fakePort(chainId, WALLET);
   const side: TrafficSide = {
@@ -35,15 +35,14 @@ function sideOf(chainId: number, seed: number, options: { router?: boolean; rese
     port,
     contracts: contractsOf(seed, options.router ?? true),
     minimumNativeWei: options.reserve ?? 1_000n,
-    newCopyGasLimit: options.newCopyGasLimit ?? null,
     gate: options.gate ?? null,
   };
   return { side, port, state };
 }
 
-function world(options: { secondRouter?: boolean; symbols?: readonly string[]; random?: () => number; newCopyGasLimit?: bigint; gate?: TrafficGate; reserve?: bigint; sleep?: (milliseconds: number) => Promise<void> } = {}): World {
+function world(options: { secondRouter?: boolean; symbols?: readonly string[]; random?: () => number; gate?: TrafficGate; reserve?: bigint; sleep?: (milliseconds: number) => Promise<void> } = {}): World {
   const first = sideOf(1, 0x10, { ...(options.gate === undefined ? {} : { gate: options.gate }), ...(options.reserve === undefined ? {} : { reserve: options.reserve }) });
-  const second = sideOf(369, 0x20, { router: options.secondRouter ?? true, ...(options.newCopyGasLimit === undefined ? {} : { newCopyGasLimit: options.newCopyGasLimit }) });
+  const second = sideOf(369, 0x20, { router: options.secondRouter ?? true });
   const settings = { amount: { minimum: "1", maximum: "25" }, balance: { minimum: "1000", maximum: "900000" } };
   const symbols = options.symbols ?? ["tUSD"];
   const logs = memoryLogger();
@@ -82,7 +81,7 @@ describe("a traffic send", () => {
     expect(relay?.to).toBe(first.side.contracts.mediator);
     const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: relay!.data });
     expect(decoded.functionName).toBe("relayTokensAndCall");
-    const [token, router, amount, terms] = decoded.args as [Address, Address, bigint, `0x${string}`];
+    const [token, router, amount, terms] = decoded.args as [Address, Address, bigint, `0x${string}`, bigint];
     expect([token, router, amount]).toEqual([DOLLAR, second.side.contracts.deliveryRouter, DOLLAR_UNIT]);
     expect(decodeFeeDirector(terms)).toEqual({ ...defaultTip(WALLET), multiplier: RATE });
     // The send terms: the simulated gas plus 30 percent, at twice the base fee plus the tip.
@@ -92,21 +91,21 @@ describe("a traffic send", () => {
     expect(second.port.sent).toHaveLength(0);
   });
 
-  it("asks for the configured gas limit when the delivery deploys the copy, and the default once the copy exists", async () => {
-    const { first, second, logs, traffic } = world({ newCopyGasLimit: 9_000_000n });
+  it("passes the router callback gas for terms without a call, whether or not the delivery deploys the copy", async () => {
+    const { first, second, logs, traffic } = world();
     first.state.balances.set(DOLLAR.toLowerCase(), 100_000n * DOLLAR_UNIT);
     first.state.allowances.set(DOLLAR.toLowerCase(), 10n ** 30n);
     second.state.code = new Set();
     await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
     const deploying = decodeFunctionData({ abi: tokenMediatorAbi, data: first.port.sent[0]!.data });
     expect(deploying.args).toHaveLength(5);
-    expect(deploying.args?.[4]).toBe(9_000_000n);
-    expect(eventsNamed(logs, "traffic_sent")[0]).toMatchObject({ deploysCopy: true, messageGasLimit: "9000000" });
+    expect(deploying.args?.[4]).toBe(routerCallbackGas({}));
+    expect(eventsNamed(logs, "traffic_sent")[0]).toMatchObject({ deploysCopy: true, callbackGas: routerCallbackGas({}).toString() });
 
     second.state.code.add(copyAddressOf(369, 1, DOLLAR).toLowerCase());
     await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
-    expect(decodeFunctionData({ abi: tokenMediatorAbi, data: first.port.sent[1]!.data }).args).toHaveLength(4);
-    expect(eventsNamed(logs, "traffic_sent")[1]).toMatchObject({ deploysCopy: false, messageGasLimit: null });
+    expect(decodeFunctionData({ abi: tokenMediatorAbi, data: first.port.sent[1]!.data }).args?.[4]).toBe(routerCallbackGas({}));
+    expect(eventsNamed(logs, "traffic_sent")[1]).toMatchObject({ deploysCopy: false, callbackGas: routerCallbackGas({}).toString() });
   });
 
   it("marks every send of a token as a deploy message until a copy came home, and keeps sending it", async () => {
@@ -120,16 +119,6 @@ describe("a traffic send", () => {
     await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
     expect(eventsNamed(logs, "traffic_skipped")).toEqual([]);
     expect(eventsNamed(logs, "traffic_sent")[1]).toMatchObject({ deployMessage: true });
-  });
-
-  it("logs a send that deploys the copy also without a gas limit for it", async () => {
-    const { first, second, logs, traffic } = world();
-    first.state.balances.set(DOLLAR.toLowerCase(), 100_000n * DOLLAR_UNIT);
-    first.state.allowances.set(DOLLAR.toLowerCase(), 10n ** 30n);
-    second.state.code = new Set();
-    await traffic.attempt({ direction: "first-to-second", beforeFirstSend: announce() });
-    expect(decodeFunctionData({ abi: tokenMediatorAbi, data: first.port.sent[0]!.data }).args).toHaveLength(4);
-    expect(eventsNamed(logs, "traffic_sent")[0]).toMatchObject({ deploysCopy: true, messageGasLimit: null });
   });
 
   it("skips the approval when the allowance covers the amount", async () => {

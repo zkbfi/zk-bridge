@@ -15,7 +15,7 @@ describe("the signing dialog on the bridge screen", () => {
   it("is a sheet with the transactions as a joined step list and pill buttons, not the explorer's modal", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 0n });
     const draft = computeBridgeDraft(
-      { token: `first:${FIXTURE_TOKENS[0]!.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", gasLimit: "" },
+      { token: `first:${FIXTURE_TOKENS[0]!.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", callGas: "", callbackGas: "" },
       { ...DEFAULT_DELIVERY_OPTIONS, mode: "none" },
       { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
     );

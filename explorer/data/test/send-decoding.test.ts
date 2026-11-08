@@ -24,7 +24,7 @@ const message = (executor: Address, data: `0x${string}`, overrides: { sourceChai
       messageId: buildMessageId(1n, pair.sides[0].contracts.bridge, 3n),
       sender,
       executor,
-      gasLimit: 250_000,
+      reservedGas: 0,
       dataType: 0,
       sourceChainId: overrides.sourceChainId ?? 1n,
       destinationChainId: overrides.destinationChainId ?? 369n,

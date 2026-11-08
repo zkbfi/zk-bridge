@@ -57,7 +57,7 @@ const timing = (overrides: Partial<JobTiming> = {}): JobTiming => ({
 
 const decision = (overrides: Partial<WatchDecision> = {}): WatchDecision => ({ at: FINAL_MS, finalizedSlot: 10_016, headSlot: 9_900, genesisTime: GENESIS, secondsPerSlot: SLOT, due: false, why: "nothing-due", detail: "the head is fresh", ...overrides });
 
-function input(overrides: Partial<ProgressInput> & { status?: string; covered?: { headSlot: number | null; timestamp: number | null } | null; delivered?: { timestamp: number; success?: boolean | null } | null } = {}): ProgressInput {
+function input(overrides: Partial<ProgressInput> & { status?: string; covered?: { headSlot: number | null; timestamp: number | null } | null; delivered?: { timestamp: number } | null } = {}): ProgressInput {
   const { status = "sent", covered = null, delivered = null, ...rest } = overrides;
   return {
     messageId: ID,
@@ -187,14 +187,11 @@ describe("the progress of a transfer (2026-11-01)", () => {
     expect(byHead.waitingOn).not.toHaveProperty("eta");
   });
 
-  it("delivered: nothing is waited on; a failed delivery says how it ended", () => {
-    const delivered = buildProgress(input({ status: "delivered", covered: { headSlot: 10_016, timestamp: null }, delivered: { timestamp: SENT + 3_000, success: true } }));
+  it("delivered: nothing is waited on; a delivery that ended as release failed says so", () => {
+    const delivered = buildProgress(input({ status: "delivered", covered: { headSlot: 10_016, timestamp: null }, delivered: { timestamp: SENT + 3_000 } }));
     expect(new Set(Object.values(statuses(delivered)))).toEqual(new Set(["done"]));
     expect(delivered.waitingOn).toEqual({ service: "none", since: (SENT + 3_000) * 1000, detail: "delivered" });
     expect(delivered.stages[6]).toEqual({ key: "delivered", status: "done", at: (SENT + 3_000) * 1000 });
-    const failed = buildProgress(input({ status: "failed_call", delivered: { timestamp: SENT + 3_000, success: false } }));
-    expect(failed.waitingOn.detail).toBe("the delivery ended as failed call");
-    expect(failed.stages[6]?.detail).toBe("the delivery ended as failed call");
     const release = buildProgress(input({ status: "release_failed", delivered: null }));
     expect(release.waitingOn).toEqual({ service: "none", since: SENT_MS, detail: "the delivery ended as release failed" });
   });

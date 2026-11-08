@@ -12,7 +12,7 @@ export type ActivityGroup = "in-flight" | "needs-you" | "delivered";
 /** A proven transfer still undelivered after this long needs the user. */
 export const NEEDS_YOU_AFTER_SECONDS = 30 * 60;
 
-/** The step index a status has reached (0 sent, 1 final, 2 proven, 5 delivered; a failed delivery stays at 2). */
+/** The step index a status has reached (0 sent, 1 final, 2 proven, 5 delivered; a failed release stays at 2). */
 export const stepOf = (status: MessageStatus): number =>
   status === "sent" ? 0 : status === "waiting_for_finality" ? 1 : status === "covered" ? 2 : status === "delivered" ? 5 : 2;
 
@@ -45,7 +45,7 @@ export const stepWords = ({ status, sentAt, destinationName, now }: DeliveryStat
     return `Proven · waiting for a deliverer${waited}`;
   }
   if (status === "delivered") return `Delivered to ${destinationName}`;
-  return status === "failed_call" ? "Delivered, but the call after it failed" : "The release failed";
+  return "The release failed";
 };
 
 /**
@@ -57,7 +57,7 @@ export const stepWords = ({ status, sentAt, destinationName, now }: DeliveryStat
  */
 export const groupOf = (status: MessageStatus, sentAt: number, now: number): ActivityGroup => {
   if (status === "delivered") return "delivered";
-  if (status === "failed_call" || status === "release_failed") return "needs-you";
+  if (status === "release_failed") return "needs-you";
   if (status === "covered" && now - sentAt > NEEDS_YOU_AFTER_SECONDS) return "needs-you";
   return "in-flight";
 };

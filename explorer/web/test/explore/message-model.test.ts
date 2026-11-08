@@ -52,7 +52,7 @@ describe("contract names", () => {
 describe("the payload", () => {
   const call = (functionName: "handleNativeTokens" | "handleBridgedTokensAndCall" | "deployAndHandleBridgedTokens"): Hex => {
     if (functionName === "handleNativeTokens") return encodeFunctionData({ abi: tokenMediatorAbi, functionName, args: [RECIPIENT, RECIPIENT, 5_000_000n] });
-    if (functionName === "handleBridgedTokensAndCall") return encodeFunctionData({ abi: tokenMediatorAbi, functionName, args: [RECIPIENT, RECIPIENT, 5_000_000n, "0xab"] });
+    if (functionName === "handleBridgedTokensAndCall") return encodeFunctionData({ abi: tokenMediatorAbi, functionName, args: [RECIPIENT, RECIPIENT, 5_000_000n, "0xab", 300_000n] });
     return encodeFunctionData({ abi: tokenMediatorAbi, functionName, args: [RECIPIENT, "Token", "TOK", 6, RECIPIENT, 5_000_000n] });
   };
 
@@ -94,10 +94,13 @@ describe("the steps", () => {
     expect(steps[3]!.tone).toBeUndefined();
   });
 
-  it("stops a reverted call at the delivery with the error tone, and leaves undelivered steps open", async () => {
+  it("stops a failed release at the delivery with the error tone, names a failed callback without stopping, and leaves undelivered steps open", async () => {
     const base = await detail();
-    const reverted = messageSteps({ ...base, deliverySucceeded: false }, FIXTURE_PAIR, []);
-    expect(reverted[3]).toMatchObject({ label: "Call reverted on PulseChain", done: false, tone: "error", detail: { kind: "delivery", reverted: true } });
+    const failed = messageSteps({ ...base, releaseFailed: true }, FIXTURE_PAIR, []);
+    expect(failed[3]).toMatchObject({ label: "Release failed on PulseChain", done: false, tone: "error", detail: { kind: "delivery", reverted: true } });
+    const callback = messageSteps({ ...base, callbackFailed: true }, FIXTURE_PAIR, []);
+    expect(callback[3]).toMatchObject({ label: "Delivered on PulseChain, the call after it failed", done: true });
+    expect(callback[3]!.tone).toBeUndefined();
     const pending = messageSteps({ ...base, coveredByHeadSlot: null, coveredAt: null, deliveredAt: null }, FIXTURE_PAIR, []);
     expect(pending.map((step) => step.done)).toEqual([true, false, false, false]);
     expect(pending[3]!.detail).toBeUndefined();

@@ -3,9 +3,8 @@ pragma solidity 0.8.28;
 
 import {IDepositGate} from "./IDepositGate.sol";
 import {BeaconBlockHeader} from "./SSZ.sol";
-import {MerkleTrie} from "./vendor/optimism/trie/MerkleTrie.sol";
-import {RLPReader} from "./vendor/optimism/rlp/RLPReader.sol";
 import {BeaconProofVerifier} from "./BeaconProofVerifier.sol";
+import {ReceiptProofLib} from "./ReceiptProofLib.sol";
 import {AmbMessageCodec} from "./AmbMessageCodec.sol";
 import {IAMB} from "./IAMB.sol";
 
@@ -21,17 +20,18 @@ import {IAMB} from "./IAMB.sol";
 ///
 /// Delivery. `executeMessage` checks a proof of the log, in this order: the anchor, the ancestry, the block hash, the
 /// execution header, the receipt (which must record success), the transaction at the same index, the log (emitter and
-/// topic) and the message (identifier, version, chains and data type). A message executes once. Delivery is final:
-/// the bridge marks the message before the call, and the mark stays whether the call succeeds or reverts. A failed
-/// call leaves the data that OmniBridge leaves (`failedMessageDataHash`, `failedMessageReceiver` and
-/// `failedMessageSender`). Messages are independent: the nonce of the sender only makes identifiers unique, and no
-/// order exists between messages.
+/// topic) and the message (identifier, version, chains and data type). A message executes once, and only a call
+/// that succeeds counts: when the call to the target fails, `executeMessage` reverts with the error of the target, and
+/// the message stays `NotDelivered`, so anyone can deliver it again later, with more gas or after the target changed
+/// its mind. Messages are independent: the nonce of the sender only makes identifiers unique, and no order exists
+/// between messages.
 ///
-/// The gas guard. The target gets exactly the gas of the message. Without a guard, an executor could give too little
-/// gas, the target would fail, and the message would be final as a failure. The bridge therefore refuses to execute
-/// unless the gas left covers the gas of the message under the 63/64 rule (the call keeps back one 64th), plus
-/// `EXECUTION_OVERHEAD_GAS` for the call itself and the bookkeeping after it. A target that runs out of its own gas
-/// is a final failure: the executor did all that the sender asked for.
+/// Gas. A message carries no gas number that the bridge reads. The target gets all the gas that is left (the EVM
+/// keeps back one 64th), and if that is not enough the call fails and the delivery reverts. So an executor that gives
+/// too little gas loses only its own transaction: it cannot make a message fail for good. The gas field of the
+/// OmniBridge encoding stays in the message, always zero, so the encoding keeps its layout. A target that needs a
+/// guarantee for a call of its own (a callback, a follow-up call) states the gas of that call in its own data and
+/// checks it itself: the bridge knows nothing about the target.
 ///
 /// The context (`messageSender`, `messageId`, `messageSourceChainId`, `transactionHash`) is set during the call to the
 /// target and cleared after it. A target trusts a message by checking `msg.sender == bridge` and the pair
@@ -74,35 +74,19 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
         uint256 logIndex;
     }
 
-    /// @notice The state of a message on this chain. A message that was never delivered is `NotDelivered`.
+    /// @notice The state of a message on this chain. A message that was never delivered, or whose every delivery
+    /// reverted, is `NotDelivered`.
     /// @dev `InProgress` lasts only inside the call to the target. It is the mark that the bridge sets before the call.
+    /// There is no failed state: a failed call reverts the delivery.
     enum DeliveryStatus {
         NotDelivered,
         InProgress,
-        Succeeded,
-        Failed
-    }
-
-    /// @dev The delivery mark and, for a failed call, the target. They share a storage word.
-    struct Delivery {
-        DeliveryStatus status;
-        address failedReceiver;
+        Succeeded
     }
 
     /// @notice The topic 0 of `UserRequestForAffirmation`. A message proof matches logs against this value.
     /// @dev Solidity 0.8.28 rejects `UserRequestForAffirmation.selector` in a constant. A test pins this value.
     bytes32 public constant USER_REQUEST_TOPIC = keccak256("UserRequestForAffirmation(bytes32,bytes)");
-
-    /// @notice The most gas that a message may ask for. A message always fits in one block.
-    uint256 public constant MAX_GAS_PER_TX = 10_000_000;
-
-    /// @notice The least gas that a message may ask for. OmniBridge uses the cost of a call to a warm address.
-    uint256 public constant MIN_GAS_PER_CALL = 100;
-
-    /// @notice The gas that `executeMessage` keeps back, on top of the gas of the message and the 63/64 rule: the cost
-    /// of the call itself and of the bookkeeping after it. A test measures the failure path (the most expensive) and
-    /// runs it with exactly the gas that the guard asks for.
-    uint256 public constant EXECUTION_OVERHEAD_GAS = 100_000;
 
     /// @dev The call data types that this bridge sends and accepts.
     uint8 private constant DATA_TYPE_PASS = AmbMessageCodec.DATA_TYPE_PASS;
@@ -118,8 +102,6 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     bytes4 private constant TRANSFER_AND_CALL_SELECTOR = 0x4000aea0;
     bytes4 private constant APPROVE_AND_CALL_SELECTOR = 0xcae9ca51;
 
-    /// @notice A send asks for less than `MIN_GAS_PER_CALL` or more than `MAX_GAS_PER_TX`.
-    error GasOutOfRange(uint256 gas, uint256 minimum, uint256 maximum);
     /// @notice The call data starts with a selector that the bridge never forwards.
     error ForbiddenSelector(bytes4 selector);
     /// @notice Sends are closed because the cutoff time passed.
@@ -142,10 +124,11 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     error WrongDestinationChain(uint64 expected, uint256 actual);
     /// @notice The message was already delivered.
     error AlreadyDelivered(bytes32 messageId);
-    /// @notice The gas left does not cover the gas of the message and the overhead.
-    error InsufficientGas(uint256 available, uint256 required);
+    /// @notice The call to the target failed and returned no error of its own (for example, it ran out of gas). The
+    /// message stays `NotDelivered`.
+    error TargetCallFailed(bytes32 messageId);
 
-    /// @notice The identifier of this chain.
+    /// @notice The identifier of this chain: `block.chainid` at deployment.
     uint64 public immutable localChainId;
     /// @notice The identifier of the other chain.
     uint64 public immutable remoteChainId;
@@ -171,16 +154,13 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     /// @dev The source transaction hash of the message that executes now. Zero outside the call to the target.
     bytes32 private _activeTransactionHash;
 
-    mapping(bytes32 messageId => Delivery) private _deliveries;
-    mapping(bytes32 messageId => address) private _failedSenders;
-    mapping(bytes32 messageId => bytes32) private _failedDataHashes;
+    mapping(bytes32 messageId => DeliveryStatus) private _deliveries;
 
     StateLayout[] private _stateLayouts;
     BodyLayout[] private _bodyLayouts;
     HistoricalLayout[] private _historicalLayouts;
 
     /// @param lightClient_ The light client of the remote chain.
-    /// @param localChainId_ The identifier of this chain. It must equal `block.chainid`.
     /// @param remoteChainId_ The identifier of the other chain.
     /// @param remoteBridge_ The bridge on the other chain.
     /// @param bridgeTerms The send cutoff and the remote light client. See `BridgeTerms`.
@@ -188,7 +168,6 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     /// @param depositGate_ The gate that every send calls. It must not be the zero address.
     constructor(
         address lightClient_,
-        uint64 localChainId_,
         uint64 remoteChainId_,
         address remoteBridge_,
         BridgeTerms memory bridgeTerms,
@@ -200,7 +179,7 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
         if (remoteBridge_ == address(0)) revert ZeroValue("remoteBridge");
         if (depositGate_ == address(0)) revert ZeroValue("depositGate");
         if (bridgeTerms.remoteLightClient == address(0)) revert ZeroValue("remoteLightClient");
-        if (localChainId_ != block.chainid) revert LocalChainIdMismatch(localChainId_, block.chainid);
+        uint64 localChainId_ = uint64(block.chainid);
         if (remoteChainId_ == localChainId_) revert RemoteChainIsLocalChain();
 
         localChainId = localChainId_;
@@ -214,33 +193,33 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     // ------------------------------------------------------------------ sending
 
     /// @inheritdoc IAMB
-    function requireToPassMessage(address _contract, bytes calldata _data, uint256 _gas)
+    /// @dev `_gas` is accepted for the OmniBridge interface and ignored: delivery gives the target all the gas that is
+    /// left, and the gas field of the message is zero.
+    function requireToPassMessage(address _contract, bytes calldata _data, uint256)
         external
         override
         returns (bytes32)
     {
-        return _send(_contract, _data, _gas, DATA_TYPE_PASS);
+        return _send(_contract, _data, DATA_TYPE_PASS);
     }
 
     /// @inheritdoc IAMB
     /// @dev The same as `requireToPassMessage`, with the data type of the manual lane. This bridge has no manual lane.
-    function requireToConfirmMessage(address _contract, bytes calldata _data, uint256 _gas)
+    function requireToConfirmMessage(address _contract, bytes calldata _data, uint256)
         external
         override
         returns (bytes32)
     {
-        return _send(_contract, _data, _gas, DATA_TYPE_CONFIRM);
+        return _send(_contract, _data, DATA_TYPE_CONFIRM);
     }
 
-    /// @dev The checks run in this order: the lock, the cutoff, the gas range, the selector, the gate. The nonce moves
-    /// before the gate call, so a gate that calls back cannot cause a repeated identifier.
-    function _send(address target, bytes calldata data, uint256 gas, uint8 dataType) private returns (bytes32 id) {
+    /// @dev The checks run in this order: the lock, the cutoff, the selector, the gate. The nonce moves before the gate
+    /// call, so a gate that calls back cannot cause a repeated identifier. There is no gas check: the gas argument of
+    /// the interface is not used.
+    function _send(address target, bytes calldata data, uint8 dataType) private returns (bytes32 id) {
         if (!depositsOpen) revert DepositsNotOpen();
         if (sendCutoffTimestamp != 0 && block.timestamp >= sendCutoffTimestamp) {
             revert SendCutoffReached(sendCutoffTimestamp);
-        }
-        if (gas < MIN_GAS_PER_CALL || gas > MAX_GAS_PER_TX) {
-            revert GasOutOfRange(gas, MIN_GAS_PER_CALL, MAX_GAS_PER_TX);
         }
         _requireForwardableSelector(data);
 
@@ -253,7 +232,7 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
             messageId: id,
             sender: msg.sender,
             executor: target,
-            gasLimit: uint32(gas),
+            gasLimit: 0,
             dataType: dataType,
             sourceChainId: localChainId,
             destinationChainId: remoteChainId
@@ -276,8 +255,10 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     // ------------------------------------------------------------------ delivery
 
     /// @notice Delivers a message that a bridge on the other chain sent, given direct evidence. Anyone may call it.
-    /// @dev A message executes once, with the target, data and gas that the sender fixed, so an executor that runs
-    /// ahead of another does no harm. The executor pays the gas and gets no fee from the bridge.
+    /// @dev A message executes once, with the target and data that the sender fixed, so an executor that runs ahead of
+    /// another does no harm. The executor pays the gas and gets no fee from the bridge. When the call to the target
+    /// fails, the delivery reverts with the error of the target (or `TargetCallFailed` when the target returned none),
+    /// and the message stays `NotDelivered`.
     /// @param proof The evidence.
     function executeMessage(MessageProof calldata proof) external {
         if (_activeMessageId != bytes32(0)) revert MessageInProgress(_activeMessageId);
@@ -288,69 +269,36 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
         (AmbMessageCodec.Header memory header, bytes memory data) = AmbMessageCodec.decode(encoded);
         _requireAcceptableMessage(header, topicMessageId);
 
-        Delivery storage delivery = _deliveries[header.messageId];
-        if (delivery.status != DeliveryStatus.NotDelivered) revert AlreadyDelivered(header.messageId);
-        delivery.status = DeliveryStatus.InProgress;
+        if (_deliveries[header.messageId] != DeliveryStatus.NotDelivered) revert AlreadyDelivered(header.messageId);
+        _deliveries[header.messageId] = DeliveryStatus.InProgress;
 
-        bool success = _callTarget(header, data, sourceTransactionHash);
-        if (success) {
-            delivery.status = DeliveryStatus.Succeeded;
-        } else {
-            _recordFailure(delivery, header, data);
-        }
-        emit AffirmationCompleted(header.sender, header.executor, header.messageId, success);
+        _callTarget(header, data, sourceTransactionHash);
+        _deliveries[header.messageId] = DeliveryStatus.Succeeded;
+        emit AffirmationCompleted(header.sender, header.executor, header.messageId, true);
     }
 
-    /// @dev Checks 1 to 7 and returns the encoded message of the log, the identifier in its topic and the hash of
-    /// the transaction. The identifier in the topic and the one in the message are two copies of the same value.
+    /// @dev Checks 1 to 7 and the log, and returns the encoded message of the log, the identifier in its topic and the
+    /// hash of the transaction. The identifier in the topic and the one in the message are two copies of the same value.
+    /// Checks 1 to 4 run here; the execution header, the receipt, the transaction and the log run in
+    /// `ReceiptProofLib.provenLog`, under the block hash proven here.
     function _provenLog(MessageProof calldata proof)
         private
         view
         returns (bytes memory encoded, bytes32 topicMessageId, bytes32 sourceTransactionHash)
     {
-        _requireStoredHeader(proof.anchorHeader);
-        _requireAncestryBranch(proof.anchorHeader, proof.sourceHeader, proof.ancestryBranch);
+        _requireAncestry(proof.anchorHeader, proof.sourceHeader, proof.ancestryBranch);
         bytes32 blockHash = keccak256(proof.executionHeaderRlp);
         _requireBlockHashBranch(blockHash, proof.sourceHeader, proof.blockHashBranch);
 
-        RLPReader.RLPItem[] memory headerItems = _headerItems(proof.executionHeaderRlp);
-        bytes32 receiptsRoot = _headerRoot(headerItems, RECEIPTS_ROOT_FIELD);
-        bytes32 transactionsRoot = _headerRoot(headerItems, TRANSACTIONS_ROOT_FIELD);
-        bytes memory key = _encodeUint(proof.receiptIndex);
-        bytes memory receipt = MerkleTrie.get(key, proof.receiptProof, receiptsRoot);
-        sourceTransactionHash = keccak256(MerkleTrie.get(key, proof.transactionProof, transactionsRoot));
-
-        (topicMessageId, encoded) = _messageOf(_receiptLog(receipt, proof.logIndex));
-    }
-
-    /// @dev Checks the emitter and the topics of a log, then returns the identifier of its topic and the message of
-    /// its data.
-    function _messageOf(RLPReader.RLPItem memory log)
-        private
-        view
-        returns (bytes32 topicMessageId, bytes memory encoded)
-    {
-        RLPReader.RLPItem[] memory logFields = _logFields(log);
-        _requireEmitter(logFields[0], remoteBridge);
-
-        RLPReader.RLPItem[] memory topics = RLPReader.readList(logFields[1]);
-        if (topics.length == 0) revert WrongEventTopic(bytes32(0));
-        bytes32 topic0 = _toBytes32(RLPReader.readBytes(topics[0]));
-        if (topic0 != USER_REQUEST_TOPIC) revert WrongEventTopic(topic0);
-        if (topics.length != 2) revert MalformedLog();
-
-        topicMessageId = _toBytes32(RLPReader.readBytes(topics[1]));
-        encoded = _decodeBytes(RLPReader.readBytes(logFields[2]));
-    }
-
-    /// @dev Reads the event data, which is `abi.encode(bytes)`: the offset 32, the length, the bytes padded to a word.
-    /// Any other layout is refused, so one message has one encoding.
-    function _decodeBytes(bytes memory eventData) private pure returns (bytes memory) {
-        if (eventData.length < 64) revert MalformedEventData();
-        (uint256 offset, uint256 length) = abi.decode(eventData, (uint256, uint256));
-        if (offset != 32) revert MalformedEventData();
-        if (eventData.length != 64 + ((length + 31) / 32) * 32) revert MalformedEventData();
-        return abi.decode(eventData, (bytes));
+        (topicMessageId, encoded, sourceTransactionHash) = ReceiptProofLib.provenLog(
+            proof.executionHeaderRlp,
+            proof.receiptProof,
+            proof.receiptIndex,
+            proof.transactionProof,
+            proof.logIndex,
+            remoteBridge,
+            USER_REQUEST_TOPIC
+        );
     }
 
     /// @dev Checks the message against the log and this bridge.
@@ -366,39 +314,40 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
         }
     }
 
-    /// @dev Sets the context, checks the gas guard, calls the target with exactly the gas of the message, and clears the
-    /// context. The call copies no return data, so a target cannot cost gas with a large answer.
+    /// @dev Sets the context, calls the target with all the gas that is left, and clears the context. A failed call
+    /// reverts the delivery with the error data of the target. A successful call copies no return data, so a target
+    /// cannot cost gas with a large answer. The error data of a failed call is copied, at the cost of the delivery that
+    /// reverts anyway.
     function _callTarget(AmbMessageCodec.Header memory header, bytes memory data, bytes32 sourceTransactionHash)
         private
-        returns (bool success)
     {
         _activeSender = header.sender;
         _activeMessageId = header.messageId;
         _activeTransactionHash = sourceTransactionHash;
 
-        uint256 gasLimit = header.gasLimit;
-        // The call forwards `gasLimit` only if one 64th of the gas left is below the rest: `gasLimit + gasLimit / 63 + 1`.
-        uint256 required = gasLimit + gasLimit / 63 + 1 + EXECUTION_OVERHEAD_GAS;
-        if (gasleft() < required) revert InsufficientGas(gasleft(), required);
-
         address target = header.executor;
+        bool success;
         assembly {
-            success := call(gasLimit, target, 0, add(data, 32), mload(data), 0, 0)
+            success := call(gas(), target, 0, add(data, 32), mload(data), 0, 0)
         }
+        if (!success) _bubble(header.messageId);
 
         _activeSender = address(0);
         _activeMessageId = bytes32(0);
         _activeTransactionHash = bytes32(0);
     }
 
-    /// @dev Marks the call as failed and keeps what OmniBridge keeps for a failed message.
-    function _recordFailure(Delivery storage delivery, AmbMessageCodec.Header memory header, bytes memory data)
-        private
-    {
-        delivery.status = DeliveryStatus.Failed;
-        delivery.failedReceiver = header.executor;
-        _failedSenders[header.messageId] = header.sender;
-        _failedDataHashes[header.messageId] = keccak256(data);
+    /// @dev Reverts with the error data of the call that just failed, or with `TargetCallFailed` when it has none.
+    function _bubble(bytes32 id) private pure {
+        assembly ("memory-safe") {
+            let size := returndatasize()
+            if size {
+                let pointer := mload(0x40)
+                returndatacopy(pointer, 0, size)
+                revert(pointer, size)
+            }
+        }
+        revert TargetCallFailed(id);
     }
 
     // ------------------------------------------------------------------ the lock
@@ -445,28 +394,42 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     }
 
     /// @inheritdoc IAMB
+    /// @dev True once the message was delivered. A delivery whose call fails reverts, so there is no false after an
+    /// attempt: false means not delivered yet.
     function messageCallStatus(bytes32 id) external view override returns (bool) {
-        return _deliveries[id].status == DeliveryStatus.Succeeded;
+        return _deliveries[id] == DeliveryStatus.Succeeded;
+    }
+
+    /// @notice The state of a message on this chain.
+    /// @param id The message identifier.
+    function deliveryStatus(bytes32 id) external view returns (DeliveryStatus) {
+        return _deliveries[id];
     }
 
     /// @inheritdoc IAMB
-    function failedMessageDataHash(bytes32 id) external view override returns (bytes32) {
-        return _failedDataHashes[id];
+    /// @dev Always zero: no message ends as a failure on this bridge. Kept for the OmniBridge interface.
+    function failedMessageDataHash(bytes32) external pure override returns (bytes32) {
+        return bytes32(0);
     }
 
     /// @inheritdoc IAMB
-    function failedMessageReceiver(bytes32 id) external view override returns (address) {
-        return _deliveries[id].failedReceiver;
+    /// @dev Always zero, as `failedMessageDataHash`.
+    function failedMessageReceiver(bytes32) external pure override returns (address) {
+        return address(0);
     }
 
     /// @inheritdoc IAMB
-    function failedMessageSender(bytes32 id) external view override returns (address) {
-        return _failedSenders[id];
+    /// @dev Always zero, as `failedMessageDataHash`.
+    function failedMessageSender(bytes32) external pure override returns (address) {
+        return address(0);
     }
 
     /// @inheritdoc IAMB
+    /// @dev The bridge has no gas ceiling for a message: delivery gives the target all the gas that is left. It answers
+    /// the largest value that the gas field of the encoding can hold, so that an OmniBridge sender that checks its gas
+    /// against this value passes.
     function maxGasPerTx() external pure override returns (uint256) {
-        return MAX_GAS_PER_TX;
+        return type(uint32).max;
     }
 
     /// @inheritdoc IAMB

@@ -75,7 +75,7 @@ describe("the bot configuration", () => {
     expect(config.publisher?.remote).toEqual({ mode: "load-balancing" });
     expect(config.runner?.signer).toEqual({ kind: "private-key", key: { source: "environment", variable: "RUNNER_PRIVATE_KEY" } });
     expect(config.runner?.maximumLossPercent).toBe(20);
-    expect(config.runner?.proofCheckGas).toBe(400_000);
+    expect(config.runner?.deliveryGasFallback).toBe(1_500_000);
     expect(config.runner?.deliverWithoutOffer).toBe(false);
     expect(config.runner?.prerequisiteGasFallback).toBe(300_000);
     expect(config.runner?.prerequisiteLossRefusalSeconds).toBe(1800);
@@ -107,7 +107,7 @@ describe("the bot configuration", () => {
       ...extra,
     });
     expect(() => parseBotConfig({ ...minimal, runner: runner({ minimumMarginWei: "0" }) })).toThrow(/config\.runner\.minimumMarginWei.*runner\.maximumLossPercent/);
-    expect(() => parseBotConfig({ ...minimal, runner: runner({ executionGasFallback: 900_000 }) })).toThrow(/config\.runner\.executionGasFallback.*runner\.proofCheckGas/);
+    expect(() => parseBotConfig({ ...minimal, runner: runner({ executionGasFallback: 900_000 }) })).toThrow(/config\.runner\.executionGasFallback.*runner\.deliveryGasFallback/);
     expect(() => parseBotConfig({ ...minimal, runner: runner({ maximumLossPercent: 101 }) })).toThrow(/config\.runner\.maximumLossPercent/);
     expect(parseBotConfig({ ...minimal, runner: runner({ maximumLossPercent: 0 }) }).runner?.maximumLossPercent).toBe(0);
     expect(() => parseBotConfig({ ...minimal, runner: "text" })).toThrow();

@@ -252,7 +252,7 @@ contract MediatorHandler is Test {
         uint256 supply;
     }
 
-    /// @dev Relays with the plain form or with the form that has a gas limit, by the seed. It checks that the message carries
+    /// @dev Relays with the plain form. It checks that the message carries
     /// exactly the value that the mediator took in, and it queues the message.
     function _relay(
         TokenMediator mediator,
@@ -266,13 +266,8 @@ contract MediatorHandler is Test {
         Snapshot memory before = _snapshot(mediator, token);
         vm.startPrank(sender);
         IERC20(token).approve(address(mediator), amount);
-        if (receiverSeed % 2 == 0) mediator.relayTokens(token, _actor(receiverSeed), amount);
-        if (receiverSeed % 2 == 1) {
-            // The request is the deploy default and a little more, so that no request is below the default of its kind.
-            mediator.relayTokens(
-                token, _actor(receiverSeed), amount, mediator.DEPLOY_GAS_LIMIT() + uint256(receiverSeed) * 1_000
-            );
-        }
+        // The form with a gas limit is gone: a plain relay carries no gas number.
+        mediator.relayTokens(token, _actor(receiverSeed), amount);
         vm.stopPrank();
         _recordSent(bridge, _movedIn(mediator, token, before));
         _pending.push(Pending(direction, bridge.sentCount() - 1, false));

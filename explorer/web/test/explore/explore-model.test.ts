@@ -21,7 +21,7 @@ const item = (overrides: Partial<FeedItem>): FeedItem => ({
 
 describe("Explore's model", () => {
   it("gives every status one word", () => {
-    expect(["sent", "waiting_for_finality", "covered", "delivered", "failed_call", "release_failed"].map((status) => statusWord(status as FeedItem["status"]))).toEqual(["sent", "waiting", "proven", "delivered", "failed", "failed"]);
+    expect(["sent", "waiting_for_finality", "covered", "delivered", "release_failed"].map((status) => statusWord(status as FeedItem["status"]))).toEqual(["sent", "waiting", "proven", "delivered", "failed"]);
   });
 
   it("writes durations short", () => {

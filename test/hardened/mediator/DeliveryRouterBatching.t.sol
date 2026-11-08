@@ -11,7 +11,7 @@ import {BridgedToken} from "../../../src/hardened/mediator/BridgedToken.sol";
 import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
-import {MockWrappedNative} from "./utils/MediatorSupport.sol";
+import {MockWrappedNative, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 import {MessageReverter, MessageNoop} from "../utils/MessageTargets.sol";
 import {WorldSupport} from "../utils/WorldSupport.sol";
 
@@ -64,11 +64,11 @@ contract DeliveryRouterBatchingTest is WorldSupport {
 
     /// @dev A transfer to the router that asks for a tip of 1% of 100 tokens, with `to` as the recipient.
     function _tipMessage(address to) internal returns (Transit memory) {
-        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(to, router.MULTIPLIER_OF_TOTAL(), 0, ONE_PERCENT));
+        bytes memory data = abi.encode(DeliveryRouter.FeeDirector(to, router.MULTIPLIER_OF_TOTAL(), 0, ONE_PERCENT, 0));
         vm.chainId(CHAIN_A);
         vm.recordLogs();
         vm.prank(alice);
-        mediatorA.relayTokensAndCall(address(nativeToken), address(router), VALUE, data);
+        mediatorA.relayTokensAndCall(address(nativeToken), address(router), VALUE, data, TEST_CALLBACK_GAS);
         return _proveForB(vm.getRecordedLogs());
     }
 
@@ -200,16 +200,19 @@ contract DeliveryRouterBatchingTest is WorldSupport {
         _assertIdle();
     }
 
-    /// Claim: a call whose target reverts is a success of the router, because the bridge marks the message and records
-    /// the failure of the target. Matters: the caller reads the result of the call, and the bridge holds the truth
-    /// about the target in `messageCallStatus`.
-    function test_batch_aFailingTargetIsRecordedByTheBridge() public {
+    /// Claim: a call whose target reverts fails alone in a batch, and the message waits; the next call of the batch
+    /// still delivers. Matters: a failed delivery reverts, so a batch must not let one target stop the others.
+    function test_batch_aFailingTargetFailsItsCallAndTheMessageWaits() public {
         Transit memory failing = _applicationMessage(address(revertingTarget), 300_000);
-        Multicall3.Call3[] memory calls = new Multicall3.Call3[](1);
+        Transit memory good = _tipMessage(makeAddr("recipient next to a failing target"));
+        Multicall3.Call3[] memory calls = new Multicall3.Call3[](2);
         calls[0] = _deliverCall(failing);
+        calls[1] = _deliverCall(good);
         Multicall3.Result[] memory results = _aggregateAs(batcher, calls);
-        assertTrue(results[0].success, "the bridge took the message");
-        assertFalse(bridgeB.messageCallStatus(failing.messageId), "the bridge records the failed target");
+        assertFalse(results[0].success, "the delivery of the failing target reverts");
+        assertFalse(bridgeB.messageCallStatus(failing.messageId), "the message waits");
+        assertTrue(results[1].success, "the other call of the batch delivers");
+        assertTrue(bridgeB.messageCallStatus(good.messageId));
     }
 
     /// Claim: the router asks nothing of the caller of a batch. Shows: four different accounts, among them the reward
@@ -249,13 +252,13 @@ contract DeliveryRouterBatchingTest is WorldSupport {
     /// leak into the tip of another, and the router is idle again after the list.
     function test_batch_aGasBasedTipIsPaidInTheCallbackOfEachCall() public {
         vm.txGasPrice(1 gwei);
-        DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(recipient, 0, 1 ether, 1 ether);
+        DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(recipient, 0, 1 ether, 1 ether, 0);
         Transit[] memory transits = new Transit[](2);
         for (uint256 i = 0; i < 2; i++) {
             vm.chainId(CHAIN_A);
             vm.recordLogs();
             vm.prank(alice);
-            mediatorA.relayTokensAndCall(address(nativeToken), address(router), VALUE, abi.encode(director));
+            mediatorA.relayTokensAndCall(address(nativeToken), address(router), VALUE, abi.encode(director), TEST_CALLBACK_GAS);
             transits[i] = _proveForB(vm.getRecordedLogs());
         }
         Multicall3.Call3[] memory calls = _two(_deliverCall(transits[0]), _deliverCall(transits[1]));

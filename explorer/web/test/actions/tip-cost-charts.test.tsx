@@ -32,6 +32,7 @@ const selectionOf = (mode: DeliveryMode, overrides: { gasMargin?: bigint; baseFe
       marginRate: DEFAULT_MARGIN_RATE,
       gasMargin: overrides.gasMargin ?? RATE_SCALE,
       baseFeeCeilingWei: overrides.baseFeeCeilingWei ?? null,
+      callGas: 0n,
     },
     { router, defaultRouter: router },
   );

@@ -55,12 +55,6 @@ export function tipRateOf(percentText: string): bigint {
   return rate;
 }
 
-/** The gas limit that a send asks for when it deploys a copy on a chain, or null for the mediator's default. */
-export function newCopyGasLimitOf(traffic: TrafficConfig, chainId: number): bigint | null {
-  const text = traffic.newCopyGasLimit[String(chainId)];
-  return text === undefined ? null : BigInt(text);
-}
-
 /**
  * The beacon API whose state proofs confirm the gate of a chain: `traffic.gateBeaconUrls` of the chain, else the beacon
  * URL of the pair (`EXPLORER_BEACON_URL_<chain id>`), else null.
@@ -140,7 +134,6 @@ async function runTraffic(input: StartTrafficInput, statePath: string): Promise<
           deliveryRouter: side.contracts.deliveryRouter,
         },
         minimumNativeWei: BigInt(traffic.minimumNativeWei[String(side.chainId)] as string),
-        newCopyGasLimit: newCopyGasLimitOf(traffic, side.chainId),
         gate:
           overrides.gate === undefined
             ? createTrafficGate({ client, gate: side.contracts.gate, chainId: side.chainId, beaconUrl: gateBeaconUrlOf(traffic, side) })

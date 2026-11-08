@@ -234,35 +234,39 @@ contract TokenMediatorGapsTest is MediatorFixture {
     }
 
     /// Claim: a release that reaches the transfer with no more gas than `TRANSFER_GAS_RESERVE` makes no call to the
-    /// token, and ends as a failed release. Shows: with the smallest gas that still delivers, so little that the reserve is all
-    /// that is left, the handler does not revert, `ReleaseFailed` names the recipient, the token never ran, and the tokens
-    /// stay in the mediator. Matters: the reserve keeps the event affordable, so a starved delivery still ends cleanly.
-    function test_aReleaseThatReachesTheTransferWithOnlyTheReserveLeftEndsAsAFailedRelease() public {
+    /// token and reverts with `ReleaseOutOfGas`. Shows: at the smallest gas that delivers, carol is paid in full (never
+    /// a failed release); below it every attempt reverts and leaves the record and the balances as they were, and at
+    /// least one of them reverts with `ReleaseOutOfGas` for the token. Matters: before 2026-11-01 this case ended as a
+    /// final `ReleaseFailed`, so an executor could turn a lack of gas into a lost release; now it only reverts its own
+    /// transaction.
+    function test_aReleaseThatReachesTheTransferWithOnlyTheReserveLeftReverts() public {
         _bridgeAtoB(alice, address(tokenA), bob, 100 ether);
         uint256 index = _sendBack(_copyOf(address(tokenA)), bob, carol, 60 ether);
         MockAMB.Sent memory message = ambB.messageAt(index);
-        // The control: the same message with the gas of a normal delivery pays carol.
-        uint256 snapshot = vm.snapshotState();
-        (bool paidOk,) =
-            ambA.execute(message.target, message.data, message.sender, bytes32(CHAIN_B), message.id, 400_000);
-        assertTrue(paidOk);
-        assertEq(tokenA.balanceOf(carol), 60 ether, "control: enough gas pays");
-        vm.revertToState(snapshot);
 
         uint256 gas = _smallestGasThatDelivers(message);
         assertGt(gas, 0, "some gas delivers the message");
-        assertLt(gas, 80_000, "the smallest delivering gas is below the figure of a paid release");
-        vm.expectEmit(true, true, true, true, address(mediatorA));
-        emit ReleaseFailed(address(tokenA), carol, 60 ether, message.id);
+        bool sawOutOfGas;
+        for (uint256 lower = gas - 250; lower >= 20_000 && lower < gas; lower -= 250) {
+            uint256 snapshot = vm.snapshotState();
+            (bool failedOk, bytes memory error) =
+                ambA.execute(message.target, message.data, message.sender, bytes32(CHAIN_B), message.id, lower);
+            vm.revertToState(snapshot);
+            assertFalse(failedOk, "less gas reverts");
+            if (keccak256(error) == keccak256(abi.encodeWithSelector(TokenMediator.ReleaseOutOfGas.selector, address(tokenA)))) {
+                sawOutOfGas = true;
+            }
+        }
+        assertTrue(sawOutOfGas, "a starved transfer reverts with ReleaseOutOfGas");
+        assertEq(mediatorA.mediatorBalance(address(tokenA)), 100 ether, "the record is unchanged");
+
         (bool ok,) = ambA.execute(message.target, message.data, message.sender, bytes32(CHAIN_B), message.id, gas);
-        assertTrue(ok, "the handler did not revert");
-        assertEq(tokenA.balanceOf(carol), 0, "the token never ran");
+        assertTrue(ok, "the smallest delivering gas delivers");
+        assertEq(tokenA.balanceOf(carol), 60 ether, "and pays carol in full");
         assertEq(mediatorA.mediatorBalance(address(tokenA)), 40 ether, "the record fell by the release");
-        assertEq(tokenA.balanceOf(address(mediatorA)), 100 ether, "the tokens stay in the mediator");
     }
 
-    /// @dev The smallest gas, in steps of 250, with which the handler does not run out of gas. At that figure the
-    /// handler reaches the transfer with less than the reserve, so it skips the transfer.
+    /// @dev The smallest gas, in steps of 250, with which the handler does not revert.
     function _smallestGasThatDelivers(MockAMB.Sent memory message) internal returns (uint256) {
         for (uint256 gas = 20_000; gas < 400_000; gas += 250) {
             uint256 snapshot = vm.snapshotState();

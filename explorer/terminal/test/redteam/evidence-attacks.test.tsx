@@ -30,7 +30,7 @@ function consistentEvidence(calldata: Hex, changes: Record<string, unknown> = {}
     ...base,
     sourceTransactionHash: proven.sourceTransactionHash,
     logIndex,
-    message: { ...(base.message as object), messageId: proven.messageId, sender: proven.sender, executor: proven.executor, gasLimit: Number(proven.gasLimit) },
+    message: { ...(base.message as object), messageId: proven.messageId, sender: proven.sender, executor: proven.executor },
     execute: { to: bridge, data: calldata },
     ...changes,
   })
@@ -61,7 +61,6 @@ describe('evidence bound to the proof (fix 3473404)', () => {
   for (const [field, value, pattern] of [
     ['sender', '0x00000000000000000000000000000000000000c4', /sender in the file/],
     ['executor', '0x00000000000000000000000000000000000000d5', /executor in the file/],
-    ['gasLimit', 300_001, /gasLimit in the file/],
   ] as const) {
     test(`ATTACK evidence label ${field} differs from the proof: BLOCKED`, () => {
       const file = JSON.parse(evidence()) as { message: Record<string, unknown> }

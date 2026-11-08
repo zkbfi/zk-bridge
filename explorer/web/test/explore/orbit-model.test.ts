@@ -39,7 +39,7 @@ describe("status → step", () => {
 
   it("maps each status to the step the transfer waits at, and the end states off the loop", () => {
     const mapped = Object.fromEntries(FEED_STATUSES.map((status) => [status, orbitStepOf({ status, ...at })]));
-    expect(mapped).toEqual({ sent: 0, waiting_for_finality: 1, covered: 2, delivered: null, failed_call: null, release_failed: null });
+    expect(mapped).toEqual({ sent: 0, waiting_for_finality: 1, covered: 2, delivered: null, release_failed: null });
   });
 
   it("puts a transfer at Proof ready once a valid proof of its direction reaches its send, before any head covers it", () => {

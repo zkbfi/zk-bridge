@@ -1,7 +1,7 @@
 /**
  * The tip for delivery. It turns the form inputs and the indexer report into one fee director, with every label that
  * the page shows: exact or estimate, the guaranteed maximum, the cost lines and the data source. The arithmetic lives in
- * `@zk-bridge/shared` (`buildFeeSuggestions`, `describeFee`); this file only picks the mode and adds the maximum that
+ * `@zk-bridge/shared` (`buildFeeSuggestions`, `describeFee`) and `@terminal/app/worst-case-fee`; this file only picks the mode and adds the maximum that
  * the tip can take from the amount that is still in the transfer.
  */
 import type { Address } from "viem";
@@ -10,13 +10,11 @@ import {
   defaultTip,
   defaultTipChoiceOf,
   gasPriceBasisFor,
-  describeFee,
   maximumFee,
   RATE_SCALE,
   settingsOf,
   type BaseFeeSupport,
   type DeliveryCostReport,
-  type FeeDescription,
   type FeeDirector,
   type FeeSuggestions,
   type FeeToken,
@@ -24,6 +22,7 @@ import {
   type PayoutKind,
   type SenderPrice,
 } from "@zk-bridge/shared";
+import { describeFeeAtWorstCase, type FeeDescriptionWithExpected } from "@terminal/app/worst-case-fee";
 
 /** The ways that the page offers to tip. */
 export type DeliveryMode = "percentage" | "fixed" | "gas-multiplier";
@@ -59,6 +58,8 @@ export type DeliverySelectionInput = {
   readonly marginRate: bigint;
   /** The factor on the gas cost, scaled by 1e18. Only the gas multiplier mode reads it. */
   readonly gasMargin: bigint;
+  /** The exact gas that the follow-up call gets: the fifth word of the terms. Zero when the relay makes no call. */
+  readonly callGas: bigint;
   /** The base fee above which a gas based tip stops rising, in wei per gas. Null takes three times the base fee now (the Normal gas level). */
   readonly baseFeeCeilingWei: bigint | null;
   /**
@@ -76,9 +77,12 @@ export type DeliverySelection = DeliveryRouters & {
   readonly kind: "available";
   readonly mode: DeliveryMode;
   readonly director: FeeDirector;
-  readonly description: FeeDescription;
+  readonly description: FeeDescriptionWithExpected;
   readonly suggestions: FeeSuggestions;
-  /** The most that the tip can take, in base units of the token. For a gas based tip it is the limit. */
+  /**
+   * The most that the tip can take, in base units of the token: the signed limit for a gas based tip. It is the hard
+   * ceiling: the "max" shown to the user and the figure the caps check. The typical tip is `description.expectedUnits`.
+   */
   readonly maximumTip: bigint;
   readonly token: FeeToken;
   readonly baseFeeCeilingWei: bigint | null;
@@ -108,15 +112,16 @@ const isUnavailable = (value: FeeDirector | DeliveryUnavailable): value is Deliv
 const directorOf = (input: DeliverySelectionInput, suggestions: FeeSuggestions): FeeDirector | DeliveryUnavailable => {
   if (input.mode === "percentage") {
     if (input.percentageRate > RATE_SCALE) return { kind: "unavailable", reason: "The percentage is above 100 percent." };
-    return { ...defaultTip(input.recipient, input.payout), multiplier: input.percentageRate };
+    return { ...defaultTip(input.recipient, input.payout), multiplier: input.percentageRate, callGas: input.callGas };
   }
   if (input.mode === "fixed" && input.fixedAmount !== null) {
-    return { recipient: input.recipient, settings: settingsOf({ mode: "fixed", payout: input.payout }), limit: input.fixedAmount, multiplier: 0n };
+    return { recipient: input.recipient, settings: settingsOf({ mode: "fixed", payout: input.payout }), limit: input.fixedAmount, multiplier: 0n, callGas: input.callGas };
   }
   const option = input.mode === "fixed" ? suggestions.fixed : suggestions.gasMultiplier;
   if (option.kind !== "available") return { kind: "unavailable", reason: option.reason };
   const cap = input.mode === "gas-multiplier" ? (input.gasLimitCapUnits ?? null) : null;
-  return cap !== null && cap < option.director.limit ? { ...option.director, limit: cap } : option.director;
+  const director = { ...option.director, callGas: input.callGas };
+  return cap !== null && cap < director.limit ? { ...director, limit: cap } : director;
 };
 
 /**
@@ -156,7 +161,7 @@ export const selectDelivery = (input: DeliverySelectionInput, routers: DeliveryR
     });
     const director = directorOf(input, suggestions);
     if (isUnavailable(director)) return director;
-    const description = describeFee(director, {
+    const description = describeFeeAtWorstCase(director, {
       transferValue: input.transferValue,
       token,
       payout: input.payout,

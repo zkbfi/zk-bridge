@@ -6,7 +6,7 @@
 import { writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { decodeErrorResult, decodeEventLog, encodeFunctionData, formatUnits, type Address, type Hex, type TransactionReceipt } from "viem";
-import { beaconLightClientAbi, deliveryRouterAbi, MAX_GAS_PER_TX, messageBridgeAbi, requiredDeliveryGas, tipVersusCost, type BatchedCall } from "@zk-bridge/shared";
+import { beaconLightClientAbi, deliveryRouterAbi, messageBridgeAbi, tipVersusCost, type BatchedCall } from "@zk-bridge/shared";
 import { ANVIL_MNEMONIC, accountOf, chainOf, sendFrom, type Context } from "../context.ts";
 import { execute, readyEvidence, sendBatch, type MessageRecord } from "../delivery.ts";
 import { record } from "../results.ts";
@@ -39,19 +39,24 @@ const runnerKey = (): Hex => `0x${Buffer.from(mnemonicToAccount(ANVIL_MNEMONIC, 
 
 /** The value of one whole token in wei: every token of the run is worth 0.001 coin (see `valuationsWei`). */
 const TOKEN_VALUE_WEI = 10n ** 15n;
+/**
+ * The gas that the costliest delivery of the run may use. The protocol has no maximum, so this is the run's own budget:
+ * a first send that deploys a copy, plus a call after the delivery, with room to spare.
+ */
+export const COSTLIEST_DELIVERY_GAS = 10_000_000n;
 /** The tip is this many times the worst delivery cost, so a small move of the gas price cannot put it below cost. */
 const TIP_MARGIN = 4n;
 
 /**
  * A fixed tip, in whole tokens, that covers the cost of the most expensive delivery. The cost is the gas that a delivery
- * must have for the largest message gas limit (`requiredDeliveryGas`) at the gas price of the destination chain. The shared
+ * may use (`COSTLIEST_DELIVERY_GAS`) at the gas price of the destination chain. The shared
  * `tipVersusCost` confirms that the tip is not below cost, so the runner delivers at its loss limit of zero.
  *
  * @param gasPrice The gas price of the destination chain, in wei.
  * @throws Error when the tip still reads as below cost.
  */
 export const coveringTipFor = (gasPrice: bigint): string => {
-  const costWei = requiredDeliveryGas(MAX_GAS_PER_TX) * gasPrice;
+  const costWei = COSTLIEST_DELIVERY_GAS * gasPrice;
   const tipUnits = (costWei * TIP_MARGIN * WHOLE) / TOKEN_VALUE_WEI + 1n;
   const valuedWei = (tipUnits * TOKEN_VALUE_WEI) / WHOLE;
   if (tipVersusCost({ tipWei: valuedWei, costWei }).position === "below-cost") throw new Error(`the computed tip ${valuedWei} is below the cost ${costWei}`);

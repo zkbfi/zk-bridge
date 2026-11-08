@@ -1,5 +1,5 @@
 import type { Address, Hex } from "viem";
-import { CALL_GAS_RESERVE, decodeMediatorMessage, gasOverheadOf, payoutOf, readDeliveryTerms, tokenUnitsToWeiFloor, type DeliveryCall, type FeeDirector, type PayoutKind } from "@zk-bridge/shared";
+import { decodeMediatorMessage, payoutOf, readDeliveryTerms, tokenUnitsToWeiFloor, type DeliveryCall, type FeeDirector, type PayoutKind } from "@zk-bridge/shared";
 
 /** The director is the shared one: it matches `DeliveryRouter.sol` and the vectors of the router (`@zk-bridge/shared`). */
 export type { FeeDirector };
@@ -50,43 +50,23 @@ export function readFeeOffer(input: ReadFeeOfferInput): FeeOffer {
   return { kind: "offer", director: terms.director, value: message.value, call: terms.call };
 }
 
-/** Input of {@link callGasAllowance}. */
-export interface CallGasAllowanceInput {
-  /** The gas that is left when the router measures the tip. */
-  readonly gasLeft: bigint;
-  /** How the router pays the tip: it sets the overhead that the router holds back. */
-  readonly payout: PayoutKind;
-}
-
-/**
- * The gas that the tip measure of the router adds for a user call: the gas left, less the payout overhead and
- * `CALL_GAS_RESERVE`, or zero when the gas left does not pass that sum. It mirrors `DeliveryRouter._callGasAllowance`.
- */
-export function callGasAllowance(input: CallGasAllowanceInput): bigint {
-  const held = gasOverheadOf(input.payout) + CALL_GAS_RESERVE;
-  return input.gasLeft > held ? input.gasLeft - held : 0n;
-}
-
 /** Input of {@link feeGasUnitsOf}. */
 export interface FeeGasUnitsInput {
   /** The user call of the offer, or null when the offer has none. */
   readonly call: DeliveryCall | null;
-  /** The gas of the execution, as simulated: what the tip counts when there is no call. */
+  /** The gas of the execution, as estimated. */
   readonly executionGas: bigint;
-  /** The gas limit that the runner plans to send. The call may use what the execution leaves of it. */
-  readonly plannedGas: bigint;
-  readonly payout: PayoutKind;
+  /** The `callGas` of the director of the offer. */
+  readonly callGas: bigint;
 }
 
 /**
- * The gas that the router counts for the tip of an offer. Without a call it is the gas of the execution. With a call the
- * router adds the allowance of the call, because the call runs after the tip: the gas left at the measure is the
- * planned gas less the execution gas, so the tip reaches up to the gas that the runner makes available.
+ * The gas that the router counts for the tip of an offer: the gas of the execution, plus the `callGas` of the director
+ * when the offer asks for a follow-up call. The call gets exactly `callGas`, so the count does not depend on what the
+ * runner makes available.
  */
 export function feeGasUnitsOf(input: FeeGasUnitsInput): bigint {
-  if (input.call === null) return input.executionGas;
-  const gasLeft = input.plannedGas > input.executionGas ? input.plannedGas - input.executionGas : 0n;
-  return input.executionGas + callGasAllowance({ gasLeft, payout: input.payout });
+  return input.call === null ? input.executionGas : input.executionGas + input.callGas;
 }
 
 /** Input of {@link payoutOfOffer}. */

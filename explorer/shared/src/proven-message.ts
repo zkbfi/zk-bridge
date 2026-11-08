@@ -16,7 +16,6 @@ export type ProvenMessage = {
   readonly sourceTransactionHash: Hex;
   readonly sender: Address;
   readonly executor: Address;
-  readonly gasLimit: bigint;
   readonly sourceChainId: bigint;
   readonly destinationChainId: bigint;
 };
@@ -138,7 +137,6 @@ const decodeMessage = (encoded: Hex) => {
     messageId: word(data, 0, 32),
     sender: getAddress(word(data, 32, 20)),
     executor: getAddress(word(data, 52, 20)),
-    gasLimit: hexToBigInt(word(data, 72, 4)),
     sourceChainId: hexToBigInt(word(data, FIXED_HEADER_LENGTH, sourceLength)),
     destinationChainId: hexToBigInt(word(data, FIXED_HEADER_LENGTH + sourceLength, destinationLength)),
   };

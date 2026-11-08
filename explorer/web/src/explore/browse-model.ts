@@ -102,7 +102,7 @@ const tokenOf = (pair: PairConfig, value: string): { chainId: number; address: s
 };
 
 /** The statuses that a status menu value stands for. */
-const STATUS_PARAM: Readonly<Record<string, string>> = { inflight: "inflight", delivered: "delivered", failed: "failed_call,release_failed" };
+const STATUS_PARAM: Readonly<Record<string, string>> = { inflight: "inflight", delivered: "delivered", failed: "release_failed" };
 
 /**
  * The request for the state's page.

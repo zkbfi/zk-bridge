@@ -189,7 +189,7 @@ describe("the filter bar", () => {
     const one = renderPage(<FilterBar pair={FIXTURE_PAIR} tokens={FIXTURE_TOKENS} state={{ ...EMPTY_FILTER, kind: "token" }} onChange={onChange} addressProblem={null} />);
     expect(screen.getByRole("button", { name: "Clear 1 filter" })).toBeEnabled();
     one.unmount();
-    renderPage(<FilterBar pair={FIXTURE_PAIR} tokens={FIXTURE_TOKENS} state={{ ...EMPTY_FILTER, kind: "token", status: "failed_call" }} onChange={onChange} addressProblem={null} />);
+    renderPage(<FilterBar pair={FIXTURE_PAIR} tokens={FIXTURE_TOKENS} state={{ ...EMPTY_FILTER, kind: "token", status: "release_failed" }} onChange={onChange} addressProblem={null} />);
     await userEvent.click(screen.getByRole("button", { name: "Clear 2 filters" }));
     expect(onChange).toHaveBeenCalledWith(EMPTY_FILTER);
   });

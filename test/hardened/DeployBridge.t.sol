@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {MediatorBuild} from "./utils/MediatorBuild.sol";
 import {Test, console2} from "forge-std/Test.sol";
 import {DeployBridge} from "../../script/hardened/DeployBridge.s.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
@@ -701,15 +702,19 @@ contract DeployBridgeTest is Test {
         assertEq(actual.observedLightClient, predicted.observedLightClient, "own-chain light client");
         assertEq(actual.registry, predicted.registry, "registry");
         assertEq(actual.gate, predicted.gate, "gate");
+        assertEq(actual.receiptProofLib, predicted.receiptProofLib, "ReceiptProofLib");
+        assertEq(actual.openingProofLib, predicted.openingProofLib, "OpeningProofLib");
+        assertEq(actual.beaconLayoutLib, predicted.beaconLayoutLib, "BeaconLayoutLib");
         assertEq(actual.bridge, predicted.bridge, "bridge");
-        assertEq(actual.mediator, predicted.mediator, "mediator");
+        assertEq(actual.mediatorPayloadsLib, predicted.mediatorPayloadsLib, "MediatorPayloads");
         assertEq(actual.factory, predicted.factory, "factory");
+        assertEq(actual.mediator, predicted.mediator, "mediator");
         assertEq(actual.deliveryRouter, predicted.deliveryRouter, "delivery router");
     }
 
     /// Claim: the nonce table of the script is the order of the deployment. Shows: the plan puts each contract at the
     /// documented offset on both chains (chain A has no registry and has the delivery router; chain B has the registry and
-    /// no router), the factory at nonce 1 of its mediator, and the two `deployChain` runs end on the nonce that the table
+    /// no router), the four libraries and the factory at deployer nonces of their own, and the two `deployChain` runs end on the nonce that the table
     /// gives. Every deployed address equals its prediction. Matters: R2-08. Each bridge and each mediator names its twin
     /// as an immutable, so one shifted nonce would point a contract at an address that holds something else.
     function test_R2_08_predictedAddressesMatchDeployedAddresses() public {
@@ -719,18 +724,26 @@ contract DeployBridgeTest is Test {
         assertEq(plan.chainA.observedLightClient, address(0), "Ethereum has no own-chain light client");
         assertEq(plan.chainA.registry, address(0), "Ethereum has no registry");
         assertEq(plan.chainA.gate, vm.computeCreateAddress(deployer, NONCE_A + 1));
-        assertEq(plan.chainA.bridge, vm.computeCreateAddress(deployer, NONCE_A + 2));
-        assertEq(plan.chainA.mediator, vm.computeCreateAddress(deployer, NONCE_A + 3));
-        assertEq(plan.chainA.deliveryRouter, vm.computeCreateAddress(deployer, NONCE_A + 4));
-        assertEq(plan.chainA.factory, vm.computeCreateAddress(plan.chainA.mediator, 1));
+        assertEq(plan.chainA.receiptProofLib, vm.computeCreateAddress(deployer, NONCE_A + 2));
+        assertEq(plan.chainA.openingProofLib, vm.computeCreateAddress(deployer, NONCE_A + 3));
+        assertEq(plan.chainA.beaconLayoutLib, vm.computeCreateAddress(deployer, NONCE_A + 4));
+        assertEq(plan.chainA.bridge, vm.computeCreateAddress(deployer, NONCE_A + 5));
+        assertEq(plan.chainA.mediatorPayloadsLib, vm.computeCreateAddress(deployer, NONCE_A + 6));
+        assertEq(plan.chainA.factory, vm.computeCreateAddress(deployer, NONCE_A + 7));
+        assertEq(plan.chainA.mediator, vm.computeCreateAddress(deployer, NONCE_A + 8));
+        assertEq(plan.chainA.deliveryRouter, vm.computeCreateAddress(deployer, NONCE_A + 9));
         assertEq(plan.chainB.lightClient, vm.computeCreateAddress(deployer, NONCE_B));
         assertEq(plan.chainB.observedLightClient, vm.computeCreateAddress(deployer, NONCE_B + 1));
         assertEq(plan.chainB.registry, vm.computeCreateAddress(deployer, NONCE_B + 2));
         assertEq(plan.chainB.gate, vm.computeCreateAddress(deployer, NONCE_B + 3));
-        assertEq(plan.chainB.bridge, vm.computeCreateAddress(deployer, NONCE_B + 4));
-        assertEq(plan.chainB.mediator, vm.computeCreateAddress(deployer, NONCE_B + 5));
+        assertEq(plan.chainB.receiptProofLib, vm.computeCreateAddress(deployer, NONCE_B + 4));
+        assertEq(plan.chainB.openingProofLib, vm.computeCreateAddress(deployer, NONCE_B + 5));
+        assertEq(plan.chainB.beaconLayoutLib, vm.computeCreateAddress(deployer, NONCE_B + 6));
+        assertEq(plan.chainB.bridge, vm.computeCreateAddress(deployer, NONCE_B + 7));
+        assertEq(plan.chainB.mediatorPayloadsLib, vm.computeCreateAddress(deployer, NONCE_B + 8));
+        assertEq(plan.chainB.factory, vm.computeCreateAddress(deployer, NONCE_B + 9));
+        assertEq(plan.chainB.mediator, vm.computeCreateAddress(deployer, NONCE_B + 10));
         assertEq(plan.chainB.deliveryRouter, address(0), "chain B deploys no delivery router");
-        assertEq(plan.chainB.factory, vm.computeCreateAddress(plan.chainB.mediator, 1));
 
         (DeployBridge.ChainDeployment memory deploymentA, DeployBridge.ChainDeployment memory deploymentB) =
             _deployments(config, plan);
@@ -740,13 +753,13 @@ contract DeployBridgeTest is Test {
         uint256 gasBefore = gasleft();
         DeployBridge.ChainAddresses memory actualA = script.deployChain(deploymentA);
         console2.log("gas of deployChain for chain A (all contracts and the read-back)", gasBefore - gasleft());
-        assertEq(vm.getNonce(deployer), NONCE_A + 5, "five contracts left the deployer on chain A");
+        assertEq(vm.getNonce(deployer), NONCE_A + 10, "ten contracts left the deployer on chain A");
         vm.chainId(369);
         vm.setNonce(deployer, uint64(NONCE_B));
         gasBefore = gasleft();
         DeployBridge.ChainAddresses memory actualB = script.deployChain(deploymentB);
         console2.log("gas of deployChain for chain B (all contracts and the read-back)", gasBefore - gasleft());
-        assertEq(vm.getNonce(deployer), NONCE_B + 6, "six contracts left the deployer on chain B");
+        assertEq(vm.getNonce(deployer), NONCE_B + 11, "eleven contracts left the deployer on chain B");
 
         _assertSameAddresses(plan.chainA, actualA);
         _assertSameAddresses(plan.chainB, actualB);
@@ -891,13 +904,13 @@ contract DeployBridgeTest is Test {
     }
 
     /// Claim: the factory of each mediator is the predicted address, and it belongs to that mediator. Shows: the plan
-    /// holds `computeCreateAddress(mediator, 1)`; `tokenFactory()` of each deployed mediator equals it; the factory has
-    /// code and names the mediator. Matters: the script cannot send the factory in a transaction. It must predict an
-    /// address that the mediator creates, and a wrong rule would make the read-back fail on every honest deployment.
+    /// holds the deployer nonce just before the mediator; `tokenFactory()` of each deployed mediator equals it; the
+    /// factory has code and names the mediator. Matters: the factory is deployed before the mediator and names it by its
+    /// predicted address, so a wrong rule would make the mediator refuse the factory on every honest deployment.
     function test_factoryOfEachMediatorIsThePredictedAddress() public {
         _deployBoth();
-        assertEq(planned.chainA.factory, vm.computeCreateAddress(deployedA.mediator, 1));
-        assertEq(planned.chainB.factory, vm.computeCreateAddress(deployedB.mediator, 1));
+        assertEq(planned.chainA.factory, vm.computeCreateAddress(deployer, NONCE_A + 7));
+        assertEq(planned.chainB.factory, vm.computeCreateAddress(deployer, NONCE_B + 9));
         assertEq(address(TokenMediator(deployedA.mediator).tokenFactory()), planned.chainA.factory);
         assertEq(address(TokenMediator(deployedB.mediator).tokenFactory()), planned.chainB.factory);
         assertGt(planned.chainA.factory.code.length, 0);
@@ -941,7 +954,7 @@ contract DeployBridgeTest is Test {
         assertEq(plan.chainB.deliveryRouter, address(0));
         assertEq(
             plan.chainB.mediator,
-            vm.computeCreateAddress(deployer, NONCE_B + 5),
+            vm.computeCreateAddress(deployer, NONCE_B + 10),
             "the offsets before the router do not move"
         );
 
@@ -951,7 +964,7 @@ contract DeployBridgeTest is Test {
         vm.setNonce(deployer, uint64(NONCE_B));
         DeployBridge.ChainAddresses memory deployed = script.deployChain(deploymentB);
         assertEq(deployed.deliveryRouter, address(0));
-        assertEq(vm.getNonce(deployer), NONCE_B + 6, "the mediator is the last contract of the deployer");
+        assertEq(vm.getNonce(deployer), NONCE_B + 11, "the mediator is the last contract of the deployer");
         _assertSameAddresses(plan.chainB, deployed);
 
         // The key may also be absent.
@@ -1050,18 +1063,18 @@ contract DeployBridgeTest is Test {
         script.parseConfig(vm.replace(json, vm.toString(feeFailedDelivery), vm.toString(address(0))));
     }
 
-    /// Claim: the deployed bridge lets through at least the gas that its mediator asks for. Shows: for each side,
-    /// `maxGasPerTx` of the deployed bridge is not below `DEPLOY_GAS_LIMIT + CALLBACK_GAS_LIMIT` of the deployed mediator.
-    /// Matters: the mediator constructor refuses a bridge below that number (`GasLimitAboveBridgeMaximum`). The script
-    /// cannot cause it with the real bridge, and this test fails if a change of either contract breaks the pair.
-    function test_deployedBridgeLetsThroughTheGasThatTheMediatorNeeds() public {
+    /// Claim: each deployed mediator reads the other chain from its own bridge. Shows: for each side, the mediator's
+    /// `remoteChainId` equals the bridge's `remoteChainId` and `destinationChainId`, and the bridge's `localChainId` is
+    /// the chain it was deployed on. Matters: the identifier is no longer passed twice, so the two cannot disagree.
+    function test_deployedMediatorReadsTheOtherChainFromItsBridge() public {
         _deployBoth();
         address[2] memory mediators = [deployedA.mediator, deployedB.mediator];
         address[2] memory bridges = [deployedA.bridge, deployedB.bridge];
         for (uint256 i = 0; i < 2; i++) {
             TokenMediator mediator = TokenMediator(mediators[i]);
-            uint256 needed = mediator.DEPLOY_GAS_LIMIT() + mediator.CALLBACK_GAS_LIMIT();
-            assertGe(MessageBridge(bridges[i]).maxGasPerTx(), needed);
+            MessageBridge bridge = MessageBridge(bridges[i]);
+            assertEq(mediator.remoteChainId(), bridge.remoteChainId(), "the mediator takes the remote chain of the bridge");
+            assertEq(bridge.destinationChainId(), bridge.remoteChainId(), "the interface view agrees");
             assertEq(address(mediator.bridgeContract()), bridges[i], "control: the mediator reads this bridge");
         }
     }
@@ -1133,7 +1146,7 @@ contract DeployBridgeTest is Test {
         for (uint256 i = 0; i < wrongLimiters.length; i++) {
             TokenMediator.MediatorTerms memory terms = _mediatorTerms(deploymentA, deployed.bridge);
             terms.flowLimiter = wrongLimiters[i];
-            _swapMediator(deploymentA, deployed, new TokenMediator(terms));
+            _swapMediator(deploymentA, deployed, MediatorBuild.deploy(terms, deploymentA.chain.remoteChainName));
             vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.flowLimiter"));
             script.verifyDeployment(deploymentA, deployed);
         }
@@ -1295,7 +1308,6 @@ contract DeployBridgeTest is Test {
     ) internal returns (MessageBridge) {
         return new MessageBridge(
             deployed.lightClient,
-            1,
             369,
             remoteBridge,
             MessageBridge.BridgeTerms(cutoff, remoteLightClient, type(uint64).max),
@@ -1313,9 +1325,8 @@ contract DeployBridgeTest is Test {
         return TokenMediator.MediatorTerms({
             bridge: bridge,
             remoteMediator: d.remoteMediator,
-            remoteChainId: d.remoteChainId,
             flowLimiter: d.chain.flowLimiter,
-            remoteChainName: d.chain.remoteChainName
+            tokenFactory: address(0)
         });
     }
 
@@ -1364,7 +1375,7 @@ contract DeployBridgeTest is Test {
 
     /// Claim: the post-deploy check catches a wrong remote bridge. Shows: a bridge with another remote bridge fails
     /// `verifyDeployment` with the field name, while the honest deployment passes; a contract at an address other than
-    /// the prediction fails with the prediction error, for each of the seven predicted contracts. Matters: R2-08 (read
+    /// the prediction fails with the prediction error, for each of the ten predicted contracts. Matters: R2-08 (read
     /// every immutable back, do not trust that the deployment matched).
     function test_R2_08_postDeployAssertionsCatchWrongRemoteBridge() public {
         (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
@@ -1376,7 +1387,18 @@ contract DeployBridgeTest is Test {
 
         // The prediction itself is checked first, for each contract.
         (d, deployed) = _honestChainA();
-        string[6] memory names = ["lightClient", "gate", "bridge", "mediator", "factory", "deliveryRouter"];
+        string[10] memory names = [
+            "lightClient",
+            "gate",
+            "receiptProofLib",
+            "openingProofLib",
+            "beaconLayoutLib",
+            "bridge",
+            "mediatorPayloadsLib",
+            "factory",
+            "mediator",
+            "deliveryRouter"
+        ];
         for (uint256 i = 0; i < names.length; i++) {
             DeployBridge.ChainAddresses memory moved = _copy(deployed);
             address predicted = _slot(moved, i);
@@ -1390,23 +1412,49 @@ contract DeployBridgeTest is Test {
 
     function _copy(DeployBridge.ChainAddresses memory a) internal pure returns (DeployBridge.ChainAddresses memory) {
         return DeployBridge.ChainAddresses(
-            a.lightClient, a.observedLightClient, a.registry, a.gate, a.bridge, a.mediator, a.factory, a.deliveryRouter
+            a.lightClient,
+            a.observedLightClient,
+            a.registry,
+            a.gate,
+            a.receiptProofLib,
+            a.openingProofLib,
+            a.beaconLayoutLib,
+            a.bridge,
+            a.mediatorPayloadsLib,
+            a.factory,
+            a.mediator,
+            a.deliveryRouter
         );
     }
 
-    /// @dev Reads one of the six predicted contracts by its position in `verifyDeployment`.
+    /// @dev Reads one of the ten predicted contracts by its position in `verifyDeployment`.
     function _slot(DeployBridge.ChainAddresses memory a, uint256 index) internal pure returns (address) {
-        address[6] memory all = [a.lightClient, a.gate, a.bridge, a.mediator, a.factory, a.deliveryRouter];
+        address[10] memory all = [
+            a.lightClient,
+            a.gate,
+            a.receiptProofLib,
+            a.openingProofLib,
+            a.beaconLayoutLib,
+            a.bridge,
+            a.mediatorPayloadsLib,
+            a.factory,
+            a.mediator,
+            a.deliveryRouter
+        ];
         return all[index];
     }
 
     function _setSlot(DeployBridge.ChainAddresses memory a, uint256 index, address value) internal pure {
         if (index == 0) a.lightClient = value;
         if (index == 1) a.gate = value;
-        if (index == 2) a.bridge = value;
-        if (index == 3) a.mediator = value;
-        if (index == 4) a.factory = value;
-        if (index == 5) a.deliveryRouter = value;
+        if (index == 2) a.receiptProofLib = value;
+        if (index == 3) a.openingProofLib = value;
+        if (index == 4) a.beaconLayoutLib = value;
+        if (index == 5) a.bridge = value;
+        if (index == 6) a.mediatorPayloadsLib = value;
+        if (index == 7) a.factory = value;
+        if (index == 8) a.mediator = value;
+        if (index == 9) a.deliveryRouter = value;
     }
 
     /// Claim: the post-deploy check catches a mediator that names the wrong remote mediator. Shows: a mediator built
@@ -1418,29 +1466,22 @@ contract DeployBridgeTest is Test {
         (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
         TokenMediator.MediatorTerms memory terms = _mediatorTerms(d, deployed.bridge);
         terms.remoteMediator = makeAddr("not the predicted mediator B");
-        _swapMediator(d, deployed, new TokenMediator(terms));
+        _swapMediator(d, deployed, MediatorBuild.deploy(terms, d.chain.remoteChainName));
         vm.expectRevert(
             abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.mediatorContractOnOtherSide")
         );
         script.verifyDeployment(d, deployed);
 
-        (d, deployed) = _honestChainA();
-        terms = _mediatorTerms(d, deployed.bridge);
-        terms.remoteChainId = 56;
-        _swapMediator(d, deployed, new TokenMediator(terms));
-        vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.remoteChainId"));
-        script.verifyDeployment(d, deployed);
-
         // A second bridge with the same settings is a different contract, so the mediator names the wrong bridge.
         (d, deployed) = _honestChainA();
         MessageBridge otherBridge = _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 0, 0);
-        _swapMediator(d, deployed, new TokenMediator(_mediatorTerms(d, address(otherBridge))));
+        _swapMediator(d, deployed, MediatorBuild.deploy(_mediatorTerms(d, address(otherBridge)), d.chain.remoteChainName));
         vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.bridgeContract"));
         script.verifyDeployment(d, deployed);
 
         // A predicted factory that another mediator made is refused at the prediction.
         (d, deployed) = _honestChainA();
-        TokenMediator other = new TokenMediator(_mediatorTerms(d, deployed.bridge));
+        TokenMediator other = MediatorBuild.deploy(_mediatorTerms(d, deployed.bridge), d.chain.remoteChainName);
         deployed.factory = address(other.tokenFactory());
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -1514,7 +1555,7 @@ contract DeployBridgeTest is Test {
         for (uint256 i = 0; i < wrongLimiters.length; i++) {
             TokenMediator.MediatorTerms memory terms = _mediatorTerms(d, deployed.bridge);
             terms.flowLimiter = wrongLimiters[i];
-            _swapMediator(d, deployed, new TokenMediator(terms));
+            _swapMediator(d, deployed, MediatorBuild.deploy(terms, d.chain.remoteChainName));
             vm.expectRevert(abi.encodeWithSelector(DeployBridge.DeploymentMismatch.selector, "mediator.flowLimiter"));
             script.verifyDeployment(d, deployed);
         }
@@ -1618,8 +1659,8 @@ contract DeployBridgeTest is Test {
     function test_HB01_postDeployAssertionsCatchLayoutsThatDoNotStartEmpty() public {
         (DeployBridge.ChainDeployment memory d, DeployBridge.ChainAddresses memory deployed) = _honestChainA();
         address honestBridge = deployed.bridge;
-        // Storage slots 6, 7 and 8 hold the three layout arrays (see `forge inspect MessageBridge storageLayout`).
-        for (uint256 slot = 6; slot <= 8; slot++) {
+        // Storage slots 4, 5 and 6 hold the three layout arrays (see `forge inspect MessageBridge storageLayout`).
+        for (uint256 slot = 4; slot <= 6; slot++) {
             MessageBridge fresh =
                 _newBridgeA(deployed, d.remoteBridge, d.remoteLightClient, 0, d.chain.lightClient.capellaEra);
             vm.store(address(fresh), bytes32(slot), bytes32(uint256(1)));

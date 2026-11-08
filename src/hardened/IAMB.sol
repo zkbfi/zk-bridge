@@ -12,7 +12,8 @@ interface IAMB {
     event UserRequestForAffirmation(bytes32 indexed messageId, bytes encodedData);
     /// @notice Never emitted by a bridge without validators.
     event UserRequestForSignature(bytes32 indexed messageId, bytes encodedData);
-    /// @notice Emitted on every execution of a message.
+    /// @notice Emitted on every execution of a message. `MessageBridge` emits it only for a delivery that succeeded: a
+    /// delivery whose call fails reverts. So `status` is always true there.
     event AffirmationCompleted(
         address indexed sender, address indexed executor, bytes32 indexed messageId, bool status
     );
@@ -22,7 +23,8 @@ interface IAMB {
     /// @notice The sender of the message on the other chain. Set only during the call to the target.
     function messageSender() external view returns (address);
 
-    /// @notice The ceiling of the gas that a message may ask for.
+    /// @notice The ceiling of the gas that a message may ask for. `MessageBridge` reads no gas from a message and answers
+    /// the width of the gas field.
     function maxGasPerTx() external view returns (uint256);
 
     /// @notice The source transaction hash of the message. Set only during the call to the target.
@@ -34,10 +36,12 @@ interface IAMB {
     /// @notice The identifier of the chain that sent the message. Set only during the call to the target.
     function messageSourceChainId() external view returns (bytes32);
 
-    /// @notice Whether the call to the target of a message succeeded.
+    /// @notice Whether the call to the target of a message succeeded. On `MessageBridge`: whether the message was
+    /// delivered.
     function messageCallStatus(bytes32 _messageId) external view returns (bool);
 
-    /// @notice The hash of the data of a message whose call failed.
+    /// @notice The hash of the data of a message whose call failed. Always zero on `MessageBridge`, where a failed call
+    /// reverts the delivery.
     function failedMessageDataHash(bytes32 _messageId) external view returns (bytes32);
 
     /// @notice The target of a message whose call failed.
@@ -49,7 +53,8 @@ interface IAMB {
     /// @notice Sends a message to `_contract` on the other chain.
     /// @param _contract The target on the other chain.
     /// @param _data The call data.
-    /// @param _gas The gas that the call to the target gets.
+    /// @param _gas The gas that the call to the target gets. `MessageBridge` ignores it: the target gets all the gas of
+    /// the delivery.
     /// @return The message identifier.
     function requireToPassMessage(address _contract, bytes calldata _data, uint256 _gas) external returns (bytes32);
 

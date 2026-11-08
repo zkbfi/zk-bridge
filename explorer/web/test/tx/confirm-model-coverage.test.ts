@@ -13,7 +13,7 @@ const receiver = getAddress(`0x${"cd".repeat(20)}`);
 const stepsOf = async (allowance: bigint, options: Partial<DeliveryOptions>): Promise<readonly WebStep[]> => {
   const { context, tokens } = await buildFixtureContext({ allowance });
   const draft = computeBridgeDraft(
-    { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", gasLimit: "" },
+    { token: `first:${usdc.address}`, amount: "250", receiver, mode: "plain", data: "", callGas: "", callbackGas: "" },
     { ...DEFAULT_DELIVERY_OPTIONS, ...options },
     { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
   );
@@ -57,8 +57,8 @@ describe("buildConfirmView: a tip that the call does not carry", () => {
   it("blocks a call whose data argument is not a fee director", async () => {
     const [tipped] = await stepsOf(10n ** 12n, { mode: "percentage" });
     const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: tipped!.plan.data });
-    const [token, router, value] = decoded.args as readonly [`0x${string}`, `0x${string}`, bigint, `0x${string}`];
-    const data = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [token, router, value, "0x1234"] });
+    const [token, router, value] = decoded.args as readonly [`0x${string}`, `0x${string}`, bigint, `0x${string}`, bigint];
+    const data = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "relayTokensAndCall", args: [token, router, value, "0x1234", 300_000n] });
     const forged: WebStep = { ...tipped!, plan: { ...tipped!.plan, data } };
     expect(buildConfirmView(forged).blockedReason).toBe("The fee director in the call data cannot be read.");
   });

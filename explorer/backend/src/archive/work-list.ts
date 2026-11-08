@@ -28,7 +28,7 @@ const messageSchema = z.object({ status: z.string() });
 export type WorkItem = z.infer<typeof workItemSchema>;
 
 /** The message statuses that end the need for evidence. */
-export const FINISHED_STATUSES: readonly string[] = ["delivered", "failed_call", "release_failed"];
+export const FINISHED_STATUSES: readonly string[] = ["delivered", "release_failed"];
 
 /** The calls that the archive makes to the chain indexer. */
 export interface IndexerClient {

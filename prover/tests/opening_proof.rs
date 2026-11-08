@@ -665,7 +665,8 @@ fn hex_to_array(text: &str) -> [u8; 32] {
 /// real light client never wrote, and the bridge reverts with `OpeningEntryEmpty`.
 #[test]
 fn the_constants_equal_the_solidity_constants() {
-    let source = include_str!("../../src/hardened/BeaconProofVerifier.sol");
+    // The opening proof runs in the linked library `OpeningProofLib` (the split for the gas cap).
+    let source = include_str!("../../src/hardened/OpeningProofLib.sol");
     for (name, value) in [
         (
             "EXECUTION_BLOCK_HASHES_MAPPING_SLOT",
@@ -674,13 +675,13 @@ fn the_constants_equal_the_solidity_constants() {
         ("STATE_ROOT_FIELD", STATE_ROOT_FIELD),
         ("ACCOUNT_STORAGE_ROOT_FIELD", ACCOUNT_STORAGE_ROOT_FIELD),
     ] {
-        let line = format!("uint256 private constant {name} = {value};");
+        let line = format!("uint256 internal constant {name} = {value};");
         assert!(source.contains(&line), "{line}");
     }
     assert!(source.contains(
         "keccak256(abi.encode(uint256(storedSlot), EXECUTION_BLOCK_HASHES_MAPPING_SLOT))"
     ));
-    assert!(source.contains("keccak256(abi.encode(_executionBlockHashesSlot(proof.storedSlot)))"));
+    assert!(source.contains("keccak256(abi.encode(executionBlockHashesSlot(storedSlot)))"));
 }
 
 /// The `eth_getProof` answer of the world for `stored_slot`, as a runner stores it, with `tamper` applied to a node.

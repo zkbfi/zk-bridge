@@ -30,8 +30,7 @@ import {
   transferLog,
   word,
   type FakeChain,
-  TEST_PROOF_CHECK_GAS,
-  FEED_REQUIRED_GAS,
+  TEST_DELIVERY_GAS_FALLBACK,
 } from "../support/builders.ts";
 
 const AGGREGATE3 = toFunctionSelector(multicall3Abi.find((entry) => entry.type === "function" && entry.name === "aggregate3") as never);
@@ -94,7 +93,7 @@ function setup(options: { deliveryRouter?: DeliveryDependencies["deliveryRouter"
       maximumLossPercent: 20,
       deliverWithoutOffer: false,
       tokenValuationsWei: {},
-      proofCheckGas: TEST_PROOF_CHECK_GAS,
+      deliveryGasFallback: TEST_DELIVERY_GAS_FALLBACK,
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: ITEM_GAS,
       maximumPrerequisiteSpendPerSweepWei: 10n ** 18n,
@@ -115,9 +114,8 @@ function readyItem(id: number, options: { prerequisiteCostWei?: bigint } = {}): 
   return {
     item: feedItem({ id, token: WRAPPED_NATIVE }),
     messageId: word(id),
-    offer: { kind: "offer", director: { recipient: REWARD_ADDRESS, settings: 1n, limit: 10n, multiplier: 0n }, value: 1000n, call: null },
+    offer: { kind: "offer", director: { recipient: REWARD_ADDRESS, settings: 1n, limit: 10n, multiplier: 0n, callGas: 0n }, value: 1000n, call: null },
     proof: decoded.args[0],
-    requiredGas: FEED_REQUIRED_GAS,
     assumedGas: ITEM_GAS,
     prerequisiteCostWei: options.prerequisiteCostWei ?? 0n,
   };
@@ -289,7 +287,7 @@ describe("the read under the gas limit of the send", () => {
       return original();
     });
     const report = await sendBatch(dependencies, ledger, { readies: [readyItem(1), readyItem(2)], update: null });
-    expect(report.outcomes[0]).toEqual(skip(word(1), "insufficient-gas", { detail: "the gas left does not cover the gas limit of the message" }));
+    expect(report.outcomes[0]).toEqual(skip(word(1), "insufficient-gas", { detail: "InsufficientGas: the delivery ran out of gas and reverted, so the message stays undelivered" }));
     expect(report.outcomes[1]).toMatchObject({ status: "delivered", messageId: word(2), gasUsed: ITEM_GAS });
     expect(chain.log.filter((entry) => entry.kind === "send")).toHaveLength(1);
   });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatAmountWithSymbol, formatLag, formatSlot, lagSeverity, STATUS_LABELS, STATUS_MEANINGS, STATUS_PALETTES } from "../../src/ui/format";
 
-const STATUSES = ["sent", "waiting_for_finality", "covered", "delivered", "failed_call", "release_failed"] as const;
+const STATUSES = ["sent", "waiting_for_finality", "covered", "delivered", "release_failed"] as const;
 
 describe("formatAmountWithSymbol", () => {
   it("groups thousands and cuts, never rounds, at six fraction digits", () => {
@@ -60,7 +60,8 @@ describe("the status tables", () => {
       expect(STATUS_PALETTES[status]).toBeTruthy();
     }
     expect(STATUS_LABELS.waiting_for_finality).toBe("Waiting for finality");
-    expect(STATUS_PALETTES.failed_call).toBe("red");
+    expect(STATUS_PALETTES.release_failed).toBe("yellow");
+    expect(STATUS_LABELS).not.toHaveProperty("failed_call");
     expect(Object.keys(STATUS_LABELS).sort()).toEqual([...STATUSES].sort());
     expect(Object.keys(STATUS_MEANINGS).sort()).toEqual([...STATUSES].sort());
     expect(Object.keys(STATUS_PALETTES).sort()).toEqual([...STATUSES].sort());

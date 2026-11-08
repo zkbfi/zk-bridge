@@ -13,10 +13,9 @@ const apiItem = {
   direction: { sourceChainId: 1, destinationChainId: 369, label: "1>369" },
   sender: ADDRESS,
   executor: ADDRESS,
-  gasLimit: 2_000_000,
   sent: { transactionHash: TRANSACTION, blockNumber: 12, timestamp: 1_790_000_000 },
   covered: { headSlot: 100, timestamp: 1_790_000_100 },
-  delivered: { transactionHash: TRANSACTION, blockNumber: 40, timestamp: 1_790_000_200, success: true, executedBy: ADDRESS },
+  delivered: { transactionHash: TRANSACTION, blockNumber: 40, timestamp: 1_790_000_200, executedBy: ADDRESS },
   callbackFailed: false,
   releaseFailed: false,
   transfer: {
@@ -37,13 +36,12 @@ describe("parseMessageDetail", () => {
     expect(detail.transfer?.deliveredValue).toBe(999_000n);
     expect(detail.sentAt).toBe(1_790_000_000);
     expect(detail.deliveredAt).toBe(1_790_000_200);
-    expect(detail.deliverySucceeded).toBe(true);
     expect(detail.data).toBe("0x1234");
   });
 
   it("reads an undelivered message with nothing after the send", () => {
     const detail = parseMessageDetail({ ...apiItem, status: "sent", covered: null, delivered: null, transfer: null, kind: "message" });
-    expect(detail).toMatchObject({ coveredAt: null, deliveredAt: null, deliverySucceeded: null, transfer: null, kind: "message" });
+    expect(detail).toMatchObject({ coveredAt: null, deliveredAt: null, transfer: null, kind: "message" });
   });
 
   it("refuses an amount that is a JSON number, because it may have lost digits", () => {

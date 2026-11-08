@@ -17,7 +17,6 @@ export type MessageRow = {
   readonly status: string;
   readonly sender: Hex | null;
   readonly executor: Hex | null;
-  readonly gasLimit: number | null;
   readonly dataType: number | null;
   readonly data: Hex | null;
   readonly sentTransactionHash: Hex | null;
@@ -28,8 +27,6 @@ export type MessageRow = {
   readonly deliveredTransactionHash: Hex | null;
   readonly deliveredBlockNumber: bigint | null;
   readonly deliveredTimestamp: bigint | null;
-  /** True when the destination call succeeded, false when it reverted, null before delivery. */
-  readonly deliveredSuccess: boolean | null;
   /** The account that sent the execution transaction. */
   readonly executedBy: Hex | null;
   /** The slot of the first stored head that covered this message, or null. */
@@ -71,7 +68,6 @@ const emptyRow = (messageId: MessageRow["messageId"], sourceChainId: number, des
   status: "sent",
   sender: null,
   executor: null,
-  gasLimit: null,
   dataType: null,
   data: null,
   sentTransactionHash: null,
@@ -81,7 +77,6 @@ const emptyRow = (messageId: MessageRow["messageId"], sourceChainId: number, des
   deliveredTransactionHash: null,
   deliveredBlockNumber: null,
   deliveredTimestamp: null,
-  deliveredSuccess: null,
   executedBy: null,
   coveredByHeadSlot: null,
   coveredAtTimestamp: null,
@@ -89,10 +84,8 @@ const emptyRow = (messageId: MessageRow["messageId"], sourceChainId: number, des
   releaseFailed: false,
 });
 
-const deliveryOf = (row: MessageRow): DeliveryOutcome => {
-  if (row.deliveredSuccess === null) return "none";
-  return row.deliveredSuccess ? "succeeded" : "failed";
-};
+/** A message is delivered once its delivery log is stored. A delivery that fails reverts and leaves no log. */
+const deliveryOf = (row: MessageRow): DeliveryOutcome => (row.deliveredBlockNumber === null ? "none" : "succeeded");
 
 /**
  * Computes the status of a stored message row from the facts it holds.

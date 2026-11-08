@@ -38,7 +38,7 @@ describe("the query text of the filters", () => {
       eventKind: "delivered",
       direction: { sourceChainId: 369, destinationChainId: 1 },
       kind: "message",
-      statuses: ["failed_call"],
+      statuses: ["release_failed"],
       token: `0x${"11".repeat(20)}`,
       address: `0x${"22".repeat(20)}`,
       from: 1n,

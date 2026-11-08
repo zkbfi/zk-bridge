@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
+import { routerCallbackGas , MAX_CALL_GAS } from "@zk-bridge/shared";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
 import { connectedWallet, renderWithWallet } from "../app/support";
@@ -81,14 +82,27 @@ describe("the fee values", () => {
     await waitFor(() => expect(window.location.hash).toMatch(/tip\.ceiling=100(&|$)/));
   });
 
-  it("moves the gas limit with its slider and refuses a fraction", async () => {
+  it("names the call gas next to the call, shows the callback gas read only (none above the cap), and drops both with the call", async () => {
     await at("bridge.amount=500");
     const scope = await menu();
     await advanced(scope);
-    fireEvent.change(within(scope).getByRole("slider", { name: "Gas limit" }), { target: { value: "300000" } });
-    await waitFor(() => expect(window.location.hash).toMatch(/bridge\.gas=300000/));
-    await retype(exact(scope, "Gas limit"), "1.5");
-    expect(within(scope).getByRole("alert")).toHaveTextContent(/whole number of gas/);
+    expect(within(scope).queryByRole("textbox", { name: "Call gas" })).toBeNull();
+    expect(within(scope).queryByTestId("callback-gas")).toBeNull();
+    await userEvent.type(within(scope).getByRole("textbox", { name: /Call after delivery/ }), `0x${"77".repeat(20)}`);
+    const callGas = within(scope).getByRole("textbox", { name: "Call gas" });
+    await userEvent.type(callGas, "200000");
+    await waitFor(() => expect(window.location.hash).toMatch(/bridge\.callGas=200000/));
+    expect(within(scope).getByTestId("callback-gas")).toHaveTextContent(routerCallbackGas({ callGas: 200_000n }).toLocaleString("en-US"));
+    await userEvent.clear(callGas);
+    await userEvent.type(callGas, String(MAX_CALL_GAS + 1n));
+    expect(within(scope).queryByTestId("callback-gas")).toBeNull();
+    await userEvent.clear(callGas);
+    await waitFor(() => expect(window.location.hash).not.toMatch(/bridge\.callGas/));
+    expect(within(scope).queryByTestId("callback-gas")).toBeNull();
+    await userEvent.type(callGas, "5");
+    await userEvent.clear(within(scope).getByRole("textbox", { name: /Call after delivery/ }));
+    await waitFor(() => expect(window.location.hash).not.toMatch(/bridge\.call/));
+    expect(within(scope).queryByRole("textbox", { name: "Call gas" })).toBeNull();
   });
 
   it("types the router in the menu", async () => {

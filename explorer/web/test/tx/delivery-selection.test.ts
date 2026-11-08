@@ -31,6 +31,7 @@ const input = (overrides: Partial<DeliverySelectionInput> = {}): DeliverySelecti
   gasMargin: DEFAULT_GAS_MARGIN,
   destinationName: "PulseChain",
   baseFeeCeilingWei: null,
+  callGas: 0n,
   ...overrides,
 });
 
@@ -72,7 +73,7 @@ describe("selectDelivery", () => {
   it("labels a gas multiplier tip an estimate and states the guaranteed maximum", () => {
     const selection = available({ mode: "gas-multiplier" });
     expect(selection.description.certainty).toBe("estimate");
-    expect(selection.description.certaintyLabel).toMatch(/^estimate, at most /);
+    expect(selection.description.certaintyLabel).toMatch(/^estimate, expected about [\d.]+ WPLS, at most /);
     expect(selection.maximumTip).toBe(selection.director.limit);
     expect(selection.description.nowUnits).toBeLessThanOrEqual(selection.maximumTip);
   });
@@ -218,8 +219,8 @@ describe("selectDelivery: the default gas based tip", () => {
   it("encodes the default director as the abi encoding of the recipient, the settings, the limit and the multiplier", () => {
     const { director } = gas();
     const expected = encodeAbiParameters(
-      [{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
-      [RECIPIENT, 4n, director.limit, director.multiplier],
+      [{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }],
+      [RECIPIENT, 4n, director.limit, director.multiplier, 0n],
     );
     expect(encodeFeeDirector(director, { router: ROUTER, protectedAddresses: [], destinationToken: null, destinationWrappedNative: null })).toBe(expected);
   });

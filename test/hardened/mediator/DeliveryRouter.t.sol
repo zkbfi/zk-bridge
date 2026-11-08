@@ -17,9 +17,10 @@ import {
     CoinRefuser,
     GasBurner,
     CoinReverter,
-    ContractWallet
-} from "./utils/MediatorSupport.sol";
+    ContractWallet, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 import {MedCutToken, SlotProbeToken} from "./utils/MedMocks.sol";
+import {CallRecorder} from "./utils/CallTargets.sol";
+import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 
 /// @notice Tests of the executor delivery router. Tokens flow from chain B to chain A, where the router lives. Anyone
 /// executes the message through the router, and the reward address earns the tip that the sender wrote in the
@@ -64,26 +65,19 @@ contract DeliveryRouterTest is MediatorFixture {
         view
         returns (DeliveryRouter.FeeDirector memory)
     {
-        return DeliveryRouter.FeeDirector(recipient, settings, limit, multiplier);
+        return DeliveryRouter.FeeDirector(recipient, settings, limit, multiplier, 0);
     }
 
     /// @dev Chain B to the router on chain A. Returns the index of the message.
     function _sendTokenB(DeliveryRouter.FeeDirector memory director, uint256 value) internal returns (uint256) {
         vm.prank(alice);
-        mediatorB.relayTokensAndCall(address(tokenB), address(router), value, abi.encode(director));
+        mediatorB.relayTokensAndCall(address(tokenB), address(router), value, abi.encode(director), TEST_CALLBACK_GAS);
         return _lastIndexB();
     }
 
-    /// @dev The measure in the callback starts before the call to the bridge, so it also counts the entry of
-    /// `executeMessage` and the bridge work before the forward. This margin covers both in the bounds below.
-    uint256 internal constant ENTRY_MARGIN = 30_000;
-
-    function _gasLimitOfAReleaseWithACall() internal view returns (uint256) {
-        return mediatorB.RELEASE_GAS_LIMIT() + mediatorB.CALLBACK_GAS_LIMIT();
-    }
-
     /// @dev Sends a token message with `director`, and runs it through the router with exactly `gasSupplied`. It returns
-    /// the tip of the reward address, the amount of the recipient and the gas limit that the message carries, then restores the state. So every run starts
+    /// the tip of the reward address, the amount of the recipient and the gas that the message asks of the bridge (zero:
+    /// the mediator asks for none), then restores the state. So every run starts
     /// from the same state, and two runs differ only in their inputs.
     function _runAtGas(DeliveryRouter.FeeDirector memory director, uint256 value, uint256 gasSupplied)
         internal
@@ -113,6 +107,83 @@ contract DeliveryRouterTest is MediatorFixture {
         return IERC20(mediatorA.bridgedTokenAddress(address(tokenB)));
     }
 
+    /// @dev The callback gas base of `@zkb/core` (`ROUTER_CALLBACK_GAS_BASE`): what a frontend adds for the work of the
+    /// router in `onTokenBridged`. The test below shows that it covers the costliest path of this router.
+    uint256 internal constant CORE_ROUTER_CALLBACK_GAS_BASE = 300_000;
+
+    /// Claim: the callback gas that `routerCallbackGas` of the core package recommends covers the costliest path of the
+    /// router: a gas based tip with an unwrap, a reward address that refuses the native coin (its tip stays with the recipient)
+    /// and a recipient that refuses it too (it gets the wrapped token after a failed send of 50,000 gas, to a new
+    /// account), and a follow-up call
+    /// of 200,000 gas to a target that writes fresh storage. Shows: a relay with exactly `base + callGas +
+    /// ceil(callGas / 63) + CALL_GAS_RESERVE` delivers with no `CallbackFailed`, the call runs, and the recipient
+    /// holds the whole value as the wrapped token; the least callback gas that runs this path (found by bisection) is
+    /// at most the recommendation and less than 250,000 below it. The router work of this path is about 100,000 gas
+    /// with a plain token; the base of 300,000 leaves room for tokens whose transfers cost more. Matters: a frontend that follows the core package never strands tokens in the
+    /// router.
+    function test_theCoreCallbackGasBaseCoversTheCostliestPathOfTheRouter() public {
+        vm.txGasPrice(10 gwei);
+        address refusingReward = address(new CoinRefuser());
+        _useReward(refusingReward);
+        address refusingRecipient = address(new CoinRefuser());
+        CallRecorder target = new CallRecorder();
+        uint256 callGas = 200_000;
+        DeliveryRouter.FeeDirector memory director =
+            DeliveryRouter.FeeDirector(refusingRecipient, router.UNWRAP(), 1 ether, 1 ether, callGas);
+        bytes memory data = bytes.concat(abi.encode(director), abi.encodePacked(address(target)), hex"c0ffee");
+        uint256 recommended =
+            CORE_ROUTER_CALLBACK_GAS_BASE + callGas + (callGas + 62) / 63 + router.CALL_GAS_RESERVE();
+
+        uint256 snapshot = vm.snapshotState();
+        uint256 index = _sendWrappedBackWithGas(5 ether, data, recommended);
+        vm.recordLogs();
+        _runThroughRouter(index);
+        assertEq(_countOf(vm.getRecordedLogs(), TokenMediator.CallbackFailed.selector), 0, "the callback had its gas");
+        assertEq(target.calls(), 1, "the call ran");
+        assertEq(weth.balanceOf(refusingRecipient), 5 ether, "the recipient holds the wrapped token, tip included");
+        assertEq(weth.balanceOf(refusingReward), 0, "a refused tip stays with the recipient");
+        vm.revertToState(snapshot);
+
+        uint256 low = callGas;
+        uint256 high = recommended;
+        while (low < high) {
+            uint256 middle = (low + high) / 2;
+            uint256 probe = vm.snapshotState();
+            index = _sendWrappedBackWithGas(5 ether, data, middle);
+            vm.recordLogs();
+            _runThroughRouter(index);
+            bool failed = _countOf(vm.getRecordedLogs(), TokenMediator.CallbackFailed.selector) != 0;
+            vm.revertToState(probe);
+            if (failed) low = middle + 1;
+            else high = middle;
+        }
+        emit log_named_uint("least callback gas of the costliest path", low);
+        emit log_named_uint("recommended callback gas", recommended);
+        assertLe(low, recommended, "the recommendation covers the costliest path");
+        assertLt(recommended - low, 250_000, "and asks for less than 250,000 gas more than it needs");
+    }
+
+    function _countOf(Vm.Log[] memory logs, bytes32 topic) internal pure returns (uint256 count) {
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].topics.length > 0 && logs[i].topics[0] == topic) count++;
+        }
+    }
+
+    /// @dev `_sendWrappedBack` with raw data and a chosen callback gas.
+    function _sendWrappedBackWithGas(uint256 value, bytes memory data, uint256 callbackGas) internal returns (uint256) {
+        vm.startPrank(alice);
+        weth.deposit{value: value}();
+        weth.approve(address(mediatorA), type(uint256).max);
+        vm.stopPrank();
+        _bridgeAtoB(alice, address(weth), alice, value);
+        address copy = _copyOf(address(weth));
+        vm.startPrank(alice);
+        IERC20(copy).approve(address(mediatorB), type(uint256).max);
+        mediatorB.relayTokensAndCall(copy, address(router), value, data, callbackGas);
+        vm.stopPrank();
+        return _lastIndexB();
+    }
+
     /// @dev Gives alice the copy of the wrapped token on chain B and sends it back to the router with a director.
     function _sendWrappedBack(DeliveryRouter.FeeDirector memory director, uint256 value, bytes memory data)
         internal
@@ -126,7 +197,7 @@ contract DeliveryRouterTest is MediatorFixture {
         address copy = _copyOf(address(weth));
         vm.startPrank(alice);
         IERC20(copy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokensAndCall(copy, address(router), value, data.length == 0 ? abi.encode(director) : data);
+        mediatorB.relayTokensAndCall(copy, address(router), value, data.length == 0 ? abi.encode(director) : data, TEST_CALLBACK_GAS);
         vm.stopPrank();
         return _lastIndexB();
     }
@@ -216,18 +287,19 @@ contract DeliveryRouterTest is MediatorFixture {
 
     /// Claim: the gas based tip is the measured gas plus the token overhead, times the multiplier and the gas price.
     /// Shows: with the caller supplying exactly 3,500,000 gas, the tip is a whole number of gas prices, the measured gas
-    /// is at most the supplied gas and at least the supplied gas less the gas that the bridge forwards, and 500,000 more
-    /// supplied gas adds exactly 500,000 times the gas price. The recipient gets the rest. Matters: the figure is exact,
-    /// not a bound.
+    /// is at most the supplied gas and at least the supplied gas less the callback gas of the relay, and 500,000 more
+    /// supplied gas adds exactly 500,000 times the gas price. The message asks the bridge for no gas. The recipient gets
+    /// the rest. Matters: the figure is exact, not a bound.
     function test_aGasBasedFeeUsesTheGasPriceAndTheMultiplier() public {
         vm.txGasPrice(10 gwei);
         DeliveryRouter.FeeDirector memory director = _director(0, 100 ether, 1 ether);
-        (uint256 tip, uint256 toRecipient, uint256 forwarded) = _runAtGas(director, 1_000 ether, 3_500_000);
+        (uint256 tip, uint256 toRecipient, uint256 messageGas) = _runAtGas(director, 1_000 ether, 3_500_000);
 
+        assertEq(messageGas, 0, "the mediator asks the bridge for no gas");
         assertEq(tip % 10 gwei, 0, "the unit is the gas price");
         uint256 measuredGas = tip / 10 gwei - router.TOKEN_GAS_OVERHEAD();
         assertLe(measuredGas, 3_500_000, "the callback cannot measure more than the caller supplied");
-        assertGe(measuredGas, 3_500_000 - forwarded - ENTRY_MARGIN, "the supplied gas less the forwarded gas");
+        assertGe(measuredGas, 3_500_000 - TEST_CALLBACK_GAS, "the supplied gas less the gas of the callback");
         assertEq(toRecipient, 1_000 ether - tip, "the recipient gets the rest");
 
         (uint256 largerTip,,) = _runAtGas(director, 1_000 ether, 4_000_000);
@@ -235,11 +307,13 @@ contract DeliveryRouterTest is MediatorFixture {
     }
 
     /// Claim: a caller can raise a gas based tip by the gas that it supplies, up to the limit of the sender. Shows: the
-    /// same delivery with a small and with a large gas amount gives two different tips, both at most the limit, and
-    /// a third run with a very large amount ends at the limit. The bridge forwards only the gas limit of the message,
-    /// so `startingGas - gasleft()` in the callback also counts the gas that the caller supplied above that. Matters:
-    /// this is the residual of the design, and it is bounded. The limit of the sender caps the tip, and the tip goes to
-    /// the fixed reward address, so a stranger who raises it gains nothing.
+    /// same delivery with a small and with a large gas amount gives two different tips, both at most the limit, and a
+    /// third run with a very large amount ends at the limit. The callback runs with exactly the callback gas of the
+    /// relay, while the bridge and the mediator keep the rest of the supplied gas, so `startingGas - gasleft()` in the
+    /// callback also counts the gas that they keep. Matters: this is the residual of the design (it was the same when the
+    /// bridge forwarded only the gas limit of the message), and it is bounded: the limit of the sender caps the tip, and
+    /// the tip goes to the fixed reward address, so a stranger who raises it gains nothing. A frontend shows `limit` as
+    /// the most that the fee can be.
     function test_aCallerCanRaiseAGasBasedTipByTheGasItSuppliesUpToTheLimit() public {
         vm.txGasPrice(10 gwei);
         uint256 limit = 0.1 ether;
@@ -283,12 +357,11 @@ contract DeliveryRouterTest is MediatorFixture {
     function test_theExcludePriorityFlagPricesGasAtTheBaseFee() public {
         vm.txGasPrice(50 gwei);
         vm.fee(7 gwei);
-        (uint256 tip,, uint256 forwarded) =
-            _runAtGas(_director(router.EXCLUDE_PRIORITY(), 100 ether, 1 ether), 1_000 ether, 3_500_000);
+        (uint256 tip,,) = _runAtGas(_director(router.EXCLUDE_PRIORITY(), 100 ether, 1 ether), 1_000 ether, 3_500_000);
         assertEq(tip % 7 gwei, 0, "priced at the base fee");
         uint256 measuredGas = tip / 7 gwei - router.TOKEN_GAS_OVERHEAD();
         assertLe(measuredGas, 3_500_000);
-        assertGe(measuredGas, 3_500_000 - forwarded - ENTRY_MARGIN);
+        assertGe(measuredGas, 3_500_000 - TEST_CALLBACK_GAS);
     }
 
     function test_aGasBasedFeeInTheNativeCoinIsPaidInTheCoin() public {
@@ -302,7 +375,7 @@ contract DeliveryRouterTest is MediatorFixture {
         assertEq(fee % 10 gwei, 0, "the unit is the gas price");
         uint256 measuredGas = fee / 10 gwei - router.NATIVE_GAS_OVERHEAD();
         assertLe(measuredGas, 1_500_000);
-        assertGe(measuredGas, 1_500_000 - _gasLimitOfAReleaseWithACall() - ENTRY_MARGIN);
+        assertGe(measuredGas, 1_500_000 - TEST_CALLBACK_GAS);
         assertEq(recipient.balance - recipientBefore, 5 ether - fee);
         assertEq(address(router).balance, 0);
         assertEq(weth.totalSupply(), 0);
@@ -381,9 +454,9 @@ contract DeliveryRouterTest is MediatorFixture {
         bytes memory data = abi.encode(_director(router.FIXED_FEE(), 1 ether, 0));
         vm.startPrank(alice);
         IERC20(copy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokensAndCall(copy, address(router), 20 ether, data);
+        mediatorB.relayTokensAndCall(copy, address(router), 20 ether, data, TEST_CALLBACK_GAS);
         uint256 viaRouter = _lastIndexB();
-        mediatorB.relayTokensAndCall(copy, address(router), 20 ether, data);
+        mediatorB.relayTokensAndCall(copy, address(router), 20 ether, data, TEST_CALLBACK_GAS);
         uint256 direct = _lastIndexB();
         vm.stopPrank();
 
@@ -469,17 +542,13 @@ contract DeliveryRouterTest is MediatorFixture {
         assertEq(refuser.balance, 0);
     }
 
-    /// @dev A native coin delivery to `receiver` with a 10 percent multiplier tip for the reward address, delivered at exactly the gas
-    /// limit that the mediator asked for.
+    /// @dev A native coin delivery to `receiver` with a 10 percent multiplier tip for the reward address, delivered through the router
+    /// with the callback gas of the relay.
     function _deliverNativeTo(address receiver, uint256 value) internal returns (uint256 toRecipientBefore) {
         DeliveryRouter.FeeDirector memory director =
-            DeliveryRouter.FeeDirector(receiver, router.UNWRAP() | router.MULTIPLIER_OF_TOTAL(), 0, 0.1 ether);
+            DeliveryRouter.FeeDirector(receiver, router.UNWRAP() | router.MULTIPLIER_OF_TOTAL(), 0, 0.1 ether, 0);
         uint256 index = _sendWrappedBack(director, value, "");
-        assertEq(
-            ambB.messageAt(index).gasLimit,
-            mediatorB.RELEASE_GAS_LIMIT() + mediatorB.CALLBACK_GAS_LIMIT(),
-            "the gas limit of a release with a call"
-        );
+        assertEq(ambB.messageAt(index).gasLimit, 0, "the mediator asks the bridge for no gas");
         toRecipientBefore = receiver.balance;
         _runThroughRouter(index);
         assertEq(address(router).balance, 0, "no coin stays in the router");
@@ -487,7 +556,7 @@ contract DeliveryRouterTest is MediatorFixture {
     }
 
     /// Claim: a recipient that burns all its gas, reverts, or needs some gas to receive cannot strand the value, and the
-    /// whole path passes at exactly the gas limit of the message. Shows: the router gives the recipient 50,000 gas; a
+    /// whole path passes within the callback gas of the relay. Shows: the router gives the recipient 50,000 gas; a
     /// burner and a reverter get the wrapped token; a contract wallet gets the coin; the reward address holds its tip in each
     /// case and the router holds nothing. Matters: with all gas forwarded, a burner leaves nothing for the fallback.
     function test_aRecipientThatBurnsItsGasOrRevertsStillGetsTheValue() public {
@@ -527,7 +596,7 @@ contract DeliveryRouterTest is MediatorFixture {
     function test_unwrapWithARecipientThatCannotTakeTheCoinPaysTheWrappedToken() public {
         address refuser = address(new CoinRefuser());
         DeliveryRouter.FeeDirector memory director =
-            DeliveryRouter.FeeDirector(refuser, router.UNWRAP() | router.MULTIPLIER_OF_TOTAL(), 0, 0.1 ether);
+            DeliveryRouter.FeeDirector(refuser, router.UNWRAP() | router.MULTIPLIER_OF_TOTAL(), 0, 0.1 ether, 0);
         uint256 index = _sendWrappedBack(director, 5 ether, "");
         _runThroughRouter(index);
         assertEq(weth.balanceOf(refuser), 4.5 ether, "paid as the wrapped token");
@@ -572,7 +641,7 @@ contract DeliveryRouterTest is MediatorFixture {
         (DenyListToken token, address copy) = _denyListCopyThatRefusesTheRewardAddress();
         bytes memory data = abi.encode(_director(router.FIXED_FEE(), 5 ether, 0));
         vm.prank(alice);
-        mediatorB.relayTokensAndCall(copy, address(router), 50 ether, data);
+        mediatorB.relayTokensAndCall(copy, address(router), 50 ether, data, TEST_CALLBACK_GAS);
         _runThroughRouter(_lastIndexB());
 
         assertEq(
@@ -589,7 +658,7 @@ contract DeliveryRouterTest is MediatorFixture {
         vm.txGasPrice(10 gwei);
         (DenyListToken token, address copy) = _denyListCopyThatRefusesTheRewardAddress();
         vm.prank(alice);
-        mediatorB.relayTokensAndCall(copy, address(router), 50 ether, abi.encode(_director(0, 10 ether, 1 ether)));
+        mediatorB.relayTokensAndCall(copy, address(router), 50 ether, abi.encode(_director(0, 10 ether, 1 ether)), TEST_CALLBACK_GAS);
         MessageBridge.MessageProof memory proof = ambA.proofOf(ambB, _lastIndexB());
         vm.recordLogs();
         vm.prank(executor, executor);
@@ -622,7 +691,7 @@ contract DeliveryRouterTest is MediatorFixture {
         IERC20(copy).approve(address(mediatorB), type(uint256).max);
         mediatorB.relayTokensAndCall(
             copy, address(router), 100 ether, abi.encode(_director(router.FIXED_FEE(), 3 ether, 0))
-        );
+        , TEST_CALLBACK_GAS);
         vm.stopPrank();
         _runThroughRouter(_lastIndexB());
 

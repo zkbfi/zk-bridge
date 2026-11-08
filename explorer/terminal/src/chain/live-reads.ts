@@ -2,7 +2,6 @@
  * Live reads from the chains: balances and allowances. They use the RPC endpoints,
  * not the indexer, because a value that a transaction depends on must be current.
  */
-import { readRelayGasFacts, type RelayGasFacts } from '@zk-bridge/shared'
 import { erc20Abi, isAddress, getAddress, zeroAddress, type Abi, type Address } from 'viem'
 import type { ChainConfig, TokenInfo } from '../model/types'
 import { deliveryRouterAbi } from '../tx/abis'
@@ -24,8 +23,6 @@ export interface TokenPosition {
   readonly balance: bigint
   /** The allowance the account gave the token mediator. */
   readonly allowance: bigint
-  /** What the mediator says about the kind of the first message of a relay of this token. */
-  readonly relayGas: RelayGasFacts
 }
 
 /** The live state of one chain for the connected account. */
@@ -70,54 +67,11 @@ async function readPosition(
 ): Promise<TokenPosition> {
   const { chain, account, token } = input
   const mediator = chain.contracts.tokenMediator
-  const [balance, allowance, relayGas] = await Promise.all([
+  const [balance, allowance] = await Promise.all([
     readBigint(client, { address: token.address, abi: erc20Abi, functionName: 'balanceOf', args: [account] }),
     readBigint(client, { address: token.address, abi: erc20Abi, functionName: 'allowance', args: [account, mediator] }),
-    cachedRelayGasFacts(client, { chain, mediator, token: token.address }),
   ])
-  return { token, balance, allowance, relayGas }
-}
-
-/** How long a `unacknowledged` reading is kept. It changes once the first bridge of the token is proven, so it is re-read. */
-const UNACKNOWLEDGED_KEEP_MILLISECONDS = 5 * 60_000
-
-interface CachedFacts {
-  readonly facts: Promise<RelayGasFacts>
-  /** When the entry stops being valid, or Infinity. */
-  readonly until: number
-}
-
-/** The relay gas facts already read, per client. A new client (new RPC settings) starts empty. */
-const relayGasCache = new WeakMap<object, Map<string, CachedFacts>>()
-
-/**
- * Relay gas facts (`nativeTokenAddress`, `isBridgedTokenDeployAcknowledged`) of a token. They do not change with the
- * account or with time (a copy stays a copy; a native token stays native; once the mediator acknowledged the deploy it stays
- * so), but the snapshot is polled every 15 s, so reading them each time was most of the RPC load. They are read once per
- * client, chain, mediator and token. A token that is native and not yet acknowledged can change, so that reading is kept
- * for five minutes only. A failed read is not kept.
- */
-function cachedRelayGasFacts(client: ReadClient, input: { chain: ChainConfig; mediator: Address; token: Address }): Promise<RelayGasFacts> {
-  let entries = relayGasCache.get(client)
-  if (entries === undefined) {
-    entries = new Map()
-    relayGasCache.set(client, entries)
-  }
-  const key = `${input.chain.chainId}:${input.mediator}:${input.token}`.toLowerCase()
-  const known = entries.get(key)
-  if (known !== undefined && known.until > Date.now()) return known.facts
-  const facts = readRelayGasFacts(client, { mediator: input.mediator, token: input.token })
-  const map = entries
-  map.set(key, { facts, until: Infinity })
-  facts.then(
-    (value) => {
-      if (value.kind === 'unacknowledged') map.set(key, { facts, until: Date.now() + UNACKNOWLEDGED_KEEP_MILLISECONDS })
-    },
-    () => {
-      if (map.get(key)?.facts === facts) map.delete(key)
-    },
-  )
-  return facts
+  return { token, balance, allowance }
 }
 
 async function readBigint(

@@ -141,7 +141,7 @@ describe("TokenMediator:ReleaseFailed", () => {
 
   it("turns a delivered message into release_failed", async () => {
     const { database, context } = createContext(369);
-    database.seed(messages, { ...sentMessageRow(messageId, 5n), deliveredSuccess: true, deliveredTimestamp: 1_100n, status: "delivered" });
+    database.seed(messages, { ...sentMessageRow(messageId, 5n), deliveredBlockNumber: 110n, deliveredTimestamp: 1_100n, status: "delivered" });
     await callHandler(name, { event: createEvent({ token, recipient: account, value: 10n, messageId }, { id: "e1" }), context });
     expect(database.row(messages, { messageId })).toMatchObject({ releaseFailed: true, status: "release_failed" });
   });

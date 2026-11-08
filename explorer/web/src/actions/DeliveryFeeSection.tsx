@@ -283,12 +283,12 @@ const DeliveryQuote = ({ draft, options, onChange, destinationNativeSymbol, dest
       <TipCostCharts delivery={delivery} nativeSymbol={destinationNativeSymbol} chainName={destinationName} />
       <Text fontSize="sm" fontWeight="medium" marginTop="1" data-testid="tip-maximum">
         {description.mode === "gas"
-          ? `The limit is ${formatUnits(delivery.maximumTip, token.decimals)} ${token.symbol}. It is the price ceiling. Expect the tip to reach it.`
+          ? `Expected tip about ${formatUnits(description.expectedUnits, token.decimals)} ${token.symbol} at the gas estimate. The most it can take is ${formatUnits(delivery.maximumTip, token.decimals)} ${token.symbol}, the limit: a deliverer who supplies more gas can raise the tip up to it.`
           : `The tip can take at most ${formatUnits(delivery.maximumTip, token.decimals)} ${token.symbol}.`}
       </Text>
       {description.certainty === "estimate" ? (
         <Text fontSize="sm" color="orange.fg">
-          This is an estimate: the real tip follows the gas that the deliverer's transaction makes available and the gas price at delivery. It can never pass the limit.
+          This is an estimate: the real tip follows the gas that the delivery uses and the gas price at delivery. It can never pass the limit.
         </Text>
       ) : null}
       {description.breakdown.length === 0 ? (

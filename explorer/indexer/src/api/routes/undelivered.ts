@@ -17,7 +17,6 @@ export type UndeliveredItem = {
   readonly destinationChainId: number;
   readonly sentTransactionHash: Hex;
   readonly sentLogIndex: number;
-  readonly gasLimit: number;
   readonly coveredByHeadSlot: string;
 };
 
@@ -31,15 +30,14 @@ type UndeliveredRow = typeof messages.$inferSelect;
  * @returns The item, or null when a send fact is missing.
  */
 const undeliveredItemOf = (row: UndeliveredRow): UndeliveredItem | null => {
-  const { sentTransactionHash, sentLogIndex, gasLimit, coveredByHeadSlot } = row;
-  if (sentTransactionHash === null || sentLogIndex === null || gasLimit === null || coveredByHeadSlot === null) return null;
+  const { sentTransactionHash, sentLogIndex, coveredByHeadSlot } = row;
+  if (sentTransactionHash === null || sentLogIndex === null || coveredByHeadSlot === null) return null;
   return {
     messageId: row.messageId,
     sourceChainId: row.sourceChainId,
     destinationChainId: row.destinationChainId,
     sentTransactionHash,
     sentLogIndex,
-    gasLimit,
     coveredByHeadSlot: coveredByHeadSlot.toString(),
   };
 };
