@@ -5,6 +5,7 @@
  */
 import type { Context, Hono } from "hono";
 import { PROOF_DIRECTIONS, secondsPerSlot, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
+import { figuresOf } from "../billing.ts";
 import type { BackendModuleContext } from "../module.ts";
 import { findActiveJob, findLatestJob, getJob, listJobsSince, type PlannedJob } from "../requests/jobs.ts";
 import { getTiming, listTimings, recentTimings, statOf } from "../requests/timings.ts";
@@ -195,18 +196,39 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
    * the billed GPU seconds estimated (to the endpoint's idle timeout after the end), the cost at the configured price,
    * and the seconds a worker sat ready before the due time. `days`: 1 to 30, default 7.
    */
-  app.get("/warmup/summary", (request) => {
+  app.get("/warmup/summary", async (request) => {
     const text = request.req.query("days") ?? "7";
     const days = /^\d+$/.test(text) ? Number(text) : 0;
     if (days < 1 || days > 30) return request.json({ error: "days is a whole number from 1 to 30" }, 400);
     const refused = limited(request);
     if (refused !== null) return refused;
     const { idleTimeoutSeconds, gpuUsdPerHour, dailyCapSeconds } = context.config.watch.warmup;
-    const byDay = createWarmupStore(storage).summary(now() - days * 86_400_000, { idleTimeoutSeconds, gpuUsdPerHour });
+    const at = now();
+    const snapshot = context.billing === undefined ? { spend: null, balance: null } : await context.billing.read();
+    const figures = figuresOf(snapshot, at);
+    // The rate that RunPod billed; the configured price only when RunPod's billing cannot be read.
+    const rateSource = figures.effectiveUsdPerHour === null ? "assumed" : "runpod";
+    const usdPerHour = figures.effectiveUsdPerHour ?? gpuUsdPerHour;
+    const warmupDays = createWarmupStore(storage).summary(at - days * 86_400_000, { idleTimeoutSeconds, gpuUsdPerHour: usdPerHour });
+    const billedOf = new Map((snapshot.spend?.days ?? []).map((day) => [day.start, day]));
+    const byDay = warmupDays.map((day) => {
+      const billed = billedOf.get(day.day);
+      return {
+        ...day,
+        billedUsd: billed === undefined ? null : Math.round(billed.amountUsd * 10_000) / 10_000,
+        runpodBilledSeconds: billed === undefined ? null : Math.round(billed.billedSeconds * 100) / 100,
+        effectiveUsdPerHour: billed !== undefined && billed.billedSeconds > 0 ? Math.round((billed.amountUsd / (billed.billedSeconds / 3600)) * 10_000) / 10_000 : null,
+      };
+    });
     const sum = (pick: (day: (typeof byDay)[number]) => number) => Math.round(byDay.reduce((total, day) => total + pick(day), 0) * 10_000) / 10_000;
+    const billedDays = byDay.filter((day) => day.billedUsd !== null);
     return request.json({
       days,
-      assumptions: { idleTimeoutSeconds, gpuUsdPerHour, dailyCapSeconds },
+      /** Where the price of a GPU hour comes from: "runpod" (measured from RunPod's billing) or "assumed" (the configured price, a fallback). */
+      rateSource,
+      usdPerHour,
+      assumptions: { idleTimeoutSeconds, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds },
+      billing: figures,
       total: {
         sessions: sum((day) => day.sessions),
         used: sum((day) => day.used),
@@ -216,6 +238,8 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
         idleBeforeDueSeconds: sum((day) => day.idleBeforeDueSeconds),
         estimatedCostUsd: sum((day) => day.estimatedCostUsd),
         wastedCostUsd: sum((day) => day.wastedCostUsd),
+        billedUsd: billedDays.length === 0 ? null : sum((day) => day.billedUsd as number),
+        runpodBilledSeconds: billedDays.length === 0 ? null : sum((day) => day.runpodBilledSeconds as number),
       },
       byDay,
     });

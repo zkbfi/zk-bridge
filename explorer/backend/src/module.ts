@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import type { Pair } from "@zk-bridge/shared";
 import type { ProverBinary } from "@zk-bridge/shared/prover";
+import type { BillingReader } from "./billing.ts";
 import type { BackendConfig, ModuleName } from "./config.ts";
 import type { ModuleHealth } from "./health.ts";
 import type { Logger } from "./logger.ts";
@@ -27,6 +28,8 @@ export type BackendModuleContext = {
    * proof. Absent in a context without the key; the watcher then sends no warm-ups.
    */
   readonly pingProver?: () => Promise<number>;
+  /** What RunPod billed, cached. Absent when no endpoint is a RunPod endpoint with a key; the summary then uses the assumed rate. */
+  readonly billing?: BillingReader;
 };
 
 /** The two functions every module exports, plus an optional health report. */

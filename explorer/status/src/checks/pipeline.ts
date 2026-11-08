@@ -46,9 +46,19 @@ export const benchmarksCheck = (deps: Deps, backendBase: string): Spec => ({
   },
 });
 
+/** The balance covers fewer days than this at the last 7 days' average spend: the check is degraded. */
+export const BALANCE_WARNING_DAYS = 14;
+/** RunPod figures older than this many seconds are said to be old. */
+const BILLING_STALE_SECONDS = 1800;
+
+const dollars = (value: unknown) => `$${(number(value) ?? 0).toFixed(2)}`;
+const balanceDollars = (value: number) => `$${value >= 10 ? Math.round(value) : value.toFixed(2)}`;
+
 /**
- * What the GPU warm-ups of the last 24 hours cost: `GET /warmup/summary?days=1`. The money is an estimate from the
- * billed seconds at the configured price. Always ok when the route answers: a wasted warm-up is a cost, not an outage.
+ * What the GPU warm-ups of the last 24 hours cost: `GET /warmup/summary?days=1`. The money is what RunPod billed
+ * (`billing`), and the wasted part is the wasted warm-up seconds at the rate RunPod's billing gives; when the backend
+ * cannot read RunPod it says so and the check shows the configured price. Degraded when the balance covers fewer than
+ * {@link BALANCE_WARNING_DAYS} days at the last 7 days' average spend; otherwise ok, since a wasted warm-up is a cost, not an outage.
  */
 export const warmupCheck = (backendBase: string): Spec => ({
   id: "pipeline-warmup",
@@ -57,13 +67,39 @@ export const warmupCheck = (backendBase: string): Spec => ({
   async run(run) {
     const answer = await get(run, `${backendBase}/warmup/summary?days=1`);
     if (answer.status !== 200) return { state: "down", detail: `answered ${answer.status} on /warmup/summary` };
-    const total = record(record(json(answer))?.total);
-    if (total === null) return { state: "down", detail: "answered something that is not the warm-up summary" };
+    const body = record(json(answer));
+    const total = record(body?.total);
+    if (body === null || total === null) return { state: "down", detail: "answered something that is not the warm-up summary" };
+    const billing = record(body.billing);
+    const spendKnown = billing?.available === true && number(billing.last24hUsd) !== null;
     const sessions = number(total.sessions) ?? 0;
-    if (sessions === 0) return { state: "ok", detail: "no warm-up in 24 h" };
-    const dollars = (value: unknown) => `$${(number(value) ?? 0).toFixed(2)}`;
     const wasted = number(total.wasted) ?? 0;
-    return { state: "ok", detail: `${count(sessions, "warm-up")} in 24 h, ${number(total.used) ?? 0} used and ${wasted} wasted; about ${dollars(total.estimatedCostUsd)} of GPU time, ${dollars(total.wastedCostUsd)} of it wasted (${duration(number(total.wastedSeconds) ?? 0)})` };
+    const parts: string[] = [];
+    if (sessions === 0) parts.push("no warm-up in 24 h");
+    else parts.push(`${count(sessions, "warm-up")} in 24 h, ${number(total.used) ?? 0} used and ${wasted} wasted`);
+    if (spendKnown) {
+      const wastedText = sessions === 0 ? "" : `, about ${dollars(total.wastedCostUsd)} of it wasted`;
+      parts.push(`${dollars(billing?.last24hUsd)} billed by RunPod in 24 h${wastedText}`);
+    } else if (sessions > 0) {
+      const assumed = number(record(body.assumptions)?.gpuUsdPerHour);
+      const rate = assumed === null ? "" : ` at the assumed $${assumed.toFixed(2)}/h`;
+      parts.push(`RunPod billing is not available; about ${dollars(total.estimatedCostUsd)} of GPU time${rate}, ${dollars(total.wastedCostUsd)} of it wasted (${duration(number(total.wastedSeconds) ?? 0)})`);
+    }
+    const age = number(billing?.ageSeconds);
+    if (spendKnown && age !== null && age > BILLING_STALE_SECONDS) parts.push(`RunPod figures are ${duration(age)} old`);
+    let state: "ok" | "degraded" = "ok";
+    const balance = number(billing?.balanceUsd);
+    if (balance !== null) {
+      const daysLeft = number(billing?.balanceDaysLeft);
+      if (daysLeft === null) parts.push(`balance ${balanceDollars(balance)}, no spend in the last 7 days`);
+      else {
+        const left = Math.floor(daysLeft);
+        const low = daysLeft < BALANCE_WARNING_DAYS;
+        if (low) state = "degraded";
+        parts.push(`balance ${balanceDollars(balance)}, ${count(left, "day")} left at the 7-day average${low ? ` (under ${BALANCE_WARNING_DAYS})` : ""}`);
+      }
+    }
+    return { state, detail: parts.join("; ") };
   },
 });
 
