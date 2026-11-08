@@ -15,6 +15,10 @@
  *   does not waits for a batch, up to the direction's minimum interval. The proving time itself is the backend's
  *   measured total for the last 7 days, else {@link PROVING_DEFAULT}.
  * - Delivered: the indexer's measured covered-to-delivered time over the last 7 days, else {@link DELIVERY_DEFAULT}.
+ *
+ * A measured range far past what its step can take (see {@link SANE_LIMITS}) is a measuring fault, not a wait: it is
+ * left out, the step falls back to the chain's or the rule's figure, and the line under the timeline says so. On
+ * 2026-11-08 a backend fault read the proof's time to the chain as 52 h and the timeline showed "~57 h 7 min".
  */
 import { defaultFinalitySeconds, secondsPerSlot } from "@zk-bridge/shared";
 import type { DirectionTiming, WindowTiming } from "../explore/explore-source";
@@ -27,6 +31,14 @@ export const PROVING_DEFAULT: Range = { typical: 120, worst: 240 };
 
 /** Covered to delivered by a runner or by the user, when the indexer has measured none. */
 export const DELIVERY_DEFAULT: Range = { typical: 60, worst: 300 };
+
+/**
+ * The longest worst case, in seconds, a measured range may have before it is left out as a measuring fault:
+ * proving and posting a proof 30 min (it takes about two); covered to delivered 30 min (a runner delivers within
+ * minutes); send to final three times the chain's two epochs; the measured proof wait twice the batch interval plus
+ * the proving limit.
+ */
+export const SANE_LIMITS = { provingSeconds: 30 * 60, deliverySeconds: 30 * 60, finalityFactor: 3 } as const;
 
 /** A typical and a worst-case wait, in seconds. */
 export type Range = { readonly typical: number; readonly worst: number };
@@ -87,6 +99,8 @@ export type Timeline = {
   readonly start: ProofStart;
   /** The wait for a batch in seconds, when the proof may wait for one. */
   readonly batchSeconds: number | null;
+  /** The steps whose measured range was past its {@link SANE_LIMITS} and left out. */
+  readonly ignored: readonly ("final" | "proved" | "delivered")[];
 };
 
 /** Seconds as "45 s", "18 min", "2 h" or "2 h 10 min". */
@@ -134,18 +148,34 @@ export const feeVerdict = (rule: ProofRule, fee: FeeReading): "pays" | "short" |
 export const buildTimeline = (inputs: WaitInputs, fee: FeeReading): Timeline => {
   const slot = secondsPerSlot(inputs.sourceChainId);
   const finality = defaultFinalitySeconds(inputs.sourceChainId);
+  const rule = inputs.rule;
+  const interval = rule === null ? 0 : rule.minIntervalSeconds;
+  const ignored: ("final" | "proved" | "delivered")[] = [];
+  /** The range when its worst case is within `limit`, else null, and the step is named as left out. */
+  const sane = (range: Range | null, limit: number, key: "final" | "proved" | "delivered"): Range | null => {
+    if (range === null || range.worst <= limit) return range;
+    if (!ignored.includes(key)) ignored.push(key);
+    return null;
+  };
   const timing = inputs.timing !== null && inputs.timing.count >= MIN_SAMPLES ? inputs.timing : null;
-  const [sentToFinal, wait, delivery] = timing === null ? [null, null, null] : [measuredOf(timing.steps[0]), measuredOf(timing.steps[1]), measuredOf(timing.steps[2])];
+  const [sentToFinal, wait, delivery] =
+    timing === null
+      ? [null, null, null]
+      : [
+          sane(measuredOf(timing.steps[0]), SANE_LIMITS.finalityFactor * finality, "final"),
+          // Without a rule the interval is unknown: an hour, the testnet's, stands in.
+          sane(measuredOf(timing.steps[1]), 2 * (rule === null ? 3600 : interval) + SANE_LIMITS.provingSeconds, "proved"),
+          sane(measuredOf(timing.steps[2]), SANE_LIMITS.deliverySeconds, "delivered"),
+        ];
   const sent: Range = { typical: slot, worst: 2 * slot };
 
   // Final on the source: the chain's rule; the send's own block is part of the sent step.
   const finalSource = sentToFinal ?? { typical: finality, worst: finality };
   const final: Range = { typical: Math.max(0, finalSource.typical - sent.typical), worst: Math.max(0, finalSource.worst - sent.typical) };
 
-  const proving = inputs.proving ?? PROVING_DEFAULT;
-  const provingBasis: Basis = inputs.proving === null ? "chain" : "measured";
-  const rule = inputs.rule;
-  const interval = rule === null ? 0 : rule.minIntervalSeconds;
+  const measuredProving = sane(inputs.proving, SANE_LIMITS.provingSeconds, "proved");
+  const proving = measuredProving ?? PROVING_DEFAULT;
+  const provingBasis: Basis = measuredProving === null ? "chain" : "measured";
   let start: ProofStart;
   let proved: Range;
   let provedBasis: Basis;
@@ -183,14 +213,16 @@ export const buildTimeline = (inputs: WaitInputs, fee: FeeReading): Timeline => 
     { key: "proved", label: "Proved", note: provedNote, range: proved, basis: provedBasis },
     { key: "delivered", label: "Delivered", note: "A delivery bot or you delivers it once proved", range: delivered, basis: delivery === null ? "chain" : "measured" },
   ] as const satisfies readonly WaitStep[];
-  return { steps, total: add(...steps.map((step) => step.range)), basis: measured ? "measured" : "derived", samples: measured ? (timing as WindowTiming).count : 0, start, batchSeconds };
+  return { steps, total: add(...steps.map((step) => step.range)), basis: measured ? "measured" : "derived", samples: measured ? (timing as WindowTiming).count : 0, start, batchSeconds, ignored };
 };
 
-/** The line under a timeline: what its numbers rest on. */
-export const basisText = (timeline: Timeline): string =>
-  timeline.basis === "measured"
-    ? `Based on ${timeline.samples} transfers in the last 7 days${timeline.start === "measured" ? "." : "; the proof step follows the proof rule."}`
-    : "Based on the chain and the proof rule.";
+/** The line under a timeline: what its numbers rest on. A measured proof time that was left out is named. */
+export const basisText = (timeline: Timeline): string => {
+  if (timeline.basis !== "measured") return "Based on the chain and the proof rule.";
+  const head = `Based on ${timeline.samples} transfers in the last 7 days`;
+  if (timeline.ignored.includes("proved")) return `${head}; the proof step is based on the chain and the proof rule.`;
+  return `${head}${timeline.start === "measured" ? "." : "; the proof step follows the proof rule."}`;
+};
 
 /**
  * What is left of a transfer that is in flight: the timeline's total less the time since the send, and never less than
@@ -216,21 +248,24 @@ export const clockText = (unix: number): string => new Date(unix * 1000).toLocal
 export const timingFor = (timings: readonly { readonly sourceChainId: number; readonly timing: DirectionTiming | null }[], sourceChainId: number): WindowTiming | null =>
   timings.find((row) => row.sourceChainId === sourceChainId)?.timing?.last7d ?? null;
 
-/** The part of `GET /benchmarks` the proving time is read from. */
-export type BenchmarkSteps = Readonly<Record<"total" | "proofToOnChain", { readonly count: number; readonly medianMs: number | null; readonly p90Ms: number | null }>>;
+type BenchmarkStat = { readonly count: number; readonly medianMs: number | null; readonly p90Ms: number | null };
+
+/** The part of `GET /benchmarks` the proving time is read from (`webhookToBoard` is absent from an older backend). */
+export type BenchmarkSteps = Readonly<Record<"total" | "proofToOnChain", BenchmarkStat>> & { readonly webhookToBoard?: BenchmarkStat };
 
 /**
- * The proving time of a direction from the backend's benchmarks: the prover's total plus the time from the board to
- * the light client on chain, typical and worst case. Null with fewer than {@link MIN_SAMPLES} proofs.
+ * The proving time of a direction from the backend's benchmarks: the prover's total, the time from its answer to the
+ * board post, and the time from the board to the light client on chain, typical and worst case. Null with fewer than
+ * {@link MIN_SAMPLES} proofs. The timeline leaves out a result past {@link SANE_LIMITS}.
  *
  * @param steps The direction's steps over the window.
  */
 export const provingOf = (steps: BenchmarkSteps | undefined): Range | null => {
   if (steps === undefined || steps.total.count < MIN_SAMPLES || steps.total.medianMs === null || steps.total.p90Ms === null) return null;
-  const toChain = steps.proofToOnChain;
+  const after = [steps.webhookToBoard, steps.proofToOnChain];
   return {
-    typical: (steps.total.medianMs + (toChain.medianMs ?? 0)) / 1000,
-    worst: (steps.total.p90Ms + (toChain.p90Ms ?? 0)) / 1000,
+    typical: after.reduce((sum, step) => sum + (step?.medianMs ?? 0), steps.total.medianMs) / 1000,
+    worst: after.reduce((sum, step) => sum + (step?.p90Ms ?? 0), steps.total.p90Ms) / 1000,
   };
 };
 

@@ -76,11 +76,18 @@ export type BenchmarkInput = {
 const difference = (later: number | null | undefined, earlier: number | null | undefined): number | null =>
   later == null || earlier == null || later < earlier ? null : later - earlier;
 
-/** When the light client stored the head of a proof: the first update at or past its new slot, in ms since 1970. */
+/**
+ * When the light client stored this proof's own head: the earliest update of exactly its new slot, in ms since 1970.
+ *
+ * A later head that merely covers the slot is not this proof landing. Matching "the first update at or past the slot"
+ * put a proof whose own update is missing (deduplicated on the board, or posted to a light client that has since been
+ * redeployed and is no longer indexed) on the next head the runner posted, hours or days later: on 2026-11-08 that read
+ * proofToOnChain as a 52 h median over 7 d, when each proof lands seconds after its board post.
+ */
 function onChainAt(updates: readonly HeadUpdate[], newSlot: number | null): number | null {
   if (newSlot === null) return null;
   let first: HeadUpdate | null = null;
-  for (const update of updates) if (update.slot >= newSlot && (first === null || update.timestamp < first.timestamp)) first = update;
+  for (const update of updates) if (update.slot === newSlot && (first === null || update.timestamp < first.timestamp)) first = update;
   return first === null ? null : first.timestamp * 1000;
 }
 

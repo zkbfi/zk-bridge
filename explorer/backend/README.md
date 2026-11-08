@@ -594,8 +594,9 @@ for a worker still starting, and the share of proofs that wait. Run it on the se
 
 Steps: `workerWait` (`wait_worker_ms`), `remote` (`remote_ms`), `workerQueue`, `workerProve` (`worker_prove_ms`, when the
 worker reports it), `total` (`total_ms`), `webhookToBoard` (webhook stored → board took it), `boardPost` (the grind of
-the board post), `proofToOnChain` (board post → the first head update on the destination at or past the proof's new
-slot, from the indexer's `/api/head-updates`), `coveredToDelivered` and `sentToDelivered` (the indexer's delivered
+the board post), `proofToOnChain` (board post → the head update on the destination that stored exactly the proof's
+new slot, from the indexer's `/api/head-updates`; a proof without its own update, such as one deduplicated on the board
+or posted to a light client that is no longer indexed, is left out rather than matched to a later head), `coveredToDelivered` and `sentToDelivered` (the indexer's delivered
 messages of the window). Without the indexer (`"indexer": "unavailable"`) the last three are empty. `recent` lists the
 newest 20 proofs of the window.
 
