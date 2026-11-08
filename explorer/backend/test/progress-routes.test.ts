@@ -389,7 +389,16 @@ describe("GET /billing (2026-11-07)", () => {
   });
 
   it("puts every billed second in one bucket, per day, in the total and over the last 24 hours (2026-11-07)", async () => {
-    const run = withBilling(snapshot);
+    // The clock is just after midnight UTC. RunPod's hours: one billed before the records (1800 s) and the hour that is still
+    // filling (not compared), so billing has reached the hour of `now`; the records of the hour before have no bill in it.
+    const run = withBilling((at) => {
+      const base = snapshot(at);
+      const hours = [
+        { start: new Date(at - 7_200_000).toISOString().slice(0, 13), amountUsd: 0.38, billedSeconds: 1800 },
+        { start: new Date(at).toISOString().slice(0, 13), amountUsd: 0.01, billedSeconds: 10 },
+      ];
+      return { ...base, spend: { ...(base.spend as NonNullable<BillingSnapshot["spend"]>), hours } };
+    });
     sessions(run);
     const now = run.context.now();
     // A job proved 30 minutes ago: a 50 s request on the worker after 20 s of waiting for a cold worker.
@@ -412,16 +421,25 @@ describe("GET /billing (2026-11-07)", () => {
       idleAfterJob: { seconds: 60 },
     });
     const claimed = 48 + 50 + 100 + 40 + 60;
-    expect(total.unaccounted).toEqual({ seconds: 10_800 - claimed, usd: Math.round((2.28 - (claimed / 3600) * 0.76) * 10_000) / 10_000 });
-    // The day totals add up to the bill of the day, and the total to the bill of the window.
-    for (const day of body.byDay) {
+    // Billing has reached the start of the current hour, which is today's first minutes: today (3600 s in the fixture) is
+    // not compared, and the two days before it are (7200 s). Each day is priced at its own rate, here the same $0.76.
+    expect(total.billed).toEqual({ seconds: 7200, usd: 1.52 });
+    expect(total.unaccounted).toEqual({ seconds: 7200 - claimed, usd: Math.round((1.52 - (claimed / 3600) * 0.76) * 10_000) / 10_000 });
+    expect(total.billedThrough).toBe(new Date(Math.floor(now / 3_600_000) * 3_600_000).toISOString());
+    expect(body.byDay[0].breakdown.unaccounted).toBeNull();
+    // The day totals add up to the bill of the day that was compared.
+    for (const day of body.byDay.slice(1)) {
       const sum = ["proving", "startingUp", "waitingForProof", "unusedEarlyStarts", "idleAfterJob", "unaccounted"].reduce((acc, key) => acc + day.breakdown[key].seconds, 0);
       expect(sum).toBeCloseTo(day.billedSeconds, 2);
+      expect(day.breakdown.billed.seconds).toBe(day.billedSeconds);
     }
     expect(body.last24h.breakdown).toMatchObject({ proving: { seconds: 48 }, unusedEarlyStarts: { seconds: 40 }, idleAfterJob: { seconds: 60 } });
     // The 24 h bill is 1800 s (the hour of the snapshot): unaccounted is that minus the buckets.
     expect(body.last24h.breakdown.unaccounted.seconds).toBe(1800 - claimed);
-    expect(body.last24h.billedSeconds).toBe(1800);
+    expect(body.last24h.billedSeconds).toBe(1810);
+    expect(body.last24h.breakdown.billed).toEqual({ seconds: 1800, usd: 0.38 });
+    expect(body.last24h.breakdown.billedThrough).toBe(total.billedThrough);
+    expect(body.last24h.breakdown.notYetBilled).toEqual({ seconds: 0, usd: 0 });
   });
 
   it("computes the buckets for days RunPod has no figure for, with unaccounted null", async () => {

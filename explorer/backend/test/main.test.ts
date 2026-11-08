@@ -1,5 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serve } from "@hono/node-server";
@@ -240,6 +241,16 @@ describe("secrets in the log", () => {
     expect(seen.every((entry) => entry.endsWith(`Bearer ${SECRETS.runpodApiKey}`))).toBe(true);
     expect(lines.join("\n")).toContain('"runpod_idle_timeout_set"');
     expect(lines.join("\n")).toContain('"from":60,"to":5');
+    // The endpoint's timeout, as read and as set, went into the history that the billing breakdown reads.
+    const history = new DatabaseSync(config.databasePath);
+    try {
+      const rows = history.prepare("SELECT seconds FROM idle_timeout_history ORDER BY at").all() as Array<{ seconds: number }>;
+      expect(rows.map((row) => row.seconds).slice(0, 2)).toEqual([60, 5]);
+      expect(rows.length).toBeGreaterThanOrEqual(3);
+      expect(rows[rows.length - 1]?.seconds).toBe(5);
+    } finally {
+      history.close();
+    }
     expect(lines.join("\n")).not.toContain(SECRETS.runpodApiKey);
   });
 

@@ -89,6 +89,10 @@ CREATE TABLE IF NOT EXISTS job_timings (
   grind_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS job_timings_by_proved ON job_timings (proved_at);
+CREATE TABLE IF NOT EXISTS idle_timeout_history (
+  at INTEGER PRIMARY KEY,
+  seconds INTEGER NOT NULL
+);
 `;
 
 /**
@@ -105,6 +109,10 @@ function migrate(database: DatabaseSync): void {
   const sessionColumns = database.prepare("PRAGMA table_info(warmup_sessions)").all() as Array<{ name: string }>;
   if (!sessionColumns.some((column) => column.name === "billed_seconds")) database.exec("ALTER TABLE warmup_sessions ADD COLUMN billed_seconds REAL");
   if (!sessionColumns.some((column) => column.name === "prediction")) database.exec("ALTER TABLE warmup_sessions ADD COLUMN prediction TEXT");
+  // The RunPod endpoint's idle timeout over time (see `idle-history.ts`): 60 s from the beginning until the owner set it to
+  // 5 s by hand (a PATCH on the endpoint, 2026-11-08 about 01:59 UTC; the backend's sync then logged runpod_idle_timeout_ok).
+  // The billing breakdown needs it: an idle tail is as long as the timeout that was in effect when the job ended.
+  database.exec("INSERT OR IGNORE INTO idle_timeout_history (at, seconds) VALUES (0, 60), (1794103140000, 5)");
   database.exec("CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_per_target ON jobs (direction, planned_start_slot, planned_new_slot) WHERE planned_start_slot IS NOT NULL");
 }
 
