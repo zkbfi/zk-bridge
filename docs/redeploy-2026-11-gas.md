@@ -1,7 +1,7 @@
 # Redeploy plan: gas reverts up (testnet, November 2026)
 
-Status: a plan, brought up to date on 2026-11-07 (merged with main, contracts split for the gas cap, dry run done).
-Nothing here has been sent. Every step that sends a transaction says so. The owner runs it.
+Status: **done on 2026-11-08.** The new layers are deployed on both chains and the services run on them; see "What
+happened on 2026-11-08" for the record. The rest of this page is the plan as it was run, kept for the next redeploy.
 
 Owner, 2026-11-01: "yes, build it test-first and show me the redeploy plan." The design is in
 `docs/hardened-build-contract.md`, "Gas reverts up, and three layers", and `docs/superpowers/specs/2026-11-01-gas-revert-up.md`.
@@ -112,9 +112,10 @@ Evidence, read with public RPCs only (nothing sent):
 
 ## The deployment (sends transactions)
 
-Order: Sepolia first, then chain 943, eight transactions on each, all from the deployer `0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc`. Both bridges and both mediators
-name their twins on the other chain by predicted address, so the nonce of each chain must not move between the dry run
-and the run; nothing else may send from the deployer meanwhile.
+Order: Sepolia first, then chain 943, eight transactions on each, all from the deployer
+`0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc`. Both bridges and both mediators name their twins on the other chain by
+predicted address, so the nonce of each chain must not move between the dry run and the run; nothing else may send from
+the deployer meanwhile.
 
 ```sh
 REDEPLOY_CONFIG=script/testnet/redeploy.config.testnet.json REDEPLOY_MODE=layers \
@@ -204,6 +205,131 @@ These steps send transactions only where they say so. The runner does the on-cha
 10. **Smoke test (sends transactions).** One relay each way through the router, as `docs/testnet-run.md` step 11:
     check `TokensBridged` on the destination, `AffirmationCompleted(..., true)`, and that a delivery with too little gas
     reverts and leaves the message waiting.
+
+## What happened on 2026-11-08
+
+Owner, 2026-11-07 and 2026-11-08: "do it all now", "go".
+
+**The broadcast.** Deployer `0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc`, from the release commit of `feat/gas-revert-up-2`.
+The record is `broadcast/multi/RedeployLayers.s.sol-latest/run.json` (16 receipts, all status 1); the filled
+configuration is `script/testnet/redeploy.config.testnet.json`.
+
+- Sepolia, nonces 14 to 21, blocks 12,087,603 to 12,087,610 (01:49:24 to about 01:51 UTC): 98,325,040 gas in all, the
+  largest creation (`MessageBridge`) 14,587,871 gas, within 1% of the node estimates above; 0.00098 ETH.
+- Chain 943, nonces 18 to 25, blocks 25,846,177 to 25,846,189 (01:51:39 to 01:53:39 UTC): 13,996,582 gas; 0.00014 PLS.
+- **The fee of the first 943 broadcast was too low.** Foundry's estimate of the maximum fee on 943 came out 15 wei below
+  the priority fee of 0.01 gwei (`--priority-gas-price 10000000`), and a transaction whose maximum fee is below its
+  priority fee is invalid, so the broadcast stalled. It was resumed with
+  `--resume --multi --with-gas-price 30000000 --priority-gas-price 10000000` (a maximum fee of 0.03 gwei); the first
+  creation is in block 25,846,177 and the other seven, at the planned nonces, from 25,846,182 on. Next time on 943, pass
+  `--with-gas-price` together with the priority fee from the start.
+
+| Contract | Sepolia 11155111 | Chain 943 |
+|---|---|---|
+| `ReceiptProofLib` | `0x11b211E478105683096E5DA4cE1abf019fF35961` | `0x603ba9c389d02964d9E7c06D994d917b868f834E` |
+| `OpeningProofLib` | `0xa8B9650A2021e014253a338629F8095D1f2e2910` | `0xBA4BecF539B90c68A333A090B3A51587909F6981` |
+| `BeaconLayoutLib` | `0x08E458763D9410EcD56B9459b42Cdc624D389d04` | `0x2c00675092e2955d27F476B5a1baC9AC5Bb6FA86` |
+| `MessageBridge` | `0xD4b1ECc1b919cf9BA7Ff45e57e1712B31abA4C66` | `0x3846e483C98cD0f164c29A5e40F7295A5765ABa4` |
+| `MediatorPayloads` | `0x603ba9c389d02964d9E7c06D994d917b868f834E` | `0x1c4627D76e6b423e06C61f055C2ce0d3E944Ce8a` |
+| `TokenFactory` | `0xBA4BecF539B90c68A333A090B3A51587909F6981` | `0xDcD7165D9941099B6657101C42CfcEb3B958557c` |
+| `TokenMediator` | `0x2c00675092e2955d27F476B5a1baC9AC5Bb6FA86` | `0x8eeF4098D3726955F7D227C4D1D92487C99F7e62` |
+| `DeliveryRouter` | `0x3846e483C98cD0f164c29A5e40F7295A5765ABa4` | `0xBEa5F0fd3712B02c25Bda32C7719fB9373C0fA20` |
+
+One deployer with overlapping nonce ranges puts different roles at the same address on the two chains (the Sepolia
+router and the 943 bridge share an address, and so on), and the 943 test tokens `tUSD` and `tTKN` sit at the addresses
+of the Sepolia proof libraries. Always read an address together with its chain.
+
+**Checked on the live chains after the broadcast** (read only, public RPCs): every address holds code of the planned
+size; every receipt has status 1; and the script's own read-backs (`verifyBridge`, `verifyMediator`, the factory of the
+mediator, `verifyRouter`, `verifyLibraries`, `verifyLinks`) ran again in a throwaway script against forks of both chains
+at blocks 12,087,652 and 25,846,227 and all passed: the twins name each other, the light clients, gates, wrapped native
+tokens, reward address (`0xE73c...2DB4`) and failed delivery address (`0xF71c...5eAc`) are the kept ones, and the code
+of the libraries and every link site is the compiled code.
+
+**The deployment file.** `deploy/deployments/sepolia-pls943.json` was written with `zk-bridge-prover deployment-file`:
+the new bridge, mediator, token factory and router; the same light clients, gates, 943 fork registry and wrapped native
+tokens; `start_block` 12,087,602 on Sepolia and 25,846,176 on 943. The old file is
+`deploy/deployments/archive/sepolia-pls943.2026-10.json`; neither the release glob (`deploy/deployments/*.json`) nor the
+docs reader (`readdirSync`, `.json` files only) descends into `archive/`. No frontend holds a router address of its own:
+`isKnownDeliveryRouter` reads the routers of the deployment file.
+
+**The last message on the old contracts** (Sepolia to 943, waiting since about 01:50) was delivered by the runner at
+02:28:42 UTC (update `0x4b46356241b2899bb31171dd57edb5db8e579cc5a9dff237fa622400c5ecca17`, delivery batch
+`0x3332b5f19f2b0095be68d6104329e715d5896ae188dd7e11f7d7607d2942ed71`, both on 943). Then the runner was stopped and the
+switch began.
+
+**The server** (release `911335249e98571f1943947de54ea7683d80ab96`, built with `build.yml`; every changed file has a
+copy with the suffix `.bak-20261108`):
+
+- `/etc/zk-bridge/deployment.json` (the one file every service reads): the new pair, mode 0644 root:root as before.
+- `/etc/zk-bridge/runner/bots.json`: `proofCheckGas` removed, `deliveryGasFallback` 1,500,000 (the old 400,000 was
+  the share of the proof check only; the new setting is the whole delivery, and 1,500,000 is the code default), and the
+  four new copies of the test tokens added to `tokenValuationsWei` (Sepolia copies of the 943 tokens
+  `0xfFd05cCfBa2DF891b837D06695e01051f2f9304d` and `0x486367F9550b211689532Edde0C0F074C014698B` at 10 coins per token;
+  943 copies of the Sepolia tokens `0xf646d8DecD04732c9CD39b56525E1D6F6d09bF2c` and
+  `0x33f92b140B18b5e1380Ea24B0520ba6139E8db21` at 1 coin), from `predictAddress` of the new factories. The runner has
+  no `deliveryRouter` setting: it takes the router of the deployment file.
+- `/etc/zk-bridge/traffic/bots.json`: `newCopyGasLimit` removed.
+- Runner state: both `runner-sepolia-pls943-<direction>.json` moved aside, so each direction started with
+  `depositsOpen` false. The proof cache stayed.
+- Indexer: `indexer.yml -e action=green` filled the new schema `indexer_4b2d903b8088` on port 42070 in a few minutes;
+  `-e action=switch` pointed Caddy at it. **`finish` was not run**: the old indexer (schema `indexer_172c92436019`, the
+  309 messages of the old pair) still runs as the unit `zk-bridge-indexer` on 127.0.0.1:42069, reachable through an SSH
+  tunnel (`ssh -L 42069:127.0.0.1:42069 zkbfi-app`, then `http://127.0.0.1:42069/api/counts`). Caddy keeps it as the
+  fallback of indexer.zkb.fi, so if green stops, the public site shows the old pair.
+- **The backend, the runner and the status service read the indexer directly at 127.0.0.1:42069**, not through Caddy,
+  so after the switch they still saw the old pair (the backend refused a proof request with `nothing-to-prove`).
+  Their `indexerUrl` (status: `indexerLocal`) now points at green, 127.0.0.1:42070. Green is a transient unit
+  (`zk-bridge-indexer-pre`, `Restart=no`): it does not survive a reboot or a crash. When the old pair's history is no
+  longer needed, run `indexer.yml -e commit=<hash> -e action=finish` and set those three URLs back to 42069.
+- `backend.yml` (drain, switch, health), `bots.yml -e bots=runner,status`, then `bots.yml -e bots=traffic`. Caddy needed
+  no change beyond the indexer switch.
+
+**The bridges opened by themselves.** At its first pass on the new deployment the runner built both opening proofs from
+its proof archive, without a new light client update:
+
+- Sepolia bridge: `openDeposits` `0xb0b017a1f3ed959fc5f37a91b32c1e4e3dec199140c4f5aeb8f2cb9f03203125` (02:32:51 UTC,
+  626,833 gas).
+- 943 bridge: `openDeposits` `0xed768fd138a9a3784c5b18caae39e87679965abbf55d0bfc8367edd48b1a7ad8` (02:32:59 UTC,
+  589,969 gas).
+
+**Smoke test.** One relay each way through the new routers, sent by the traffic bot (restarted at 02:34):
+
+- **943 to Sepolia.** The relay `0x1ef8f5e223824d55824880dde11aba4d36305b43e9bcfda1f42ec24b8a0d395e` (02:50:09 UTC, tTKN,
+  a deploy message) was delivered on Sepolia at 03:12:41 in
+  `0xd670555f6555f6032e08094ec401e969660124ebd076c03f8d5ea307ab3c0c55` (status 1, 7,883,652 gas, which deploys the
+  copy `ztTKN` at `0x486367F9550b211689532Edde0C0F074C014698B`, the address the factory predicted): `TokensBridged` from
+  the new mediator, `AffirmationCompleted(943 mediator, Sepolia mediator, message, true)` from the new bridge. Before
+  it, the runner sent the first layout rows of the Sepolia bridge: `addBlockRootsLayout`
+  `0x2536543cd433229c47dea3baebf69236a6be28445b7909044deedc858413ab28`, `addBlockHashLayout`
+  `0x715727d57405d0ba8eb5d0d0973c34003ea5ba020d140f1338ee626b56490e62` and
+  `0x9650689583f1f0d0077d75bb3c2f71b2da692f7ef102a869d5e3a1fbd32f18ac`. A second message followed at 03:14:04
+  (`0xdd2e8eaee0ed494a96c3fc528fc2ee175d205b95d5165fd2215d80aa8502dfa7`).
+- **Sepolia to 943.** The relay `0xe28fdbad0d20f26fe35b97be10c4221dc0e06930e94745c1f959b492e8ae825f` (03:02:37 UTC) was
+  delivered on 943 at 03:22:11 in `0xfa286a0b569896b80d506cb41d2bf20d11e4d4720864590472e1b3b27f2c07ae` (status 1,
+  `TokensBridged` from the new mediator, `AffirmationCompleted(..., true)` from the new bridge), after the layout row
+  `addBlockRootsLayout` `0x6fcbf08019203a52de8840ec710faf7d500c9b8691e19985dc443fcc5ce51513`.
+- The delivery with too little gas (step 10 of the plan) was not tried on the live chains; the forge tests cover it.
+
+**What got in the way, and what to change next time.**
+
+- **The first delivery on each side waits for three light client heads after `start_block`.** The prover finds the
+  stored heads of the destination light client by scanning its `HeadUpdated` logs from the route's `start_block`
+  (`read_stored_slots` in `prover/src/stored.rs`), and the first layout row of a new bridge (`addBlockRootsLayout`)
+  needs two stored heads below the anchor. The light clients are kept and hold many heads, but the scan starts at the
+  redeploy block, so evidence failed with "not enough stored headers yet to validate the block roots layout" until each
+  light client had stored three heads after the redeploy. Here that was sped up with proof requests to the backend
+  (`POST /requests`, reason `message`, for messages that were waiting), three per direction. Next time: give the
+  prover the light client's own deployment block for this scan (a separate setting), or plan the extra proofs.
+- **The first Sepolia send reverted at the gate.** The traffic bot confirmed epoch 360342 ten seconds before its end,
+  and the relay `0x4a543d53bca0227af30c82aa164ebab87960e8586d2abc2ed5d78da5cdb63bda` was mined in epoch 360343
+  (`ForkNotConfirmed(360343)`). The gate is the kept one; the bot sent again in its next hour. The bot should not
+  confirm and send this close to an epoch boundary.
+- **One older 943 message (`...0000`) was held back** after a block hash row did not satisfy its evidence
+  ("prerequisites-not-satisfied", a loss of 0.00000064 ETH); the runner refuses such a message for
+  `prerequisiteLossRefusalSeconds` (1,800 s) and tries again after that.
+- **The backend, the runner and the status service bypass Caddy** (see the server list above): a blue/green switch of
+  the indexer without `finish` leaves them on the old index unless their URLs are changed too.
 
 ## What the split costs a delivery
 
