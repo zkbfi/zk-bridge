@@ -14,6 +14,9 @@ import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, DEFAULT_GAS_MARGIN_TEXT, 
 import type { WebStep } from "../tx/bridge-steps";
 import { parseUnits } from "../ui/format";
 import { useWallet } from "../wallet/wallet-port";
+import { WaitTimeline } from "../wait/WaitTimeline";
+import { durationText, type FeeReading } from "../wait/wait-model";
+import { useTimeline } from "../wait/use-wait";
 import { arrivesAsSymbol, isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps, withLightClientStep } from "./bridge-model";
 import { DeliveryMenu, deliverySummary, type TipChoiceKey } from "./DeliveryMenu";
@@ -236,6 +239,9 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
           : "estimating";
   // The automatic fee is the rule's own figure; a share the draft signs from it rounds down by at most a unit.
   const feeUsd = automatic && auto.feeUsd !== null && tipUnits !== null ? auto.feeUsd : valueOf(tipUnits);
+  // The wait the pill shows follows the fee: one that pays for a proof starts it at finality, one that does not waits for a batch.
+  const waitFee: FeeReading = feeUsd !== null && costDefaultUsd !== null && feeState === "known" ? { kind: "known", feeUsd: Number(feeUsd) / 1e18, costUsd: Number(costDefaultUsd) / 1e18 } : { kind: "unknown" };
+  const timeline = useTimeline(route.dir, waitFee);
   const gasBased = options.mode === "gas-multiplier";
   const expandedUsd = (() => {
     const input = costInputAt(gasLevel);
@@ -749,8 +755,9 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
               onGasLevel={setGasLevel}
               // Owner: "just tell the user what is happening ... give them hard numbers. clicking in helps them figure out why":
               // the time is the number alone; the light client's age is a row in the steps.
-              time={transferEstimate(source, destination)}
+              time={`~${durationText(timeline.total.typical)}`}
               steps={withLightClientStep(transferSteps(source, destination), lightClientDelay(heads ?? [], side))}
+              timeline={<WaitTimeline timeline={timeline} sourceName={source.name} />}
               menu={
                 <DeliveryMenu
                   form={form}

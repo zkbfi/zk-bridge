@@ -15,7 +15,9 @@ import { decisionBoardOf } from "../watch/decisions.ts";
 import { createWarmupStore } from "../watch/warmup-store.ts";
 import { buildBenchmarks, parseWindow, WINDOW_LIMITS, type Benchmarks } from "./benchmarks.ts";
 import { createIndexerReads, type IndexedHead, type IndexerReads } from "./indexer.ts";
-import { buildPipeline, knownProofs } from "./pipeline.ts";
+import { buildPipeline, knownProofs, pipelineRuleOf } from "./pipeline.ts";
+import { batchRuleFor } from "../watch/batch.ts";
+import { SLOTS_PER_EPOCH } from "../watch/decide.ts";
 import { buildProgress, clockFromHead, type Estimates } from "./progress.ts";
 
 /** How many reads of these routes one caller may make in a minute. */
@@ -105,6 +107,13 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     return buildBenchmarks({ window, windowSeconds, now: at, timings: listTimings(storage, at - windowSeconds * 1000), jobOf: (jobId) => getJob(storage, jobId), indexer: fromIndexer });
   }
 
+  /** The batch rule of a direction, as the watcher resolves it, and whether the pair has a PulseChain mainnet side to price on. */
+  const ruleOf = (direction: ProofDirection) =>
+    pipelineRuleOf(
+      batchRuleFor(context.config.watch, context.config.pair, direction, SLOTS_PER_EPOCH * secondsPerSlot(sidesOf(pair, direction).source.chainId)),
+      pair.sides.some((side) => side.chainId === 369),
+    );
+
   let estimateCache: { at: number; value: Promise<Benchmarks> } | null = null;
 
   /** Medians for the `eta` of a stage: the prover's from the newest proofs, the on-chain ones from a day of benchmarks. */
@@ -171,6 +180,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     return request.json(
       buildPipeline({
         direction,
+        rule: ruleOf(direction),
         activeJob: active,
         latestJob: findLatestJob(storage, direction),
         proofs: knownProofs(storage, direction),

@@ -418,6 +418,7 @@ pair), 503 when the indexer is not configured or cannot be read.
 ```json
 {
   "direction": "second-to-first", "now": 1793500000000,
+  "rule": { "minIntervalSeconds": 3600, "lookaheadSeconds": 320, "profitMargin": 1, "proofCostUsd": "0.025000", "priced": false },
   "batch": { "count": 2, "oldestFinalAt": 1793499400000, "trigger": "max-wait", "eta": 1793503000000,
     "fallbackAt": 1793503000000, "feesUsd": null, "costUsd": null, "detail": "2 messages wait, …" },
   "job": { "jobId": "…", "status": "proving", "step": "gpu-proving", "startedAt": 1793499960000, "elapsedMs": 40000,
@@ -433,7 +434,12 @@ pair), 503 when the indexer is not configured or cannot be read.
 `deposits` is `{ open, remoteHasHead, waiting, proofDue }` when the latest decision read the destination bridge:
 `waiting` while it waits for an update of this direction's light client to open deposits, `proofDue` when that
 decision started a proof for it (`decision.why` "deposits-locked"); null when it did not read them (another reason made
-a proof due, or no watcher runs). `batch` is null unless the watcher's latest decision is `min-interval`. `job` is the queued or proving job, or
+a proof due, or no watcher runs).
+`rule` is how the direction's proofs start, resolved from the configuration as the watcher resolves it: a batch that
+does not pay waits `minIntervalSeconds` since the direction's last proof; it pays when its fees reach (`proofCostUsd`
+plus the delivery gas of each message) times `profitMargin`; `priced` is false when the pair has no PulseChain mainnet
+side to price tokens on (a testnet), where nothing pays and only the interval applies. The dapp's wait timeline reads
+it. `batch` is null unless the watcher's latest decision is `min-interval`. `job` is the queued or proving job, or
 null. `latestProof` is the proof that reaches furthest among the msgboard indexer's, the webhook's and the newest job's
 that did not fail. `head` is null when the indexer cannot be read. `decision` carries the `why` and `detail` of
 `proof_due` / `proof_not_due`, and for a due proof `trigger`, `batchSize`, `feesUsd`, `costUsd` and `outcome`

@@ -56,6 +56,8 @@ export type FeeLineProps = {
   readonly onGasLevel?: (level: FeeGasLevel) => void;
   readonly time: string;
   readonly steps: readonly TransferStep[];
+  /** The wait-time timeline (typical and worst case per step); shown in the time drawer instead of the plain step list. */
+  readonly timeline?: ReactNode;
   /**
    * The one delivery menu (owner, quote 98): who delivers and that mode's value, the gas level, both caps, the
    * breakdown and the Advanced fold. Shown in the drawer when the first segment is open.
@@ -127,7 +129,7 @@ export const HelpButton = ({ label, text }: { readonly label: string; readonly t
  *
  * @param props The summary, the gas level, the time and steps, and the menu.
  */
-export const FeeLine = ({ summary, summaryFull, gasHelp, gasLevel, onGasLevel, time, steps, menu }: FeeLineProps) => {
+export const FeeLine = ({ summary, summaryFull, gasHelp, gasLevel, onGasLevel, time, steps, timeline, menu }: FeeLineProps) => {
   // `open` is the segment the user chose (aria-expanded); `shown` is the content in the drawer, which lags a swap by the
   // close time; `expanded` drives the drawer's height (grid rows 0fr → 1fr) and the deck line.
   const [open, setOpen] = useState<Open>(null);
@@ -230,7 +232,9 @@ export const FeeLine = ({ summary, summaryFull, gasHelp, gasLevel, onGasLevel, t
       <div className={expanded ? "zb-drawer zb-open" : "zb-drawer"} id={ids.drawer} aria-hidden={!expanded} inert={!expanded}>
         <div className="zb-drawer-inner">
           <div className="zb-drawer-body" data-shown={shown ?? undefined} style={{ "--zb-from": `${from}px` } as CSSProperties}>
-            {shown === null ? null : shown === "time" ? (
+            {shown === null ? null : shown === "time" && timeline !== undefined ? (
+              timeline
+            ) : shown === "time" ? (
               <ol className="zb-steps">
                 {steps.map((step) => (
                   <li key={step.label} className="zb-step" data-state="ahead">

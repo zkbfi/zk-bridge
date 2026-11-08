@@ -34,6 +34,7 @@ import { recognise, searchExplore } from "./search";
 import { exploreShortcuts, type Shortcut } from "./shortcuts";
 import { moveHighlight, type MoveKey } from "../search/search-model";
 import "./explore.css";
+import { ExploreWaits } from "../wait/WaitTimeline";
 
 /** Props of {@link ExploreScreen}. */
 export type ExploreScreenProps = {
@@ -208,6 +209,7 @@ const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
           <Browse data={data} />
           <RingMap feed={data.feed} pair={data.pair} />
           <Numbers feed={data.feed} now={data.now} />
+          <ExploreWaits pair={data.pair} />
           <LightClients data={data} />
           <LatestTransfers feed={data.feed} pair={data.pair} now={data.now} />
           <Services pair={data.pair} />

@@ -35,7 +35,7 @@ describe("the signing dialog on the bridge screen", () => {
   it("shows an inserted gate confirmation in the step list, the wait for a beacon header, and a retry after a reverted confirmation", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 10n ** 30n });
     const draft = computeBridgeDraft(
-      { token: `first:${FIXTURE_TOKENS[0]!.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", gasLimit: "" },
+      { token: `first:${FIXTURE_TOKENS[0]!.address}`, amount: "250", receiver: getAddress(`0x${"cd".repeat(20)}`), mode: "plain", data: "", callGas: "", callbackGas: "" },
       { ...DEFAULT_DELIVERY_OPTIONS, mode: "none" },
       { pair: FIXTURE_PAIR, tokens, context, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n },
     );

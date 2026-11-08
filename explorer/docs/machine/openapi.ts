@@ -253,7 +253,7 @@ export const buildBackendSpec = (): OpenApiDocument => {
       },
       "/requests/{id}": { get: get("State of a request", "The request and the job behind it.", [path("id", "The requestId from POST /requests.")], json(open("The request with its job."), "The request."), { "404": errorResponse("No such request.") }) },
       "/directions/{direction}": { get: get("Newest proof job of a direction", "The active job, or the latest one.", [directionPath], json(open("direction and job (null when none)."), "The job."), { "404": errorResponse("Unknown direction.") }) },
-      "/directions/{direction}/pipeline": { get: get("Proving pipeline of a direction", "The stages of the next proof: head, decision, job, latest proof.", [directionPath], json(open("The pipeline."), "The pipeline."), { "404": errorResponse("Unknown direction."), ...tooMany }) },
+      "/directions/{direction}/pipeline": { get: get("Proving pipeline of a direction", "The stages of the next proof: head, decision, job, latest proof, and the rule that starts a proof (rule: minIntervalSeconds, lookaheadSeconds, profitMargin, proofCostUsd, priced).", [directionPath], json(open("The pipeline."), "The pipeline."), { "404": errorResponse("Unknown direction."), ...tooMany }) },
       "/progress/{messageId}": {
         get: get("Progress of one transfer", "Which stage a message is in, what it waits on and an estimate.", [messageId], json(open("The stages with status done, current or pending."), "The progress."), { "400": errorResponse("Not a message identifier."), "404": errorResponse("Unknown message."), ...tooMany, "503": errorResponse("The chain indexer is not configured or cannot be read.") }),
       },

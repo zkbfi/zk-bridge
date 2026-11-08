@@ -7,7 +7,7 @@ import { useDeliveryCost, useSnapshots } from "../app/queries";
 import { formatRoute } from "../app/route";
 import { useServices } from "../app/services";
 import { useWallet } from "../wallet/wallet-port";
-import { dayOf, groupOf, leftText, positionOf, relativeTime, secondsLeft, stepsOf, stepWords, type ActivityGroup } from "./activity-model";
+import { dayOf, groupOf, positionOf, relativeTime, stepsOf, stepWords, type ActivityGroup } from "./activity-model";
 import { amountText, chainsFor } from "./bridge-model";
 import { Chevron, GasCan } from "./icons";
 import { iconSubjectOf } from "./image-source";
@@ -17,6 +17,7 @@ import { canRequestProof } from "./proof-request";
 import { RequestProof } from "./RequestProof";
 import { selfDeliveryState } from "./self-delivery";
 import { StepList } from "./StepList";
+import { TransferWaitLine, TransferWaitTime } from "../wait/WaitTimeline";
 import { TokenIcon } from "./TokenIcon";
 
 type Tab = "all" | ActivityGroup;
@@ -154,8 +155,9 @@ export const ActivityScreen = () => {
               <ActivityPulse position={positionOf(row.status)} label={stepWords(row, destination, now)} />
               <div className="zb-arow zb-small">
                 <span>{stepWords(row, destination, now)}</span>
-                {group === "in-flight" ? <span className="zb-right zb-left-time">{leftText(secondsLeft(row, pair, now))}</span> : null}
+                {group === "in-flight" ? <TransferWaitTime row={row} now={now} /> : null}
               </div>
+              {group === "in-flight" ? <TransferWaitLine row={row} now={now} pair={pair} /> : null}
               {canRequestProof(row.status) ? <RequestProof messageId={row.id} direction={row.direction} destinationName={destination.name} /> : null}
               {group === "needs-you" ? (
                 <NeedsYou row={row} destinationChainId={destination.chainId} destinationName={destination.name} nativeSymbol={destination.nativeSymbol} nativeBalance={destinationSnapshot?.status === "ok" ? destinationSnapshot.snapshot.nativeBalance : null} />

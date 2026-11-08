@@ -55,7 +55,7 @@ const forkNotConfirmed = (epoch: bigint): Error =>
 const stepsWithApproval = async () => {
   const { context, tokens } = await buildFixtureContext({ allowance: 0n });
   const draft = computeBridgeDraft(
-    { token: `first:${FIXTURE_TOKENS[0]!.address}`, amount: "10", receiver: FIXTURE_ACCOUNT, mode: "plain", data: "", gasLimit: "" },
+    { token: `first:${FIXTURE_TOKENS[0]!.address}`, amount: "10", receiver: FIXTURE_ACCOUNT, mode: "plain", data: "", callGas: "", callbackGas: "" },
     { ...DEFAULT_DELIVERY_OPTIONS, mode: "none" },
     { pair: FIXTURE_PAIR, tokens, context, report: null, priorityFeeWei: null },
   );

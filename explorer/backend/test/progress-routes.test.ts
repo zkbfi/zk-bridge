@@ -181,6 +181,23 @@ describe("GET /directions/:direction/pipeline (2026-11-01)", () => {
     expect((await run.get("/directions/second-to-first/pipeline")).body).toMatchObject({ head: null });
   });
 
+  it("carries the rule that starts a proof: the configured interval and margin, the proof cost, and whether prices exist (2026-11-07)", async () => {
+    const config = makeConfig({ watch: { enabled: false, minIntervalSeconds: 3600, profitMargin: 1.5, pairs: { "eth-pls": { directions: { "second-to-first": { minIntervalSeconds: 0 } } } } } });
+    const backend = makeBackend({ config });
+    const app = new Hono();
+    registerProgressRoutes(app, backend.context, { indexer: null, callerOf: () => "10.0.0.1" });
+    const rule = async (direction: string) => ((await (await app.request(`/directions/${direction}/pipeline`)).json()) as { rule: unknown }).rule;
+    // PAIR has a PulseChain mainnet side, so prices exist; the epoch of Ethereum is 32 x 12 s.
+    expect(await rule("first-to-second")).toEqual({ minIntervalSeconds: 3600, lookaheadSeconds: 384, profitMargin: 1.5, proofCostUsd: "0.025000", priced: true });
+    expect(await rule("second-to-first")).toMatchObject({ minIntervalSeconds: 0, lookaheadSeconds: 320 });
+    // A testnet pair has no PulseChain mainnet side: nothing can be priced.
+    const [first, second] = backend.context.pair.sides;
+    const testnet = { ...backend.context, pair: { ...backend.context.pair, sides: [first, { ...second, chainId: 943 }] as const } };
+    const other = new Hono();
+    registerProgressRoutes(other, testnet, { indexer: null, callerOf: () => "10.0.0.1" });
+    expect(((await (await other.request("/directions/first-to-second/pipeline")).json()) as { rule: unknown }).rule).toMatchObject({ priced: false });
+  });
+
   it("works without an indexer: no head", async () => {
     expect((await setup({ indexer: null }).get("/directions/first-to-second/pipeline")).body).toMatchObject({ head: null, job: null, latestJob: null });
   });
