@@ -89,6 +89,60 @@ describe("the benchmarks of a window (2026-11-01)", () => {
     expect(benchmarks.recent[0]).toMatchObject({ endpoint: "serverless", workerGpu: "RTX 4090", grindMs: 8_000, totalMs: 100_000 });
   });
 
+  it("counts only proofs whose own light client update landed, not a later head that covered them (live 2026-11-08: 52 h median)", () => {
+    // Live, 7 d window: the light client was redeployed 19 h ago, so the indexer's head updates start at slot 11274912.
+    // The proofs of the days before (the old light client) were matched to that first update "at or past" their slot,
+    // which put proofToOnChain at a 52 h median and a 113 h p90 although every proof landed seconds after its board post.
+    const hour = 3_600_000;
+    const sec = (ms: number) => Math.floor(ms / 1000);
+    const posted = (jobId: string, ageMs: number, direction: "first-to-second" | "second-to-first" = "second-to-first") =>
+      timing(jobId, { direction, boardPostedAt: NOW - ageMs, webhookStoredAt: NOW - ageMs - 16_000 });
+    const slots: Record<string, string> = { old1: "11250000", old2: "11262000", old3: "11270400", skipped: "11281376", fresh1: "11280928", fresh2: "11281792" };
+    const benchmarks = buildBenchmarks({
+      window: "7d",
+      windowSeconds: 7 * 86_400,
+      now: NOW,
+      timings: [posted("fresh2", 1 * hour), posted("skipped", 2 * hour), posted("fresh1", 3 * hour), posted("old3", 30 * hour), posted("old2", 70 * hour), posted("old1", 120 * hour)],
+      jobOf: (id) => ({ ...job(id, slots[id] as string), direction: "second-to-first" }),
+      indexer: {
+        "first-to-second": { headUpdates: [], delivered: [] },
+        "second-to-first": {
+          headUpdates: [
+            { chainId: 11155111, slot: 11281792, timestamp: sec(NOW - 1 * hour + 2_298) },
+            // "skipped" was deduplicated on the board: no update of its own; the next head covered it an hour later.
+            { chainId: 11155111, slot: 11280928, timestamp: sec(NOW - 3 * hour + 8_350) },
+            { chainId: 11155111, slot: 11274912, timestamp: sec(NOW - 19 * hour) },
+          ],
+          delivered: [],
+        },
+      },
+    });
+    expect(benchmarks.recent.map((proof) => [proof.jobId, proof.onChainAt])).toEqual([
+      ["fresh2", sec(NOW - 1 * hour + 2_298) * 1000],
+      ["skipped", null],
+      ["fresh1", sec(NOW - 3 * hour + 8_350) * 1000],
+      ["old3", null],
+      ["old2", null],
+      ["old1", null],
+    ]);
+    expect(benchmarks.steps.proofToOnChain.count).toBe(2);
+    expect(benchmarks.steps.proofToOnChain.p90Ms).toBeLessThan(60_000);
+  });
+
+  it("the earliest update of the slot is the landing, and one stored before the board post is not counted", () => {
+    const update = (ago: number) => ({ chainId: 369, slot: 200, timestamp: (NOW - ago) / 1000 });
+    const benchmarks = buildBenchmarks({
+      window: "24h",
+      windowSeconds: 86_400,
+      now: NOW,
+      timings: [timing("a")],
+      jobOf: () => job("a", "200"),
+      indexer: { "first-to-second": { headUpdates: [update(10_000), update(95_000), update(50_000)], delivered: [] }, "second-to-first": { headUpdates: [], delivered: [] } },
+    });
+    expect(benchmarks.recent[0]?.onChainAt).toBe(NOW - 95_000);
+    expect(benchmarks.steps.proofToOnChain.count).toBe(0);
+  });
+
   it("without the indexer the on-chain and delivery steps are empty, and the recent list has a limit", () => {
     const timings = Array.from({ length: RECENT_LIMIT + 5 }, (_, index) => timing(`j${index}`));
     const benchmarks = buildBenchmarks({ window: "1h", windowSeconds: 3_600, now: NOW, timings, jobOf: () => null, indexer: null });

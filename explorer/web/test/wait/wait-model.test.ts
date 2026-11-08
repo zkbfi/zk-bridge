@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MIN_SAMPLES, basisText, buildTimeline, clockText, durationText, feeVerdict, provingOf, rangeText, remainingOf, ruleOf, timingFor, type ProofRule, type WaitInputs } from "../../src/wait/wait-model";
+import { MIN_SAMPLES, SANE_LIMITS, basisText, buildTimeline, clockText, durationText, feeVerdict, provingOf, rangeText, remainingOf, ruleOf, timingFor, type ProofRule, type WaitInputs } from "../../src/wait/wait-model";
 import type { WindowTiming } from "../../src/explore/explore-source";
 
 const SEPOLIA = 11155111;
@@ -152,6 +152,9 @@ describe("reading the sources (2026-11-07)", () => {
     const stat = (count: number, medianMs: number | null, p90Ms: number | null) => ({ count, medianMs, p90Ms });
     expect(provingOf({ total: stat(9, 100_000, 160_000), proofToOnChain: stat(9, 30_000, 50_000) })).toEqual({ typical: 130, worst: 210 });
     expect(provingOf({ total: stat(9, 100_000, 160_000), proofToOnChain: stat(0, null, null) })).toEqual({ typical: 100, worst: 160 });
+    // With the answer-to-board time of a newer backend.
+    expect(provingOf({ total: stat(9, 100_000, 160_000), webhookToBoard: stat(9, 10_000, 40_000), proofToOnChain: stat(9, 30_000, 50_000) })).toEqual({ typical: 140, worst: 250 });
+    expect(provingOf({ total: stat(9, 100_000, 160_000), webhookToBoard: stat(0, null, null), proofToOnChain: stat(9, 30_000, 50_000) })).toEqual({ typical: 130, worst: 250 - 40 });
     expect(provingOf({ total: stat(MIN_SAMPLES - 1, 1, 1), proofToOnChain: stat(0, null, null) })).toBeNull();
     expect(provingOf({ total: stat(9, null, null), proofToOnChain: stat(0, null, null) })).toBeNull();
     expect(provingOf(undefined)).toBeNull();
@@ -160,5 +163,58 @@ describe("reading the sources (2026-11-07)", () => {
   it("the rule is read from the pipeline answer, null from an older backend", () => {
     expect(ruleOf({ minIntervalSeconds: 3600, profitMargin: 1, proofCostUsd: "0.025000", priced: false })).toEqual({ minIntervalSeconds: 3600, profitMargin: 1, proofCostUsd: 0.025, priced: false });
     expect(ruleOf(undefined)).toBeNull();
+  });
+});
+
+describe("a measured range past what its step can take is left out (2026-11-08)", () => {
+  const stat = (count: number, medianMs: number | null, p90Ms: number | null) => ({ count, medianMs, p90Ms });
+  // GET /benchmarks?window=7d, live 2026-11-08, before the backend fix: proofToOnChain 52 h median, 113 h p90.
+  const live = { total: stat(236, 49_235, 71_322), webhookToBoard: stat(236, 16_667, 55_589), proofToOnChain: stat(236, 188_791_410, 408_330_591) };
+  // GET /api/delivered, live 2026-11-08, last 7 days from Sepolia.
+  const sepolia = timing(14, { steps: [spread(768, 768), spread(963, 3202.4), spread(40, 120)] });
+
+  it("the live 52 h proof time no longer gives ~57 h: the proof step falls back to the rule, and the line says so", () => {
+    const proving = provingOf(live);
+    expect(proving?.typical).toBeGreaterThan(SANE_LIMITS.provingSeconds);
+    const derived = buildTimeline(inputs({ proving }), { kind: "known", feeUsd: 0, costUsd: 0.1 });
+    expect(derived.ignored).toEqual(["proved"]);
+    expect(derived.steps[2]).toMatchObject({ range: { typical: 1800 + 120, worst: 3600 + 240 }, basis: "rule" });
+    expect(derived.total.worst).toBeLessThan(90 * 60);
+    expect(basisText(derived)).toBe("Based on the chain and the proof rule.");
+
+    const measured = buildTimeline(inputs({ proving, timing: sepolia }), { kind: "known", feeUsd: 0, costUsd: 0.1 });
+    expect(measured.basis).toBe("measured");
+    expect(basisText(measured)).toBe("Based on 14 transfers in the last 7 days; the proof step is based on the chain and the proof rule.");
+  });
+
+  it("with the backend fixed (proofs land seconds after the board post), the Sepolia timeline is about 45 min typical and 77 min worst", () => {
+    // The 20 newest proofs of the same answer, each matched to its own light client update: 7.4 s median, 11.5 s p90.
+    const proving = provingOf({ ...live, proofToOnChain: stat(20, 7_446, 11_520) });
+    expect(proving).toEqual({ typical: (49_235 + 16_667 + 7_446) / 1000, worst: (71_322 + 55_589 + 11_520) / 1000 });
+    const timeline = buildTimeline(inputs({ proving, timing: sepolia }), { kind: "known", feeUsd: 0, costUsd: 0.1 });
+    expect(timeline.ignored).toEqual([]);
+    expect(timeline.steps[2].range.typical).toBeCloseTo(1800 + 73.348);
+    expect(timeline.steps[2].range.worst).toBeCloseTo(3600 + 138.431);
+    expect(durationText(timeline.total.typical)).toBe("45 min");
+    expect(durationText(timeline.total.worst)).toBe("77 min");
+  });
+
+  it("a measured send-to-final, proof wait or delivery past its limit falls back to the chain's figure", () => {
+    const wild = timing(20, { steps: [spread(760, 768 * 3 + 1), spread(600, 2 * 3600 + 1801), spread(30, 1801)] });
+    const timeline = buildTimeline(inputs({ timing: wild }), { kind: "observed" });
+    expect(timeline.ignored).toEqual(["final", "proved", "delivered"]);
+    expect(timeline.steps.map((step) => step.basis)).toEqual(["chain", "chain", "chain", "chain"]);
+    expect(timeline.basis).toBe("derived");
+    expect(basisText(timeline)).toBe("Based on the chain and the proof rule.");
+    // Without a rule an hour stands in for the interval; at the limits the measured ranges stay.
+    const edge = timing(20, { steps: [spread(760, 768 * 3), spread(600, 2 * 3600 + 1800), spread(30, 1800)] });
+    expect(buildTimeline(inputs({ timing: edge, rule: null }), { kind: "observed" }).ignored).toEqual([]);
+    expect(buildTimeline(inputs({ timing: timing(20, { steps: [spread(760, 790), spread(600, 2 * 3600 + 1801), spread(30, 200)] }), rule: null }), { kind: "observed" }).ignored).toEqual(["proved"]);
+  });
+
+  it("a wild measured proof wait and a wild proving time are named once", () => {
+    const timeline = buildTimeline(inputs({ timing: timing(20, { steps: [spread(760, 790), spread(600, 99_999), spread(30, 200)] }), proving: { typical: 9_999, worst: 99_999 } }), { kind: "observed" });
+    expect(timeline.ignored).toEqual(["proved"]);
+    expect(timeline.steps[2]).toMatchObject({ range: { typical: 120, worst: 240 }, basis: "chain" });
   });
 });
