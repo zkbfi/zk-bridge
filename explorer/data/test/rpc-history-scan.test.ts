@@ -45,7 +45,8 @@ describe("scanHistory", () => {
     const { items } = await scanHistory({ pair, readers, fromBlock: 0n });
     const statusOf = (id: string) => items.find((item) => item.kind === "sent" && item.messageId === id)?.status;
     expect(statusOf(scenario.ids.delivered)).toBe("delivered");
-    expect(statusOf(scenario.ids.failed)).toBe("failed_call");
+    // A delivery that fails reverts and leaves no log, so the scan sees no delivery.
+    expect(statusOf(scenario.ids.failed)).toBeNull();
     expect(statusOf(scenario.ids.stuck)).toBe("release_failed");
     expect(statusOf(scenario.ids.young)).toBeNull();
   });

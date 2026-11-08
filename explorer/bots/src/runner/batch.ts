@@ -5,6 +5,7 @@ import {
   encodeAggregate3,
   deliveryRouterAbi,
   messageBridgeAbi,
+  tokenMediatorAbi,
   type BatchedCall,
   type BatchedCallResult,
   type ProofMessage,
@@ -12,6 +13,7 @@ import {
 import { sendTerms, worstCaseCostWei, type CallRequest, type ReceiptSummary, type SendTerms, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem } from "../indexer/client.ts";
 import {
+  BATCH_ITEM_OVERHEAD_GAS,
   judgeOffer,
   prepareItem,
   recordLoss,
@@ -26,12 +28,7 @@ import {
 } from "./delivery.ts";
 import type { PrerequisiteLedger } from "./prerequisite-ledger.ts";
 
-/**
- * The gas that Multicall3 adds to each call, beyond the single entry of the router: the call, the copy of the proof and
- * the result. The batch test of the router (`DeliveryRouterBatching.t.sol`) measures about 17,000, so this rounds up. The
- * batch simulation needs it because it measures the gas of an item at the single entry.
- */
-export const BATCH_ITEM_OVERHEAD_GAS = 20_000n;
+export { BATCH_ITEM_OVERHEAD_GAS };
 
 /** How many times the runner simulates a batch again after items dropped out of it, before it gives up on the rest. */
 export const MAXIMUM_SETTLING_ROUNDS = 3;
@@ -144,8 +141,8 @@ async function readResults(chain: TransactionPort, call: CallRequest, shape: { r
   return shape.hasUpdate ? { update: results[0] as BatchedCallResult, items: results.slice(1) } : { update: null, items: results };
 }
 
-/** The errors that the calls of a batch can revert with: the bridge, the router and the light client. */
-const BATCH_ERRORS_ABI = [...messageBridgeAbi, ...deliveryRouterAbi, ...beaconLightClientAbi].filter((entry) => entry.type === "error") as Abi;
+/** The errors that the calls of a batch can revert with: the bridge, the router, the mediator and the light client. */
+const BATCH_ERRORS_ABI = [...messageBridgeAbi, ...deliveryRouterAbi, ...tokenMediatorAbi, ...beaconLightClientAbi].filter((entry) => entry.type === "error") as Abi;
 
 /** The name of the error in revert data, or null when the data is empty or holds an error that this build does not know. */
 function errorNameOf(returnData: Hex): string | null {
@@ -173,7 +170,9 @@ function skipOfResult(messageId: Hex, result: BatchedCallResult): Skip {
   const name = errorNameOf(result.returnData);
   if (name === "AnchorNotStored") return skip(messageId, "anchor-not-stored", { detail: "the light client has not stored the anchor header of the proof yet" });
   if (name === "AlreadyDelivered") return skip(messageId, "already-delivered", { detail: "the bridge shows the message as delivered" });
-  if (name === "InsufficientGas") return skip(messageId, "insufficient-gas", { detail: "the gas left does not cover the gas limit of the message" });
+  if (name === "InsufficientGas" || name === "CallOutOfGas" || name === "ReleaseOutOfGas") {
+    return skip(messageId, "insufficient-gas", { detail: `${name}: the delivery ran out of gas and reverted, so the message stays undelivered` });
+  }
   return skip(messageId, "simulation-reverted", { detail: `the call reverted: ${describeRevert(result)}` });
 }
 
@@ -194,14 +193,14 @@ function droppedAll(readies: readonly ReadyDelivery[], reason: string): Evaluati
  * an item of this size that is the block gas limit.
  */
 function droppedOversize(ready: ReadyDelivery, maximumBatchGas: bigint, reason: string): Evaluation {
-  const detail = `the delivery needs ${ready.requiredGas} gas, above maximumBatchGas ${maximumBatchGas}, and the node refused to run it alone: ${reason}`;
+  const detail = `the delivery is estimated at ${ready.assumedGas} gas, above maximumBatchGas ${maximumBatchGas}, and the node refused to run it alone: ${reason}`;
   return { kind: "dropped", droppedUpdate: null, dropped: [{ ready, outcome: skip(ready.messageId, "message-gas-above-batch-maximum", { detail }) }] };
 }
 
 /** Drops every item with the reason of a failed simulation. A lone item above the batch maximum gets its own reason. */
 function droppedBySimulation(readies: readonly ReadyDelivery[], maximumBatchGas: bigint, reason: string): Evaluation {
   const [only] = readies;
-  if (readies.length === 1 && only !== undefined && only.requiredGas > maximumBatchGas) return droppedOversize(only, maximumBatchGas, reason);
+  if (readies.length === 1 && only !== undefined && only.assumedGas > maximumBatchGas) return droppedOversize(only, maximumBatchGas, reason);
   return droppedAll(readies, reason);
 }
 
@@ -220,9 +219,10 @@ function reasonOf(error: unknown): string {
  * 3. Split the gas of the update among the items by their gas, so that each item carries its share of the update in its
  *    cost. Judge the fee of each item against that cost. Each judgement stands alone, so all items that lose too much
  *    leave the batch together. The next round splits the update among the items that stay.
- * 4. Read the results again under the gas limit that the transaction would use, so that a limit which is too short
- *    shows as failed calls. That limit is never below the gas that the bridge requires for the messages, and no setting
- *    cuts it.
+ * 4. Keep the sum of the estimates, with the update, within `maximumBatchGas`: items from the end of the batch that
+ *    would pass it leave the batch and are tried again later. A single item may pass it and goes alone.
+ * 5. Read the results again under the gas limit that the transaction would use (the sum of the estimates with a
+ *    margin), so that a limit which is too short shows as failed calls.
  *
  * A round that dropped something tells the caller to simulate what is left again.
  */
@@ -272,11 +272,11 @@ async function evaluateBatch(dependencies: DeliveryDependencies, readies: readon
   if (unpaid.length > 0) return { kind: "dropped", dropped: unpaid, droppedUpdate: null };
 
   const needed = itemGasTotal + updateGas;
-  const buffered = sendTerms(quote, simulation.gas > needed ? simulation.gas : needed);
-  // The gas limit is never below what the bridge requires for each message, and no setting cuts it. A message above the
-  // batch maximum is sent alone with the gas it needs, never with less.
-  const required = readies.reduce((sum, ready) => sum + ready.requiredGas, updateGas);
-  const terms = buffered.gas >= required ? buffered : { ...buffered, gas: required };
+  const overflow = overflowOf(readies, itemGas, updateGas, settings.maximumBatchGas);
+  if (overflow.length > 0) return { kind: "dropped", dropped: overflow, droppedUpdate: null };
+  // The gas limit is the sum of the estimates with the margin of `sendTerms`. A delivery that gets less gas reverts and
+  // stays undelivered, so the limit is never cut below the estimates.
+  const terms = sendTerms(quote, simulation.gas > needed ? simulation.gas : needed);
   const limited = await readResults(chain, { ...call, gas: terms.gas }, shape).catch((error: unknown) => reasonOf(error));
   if (typeof limited === "string") return droppedBySimulation(readies, settings.maximumBatchGas, limited);
   const updateAtLimit = updateDropOf(update, limited.update);
@@ -285,6 +285,25 @@ async function evaluateBatch(dependencies: DeliveryDependencies, readies: readon
   if (refusedAtLimit.length > 0) return { kind: "dropped", dropped: refusedAtLimit, droppedUpdate: null };
 
   return { kind: "send", plan: { call, terms, itemGas, feeWei, updateGas } };
+}
+
+/**
+ * The items at the end of the batch that push the sum of the estimates, with the update, above `maximumBatchGas`. The
+ * first item always stays: a batch of one with an estimate above the maximum goes alone.
+ */
+function overflowOf(readies: readonly ReadyDelivery[], itemGas: readonly bigint[], updateGas: bigint, maximumBatchGas: bigint): Dropped[] {
+  const overflow: Dropped[] = [];
+  let total = updateGas;
+  for (const [index, ready] of readies.entries()) {
+    const gas = itemGas[index] as bigint;
+    if (index > 0 && total + gas > maximumBatchGas) {
+      const detail = `the estimates of the batch would pass maximumBatchGas ${maximumBatchGas}: the item needs ${gas} gas after ${total}`;
+      overflow.push({ ready, outcome: skip(ready.messageId, "batch-gas-above-maximum", { detail }) });
+      continue;
+    }
+    total += gas;
+  }
+  return overflow;
 }
 
 /** The gas of the update at the light client, or {@link UPDATE_GAS_FALLBACK} when it cannot be simulated alone. */

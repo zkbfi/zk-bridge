@@ -12,15 +12,15 @@ Call a contract on the other chain: the bridge carries your call, proves it, and
 
 ## What a message is
 
-A message is a request. It names a contract on the other chain, some call data, and an amount of gas. The bridge proves the request on the destination chain and then makes the call.
+A message is a request. It names a contract on the other chain and some call data. The bridge proves the request on the destination chain and then makes the call.
 
 Token transfers use the same mechanism. A token relay is a message to the token mediator on the other side.
 
 The bridge follows the interface of the OmniBridge Arbitrary Message Bridge. The function you call is `requireToPassMessage`.
 
-## The three values of a message
+## The values of a message
 
-You supply three values.
+You supply two values, and no gas number.
 
 ### Target
 
@@ -34,11 +34,7 @@ The bridge refuses data that starts with the selector of `transfer`, `approve`, 
 
 ### Gas
 
-The gas is the amount that the bridge forwards to the target. The bridge forwards exactly this amount.
-
-The bridge accepts a gas value between 100 and 10,000,000. A value outside this range makes the send revert.
-
-Choose enough gas for the target to finish. If the target runs out of gas, the call fails, and the failure is final.
+A message has no gas number. The target gets all the gas that the deliverer gives the delivery. If the target runs out of gas or reverts, the whole delivery reverts and the message stays waiting. Anyone can deliver it again with more gas, and nothing is lost.
 
 ## How to send a message
 
@@ -47,9 +43,8 @@ Open search (⌘K, Ctrl K or the slash key) and choose **Send a message**.
 1. Choose the direction.
 2. Enter the target address on the destination chain.
 3. Enter the call data as hex.
-4. Enter the gas.
-5. Read the full transaction.
-6. Sign it in your wallet.
+4. Read the full transaction.
+5. Sign it in your wallet.
 
 The app shows the chain, the contract, the function, the arguments, the value and the gas before your wallet opens. Check each line before you sign.
 
@@ -67,23 +62,19 @@ If you send through a multicall contract, the sender is the multicall contract. 
 
 ## The life of a message
 
-A message has the same steps as a token transfer: sent, final, proven, delivered. A delivered message can also end as a failed call. Your messages show on the Activity screen next to your transfers. The page How the bridge works explains each status.
+A message has the same steps as a token transfer: sent, final, proven, delivered. Your messages show on the Activity screen next to your transfers. The page How the bridge works explains each status.
 
 Anyone can deliver a message. Messages are independent. They can arrive in any order.
 
 ## Delivery is final
 
-The bridge marks a message as delivered whether the call succeeds or reverts. The bridge never runs the same message twice.
+The bridge marks a message as delivered only when the call succeeds. A call that reverts undoes the delivery, so the message stays waiting and nothing is recorded. The bridge never runs the same message twice once it has succeeded.
 
-A failed call is a real outcome. The status shows failed call. The bridge records the failure for contracts to read. It does not retry. It does not refund anything.
-
-Plan for this before you send. Your target contract or your application must handle a failed call. For example, the application can send a new message.
+Plan for this before you send. A target that always reverts can never be delivered, and the message waits for ever. Your target contract must be able to take the call.
 
 ## Gas protection
 
-An executor cannot cheat the message by giving it too little gas. The bridge refuses to deliver unless enough gas remains to forward the full amount you chose.
-
-This means a failed call is not the fault of the executor. It happens only when the target itself fails with the gas that you chose.
+An executor cannot make the message fail by giving it too little gas. A delivery with too little gas reverts and leaves the message waiting, so the next deliverer can try again with more.
 
 ## The gate and your send
 

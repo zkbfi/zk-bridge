@@ -66,8 +66,8 @@ describe("the bridge form: the tip before any signature", () => {
     expect(screen.getByLabelText("Ceiling base fee (gwei)")).toHaveValue("");
     expect(screen.getByTestId("gas-mode-help")).toHaveTextContent(GAS_MODE_HELP);
     const quote = await screen.findByTestId("delivery-quote");
-    await waitFor(() => expect(within(quote).getByTestId("delivery-summary")).toHaveTextContent(/^about [\d.]+ zUSDC now \(estimate, at most [\d.]+ zUSDC\)$/));
-    expect(within(quote).getByTestId("tip-maximum")).toHaveTextContent(/^The limit is [\d.]+ zUSDC\. It is the price ceiling\. Expect the tip to reach it\.$/);
+    await waitFor(() => expect(within(quote).getByTestId("delivery-summary")).toHaveTextContent(/^about [\d.]+ zUSDC now \(estimate, expected about [\d.]+ zUSDC, at most [\d.]+ zUSDC\)$/));
+    expect(within(quote).getByTestId("tip-maximum")).toHaveTextContent(/^Expected tip about [\d.]+ zUSDC at the gas estimate\. The most it can take is [\d.]+ zUSDC, the limit: a deliverer who supplies more gas can raise the tip up to it\.$/);
     expect(screen.queryByTestId("tip-notice")).toBeNull();
     await waitFor(() => expect(screen.getByRole("button", { name: "Review transaction" })).toBeEnabled());
   });
@@ -177,8 +177,8 @@ describe("the bridge form: the tip before any signature", () => {
     expect(screen.getByRole("button", { name: "Review transaction" })).toBeDisabled();
     await userEvent.type(screen.getByLabelText(/^Your coin price/), "3000");
     const summary = await screen.findByTestId("delivery-summary");
-    await waitFor(() => expect(summary).toHaveTextContent(/estimate, at most [\d.]+ zUSDC\)$/));
-    expect(screen.getByText(/This is an estimate: the real tip follows the gas that the deliverer's transaction makes available/)).toBeInTheDocument();
+    await waitFor(() => expect(summary).toHaveTextContent(/estimate, expected about [\d.]+ zUSDC, at most [\d.]+ zUSDC\)$/));
+    expect(screen.getByText(/This is an estimate: the real tip follows the gas that the delivery uses/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review transaction" })).toBeEnabled();
   });
 
@@ -188,9 +188,9 @@ describe("the bridge form: the tip before any signature", () => {
     await typeAmount("2");
     await userEvent.click(screen.getByRole("radio", { name: /Gas based, up to the limit/ }));
     const summary = await screen.findByTestId("delivery-summary");
-    await waitFor(() => expect(summary).toHaveTextContent(/estimate, at most [\d.]+ WPLS\)$/));
+    await waitFor(() => expect(summary).toHaveTextContent(/estimate, expected about [\d.]+ WPLS, at most [\d.]+ WPLS\)$/));
     expect(summary).toHaveTextContent(/^about [\d.]+ WPLS now/);
-    expect(screen.getByTestId("tip-maximum")).toHaveTextContent(/The limit is [\d.]+ WPLS/);
+    expect(screen.getByTestId("tip-maximum")).toHaveTextContent(/The most it can take is [\d.]+ WPLS/);
   });
 
   it("raises the maximum when the user raises the ceiling", async () => {

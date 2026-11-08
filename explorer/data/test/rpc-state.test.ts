@@ -91,9 +91,9 @@ describe("the summary", () => {
     const harness = createRpcHarness();
     const summary = await harness.body("/api/summary");
     expect(summary.inFlight).toEqual({
-      total: 4,
-      byStatus: { sent: 2, waiting_for_finality: 1, covered: 1 },
-      byDirection: { "1>369": 3, "369>1": 1 },
+      total: 5,
+      byStatus: { sent: 2, waiting_for_finality: 2, covered: 1 },
+      byDirection: { "1>369": 4, "369>1": 1 },
     });
   });
 

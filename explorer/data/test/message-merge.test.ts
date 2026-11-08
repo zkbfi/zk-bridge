@@ -14,7 +14,6 @@ const delivery: Partial<MessageRow> = {
   deliveredTransactionHash: `0x${"ef".repeat(32)}`,
   deliveredBlockNumber: 55n,
   deliveredTimestamp: 2_000n,
-  deliveredSuccess: true,
 };
 
 const merge = (existing: MessageRow | null, patch: Partial<MessageRow>, latest: bigint | null = null) =>
@@ -26,7 +25,7 @@ describe("mergeMessage", () => {
     expect(row.status).toBe("sent");
     expect(row.direction).toBe("1>369");
     expect(row.kind).toBe("token");
-    expect(row.deliveredSuccess).toBeNull();
+    expect(row.deliveredBlockNumber).toBeNull();
   });
 
   it("derives waiting_for_finality once the source clock passes the window", () => {
@@ -54,9 +53,10 @@ describe("mergeMessage", () => {
     expect(row.sentTimestamp).toBeNull();
   });
 
-  it("reports a reverted call as failed_call even when a failed release is recorded", () => {
-    const row = merge(merge(null, send, 1_000n), { ...delivery, deliveredSuccess: false, releaseFailed: true });
-    expect(row.status).toBe("failed_call");
+  it("keeps a message undelivered while no delivery log is stored: a failed delivery reverts and leaves none", () => {
+    const row = merge(merge(null, send, 1_000n), { coveredByHeadSlot: 77n, coveredAtTimestamp: 1_500n });
+    expect(row.status).toBe("covered");
+    expect(row.deliveredBlockNumber).toBeNull();
   });
 
   it("turns a delivered release into release_failed, and nothing brings it back", () => {

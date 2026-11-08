@@ -109,7 +109,7 @@ describe('confirm before send: bridge tokens', () => {
     expect(app.frame()).not.toContain('Step 1 of')
   })
 
-  test('a gas limit shows the four-argument call and no mediator fee', async () => {
+  test('a plain relay shows the three-argument call, no gas number and no mediator fee', async () => {
     const chainAccess = createFixtureChainAccess(FIXTURE_PAIR, { allowance: 10n ** 30n })
     app = await renderApp({ width: 120, height: 40, initialSigner: signer(), chainAccess })
     await openAction(app, 1)
@@ -118,12 +118,12 @@ describe('confirm before send: bridge tokens', () => {
     await app.press('TAB') // receiver
     await app.press('TAB') // tip for delivery
     await app.press('ARROW_RIGHT') // no tip: a plain relay
-    await app.press('TAB') // gas limit
-    await app.type('300000')
     await app.press('RETURN')
     await app.settle(80)
     const frame = app.frame()
-    expect(frame).toContain('relayTokens(address,address,uint256,uint256)')
+    expect(frame).toContain('relayTokens(address,address,uint256)')
+    expect(frame).not.toContain('gasLimit')
+    expect(frame).not.toContain('callbackGas')
     expect(frame).not.toContain('maxFeeRate')
     expect(frame).not.toContain('Fee rate')
     expect(frame).not.toContain('Bridge fee')

@@ -17,7 +17,7 @@ import { useWallet } from "../wallet/wallet-port";
 import { arrivesAsSymbol, isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
 import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps, withLightClientStep } from "./bridge-model";
 import { DeliveryMenu, deliverySummary, type TipChoiceKey } from "./DeliveryMenu";
-import { nativeSymbolOf, ceilingCostUsd, ceilingWeiOf, DEFAULT_GAS_LEVEL, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
+import { nativeSymbolOf, ceilingCostUsd, ceilingWeiOf, DEFAULT_GAS_LEVEL, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, routerCallbackGas, MAX_CALL_GAS, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
 import { formatUnits } from "viem";
 import { DEFAULT_AUTO_CAP_PERCENT, DEFAULT_HARD_CAP_PERCENT, feeCapProblem, ReviewNotice, ReviewRow, ReviewSheet, useDefaultFee, useFeeCaps, useFeeWarnings, useHardCap, useVerdict } from "@zkb/react";
 import { DirectionMenu } from "./DirectionMenu";
@@ -156,7 +156,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   // account on the source chain and a stand-in receiver. Nothing can be sent that way: the pill asks for a wallet, or
   // names the destination's problem, first.
   const estimateReceiver = receiver === "" || (unlocked && receiverProblem !== null) ? ESTIMATE_RECEIVER : receiver;
-  const values = { token: token === null ? "" : choiceOf(token), amount: form.amount ?? "", receiver: estimateReceiver, mode: "plain" as const, data: "", gasLimit: form.gasLimit ?? "", callTarget: form.callTarget ?? "", callData: form.callData ?? "" };
+  const values = { token: token === null ? "" : choiceOf(token), amount: form.amount ?? "", receiver: estimateReceiver, mode: "plain" as const, data: "", callGas: form.callGas ?? "", callbackGas: "", callTarget: form.callTarget ?? "", callData: form.callData ?? "" };
   const context = {
     pair,
     snapshots: account === null ? [{ status: "ok" as const, snapshot: { chain: source, nativeBalance: 0n, positions: [] } }] : (snapshots ?? []),
@@ -569,30 +569,10 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     };
   })();
 
-  // The gas limit of the message (recommended: the delivery gas the cost is estimated at; empty sends the default).
-  const gasEstimate = probe.delivery?.suggestions.dataSource.gas ?? null;
-  const gasLimitControl: FeeSlider = (() => {
-    const text = form.gasLimit ?? "";
-    const estimate = gasEstimate === null ? null : Number(gasEstimate);
-    const value = text !== "" ? Number(text) || 0 : (estimate ?? 0);
-    const max = Math.max((estimate ?? 500_000) * 3, value * 1.5);
-    return {
-      label: "Gas limit",
-      help: "The gas the message may use on the destination. Leave it at the recommendation unless the receiver runs code that needs more.",
-      value,
-      min: 0,
-      max: Math.round(max),
-      step: 1_000,
-      ticks: [],
-      onChange: (next) => write({ ...form, gasLimit: String(Math.round(next)) }),
-      input: {
-        text: text !== "" ? text : (estimate === null ? "" : String(estimate)),
-        unit: "gas",
-        check: (typed) => (/^\d+$/.test(typed.trim()) && Number(typed) > 0 && Number(typed) <= 30_000_000 ? null : "Enter a whole number of gas above 0, at most 30,000,000."),
-        onText: (typed) => write({ ...form, gasLimit: typed }),
-      },
-      ...(estimate === null ? {} : { recommended: { at: estimate, differs: text !== "", onReset: () => write({ ...form, gasLimit: undefined }) } }),
-    };
+  // The callback gas that the relay passes: the call gas plus the router's own work, shown read only. No call, no number.
+  const callbackGas = (() => {
+    const text = (form.callGas ?? "").trim();
+    return form.callTarget !== undefined && /^\d+$/.test(text) && BigInt(text) > 0n && BigInt(text) <= MAX_CALL_GAS ? routerCallbackGas({ callGas: BigInt(text) }) : null;
   })();
 
   const autoCapRecommended = Math.min(DEFAULT_AUTO_CAP_PERCENT, hardCapPercent);
@@ -783,7 +763,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
                   caps={[capControl, hardCapControl]}
                   breakdown={breakdown}
                   note={tipControl?.label !== "Fee" ? null : share(breakEven) === null ? null : "Left of break-even a delivery bot loses money at today's gas price, so expect to deliver it yourself."}
-                  gasLimit={gasLimitControl}
+                  callbackGas={callbackGas}
                 />
               }
             />

@@ -70,7 +70,7 @@ Do not use it to follow a transfer that is already sent (use `check-transfer-sta
 - **The transfer waits.** If it is proven and still undelivered 30 minutes after sending, it moves to **Needs you** on the Activity screen. See `deliver-it-yourself`.
 - **The receiver cannot take the tokens** (for example a deny-listed address). The status becomes `release_failed`. This is final: the tokens stay in the token mediator, with no claim and no fallback address. Check the destination address before you send.
 - **The wallet rejects, or a transaction fails.** The dialog shows the error with **Close** and **Try again**. When one of its transactions reverted, it shows only **Close**: start again from the Bridge screen.
-- **A link filled in the form.** A link can set direction, token and amount quietly, and names any field that changes where the tokens go or what you pay (destination, fee settings, relay router, gas limit, a call). Check those before confirming.
+- **A link filled in the form.** A link can set direction, token and amount quietly, and names any field that changes where the tokens go or what you pay (destination, fee settings, relay router, the gas of a call or a callback, a call). Check those before confirming.
 
 ## References
 

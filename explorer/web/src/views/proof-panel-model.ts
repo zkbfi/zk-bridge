@@ -46,7 +46,7 @@ export const NO_ENDPOINTS: PanelEndpoints = { backendUrl: null, msgboardIndexerU
 /** Where a message is on its way. */
 export type MessageStage = "sent" | "waiting-for-finality" | "covered" | "delivered";
 
-const DELIVERED_STATUSES: readonly MessageStatus[] = ["delivered", "failed_call", "release_failed"];
+const DELIVERED_STATUSES: readonly MessageStatus[] = ["delivered", "release_failed"];
 
 /**
  * Tells where a message is. A stored head at or after the slot of the message covers it, even when the status that the

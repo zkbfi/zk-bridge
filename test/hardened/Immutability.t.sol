@@ -237,4 +237,37 @@ contract ImmutabilityTest is Test {
             }
         }
     }
+
+    /// Claim: the four external libraries that the bridge and the mediator link have no state-changing entry point that
+    /// anyone can call, and no state of their own. Shows: every function in the ABI of `ReceiptProofLib`,
+    /// `OpeningProofLib` and `MediatorPayloads` is `pure` or `view`, and `BeaconLayoutLib` lists no function at all (its
+    /// functions take `storage` arguments, so they run only by DELEGATECALL from the bridge); no library has a storage
+    /// layout. Matters: the split for the gas cap must not add an owner, a setter or a second copy of state to layers 1
+    /// and 2. A linked library is fixed in the bytecode of the bridge and of the mediator.
+    function test_theLinkedLibrariesHaveNoStateAndNoStateChangingEntryPoint() public view {
+        string[4] memory libraries = ["ReceiptProofLib", "OpeningProofLib", "BeaconLayoutLib", "MediatorPayloads"];
+        for (uint256 i = 0; i < libraries.length; i++) {
+            string memory json = vm.readFile(string.concat("out/", libraries[i], ".sol/", libraries[i], ".json"));
+            for (uint256 j = 0;; j++) {
+                string memory entry = string.concat(".abi[", vm.toString(j), "]");
+                if (!vm.keyExistsJson(json, entry)) break;
+                if (keccak256(bytes(vm.parseJsonString(json, string.concat(entry, ".type")))) != keccak256("function"))
+                {
+                    continue;
+                }
+                bytes32 mutability =
+                    keccak256(bytes(vm.parseJsonString(json, string.concat(entry, ".stateMutability"))));
+                assertTrue(mutability == keccak256("pure") || mutability == keccak256("view"), libraries[i]);
+            }
+            if (vm.keyExistsJson(json, ".storageLayout.storage[0]")) {
+                revert(string.concat(libraries[i], " has storage"));
+            }
+        }
+        assertFalse(
+            vm.keyExistsJson(
+                vm.readFile("out/BeaconLayoutLib.sol/BeaconLayoutLib.json"), ".abi[?(@.type==\"function\")]"
+            ),
+            "BeaconLayoutLib lists no function"
+        );
+    }
 }

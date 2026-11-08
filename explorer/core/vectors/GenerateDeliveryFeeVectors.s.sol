@@ -116,13 +116,16 @@ contract GenerateDeliveryFeeVectors is Script {
         bytes[5] memory callDatas = [bytes(""), hex"ab", hex"a9059cbb", _patterned(36), _patterned(200)];
         for (uint256 i = 0; i < callDatas.length; i++) {
             DeliveryRouter.FeeDirector memory director =
-                DeliveryRouter.FeeDirector(address(uint160(0xA00 + i)), i % 2 == 0 ? 8 : 1, 1_000 + i, 0.01 ether + i);
+                DeliveryRouter.FeeDirector(
+                    address(uint160(0xA00 + i)), i % 2 == 0 ? 8 : 1, 1_000 + i, 0.01 ether + i, 50_000 + i
+                );
             console2.log(
                 string.concat(
                     "CALLVECTOR {\"recipient\":\"", vm.toString(director.recipient),
                     "\",\"settings\":\"", vm.toString(director.settings),
                     "\",\"limit\":\"", vm.toString(director.limit),
                     "\",\"multiplier\":\"", vm.toString(director.multiplier),
+                    "\",\"callGas\":\"", vm.toString(director.callGas),
                     "\",\"target\":\"", vm.toString(target),
                     "\",\"callData\":\"", vm.toString(callDatas[i]),
                     "\",\"encoded\":\"", vm.toString(abi.encodePacked(abi.encode(director), target, callDatas[i])),
@@ -166,7 +169,8 @@ contract GenerateDeliveryFeeVectors is Script {
 
     function _print(Case memory c) private {
         address recipient = address(uint160(uint256(keccak256(abi.encode(c.settings, c.value, c.limit, c.multiplier)))));
-        DeliveryRouter.FeeDirector memory director = DeliveryRouter.FeeDirector(recipient, c.settings, c.limit, c.multiplier);
+        DeliveryRouter.FeeDirector memory director =
+            DeliveryRouter.FeeDirector(recipient, c.settings, c.limit, c.multiplier, 0);
         vm.fee(c.baseFee);
         vm.txGasPrice(c.baseFee + c.priorityFee);
         string memory head = _head(c, director);
@@ -199,6 +203,7 @@ contract GenerateDeliveryFeeVectors is Script {
             "\",\"settings\":\"", vm.toString(director.settings),
             "\",\"limit\":\"", vm.toString(director.limit),
             "\",\"multiplier\":\"", vm.toString(director.multiplier),
+            "\",\"callGas\":\"", vm.toString(director.callGas),
             "\",\"encoded\":\"", vm.toString(abi.encode(director))
         );
     }

@@ -20,7 +20,6 @@ describe("the fixture indexer client", () => {
     expect(detail).toMatchObject({
       sourceChainId: FIXTURE_PAIR.first.chainId,
       destinationChainId: FIXTURE_PAIR.second.chainId,
-      deliverySucceeded: true,
       executedBy: item.recipient,
       releaseFailed: false,
       coveredByHeadSlot: 14_100_000,
@@ -46,7 +45,7 @@ describe("the fixture indexer client", () => {
 
   it("describes a sent row as not yet covered, not delivered, and has no delivery result", async () => {
     const detail = (await client.message(itemWith((candidate) => candidate.status === "sent").id))!;
-    expect(detail).toMatchObject({ coveredByHeadSlot: null, coveredAt: null, deliveredAt: null, deliverySucceeded: null, executedBy: null });
+    expect(detail).toMatchObject({ coveredByHeadSlot: null, coveredAt: null, deliveredAt: null, executedBy: null });
     if (detail.transfer !== null) expect(detail.transfer.deliveredValue).toBeNull();
   });
 
@@ -55,8 +54,7 @@ describe("the fixture indexer client", () => {
     expect(detail.coveredByHeadSlot).toBeNull();
   });
 
-  it("marks a failed call as delivered with a failed result, and a failed release row", async () => {
-    expect((await client.message(itemWith((candidate) => candidate.status === "failed_call").id))!.deliverySucceeded).toBe(false);
+  it("marks a failed release row", async () => {
     expect((await client.message(itemWith((candidate) => candidate.status === "release_failed").id))!.releaseFailed).toBe(true);
   });
 

@@ -314,7 +314,6 @@ abstract contract GateSupport is WithdrawalScenes {
         return _opened(
             new MessageBridge(
                 address(lightClientForA),
-                CHAIN_A,
                 CHAIN_B,
                 makeAddr("remote bridge"),
                 MessageBridge.BridgeTerms(0, address(lightClientForB), type(uint64).max),

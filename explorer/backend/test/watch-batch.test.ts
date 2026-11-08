@@ -175,8 +175,8 @@ function pulsechain(options: { usdc?: boolean; failBlock?: boolean } = {}) {
 
 /** A relay of `value` to the router, with a fixed fee of `fee`, as the mediator call of a message. */
 function relay(fee: bigint, recipient: Address = ROUTER, value = 10n ** 20n): Hex {
-  const director = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], ["0x00000000000000000000000000000000000000e1", 1n, fee, 0n]);
-  return encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokensAndCall", args: [FEE_TOKEN, recipient, value, director] });
+  const director = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], ["0x00000000000000000000000000000000000000e1", 1n, fee, 0n, 0n]);
+  return encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokensAndCall", args: [FEE_TOKEN, recipient, value, director, 400_000n] });
 }
 
 const token = (overrides: Partial<DestinationToken> = {}): DestinationToken => ({ address: FEE_TOKEN, decimals: 18, isBridgedCopy: false, homeChainId: 369, homeToken: FEE_TOKEN, ...overrides });
@@ -216,10 +216,10 @@ describe("createEconomicsReader", () => {
 
   it("counts nothing for a message that pays no fee or whose token has no price", async () => {
     const plain = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokens", args: [FEE_TOKEN, ROUTER, 1n] });
-    const legacy = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokensAndCall", args: [FEE_TOKEN, ROUTER, 1n, "0x00000000000000000000000000000000000000e1"] });
+    const legacy = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokensAndCall", args: [FEE_TOKEN, ROUTER, 1n, "0x00000000000000000000000000000000000000e1", 400_000n] });
     const overflow = (() => {
-      const director = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], ["0x00000000000000000000000000000000000000e1", 0n, 1n, 2n ** 255n]);
-      return encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokensAndCall", args: [FEE_TOKEN, ROUTER, 10n ** 30n, director] });
+      const director = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], ["0x00000000000000000000000000000000000000e1", 0n, 1n, 2n ** 255n, 0n]);
+      return encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokensAndCall", args: [FEE_TOKEN, ROUTER, 10n ** 30n, director, 400_000n] });
     })();
     const data = { [id("1")]: "0x12345678" as Hex, [id("2")]: plain, [id("3")]: relay(5n, "0x00000000000000000000000000000000000000c3"), [id("4")]: legacy, [id("5")]: overflow, [id("6")]: relay(10n ** 18n), [id("7")]: relay(10n ** 18n), [id("8")]: relay(10n ** 18n), [id("9")]: relay(10n ** 18n) };
     const { read } = reader(data);

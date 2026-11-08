@@ -66,29 +66,25 @@ contract TokenMediatorFuzzTest is MediatorFixture {
         assertEq(_firstMessage().value, held, "the message names what arrived");
     }
 
-    /// Claim: every limit that a relay sends is at least the minimum of its kind and at most the bridge maximum, and a
-    /// relay that cannot meet that rule reverts. Shows: for any request, either the relay reverts with
-    /// `GasLimitBelowMinimum` or `GasLimitAboveBridgeMaximum`, or the message carries a limit inside the range, equal
-    /// to the request when the request is above zero. Matters: this is the one rule of the gas limit, and no value of
-    /// the request may slip past it.
-    function testFuzz_everySentLimitIsAtLeastTheKindMinimumAndAtMostTheMaximum(uint256 request) public {
-        uint256 minimum = mediatorA.DEPLOY_GAS_LIMIT();
-        uint256 maximum = ambA.maxGasPerTx();
+    /// Claim: the callback gas that a sender states is carried as it is, and only zero is refused. Shows: for any
+    /// request, a relay with a call either reverts with `ZeroCallbackGas` (zero) or sends a message whose payload carries
+    /// exactly the request, while the gas asked of the bridge stays zero. Matters: the owner's rule, "the message
+    /// has to pass the gas limit. there should be no defaults".
+    function testFuzz_theCallbackGasIsCarriedAsItIs(uint256 request) public {
         vm.prank(alice);
-        if (request != 0 && request < minimum) {
-            vm.expectRevert(abi.encodeWithSelector(TokenMediator.GasLimitBelowMinimum.selector, request, minimum));
-        }
-        if (request > maximum) {
-            vm.expectRevert(abi.encodeWithSelector(TokenMediator.GasLimitAboveBridgeMaximum.selector, request, maximum));
-        }
-        mediatorA.relayTokens(address(tokenA), bob, 1 ether, request);
-        if (request != 0 && request < minimum || request > maximum) {
+        if (request == 0) vm.expectRevert(TokenMediator.ZeroCallbackGas.selector);
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, hex"01", request);
+        if (request == 0) {
             assertEq(ambA.sentCount(), 0, "a refused relay sends nothing");
             return;
         }
-        uint256 sent = ambA.messageAt(0).gasLimit;
-        assertGe(sent, minimum, "at least the minimum of the kind");
-        assertLe(sent, maximum, "at most the bridge maximum");
-        assertEq(sent, request == 0 ? minimum : request, "zero gives the default and a request is used as it is");
+        bytes memory data = ambA.messageAt(0).data;
+        // The first relay of the token deploys its copy: the callback gas is the eighth argument of the payload.
+        uint256 gasWord;
+        assembly {
+            gasWord := mload(add(data, add(36, mul(7, 32))))
+        }
+        assertEq(gasWord, request, "the payload carries the request");
+        assertEq(ambA.messageAt(0).gasLimit, 0, "the bridge is asked for no gas");
     }
 }

@@ -44,17 +44,17 @@ describe('relay that pays for delivery', () => {
     const plan = await relayOf({ feeMode: 'percentage', feePercent: '0.5' })
     const decoded = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data })
     expect(decoded.functionName).toBe('relayTokensAndCall')
-    const [token, relayReceiver, amount, data] = decoded.args as [string, string, bigint, `0x${string}`]
+    const [token, relayReceiver, amount, data] = decoded.args as unknown as [string, string, bigint, `0x${string}`, bigint]
     expect(token).toBe(usdc.address)
     expect(relayReceiver).toBe(FIXTURE_PAIR.second.contracts.deliveryRouter!)
     expect(amount).toBe(100_000_000n)
-    expect(decodeFeeDirector(data)).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 5n * 10n ** 15n })
+    expect(decodeFeeDirector(data)).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 5n * 10n ** 15n, callGas: 0n })
     expect(plan.deliveryFee?.director).toEqual(decodeFeeDirector(data))
   })
 
   test('a typed fixed fee and the wrapped native payout are encoded as the flags of the router', async () => {
     const plan = await relayOf({ feeMode: 'fixed', feeFixed: '1.5', feePayout: 'native' })
-    const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
+    const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as unknown as [string, string, bigint, `0x${string}`, bigint]
     // zUSDC is not the wrapped native token of the fixture pair, so the native payout is ignored.
     expect(decodeFeeDirector(data).settings).toBe(settingsOf({ mode: 'fixed' }))
     expect(decodeFeeDirector(data).limit).toBe(1_500_000n)
@@ -63,7 +63,7 @@ describe('relay that pays for delivery', () => {
   test('the fee recipient defaults to the receiver and can be another address', async () => {
     const other = '0x00000000000000000000000000000000000000e5'
     const plan = await relayOf({ feeMode: 'fixed', feeFixed: '1', feeRecipient: other })
-    const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
+    const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as unknown as [string, string, bigint, `0x${string}`, bigint]
     expect(decodeFeeDirector(data).recipient).toBe(getAddress(other))
   })
 
@@ -159,15 +159,15 @@ describe('relay that pays for delivery', () => {
 
   test('the tip is 0.1 percent when the percentage is blank: the default, in the share mode', async () => {
     const plan = await relayOf({ feeMode: 'percentage', feePercent: '' })
-    const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
-    expect(decodeFeeDirector(data)).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 10n ** 15n })
+    const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as unknown as [string, string, bigint, `0x${string}`, bigint]
+    expect(decodeFeeDirector(data)).toEqual({ recipient: getAddress(receiver), settings: settingsOf({ mode: 'share' }), limit: 0n, multiplier: 10n ** 15n, callGas: 0n })
     expect(plan.deliveryFee?.description.summary).toBe('0.1 zUSDC (exact)')
   })
 
   test('the router is chosen in the extra data: the relay targets the router of the form, and the review marks it', async () => {
     const chosen = '0x00000000000000000000000000000000000000f7'
     const plan = await relayOf({ feeMode: 'percentage', feePercent: '0.1', deliveryRouter: chosen })
-    const [, relayReceiver] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
+    const [, relayReceiver] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as unknown as [string, string, bigint, `0x${string}`, bigint]
     expect(relayReceiver).toBe(getAddress(chosen))
     expect(plan.deliveryFee?.router).toBe(getAddress(chosen))
     expect(plan.deliveryFee?.defaultRouter).toBe(FIXTURE_PAIR.second.contracts.deliveryRouter!)
@@ -182,7 +182,7 @@ describe('relay that pays for delivery', () => {
     // The sender says one native coin of PulseChain is worth 0.003 zUSDC: 3,000 base units for 1e18 wei.
     // multiplier = 3,000 / 1e18 * 1.2 * 1e18 = 3,600.
     const plan = await relayOf({ feeMode: 'gas', feeMultiplier: '1.2', feeSenderPrice: '0.003', feeCeilingGwei: '10' })
-    const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as [string, string, bigint, `0x${string}`]
+    const [, , , data] = decodeFunctionData({ abi: tokenMediatorAbi, data: plan.data }).args as unknown as [string, string, bigint, `0x${string}`, bigint]
     const director = decodeFeeDirector(data)
     expect(director.multiplier).toBe(3_600n)
     // The destination chain reports a base fee, so the gas mode reads the base fee only and the priority fee adds nothing.
@@ -209,14 +209,14 @@ describe('relay that pays for delivery', () => {
 })
 
 describe('planRelay refuses a delivery fee that the data does not carry', () => {
-  const director = { recipient: getAddress(receiver), settings: settingsOf({ mode: 'fixed' }), limit: 1n, multiplier: 0n }
+  const director = { recipient: getAddress(receiver), settings: settingsOf({ mode: 'fixed' }), limit: 1n, multiplier: 0n, callGas: 0n }
   const router = FIXTURE_PAIR.second.contracts.deliveryRouter!
   const base = { chain: FIXTURE_PAIR.first, token: usdc, amount: 5n }
   const review = { router, defaultRouter: router, routerChainName: 'PulseChain', director, token: { symbol: 'zUSDC', decimals: 6 }, description: undefined as never, dataSource: undefined as never, routerAddresses: { kind: 'read' as const, rewardAddress: router, failedDeliveryAddress: router } }
 
   test('a plain mode, another receiver and other data are each refused', () => {
     expect(() => planRelay({ ...base, receiver: router, mode: { kind: 'plain' }, deliveryFee: review })).toThrow('needs relayTokensAndCall')
-    expect(() => planRelay({ ...base, receiver, mode: { kind: 'call', data: encodeFeeDirector(director, { router, protectedAddresses: [], destinationToken: null, destinationWrappedNative: null }) }, deliveryFee: review })).toThrow('router of the other chain as the receiver')
-    expect(() => planRelay({ ...base, receiver: router, mode: { kind: 'call', data: '0x' }, deliveryFee: review })).toThrow('does not hold the fee terms')
+    expect(() => planRelay({ ...base, receiver, mode: { kind: 'call', data: encodeFeeDirector(director, { router, protectedAddresses: [], destinationToken: null, destinationWrappedNative: null }) }, callbackGas: 1_000_000n, deliveryFee: review })).toThrow('router of the other chain as the receiver')
+    expect(() => planRelay({ ...base, receiver: router, mode: { kind: 'call', data: '0x' }, callbackGas: 1_000_000n, deliveryFee: review })).toThrow('does not hold the fee terms')
   })
 })

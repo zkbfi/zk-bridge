@@ -3,7 +3,7 @@
  * function is pure and returns lines, so a test reads the text without a terminal. The amounts and the labels
  * (`exact`, `estimate, at most X`) come from `@zk-bridge/shared`.
  */
-import { GAS_MODE_HELP, GAS_MODE_SHORT_LABEL, TIP_MODE_NAMES, TIP_NATURE, TIP_RANGE_HELP, feeModeOf, routerInWords, settingFlagsOf, type FeeDirector, type FeeMode, type FeeOption, type SettingFlagName, type TipRangeOption } from '@zk-bridge/shared'
+import { GAS_MODE_HELP, GAS_MODE_SHORT_LABEL, TIP_MODE_NAMES, TIP_NATURE, TIP_RANGE_HELP, feeModeOf, routerCallbackGas, routerInWords, settingFlagsOf, type FeeDirector, type FeeMode, type FeeOption, type SettingFlagName, type TipRangeOption } from '@zk-bridge/shared'
 import { getAddress } from 'viem'
 import type { RouterAddressesReading } from '../chain/live-reads'
 import type { DeliveryFeeState, DeliveryTarget } from '../app/delivery-fee-form'
@@ -156,22 +156,33 @@ function chosenLines(chosen: DeliveryFeeStateReady['chosen'], target: DeliveryTa
   if (chosen.kind === 'invalid') return [[muted('Your tip'.padEnd(LABEL_WIDTH)), colored(chosen.reason, theme.bad)]]
   const maximum = `${formatUnits(chosen.description.maximumUnits, target.token.decimals)} ${target.token.symbol}`
   const limit = chosen.mode === 'gas' ? [row('Limit', limitInWords(chosen.director, target.token))] : []
+  const gas = chosen.director.callGas > 0n ? callGasRows(chosen.director, row) : []
   return [
     row('Tip mode', tipModeLabel(chosen.description.mode)),
     [muted('Your tip'.padEnd(LABEL_WIDTH)), strong(chosen.description.summary, theme.good)],
     ...limit,
     row('At most', maximum),
+    ...gas,
   ]
 }
 
-/** The call after the delivery: its target and its call data, and for a gas based tip the warning that the call counts. */
+/** The gas of the call, and the callback gas that the relay passes: the call gas plus the router's own work. The callback gas is derived, never typed. */
+function callGasRows(director: FeeDirector, makeRow: (label: string, value: string) => Line): readonly Line[] {
+  return [
+    makeRow('Call gas', `${director.callGas} (the exact gas the call gets)`),
+    makeRow('Callback gas', `${routerCallbackGas({ callGas: director.callGas })} (the call gas plus the router's own work; set for you)`),
+  ]
+}
+
+/** The call after the delivery: its target, its call data and its gas, and for a gas based tip the note that the call gas counts. */
 function callReviewLines(deliveryFee: DeliveryFeeReview): readonly Line[] {
   const { call, description } = deliveryFee
   if (call === undefined) return []
   return [
     reviewRow('Call target', getAddress(call.target)),
     reviewRow('Call data', call.data === '0x' ? '0x (empty)' : `${call.data} (${(call.data.length - 2) / 2} bytes)`),
-    ...(description.mode === 'gas' ? [[colored('Warning: a gas based tip counts the gas of the call, so expect the tip to reach its limit.', theme.warn)] as Line] : []),
+    ...callGasRows(deliveryFee.director, reviewRow),
+    ...(description.mode === 'gas' ? [[colored('A gas based tip counts the call gas, so the tip is higher with a call. The limit above is still the most it can be.', theme.warn)] as Line] : []),
   ]
 }
 
@@ -194,7 +205,8 @@ export function deliveryFeeReviewLines(deliveryFee: DeliveryFeeReview): readonly
     reviewRow('Limit', limitInWords(director, token)),
     reviewRow('Multiplier', multiplierInWords(director)),
     reviewRow('Tip now', description.summary),
-    reviewRow('Most the tip', `${formatUnits(description.maximumUnits, token.decimals)} ${token.symbol} (the tip never passes this)`),
+    ...(description.mode === 'gas' ? [reviewRow('Expected', `about ${formatUnits(description.expectedUnits, token.decimals)} ${token.symbol} at the gas estimate`)] : []),
+    reviewRow('Most the tip', `${formatUnits(description.maximumUnits, token.decimals)} ${token.symbol} (the tip never passes this${description.mode === 'gas' ? '; more gas from the deliverer can raise it up to here' : ''})`),
     ...callReviewLines(deliveryFee),
     reviewRow('Data source', `${dataSource.description}, ${dataSource.gas} gas`),
     reviewRow('Base fee', dataSource.baseFeeDescription.replace(/^base fee /, '')),

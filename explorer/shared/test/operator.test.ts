@@ -243,7 +243,6 @@ describe('planMessageExecution', () => {
       [{ sourceTransactionHash: word('a') }, /sourceTransactionHash/],
       [{ message: { ...message, sender: '0x0000000000000000000000000000000000000abc' } }, /sender/],
       [{ message: { ...message, executor: '0x0000000000000000000000000000000000000abd' } }, /executor/],
-      [{ message: { ...message, gasLimit: 250_000 } }, /gasLimit/],
     ] as const) {
       expect(() => planMessageExecution(evidence(changes), chains)).toThrow(field)
     }

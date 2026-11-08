@@ -8,17 +8,17 @@ import { RATE_SCALE } from "./format.js";
  * `src/hardened/mediator/DeliveryRouter.sol` and, through it, the `FeeDirector` that carries the delivery terms. The terminal, the web page and the bots import from here and never read
  * or write a settings bit, a word of the data or a fee formula themselves.
  *
- * A gas based tip is computed from the gas that the deliverer's transaction makes available (`startingGas` at router entry
- * minus `gasleft()` in the callback, plus a fixed overhead). The deliverer chooses the gas limit of the transaction. The
- * bridge forwards only the message gas limit, so gas that the deliverer holds back above it counts. A sender must expect
- * the tip to reach `limit`, and `limit` is the price ceiling. The tip counts the call after the delivery. When a call is
- * requested, the router adds `gasLeft - overhead - CALL_GAS_RESERVE` to the measured gas, so with a call the tip reaches
- * up to what the deliverer made available.
+ * A gas based tip is computed from the gas that the delivery used up to the router callback (`startingGas` at router
+ * entry minus `gasleft()` in the callback), plus the `callGas` of the director when a call is requested, plus a fixed
+ * overhead, times the multiplier and the gas price. `limit` is the price ceiling that the sender signs. The follow-up call
+ * gets exactly `callGas`: with too little gas the router callback reverts, and a call that fails with its gas leaves the
+ * tokens with the recipient. The sender's `callbackGas` must cover the router's own work and the call: see
+ * {@link routerCallbackGas}.
  *
- * The data of `onTokenBridged` is the 128 byte director (four words), then optionally a 20 byte target address, then the
- * call data (all remaining bytes, which may be empty). The legacy form is 20 bytes and cannot carry a call. Data of 129 to
- * 147 bytes makes the router deliver and make no call, because a tail shorter than a target is ignored. This module
- * refuses to build such data.
+ * The data of `onTokenBridged` is the 160 byte director (five words), then optionally a 20 byte target address, then the
+ * call data (all remaining bytes, which may be empty). The legacy form is 20 bytes and cannot carry a call. Data of 161 to
+ * 179 bytes makes the router deliver and make no call, because a tail shorter than a target is ignored. This module
+ * refuses to build such data. Data shorter than 160 bytes (and not exactly 20) has no known shape.
  *
  * The test `test/delivery-terms.test.ts` checks the constants, the encoding and the fee against vectors that the compiled
  * router printed (`vectors/GenerateDeliveryFeeVectors.s.sol`), so the two sides cannot drift.
@@ -60,10 +60,28 @@ export const UINT256_MAXIMUM = 2n ** 256n - 1n;
 /** Gas that the router keeps back from a call after a delivery. Same as `DeliveryRouter.CALL_GAS_RESERVE`. */
 export const CALL_GAS_RESERVE = 10_000n;
 
+/**
+ * The gas that the router's own work in `onTokenBridged` needs: the tip and the payout, worst case a native payout with
+ * the fallbacks. A frontend that relays to a router passes {@link routerCallbackGas} as the `callbackGas`. The forge
+ * test `test_theCoreCallbackGasBaseCoversTheCostliestPathOfTheRouter` checks that this number is enough: that path needs
+ * about 100,000 gas of router work with a plain token, and the rest is room for tokens whose transfers cost more.
+ */
+export const ROUTER_CALLBACK_GAS_BASE = 300_000n;
+
+/**
+ * The most gas that a follow-up call of a delivery may get. A delivery runs in one transaction on the destination chain,
+ * so the call gas, the callback gas around it and the proof must fit one block, and on Sepolia one transaction may use at
+ * most 16,777,216 gas (EIP-7825). Ten million leaves room for the rest of the delivery. The encoder, the guard of the
+ * terms and {@link routerCallbackGas} refuse more, and every form and link reads this one number.
+ */
+export const MAX_CALL_GAS = 10_000_000n;
+
+const callGasAboveCapText = `The call gas is above ${MAX_CALL_GAS}, the most that a delivery can carry.`;
+
 /** The bytes of the legacy form: one address. */
 export const LEGACY_RECEIVER_BYTES = 20;
-/** The size of an encoded director: four words. */
-export const FEE_DIRECTOR_BYTES = 128;
+/** The size of an encoded director: five words. */
+export const FEE_DIRECTOR_BYTES = 160;
 /** The bytes of the target address that follows a director. */
 export const DELIVERY_CALL_TARGET_BYTES = 20;
 /** Where the call data starts: the director plus the target. Data shorter than this makes no call. */
@@ -84,14 +102,18 @@ export interface FeeDirector {
   /** Flag bits: see {@link SETTING_FLAG_VALUES}. */
   readonly settings: bigint;
   /**
-   * The fixed tip, or the price ceiling of the gas based tip, in base units of the transferred token. A gas based tip is
-   * computed from the gas that the deliverer's transaction makes available. The deliverer chooses the gas limit of that
-   * transaction, and the bridge forwards only the message gas limit, so gas held back above it counts. Expect the tip to
-   * reach `limit`.
+   * The fixed tip, or the price ceiling of the gas based tip, in base units of the transferred token. The gas based tip is
+   * computed from the gas that the delivery used up to the router callback, plus the call gas when a call is requested,
+   * plus the overhead. `limit` is the hard ceiling that the sender signs.
    */
   readonly limit: bigint;
   /** Scaled by 1e18: the share of the value, or the factor on the gas cost. */
   readonly multiplier: bigint;
+  /**
+   * The exact gas that the follow-up call gets. It must be above zero when the data carries a call, and it is ignored (use
+   * 0n) when it does not. The router counts it in a gas based tip when a call is requested.
+   */
+  readonly callGas: bigint;
 }
 
 /** How the router computes the tip. `fixed` wins over `share`, as in the router. */
@@ -172,6 +194,7 @@ const DIRECTOR_PARAMETERS = [
   { type: "uint256", name: "settings" },
   { type: "uint256", name: "limit" },
   { type: "uint256", name: "multiplier" },
+  { type: "uint256", name: "callGas" },
 ] as const;
 
 /** An address that no tip recipient may be, with the words that name it in the message. */
@@ -235,6 +258,9 @@ export const protectedAddressesOf = (chains: readonly ProtectedChain[]): readonl
  * True when the address is one of the delivery routers in the list. The terminal and the web page use it to decide that a
  * receiver is a router, so a hand written relay to a router gets the same check as a delivery tip.
  *
+ * The list is a frontend and operator allowlist, not a protocol rule: the mediator and the bridge name no router, and any
+ * contract can receive a relay. A frontend may point to any router it trusts and swap it at will.
+ *
  * @param address Any address.
  * @param chains The chains of the deployment.
  */
@@ -258,6 +284,9 @@ const recipientOf = (data: Hex, length: number): Address => {
 };
 
 const settingsOfData = (data: Hex): bigint => BigInt(`0x${data.slice(66, 130)}`);
+
+/** The fifth word of a director: the gas of the follow-up call. */
+const callGasOfData = (data: Hex): bigint => BigInt(`0x${data.slice(258, 322)}`);
 
 /**
  * Refuses terms that the router would hand to its failed delivery address, a legacy shape that has no native coin to
@@ -285,6 +314,7 @@ export const assertValidFeeTerms = (input: FeeTermsInput): void => {
   }
   if (length === LEGACY_RECEIVER_BYTES) assertLegacyToken(input);
   if (length >= FEE_DIRECTOR_BYTES) assertSettings(settingsOfData(data), input);
+  if (length >= FEE_DIRECTOR_BYTES && callGasOfData(data) > MAX_CALL_GAS) throw new FeeTermsError(callGasAboveCapText);
   const recipient = recipientOf(data, length);
   if (sameAddress(recipient, ZERO_ADDRESS)) throw new FeeTermsError("The recipient of the fee terms is the zero address. The router would hand the value to its failed delivery address.");
   if (sameAddress(recipient, router)) throw new FeeTermsError("The recipient of the fee terms is the router itself. The router would hand the value to its failed delivery address.");
@@ -300,11 +330,12 @@ const assertCallTarget = (input: FeeTermsInput): void => {
   if (sameAddress(call.target, input.router)) throw new FeeTermsError("The target of the call is the router itself. Name another contract.");
   const clash = input.protectedAddresses.find((protectedAddress) => sameAddress(protectedAddress.address, call.target));
   if (clash !== undefined) throw new FeeTermsError(`The target of the call is ${clash.label}. The router must not call it. Name another contract.`);
+  if (callGasOfData(input.data) === 0n) throw new FeeTermsError("The call has no gas. Set the call gas above zero: the router gives the call exactly that much.");
 };
 
 const assertLegacyToken = (input: FeeTermsInput): void => {
   if (isWrappedNativeToken(input)) return;
-  throw new FeeTermsError("The 20 byte call data pays the native coin, so it works only for the wrapped native token. Use the 128 byte fee terms for this token.");
+  throw new FeeTermsError(`The 20 byte call data pays the native coin, so it works only for the wrapped native token. Use the ${FEE_DIRECTOR_BYTES} byte fee terms for this token.`);
 };
 
 const assertSettings = (settings: bigint, input: FeeTermsInput): void => {
@@ -320,7 +351,7 @@ const assertSettings = (settings: bigint, input: FeeTermsInput): void => {
 };
 
 /**
- * Encodes a director as `abi.encode(director)` does. The struct is static, so the result is four words with no offset.
+ * Encodes a director as `abi.encode(director)` does. The struct is static, so the result is five words with no offset.
  * This is the callback data of `relayTokensAndCall`. It runs the guard, so no caller can skip it.
  *
  * @param director The director.
@@ -333,28 +364,28 @@ const assertSettings = (settings: bigint, input: FeeTermsInput): void => {
  * @throws FeeTermsError when the router would not honour the terms.
  */
 export const encodeFeeDirector = (director: FeeDirector, context: FeeTermsContext, call?: DeliveryCall): Hex => {
-  const words = encodeAbiParameters(DIRECTOR_PARAMETERS, [director.recipient, director.settings, director.limit, director.multiplier]);
+  const words = encodeAbiParameters(DIRECTOR_PARAMETERS, [director.recipient, director.settings, director.limit, director.multiplier, director.callGas]);
   const data: Hex = call === undefined ? words : `${words}${call.target.slice(2).toLowerCase()}${call.data.slice(2).toLowerCase()}`;
   assertValidFeeTerms({ ...context, data });
   return data;
 };
 
 /**
- * Decodes `abi.decode(data, (FeeDirector))`. The router reads the first 128 bytes and ignores the rest, and so does this.
+ * Decodes `abi.decode(data, (FeeDirector))`. The router reads the first 160 bytes and ignores the rest, and so does this.
  *
- * @param data At least 128 bytes.
- * @throws When the data is shorter than 128 bytes, or when the address word has bits above 160.
+ * @param data At least 160 bytes.
+ * @throws When the data is shorter than 160 bytes, or when the address word has bits above 160.
  */
 export const decodeFeeDirector = (data: Hex): FeeDirector => {
   const bytes = bytesOf(data);
   if (bytes < FEE_DIRECTOR_BYTES) throw new RangeError(`a fee director is at least ${FEE_DIRECTOR_BYTES} bytes, not ${bytes}`);
   if (hasDirtyRecipientWord(data)) throw new RangeError("the recipient word of a fee director has bits above 160");
-  const [recipient, settings, limit, multiplier] = decodeAbiParameters(DIRECTOR_PARAMETERS, data.slice(0, 2 + FEE_DIRECTOR_BYTES * 2) as Hex);
-  return { recipient, settings, limit, multiplier };
+  const [recipient, settings, limit, multiplier, callGas] = decodeAbiParameters(DIRECTOR_PARAMETERS, data.slice(0, 2 + FEE_DIRECTOR_BYTES * 2) as Hex);
+  return { recipient, settings, limit, multiplier, callGas };
 };
 
 /**
- * Reads the call after the director, as the router does: data of 148 bytes or more names a target (20 bytes after the
+ * Reads the call after the director, as the router does: data of 180 bytes or more names a target (20 bytes after the
  * director) and the call data (all bytes after the target, possibly empty). Shorter data makes no call.
  *
  * @param data The callback data of a transfer.
@@ -374,8 +405,8 @@ export type DeliveryTerms =
   | { readonly kind: "unknown"; readonly bytes: number };
 
 /**
- * Reads the callback data as the router does: 20 bytes are the legacy receiver (no tip), 128 bytes or more are a
- * director (with a call when the data has 148 bytes or more, and no call for 129 to 147 bytes), and anything else has
+ * Reads the callback data as the router does: 20 bytes are the legacy receiver (no tip), 160 bytes or more are a
+ * director (with a call when the data has 180 bytes or more, and no call for 161 to 179 bytes), and anything else has
  * no known shape (the router hands the whole value to its failed delivery address). A director whose address word has
  * bits above 160 also has no known shape here.
  *
@@ -496,4 +527,55 @@ export const maximumFee = (director: FeeDirector, value: bigint): bigint => {
   const mode = feeModeOf(director.settings);
   if (mode === "gas") return clampToValue(director.limit, value);
   return expectedFee(director, { value, gasUsed: 0n, baseFeeWei: 0n }).fee;
+};
+
+/**
+ * The `callbackGas` that a frontend passes to `relayTokensAndCall` when the receiver is a delivery router: the router's
+ * own work, plus, when a call is requested, the call gas, one 64th of it that the 63/64 rule holds back, and the reserve.
+ *
+ * @param input The call gas of the director. Omit it, or give zero, for a delivery with no call.
+ */
+export const routerCallbackGas = (input: { callGas?: bigint }): bigint => {
+  const callGas = input.callGas;
+  if (callGas === undefined || callGas <= 0n) return ROUTER_CALLBACK_GAS_BASE;
+  if (callGas > MAX_CALL_GAS) throw new RangeError(callGasAboveCapText);
+  return ROUTER_CALLBACK_GAS_BASE + callGas + divideRoundingUp(callGas, 63n) + CALL_GAS_RESERVE;
+};
+
+/**
+ * The most callback gas that a relay may state: what a router needs for a call of {@link MAX_CALL_GAS}. A form refuses
+ * more for any receiver, because no delivery could carry it.
+ */
+export const MAX_CALLBACK_GAS = routerCallbackGas({ callGas: MAX_CALL_GAS });
+
+/** Input of {@link worstCaseFee}. */
+export interface WorstCaseFeeInput {
+  /** The amount that the mediator releases to the router, in base units. */
+  readonly value: bigint;
+  /** The frontend's estimate of the gas that the delivery uses before the router callback (proof, bridge and mediator). */
+  readonly deliveryGas: bigint;
+  /** The gas price of the destination chain, in wei per gas. */
+  readonly gasPrice: bigint;
+  /** How the payout travels. */
+  readonly payout: PayoutKind;
+  /** True when the director asks for a follow-up call, so its `callGas` counts. */
+  readonly withCall: boolean;
+}
+
+/**
+ * The most that a delivery tip is expected to be: the "max" that the app shows. `limit` stays the signed hard ceiling
+ * (see {@link maximumFee}). Fixed: `min(limit, value)`. Share: `min(value * multiplier / 1e18, value)`. Gas based:
+ * `min(limit, value, (deliveryGas + callGas + overhead) * multiplier * gasPrice / 1e18)`.
+ *
+ * @param director The fee terms.
+ * @param input The value, the gas estimate, the gas price, the payout and whether a call is requested.
+ * @throws When the arithmetic would overflow 256 bits.
+ */
+export const worstCaseFee = (director: FeeDirector, input: WorstCaseFeeInput): bigint => {
+  const mode = feeModeOf(director.settings);
+  if (mode === "fixed") return clampToValue(director.limit, input.value);
+  if (mode === "share") return clampToValue(checkedProduct(input.value, director.multiplier) / RATE_SCALE, input.value);
+  const gas = checkedSum(checkedSum(input.deliveryGas, input.withCall ? director.callGas : 0n), gasOverheadOf(input.payout));
+  const estimate = checkedProduct(gas, director.multiplier, input.gasPrice) / RATE_SCALE;
+  return clampToValue(estimate > director.limit ? director.limit : estimate, input.value);
 };

@@ -16,7 +16,7 @@ beforeEach(() => {
 describe("which link fields need the user's attention", () => {
   it("lets only the route, the token and the amount prefill silently", () => {
     expect(bridgeLinkedFields({ token: `first:${OTHER}`, amount: "1" }, null)).toEqual([]);
-    expect(bridgeLinkedFields({ amount: "1", receiver: OTHER, gasLimit: "900000", tip: { routerText: ROUTER, fixedText: "5", mode: "fixed" } }, null)).toEqual(
+    expect(bridgeLinkedFields({ amount: "1", receiver: OTHER, callGas: "900000", tip: { routerText: ROUTER, fixedText: "5", mode: "fixed" } }, null)).toEqual(
       expect.arrayContaining(["receiver", "gas for the call", "relay router", "fixed tip", "tip kind"]),
     );
   });

@@ -9,7 +9,6 @@
 import type { Address, Hex } from "viem";
 import {
   DEFAULT_GAS_LEVEL,
-  RELEASE_GAS_LIMIT,
   TESTNETS,
   decodeMediatorMessage,
   deliveryGasUsd,
@@ -20,7 +19,6 @@ import {
   plsUsd,
   poolReaderOver,
   readDeliveryTerms,
-  requiredDeliveryGas,
   resolvePricingAddress,
   tokenUsd,
   usdOf,
@@ -29,10 +27,11 @@ import {
 import type { Economics } from "./batch.ts";
 
 /**
- * The gas one delivery is counted at: what a release must be given (`requiredDeliveryGas` of the release limit). Above
- * what a plain release uses, so the cost errs high and a batch proves early only when it surely pays.
+ * The gas one delivery is counted at. A message has no gas limit of its own, so this is an estimate: the proof check
+ * (the bridge test measures 290,655), the bridge, the release and the tip, rounded up. Above what a plain release uses,
+ * so the cost errs high and a batch proves early only when it surely pays.
  */
-export const DELIVERY_GAS = requiredDeliveryGas(RELEASE_GAS_LIMIT);
+export const DELIVERY_GAS = 400_000n;
 
 /** The destination token of a message, as the indexer lists it. */
 export type DestinationToken = {

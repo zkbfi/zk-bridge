@@ -42,7 +42,7 @@ describe("GET /api/counts", () => {
         group(1, 369, "token", "delivered", 100),
         group(1, 369, "message", "covered", 1),
         group(369, 1, "token", "waiting_for_finality", 2),
-        group(369, 1, "token", "failed_call", 4),
+        group(369, 1, "token", "release_failed", 4),
       ],
     });
     const { status, body } = await get();
@@ -53,7 +53,7 @@ describe("GET /api/counts", () => {
       inFlight: 6,
       transfers: 109,
       plain: 1,
-      byStatus: { sent: 3, waiting_for_finality: 2, covered: 1, delivered: 100, failed_call: 4, release_failed: 0 },
+      byStatus: { sent: 3, waiting_for_finality: 2, covered: 1, delivered: 100, release_failed: 4 },
       directions: [
         { sourceChainId: 1, destinationChainId: 369, total: 104, inFlight: 4 },
         { sourceChainId: 369, destinationChainId: 1, total: 6, inFlight: 2 },

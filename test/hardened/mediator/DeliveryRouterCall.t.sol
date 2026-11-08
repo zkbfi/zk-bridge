@@ -7,9 +7,11 @@ import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.so
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
+import {ExactGasCall} from "../../../src/hardened/mediator/ExactGasCall.sol";
+import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
-import {MediatorFixture, MockWrappedNative, DenyListToken, CoinRefuser} from "./utils/MediatorSupport.sol";
+import {MediatorFixture, MockWrappedNative, DenyListToken, CoinRefuser, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 import {
     CallRecorder,
     CallReverter,
@@ -78,8 +80,11 @@ contract DeliveryRouterCallTest is MediatorFixture {
         view
         returns (DeliveryRouter.FeeDirector memory)
     {
-        return DeliveryRouter.FeeDirector(recipient, settings, limit, multiplier);
+        return DeliveryRouter.FeeDirector(recipient, settings, limit, multiplier, CALL_GAS);
     }
+
+    /// @dev The gas that the follow-up call gets in these tests, unless a test sets its own.
+    uint256 internal constant CALL_GAS = 200_000;
 
     /// @dev The data of `onTokenBridged` with a call: the director, the 20 byte target and the call data.
     function _withCall(DeliveryRouter.FeeDirector memory director, address target, bytes memory callData)
@@ -94,7 +99,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
     function _sendBack(IERC20 nativeOnA, bytes memory data, uint256 value) internal returns (uint256) {
         address copy = _copyOf(address(nativeOnA));
         vm.prank(alice);
-        mediatorB.relayTokensAndCall(copy, address(router), value, data);
+        mediatorB.relayTokensAndCall(copy, address(router), value, data, TEST_CALLBACK_GAS);
         return _lastIndexB();
     }
 
@@ -243,67 +248,51 @@ contract DeliveryRouterCallTest is MediatorFixture {
         assertEq(tokenA.balanceOf(recipient), 97 ether);
     }
 
-    /// Claim: `gasGiven` is the gas left at the call less the reserve, and the target sees it. Shows: in the harness at
-    /// 500,000 gas (below the 63/64 limit, which binds above 640,000), a recorder sees at its first instruction a figure
-    /// that is at most 100 gas below the `gasGiven` that a reverting target at the same state reports. The few gas
-    /// between come from the dispatch of the fallback function before it reads the gas. Matters: it proves the event
-    /// reports what the call got, and not a different number.
-    function test_theGasGivenOfAFailedCallIsWhatTheTargetSees() public {
+    /// Claim: the call gets exactly the `callGas` of the terms, and `gasGiven` reports it. Shows: in the harness with
+    /// 2,000,000 gas, a recorder sees at its first instruction at most `CALL_GAS` and at most 100 gas less (the dispatch
+    /// of the fallback before it reads the gas); a reverting target at the same state reports `gasGiven` equal to
+    /// `CALL_GAS`. Matters: the sender, not the deliverer, decides the gas of the call.
+    function test_theCallGetsExactlyTheCallGas() public {
         DeliveryRouter.FeeDirector memory director = _director(router.FIXED_FEE(), 3 ether, 0);
         bytes memory callData = hex"c0ffee";
-        (bool ok,,, uint256 calls) = _probe(_withCall(director, address(recorder), callData), 100 ether, 500_000);
-        assertTrue(ok);
-        assertEq(calls, 1);
-        // The probe restores the state, so read the recorder through a run that keeps it.
         uint256 snapshot = vm.snapshotState();
-        _harnessDeliver(_withCall(director, address(recorder), callData), 100 ether, 500_000);
+        assertTrue(_harnessDeliver(_withCall(director, address(recorder), callData), 100 ether, 2_000_000));
         uint256 gasSeen = recorder.gasAtEntry();
         vm.revertToState(snapshot);
+        assertLe(gasSeen, CALL_GAS, "the target never sees more than the call gas");
+        assertGe(gasSeen + 100, CALL_GAS, "and it sees all of it, less the dispatch");
 
         CallReverter reverter = new CallReverter();
         (bool reverterOk, FailedCall[] memory failures,,) =
-            _probe(_withCall(director, address(reverter), callData), 100 ether, 500_000);
+            _probe(_withCall(director, address(reverter), callData), 100 ether, 2_000_000);
         assertTrue(reverterOk);
         assertEq(failures.length, 1);
-        assertGe(failures[0].gasGiven, gasSeen, "the target never sees more than it was given");
-        assertLe(failures[0].gasGiven - gasSeen, 100, "the dispatch before the first read costs a few gas");
-        assertLe(failures[0].gasGiven, 500_000 - 10_000, "the reserve is held back");
+        assertEq(failures[0].gasGiven, CALL_GAS, "the event reports the call gas");
     }
 
-    /// Claim: the user call never gets more gas than the message limit, however much gas the deliverer supplies.
-    /// Shows: a message with a limit of 1,000,000 executed with 9,000,000 gas lets the target see less than 1,000,000
-    /// at its first instruction. Matters: the bound holds because the bridge calls the mediator with exactly the
-    /// message limit and the user call runs inside that call. This test fails if a change ever gives the user call
-    /// the gas of the deliverer instead.
-    function test_theUserCallNeverGetsMoreThanTheMessageGasLimit() public {
-        uint256 messageGasLimit = 1_000_000;
+    /// Claim: the call gets its `callGas` however much gas the deliverer supplies. Shows: a delivery executed with
+    /// 9,000,000 gas lets the target see at most `CALL_GAS`. Matters: the bridge now gives the mediator all the gas, so
+    /// the bound must come from the terms, not from a cap of the bridge.
+    function test_theCallGetsItsCallGasHoweverMuchGasTheDelivererSupplies() public {
         bytes memory data = _withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(recorder), hex"01");
-        address copy = _copyOf(address(tokenA));
-        vm.prank(alice);
-        mediatorB.relayTokensAndCall(copy, address(router), 100 ether, data, messageGasLimit);
-        uint256 index = _lastIndexB();
-        assertEq(ambB.messageAt(index).gasLimit, messageGasLimit, "the message carries the limit");
-
+        uint256 index = _sendBack(tokenA, data, 100 ether);
         vm.prank(executor, executor);
         router.executeMessage{gas: 9_000_000}(ambA.proofOf(ambB, index));
 
         assertEq(recorder.calls(), 1, "the call ran");
-        assertLt(recorder.gasAtEntry(), messageGasLimit, "the target sees less than the message limit");
+        assertLe(recorder.gasAtEntry(), CALL_GAS, "the target sees at most the call gas");
     }
 
     // ------------------------------------------------------------------------------------------------ 3. burner
 
-    /// Claim: a target that burns all its gas cannot stop the router. Shows: with a message gas limit of 5,000,000 and
-    /// 20,000,000 supplied by the deliverer, the burner takes its gas, the router still pays the tip and the
-    /// recipient, emits `CallFailed` with a gas figure above 4,000,000 and keeps no tokens. Matters: the one hostile
-    /// target must not turn the delivery into a failure that strands the tokens.
+    /// Claim: a target that burns all its gas cannot stop the router. Shows: with 20,000,000 supplied by the deliverer,
+    /// the burner takes its call gas, the router still pays the tip and the recipient, emits `CallFailed` with exactly
+    /// the call gas and keeps no tokens. Matters: the one hostile target must not turn the delivery into a failure that
+    /// strands the tokens; with its full call gas, its failure is the callee's no.
     function test_aTargetThatBurnsAllItsGasLeavesTheDeliveryWhole() public {
         CallBurner burner = new CallBurner();
         bytes memory data = _withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(burner), hex"01");
-        address copy = _copyOf(address(tokenA));
-        vm.prank(alice);
-        mediatorB.relayTokensAndCall(copy, address(router), 100 ether, data, 5_000_000);
-        uint256 index = _lastIndexB();
+        uint256 index = _sendBack(tokenA, data, 100 ether);
 
         vm.recordLogs();
         vm.prank(executor, executor);
@@ -313,7 +302,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
         assertEq(failures.length, 1);
         assertEq(failures[0].target, address(burner));
         assertEq(failures[0].recipient, recipient);
-        assertGt(failures[0].gasGiven, 4_000_000, "the burner got a large amount");
+        assertEq(failures[0].gasGiven, CALL_GAS, "the burner got its call gas");
         assertEq(tokenA.balanceOf(reward), 3 ether);
         assertEq(tokenA.balanceOf(recipient), 97 ether);
         assertEq(tokenA.balanceOf(address(router)), 0);
@@ -505,7 +494,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
     /// terms are invalid, so nothing the sender asked for after the payment may run.
     function test_aZeroRecipientHandsOffAndSkipsTheCall() public {
         DeliveryRouter.FeeDirector memory director =
-            DeliveryRouter.FeeDirector(address(0), router.FIXED_FEE(), 3 ether, 0);
+            DeliveryRouter.FeeDirector(address(0), router.FIXED_FEE(), 3 ether, 0, 0);
         uint256 index = _sendBack(tokenA, _withCall(director, address(recorder), hex"01"), 100 ether);
 
         vm.recordLogs();
@@ -572,7 +561,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
         _enterChainBWithWrapped(50 ether);
         address refuser = address(new CoinRefuser());
         DeliveryRouter.FeeDirector memory director =
-            DeliveryRouter.FeeDirector(refuser, router.FIXED_FEE() | router.UNWRAP(), 0.4 ether, 0);
+            DeliveryRouter.FeeDirector(refuser, router.FIXED_FEE() | router.UNWRAP(), 0.4 ether, 0, CALL_GAS);
         uint256 index = _sendBack(IERC20(address(weth)), _withCall(director, address(recorder), hex"01"), 5 ether);
         vm.recordLogs();
         _execute(index);
@@ -589,11 +578,11 @@ contract DeliveryRouterCallTest is MediatorFixture {
 
     // ------------------------------------------------------------------------------------------------ 8. gas tip
 
-    /// Claim: a gas based tip counts the call. Shows: in the harness with 600,000 gas supplied and a stored starting
-    /// gas of 2,000,000, a delivery with a call has the tip (starting gas less the reserve) times the gas price, which
-    /// does not depend on the gas that ran before the measure, and a delivery without a call has a smaller tip by
-    /// exactly the gas that the allowance adds. Matters: the call runs after the tip, so the tip must pay for it.
-    function test_aGasBasedTipCountsTheGasThatTheCallMayUse() public {
+    /// Claim: a gas based tip with a call counts the call gas of the terms. Shows: in the harness, a delivery with a
+    /// call pays a tip larger than the same delivery without one by the call gas, to within 2,000 gas (the longer data
+    /// changes the work before the measure a little). Matters: the call runs after the tip, so the tip must pay for it,
+    /// and the sender's number bounds it.
+    function test_aGasBasedTipCountsTheCallGas() public {
         vm.txGasPrice(10 gwei);
         uint256 startingGas = 2_000_000;
         uint256 supplied = 600_000;
@@ -603,25 +592,13 @@ contract DeliveryRouterCallTest is MediatorFixture {
         (uint256 tipWith, uint256 paidWith) =
             _harnessTip(_withCall(director, address(recorder), hex"01"), 100 ether, supplied, startingGas);
 
-        uint256 overhead = harnessRouter.TOKEN_GAS_OVERHEAD();
-        uint256 reserve = harnessRouter.CALL_GAS_RESERVE();
-        assertEq(tipWith, startingGas - reserve, "the tip with a call is the starting gas less the reserve");
-        // Without a call: tip = startingGas - gasLeft + overhead. The gas left at the measure is below the supplied gas.
-        uint256 gasLeftAtMeasure = startingGas + overhead - tipNone;
-        assertLt(gasLeftAtMeasure, supplied, "the measure runs after the entry");
-        assertGt(gasLeftAtMeasure, supplied - 20_000, "the entry costs less than 20,000 gas");
-        assertEq(
-            tipWith - tipNone,
-            gasLeftAtMeasure - overhead - reserve,
-            "the call adds the gas left at the measure less the overhead and the reserve"
-        );
+        assertApproxEqAbs(tipWith, tipNone + CALL_GAS, 2_000, "the call adds its call gas, give or take the longer data");
         assertEq(paidNone, 100 ether - tipNone * 10 gwei);
         assertEq(paidWith, 100 ether - tipWith * 10 gwei);
     }
 
-    /// Claim: the tip counts the gas that the call may use, not the gas that it used. Shows: a burning target and a
-    /// quiet target give the same tip, equal to the starting gas less the reserve times the gas price. Matters: a
-    /// target cannot change the tip, up or down.
+    /// Claim: the tip counts the gas that the call was given, not the gas that it used. Shows: a burning target and a
+    /// quiet target give the same tip. Matters: a target cannot change the tip, up or down.
     function test_aBurningTargetAndAQuietTargetGiveTheSameTip() public {
         vm.txGasPrice(10 gwei);
         uint256 startingGas = 2_000_000;
@@ -634,25 +611,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
             _harnessTip(_withCall(director, address(burner), hex"01"), 100 ether, 600_000, startingGas);
 
         assertEq(tipBurning, tipQuiet);
-        assertEq(tipBurning, startingGas - harnessRouter.CALL_GAS_RESERVE());
         assertEq(paidBurning, 100 ether - tipBurning * 10 gwei, "the recipient is paid before the burn");
-    }
-
-    /// Claim: when the gas left at the measure is below the overhead and the reserve, the allowance is zero. Shows: with
-    /// 115,000 gas supplied, the tip in gas units is above the starting gas less the reserve by exactly the shortfall
-    /// of the gas left against the held gas (110,000). Matters: the allowance never underflows.
-    function test_aTipWithLittleGasLeftAddsNoAllowance() public {
-        vm.txGasPrice(10 gwei);
-        uint256 supplied = 115_000;
-        DeliveryRouter.FeeDirector memory director = _director(0, 100 ether, 1 ether);
-        (uint256 tipWith,) = _harnessTip(_withCall(director, address(recorder), hex"01"), 100 ether, supplied, supplied);
-
-        uint256 held = harnessRouter.TOKEN_GAS_OVERHEAD() + harnessRouter.CALL_GAS_RESERVE();
-        // With an allowance the tip would be supplied - reserve. With none it is supplied - gasLeft + overhead.
-        assertGt(tipWith, supplied - harnessRouter.CALL_GAS_RESERVE(), "no allowance was added");
-        uint256 gasLeftAtMeasure = supplied + harnessRouter.TOKEN_GAS_OVERHEAD() - tipWith;
-        assertLe(gasLeftAtMeasure, held, "the gas left was below the held gas");
-        assertGt(gasLeftAtMeasure, held - 20_000);
     }
 
     // ------------------------------------------------------------------------------------------------ 9. edges
@@ -720,70 +679,68 @@ contract DeliveryRouterCallTest is MediatorFixture {
         assertEq(recorder.lastCaller(), address(router));
     }
 
-    /// @dev Whether a harness run at `gasSupplied` ends with an attempted call: it succeeded and the call got gas.
-    function _callWasAttempted(bytes memory data, uint256 gasSupplied) internal returns (bool) {
-        (bool succeeded, FailedCall[] memory failures,,) = _probe(data, 100 ether, gasSupplied);
-        if (!succeeded) return false;
-        if (failures.length == 0) return true;
-        return failures[0].gasGiven != 0;
+    /// @dev Calls the harness with exactly `gasSupplied` from a clean state. Returns whether it succeeded, its error, and
+    /// the `CallFailed` events.
+    function _harnessAttempt(bytes memory data, uint256 gasSupplied)
+        internal
+        returns (bool succeeded, bytes memory error, FailedCall[] memory failures)
+    {
+        uint256 snapshot = vm.snapshotState();
+        harnessToken.mint(address(harnessRouter), 100 ether);
+        bytes memory payload = abi.encodeCall(DeliveryRouter.onTokenBridged, (address(harnessToken), 100 ether, data));
+        vm.recordLogs();
+        (succeeded, error) = address(harnessRouter).call{gas: gasSupplied}(payload);
+        failures = _failedCalls(vm.getRecordedLogs(), address(harnessRouter));
+        vm.revertToState(snapshot);
     }
 
-    /// @dev The smallest supplied gas at which the call is attempted. Below it the call has no gas or the frame stops.
-    function _smallestGasThatAttemptsTheCall(bytes memory data) internal returns (uint256) {
-        uint256 low = 40_000;
-        uint256 high = 400_000;
-        assertTrue(_callWasAttempted(data, high), "the upper bound attempts the call");
-        assertFalse(_callWasAttempted(data, low), "the lower bound does not");
-        while (high - low > 1) {
-            uint256 middle = (low + high) / 2;
-            if (_callWasAttempted(data, middle)) high = middle;
-            else low = middle;
-        }
-        return high;
-    }
-
-    /// Claim: with no gas to spare the router skips the call and says so. Shows: at the largest supplied gas below the
-    /// threshold at which a call is attempted that still succeeds, `CallFailed` has `gasGiven` 0, the recorder is not
-    /// called, and the recipient holds the whole value. Matters: the delivery must finish even when the deliverer gave
-    /// too little gas for the call.
-    function test_withNoSpareGasTheCallIsSkippedAndTheDeliveryStands() public {
+    /// Claim: the call never runs with less than its call gas: a callback that cannot give it reverts. Shows: across a
+    /// sweep of the gas of the callback, every run either reverts or calls the target with no `CallFailed`; some runs
+    /// revert with `InsufficientGas`. Matters: the router keeps the rule of the mediator for its own call. Inside the
+    /// callback gas that the mediator guarantees, the shortfall is the sender's (its `callbackGas` is below the router's
+    /// work and the call gas), so the mediator records that revert as `CallbackFailed`: see
+    /// `test_aCallbackGasTooSmallForTheCallGasIsRecordedByTheMediator`.
+    function test_tooLittleGasForTheCallRevertsTheCallback() public {
         bytes memory data = _withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(recorder), hex"01");
-        uint256 threshold = _smallestGasThatAttemptsTheCall(data);
-
-        bool found;
-        for (uint256 step = 1; step <= 400 && !found; step++) {
-            (bool succeeded, FailedCall[] memory failures, uint256 recipientTokens, uint256 recorderCalls) =
-                _probe(data, 100 ether, threshold - step);
-            if (!succeeded) continue;
-            found = true;
-            assertEq(failures.length, 1);
-            assertEq(failures[0].target, address(recorder));
-            assertEq(failures[0].recipient, recipient);
-            assertEq(failures[0].gasGiven, 0, "no gas was given");
-            assertEq(recorderCalls, 0);
-            assertEq(recipientTokens, 100 ether, "the payment stands");
+        bool sawInsufficient;
+        bool sawSuccess;
+        for (uint256 gasSupplied = 150_000; gasSupplied <= 400_000; gasSupplied += 500) {
+            (bool succeeded, bytes memory error, FailedCall[] memory failures) = _harnessAttempt(data, gasSupplied);
+            if (!succeeded) {
+                if (bytes4(error) == ExactGasCall.InsufficientGas.selector) sawInsufficient = true;
+                continue;
+            }
+            sawSuccess = true;
+            assertEq(failures.length, 0, "a run that finishes made the call with its gas");
         }
-        assertTrue(found, "a gas amount exists with a finished delivery and no spare gas");
+        assertTrue(sawInsufficient, "too little gas for the call reverts with InsufficientGas");
+        assertTrue(sawSuccess, "enough gas runs the call");
     }
 
-    /// Claim: the delivery never reverts for want of the gas of the call: every gas amount from the first that lets
-    /// the frame finish upward finishes. Shows: the amount just below the threshold finishes with `gasGiven` 0, and
-    /// the amount at the threshold attempts the call. Matters: the callback must never revert, because a revert
-    /// strands the tokens in the router; a window of amounts that revert would let a deliverer force that.
-    function test_noGasAmountNearTheReserveMakesTheCallbackRevert() public {
+    /// Claim: a `callbackGas` too small for the router's work and its call gas ends, through the real flow of the
+    /// mediator, as `CallbackFailed`, with the tokens in the router for `sweep`. Shows: a relay with a callback gas of
+    /// 150,000 and a call gas of 200,000: the delivery goes through, the mediator emits `CallbackFailed`, the recorder
+    /// is not called, the recipient gets nothing and the router holds the value. Matters: this is the cost of a wrong
+    /// `callbackGas`, which `routerCallbackGas` of the core package exists to prevent.
+    function test_aCallbackGasTooSmallForTheCallGasIsRecordedByTheMediator() public {
         bytes memory data = _withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(recorder), hex"01");
-        uint256 threshold = _smallestGasThatAttemptsTheCall(data);
-
-        (bool succeeded, FailedCall[] memory failures,,) = _probe(data, 100 ether, threshold - 1);
-        assertTrue(succeeded, "the amount below the threshold finishes");
-        assertEq(failures.length, 1);
-        assertEq(failures[0].gasGiven, 0);
-        // Every amount in the window around the threshold finishes. The window is wider than the few gas that
-        // separate two reads of the gas left, so a double read that underflows would show here.
-        for (uint256 gasSupplied = threshold - 1_000; gasSupplied <= threshold + 100; gasSupplied++) {
-            (bool finished,,,) = _probe(data, 100 ether, gasSupplied);
-            assertTrue(finished, "every amount in the window finishes");
+        address copy = _copyOf(address(tokenA));
+        vm.prank(alice);
+        mediatorB.relayTokensAndCall(copy, address(router), 100 ether, data, 150_000);
+        uint256 index = _lastIndexB();
+        vm.recordLogs();
+        _execute(index);
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+        uint256 callbackFailures;
+        for (uint256 i = 0; i < logs.length; i++) {
+            if (logs[i].emitter == address(mediatorA) && logs[i].topics[0] == TokenMediator.CallbackFailed.selector) {
+                callbackFailures++;
+            }
         }
+        assertEq(callbackFailures, 1, "the mediator records the failed callback");
+        assertEq(recorder.calls(), 0, "the call did not run");
+        assertEq(tokenA.balanceOf(recipient), 0, "the recipient got nothing");
+        assertEq(tokenA.balanceOf(address(router)), 100 ether, "the router holds the value for sweep");
     }
 
     /// Claim: a target equal to the mediator fails and moves nothing. Shows: a call to `handleBridgedTokens` on the

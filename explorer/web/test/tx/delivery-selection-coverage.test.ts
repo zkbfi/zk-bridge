@@ -24,6 +24,7 @@ const input = (overrides: Partial<DeliverySelectionInput> = {}): DeliverySelecti
   gasMargin: DEFAULT_GAS_MARGIN,
   destinationName: "PulseChain",
   baseFeeCeilingWei: null,
+  callGas: 0n,
   ...overrides,
 });
 

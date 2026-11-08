@@ -209,6 +209,15 @@ const NeedsYou = ({ row, destinationChainId, destinationName, nativeSymbol, nati
   const gasWei = (cost as { gasCostWei?: bigint } | undefined)?.gasCostWei ?? 10n ** 15n;
   const state = selfDeliveryState({ nativeBalance, estimatedGasWei: gasWei, symbol: nativeSymbol, chainName: destinationName });
   const [tip, setTip] = useState(false);
+  // A failed release is final: the bridge delivered the message and the recipient could not take the tokens. Nobody
+  // can deliver it again, so there is nothing to finish.
+  if (row.status === "release_failed") {
+    return (
+      <p className="zb-small" style={{ margin: "6px 0 0" }}>
+        The recipient could not take the tokens, so the release failed. This is final: the tokens stay in the token mediator on {destinationName}, and the transfer cannot be delivered again.
+      </p>
+    );
+  }
   return (
     <>
       <p className="zb-small" style={{ margin: "6px 0 0", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>

@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20} from "../../../src/mocks/MockERC20.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
-import {MediatorFixture, MockAMB, RecordingReceiver} from "./utils/MediatorSupport.sol";
+import {MediatorFixture, MockAMB, RecordingReceiver, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 
 /// @notice The message forms of a relay with a callback when the sender is also the receiver, so that the sender needs
 /// no separate fallback, and the refusals of a message that the other mediator would never send. Each test sends through
@@ -34,7 +34,7 @@ contract TokenMediatorCallRoutesTest is MediatorFixture {
     /// is also the receiver is its own fallback, so the message carries one address less.
     function test_selfCall_firstMessageDeploysTheCopyAndCallsTheSender() public {
         vm.prank(address(selfReceiver));
-        mediatorA.relayTokensAndCall(address(tokenA), address(selfReceiver), 100 ether, hex"abcd");
+        mediatorA.relayTokensAndCall(address(tokenA), address(selfReceiver), 100 ether, hex"abcd", TEST_CALLBACK_GAS);
         MockAMB.Sent memory message = ambA.messageAt(0);
         assertEq(_selectorOf(message.data), TokenMediator.deployAndHandleBridgedTokensAndCall.selector);
 
@@ -56,12 +56,12 @@ contract TokenMediatorCallRoutesTest is MediatorFixture {
         _teachTheNativeSideThatTheCopyExists();
         uint256 sentBefore = ambA.sentCount();
         vm.prank(address(selfReceiver));
-        mediatorA.relayTokensAndCall(address(tokenA), address(selfReceiver), 7 ether, hex"01");
+        mediatorA.relayTokensAndCall(address(tokenA), address(selfReceiver), 7 ether, hex"01", TEST_CALLBACK_GAS);
         MockAMB.Sent memory message = ambA.messageAt(sentBefore);
         assertEq(
             message.data,
             abi.encodeWithSelector(
-                TokenMediator.handleBridgedTokensAndCall.selector, address(tokenA), address(selfReceiver), 7 ether, hex"01"
+                TokenMediator.handleBridgedTokensAndCall.selector, address(tokenA), address(selfReceiver), 7 ether, hex"01", TEST_CALLBACK_GAS
             )
         );
 
@@ -82,7 +82,7 @@ contract TokenMediatorCallRoutesTest is MediatorFixture {
         selfReceiver.setRefuse(true);
         uint256 sentBefore = ambA.sentCount();
         vm.prank(alice);
-        mediatorA.relayTokensAndCall(address(tokenA), address(selfReceiver), 5 ether, hex"02");
+        mediatorA.relayTokensAndCall(address(tokenA), address(selfReceiver), 5 ether, hex"02", TEST_CALLBACK_GAS);
         MockAMB.Sent memory message = ambA.messageAt(sentBefore);
         assertEq(
             message.data,
@@ -91,7 +91,8 @@ contract TokenMediatorCallRoutesTest is MediatorFixture {
                 address(tokenA),
                 address(selfReceiver),
                 5 ether,
-                hex"02"
+                hex"02",
+                TEST_CALLBACK_GAS
             )
         );
 
@@ -120,13 +121,13 @@ contract TokenMediatorCallRoutesTest is MediatorFixture {
 
         vm.startPrank(address(selfReceiver));
         IERC20(copy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokensAndCall(copy, address(selfReceiver), 20 ether, hex"beef");
+        mediatorB.relayTokensAndCall(copy, address(selfReceiver), 20 ether, hex"beef", TEST_CALLBACK_GAS);
         vm.stopPrank();
         uint256 index = _lastIndexB();
         assertEq(
             ambB.messageAt(index).data,
             abi.encodeWithSelector(
-                TokenMediator.handleNativeTokensAndCall.selector, address(tokenA), address(selfReceiver), 20 ether, hex"beef"
+                TokenMediator.handleNativeTokensAndCall.selector, address(tokenA), address(selfReceiver), 20 ether, hex"beef", TEST_CALLBACK_GAS
             )
         );
 

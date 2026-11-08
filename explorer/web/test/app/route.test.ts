@@ -1,3 +1,4 @@
+import { MAX_CALL_GAS, MAX_CALLBACK_GAS } from "@zk-bridge/shared";
 import { describe, expect, it } from "vitest";
 import { EMPTY_HISTORY_FILTERS } from "../../src/views/history-model";
 import {
@@ -138,7 +139,8 @@ describe("the dialog in the address", () => {
         receiver: ADDRESS,
         mode: "call",
         data: "0xabcd",
-        gasLimit: "300000",
+        callGas: "300000",
+        callbackGas: "350000",
         callTarget: ADDRESS,
         callData: "0x12",
         tip: { mode: "fixed", fixedText: "2", marginPercentText: "15", percentText: "1", gasMultiplierText: "1.2", ceilingGweiText: "40", senderPriceText: "3000", routerText: ADDRESS, payoutNative: true },
@@ -147,7 +149,7 @@ describe("the dialog in the address", () => {
     { ...NO_OVERLAY, dialog: "wrap", bridge: { token: "first:native", amount: "0.25" } },
     { ...NO_OVERLAY, dialog: "bridge", bridge: { tip: { mode: "none" } } },
     { ...NO_OVERLAY, dialog: "message" },
-    { ...NO_OVERLAY, dialog: "message", message: { chain: "second", target: ADDRESS, data: "0x", gas: "250000" } },
+    { ...NO_OVERLAY, dialog: "message", message: { chain: "second", target: ADDRESS, data: "0x" } },
   ];
 
   it.each(overlays.map((overlay) => [formatLocation({ route: { name: "pair", pairId: "eth-pls", token: null }, overlay }), overlay] as const))(
@@ -167,24 +169,31 @@ describe("the dialog in the address", () => {
   });
 
   it("reads a form's fields only for its own dialog", () => {
-    expect(parseOverlay("#/?dialog=message&bridge.amount=5&msg.gas=1")).toEqual({ ...NO_OVERLAY, dialog: "message", message: { gas: "1" } });
+    expect(parseOverlay("#/?dialog=message&bridge.amount=5&msg.target=0x12&msg.gas=1")).toEqual({ ...NO_OVERLAY, dialog: "message", message: { target: "0x12" } });
     expect(parseOverlay("#/?bridge.amount=5")).toEqual(NO_OVERLAY);
     expect(parseOverlay("#/?dialog=wallet-drain")).toEqual(NO_OVERLAY);
   });
 
   it("drops every field of the wrong shape, so a crafted link cannot prefill garbage", () => {
-    const hash = "#/?dialog=bridge&bridge.token=first:evil&bridge.amount=1e18&bridge.receiver=attacker&bridge.mode=drain&bridge.data=zz&bridge.gas=-1"
+    const hash = "#/?dialog=bridge&bridge.token=first:evil&bridge.amount=1e18&bridge.receiver=attacker&bridge.mode=drain&bridge.data=zz&bridge.callGas=-1&bridge.callbackGas=1.5"
       + "&bridge.callTarget=0x12345678901234567890123456789012345678901&tip.mode=all&tip.router=nope&tip.native=yes";
     expect(parseOverlay(hash)).toEqual({ ...NO_OVERLAY, dialog: "bridge" });
     expect(parseOverlay(`#/?dialog=bridge&bridge.data=0x${"a".repeat(30_000)}`)).toEqual({ ...NO_OVERLAY, dialog: "bridge" });
+  });
+
+  it("drops a linked call gas or callback gas above what a delivery can carry, and keeps one at the cap", () => {
+    const over = `#/?dialog=bridge&bridge.callGas=${MAX_CALL_GAS + 1n}&bridge.callbackGas=${MAX_CALLBACK_GAS + 1n}`;
+    expect(parseOverlay(over)).toEqual({ ...NO_OVERLAY, dialog: "bridge" });
+    const at = `#/?dialog=bridge&bridge.callGas=${MAX_CALL_GAS}&bridge.callbackGas=${MAX_CALLBACK_GAS}`;
+    expect(parseOverlay(at)).toEqual({ ...NO_OVERLAY, dialog: "bridge", bridge: { callGas: String(MAX_CALL_GAS), callbackGas: String(MAX_CALLBACK_GAS) } });
   });
 
   it("names every field a link filled in that moves or spends funds, and not the user's own account", () => {
     const overlay: Overlay = { ...NO_OVERLAY, dialog: "bridge", bridge: { amount: "1", receiver: ADDRESS, callTarget: ADDRESS, callData: "0x1", data: "0x2", tip: { routerText: ADDRESS } } };
     expect(linkedFields(overlay, null)).toEqual(["amount", "receiver", "call target", "call data", "data for the receiver", "relay router"]);
     expect(linkedFields(overlay, ADDRESS.toLowerCase())).not.toContain("receiver");
-    expect(linkedFields({ ...NO_OVERLAY, dialog: "message", message: { target: ADDRESS, data: "0x1", gas: "9" } }, null)).toEqual(["target contract", "message data", "gas for the call"]);
-    expect(linkedFields({ ...NO_OVERLAY, dialog: "bridge", bridge: { token: "first:native", gasLimit: "9", mode: "call" } }, null)).toEqual(["token", "kind of transfer", "gas for the call"]);
+    expect(linkedFields({ ...NO_OVERLAY, dialog: "message", message: { target: ADDRESS, data: "0x1" } }, null)).toEqual(["target contract", "message data"]);
+    expect(linkedFields({ ...NO_OVERLAY, dialog: "bridge", bridge: { token: "first:native", callGas: "9", callbackGas: "8", mode: "call" } }, null)).toEqual(["token", "kind of transfer", "gas for the call", "gas for the callback"]);
     expect(linkedFields({ ...NO_OVERLAY, dialog: "bridge", bridge: {} }, null)).toEqual([]);
   });
 

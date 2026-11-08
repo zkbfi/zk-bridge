@@ -17,7 +17,7 @@ verified_release: 0.1.2-next.14
 - A transfer is `waiting_for_finality` for much longer than the finality window (768 s from Ethereum or Sepolia, 640 s from PulseChain or PulseChain testnet v4), so it needs a proof first.
 - The transfer was sent with the **Yourself** delivery choice (no fee, no bot).
 
-Check the status first with `check-transfer-status`. Do not use this for `delivered`, `failed_call` or `release_failed`: those are final.
+Check the status first with `check-transfer-status`. Do not use this for `delivered` or `release_failed`: those are final.
 
 ## Preconditions
 

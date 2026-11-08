@@ -42,7 +42,7 @@ export type DeliverySummary = { readonly short: string; readonly text: string; r
 
 const shortAddress = (address: string): string => (/^0x[0-9a-fA-F]{40}$/.test(address) ? `${address.slice(0, 4)}…${address.slice(-2)}` : address);
 
-const gasLimitText = (text: string): string => {
+const callGasText = (text: string): string => {
   const trimmed = text.trim();
   return /^\d+$/.test(trimmed) ? BigInt(trimmed).toLocaleString("en-US") : trimmed;
 };
@@ -50,7 +50,7 @@ const gasLimitText = (text: string): string => {
 /**
  * What the delivery pill says (owner, quote 88): the arrangement in plain words, from the actual settings and numbers.
  * "Deliver for 0.39%, max $0.39", "Deliver for ~0.39%, max $0.60" (the fee follows gas), "Deliver for 0.50 USDC",
- * "You deliver it yourself on PulseChain"; then a call, a router or a gas limit that is set.
+ * "You deliver it yourself on PulseChain"; then a call (with its call gas), or a router that is set.
  *
  * @param form The bridge form.
  * @param facts The destination and the fee's numbers.
@@ -74,12 +74,11 @@ export const deliverySummary = (form: BridgeQuery, facts: DeliveryFacts): Delive
           : `Deliver for ${share ?? "a share of the amount"}${amount === null ? "" : `, max ${amount}`}`;
   const call = form.callTarget !== undefined && form.callTarget !== "" ? form.callTarget : null;
   const router = tip.routerText !== undefined && tip.routerText.trim() !== "" ? tip.routerText.trim() : null;
-  const gasLimit = form.gasLimit !== undefined && form.gasLimit.trim() !== "" ? form.gasLimit : null;
+  const callGas = call !== null && form.callGas !== undefined && form.callGas.trim() !== "" ? form.callGas : null;
   const sentence = (address: (text: string) => string): string =>
     [
-      `${main}${call === null ? "" : `, then calls ${address(call)}`}`,
+      `${main}${call === null ? "" : `, then calls ${address(call)}${callGas === null ? "" : ` with ${callGasText(callGas)} gas`}`}`,
       ...(router === null ? [] : [`via router ${address(router)}`]),
-      ...(gasLimit === null ? [] : [`gas limit ${gasLimitText(gasLimit)}`]),
     ].join(" · ");
   // Owner: "this shit in the ui is still too wordy. just tell the user what is happening: \"Deliver for a share ~16 min + light
   // client 14 h behind\" they do not need to know why. give them hard numbers. clicking in helps them figure out why".
@@ -131,28 +130,32 @@ export type DeliveryMenuProps = {
   readonly breakdown: readonly { readonly label: string; readonly value: string; readonly total?: boolean }[];
   /** A line under the values, such as what happens left of the break-even tick. */
   readonly note: string | null;
-  /** The gas limit, in the Advanced fold. */
-  readonly gasLimit: FeeSlider;
+  /**
+   * The callback gas that the relay passes, worked out from the call gas, or null when there is no call or no call gas
+   * yet. It is shown read only: the page sets it.
+   */
+  readonly callbackGas: bigint | null;
 };
 
 /**
  * The one delivery menu (owner, quote 98: one layer, "a tighter summary of actions"): who delivers, that mode's value,
- * the gas level, both caps, what the fee covers, then an Advanced fold with the gas limit, the relay router and a call
- * after delivery. Every value is a slider with a recommended tick, an exact input, a reset and an undo (owner, quote
+ * the gas level, both caps, what the fee covers, then an Advanced fold with the relay router and a call
+ * after delivery (with the exact gas the call gets). Every value is a slider with a recommended tick, an exact input, a reset and an undo (owner, quote
  * 90); every choice writes the address.
  *
  * @param props The form, the default router, the controls and the handlers.
  */
-export const DeliveryMenu = ({ form, defaultRouter, onChange, tipChoice, onTipChoice, value, gas, caps, breakdown, note, gasLimit }: DeliveryMenuProps) => {
+export const DeliveryMenu = ({ form, defaultRouter, onChange, tipChoice, onTipChoice, value, gas, caps, breakdown, note, callbackGas }: DeliveryMenuProps) => {
   const tip: TipQuery = form.tip ?? {};
-  const [advanced, setAdvanced] = useState(form.gasLimit !== undefined || tip.routerText !== undefined || form.callTarget !== undefined);
+  const [advanced, setAdvanced] = useState(form.callGas !== undefined || tip.routerText !== undefined || form.callTarget !== undefined);
   const control = (slider: FeeSlider) => (
     <div key={slider.label} className="zb-menu-control">
       <FeeControl slider={slider} />
     </div>
   );
   // The router calls this contract after it pays the recipient (the call after delivery); no target, no call.
-  const writeCall = (target: string | undefined, data: string | undefined): void => onChange({ ...form, callTarget: target, callData: target === undefined ? undefined : data });
+  const writeCall = (target: string | undefined, data: string | undefined): void =>
+    onChange({ ...form, callTarget: target, callData: target === undefined ? undefined : data, ...(target === undefined ? { callGas: undefined } : {}) });
   return (
     <div className="zb-delivery-menu" role="group" aria-label="Delivery settings">
       <Segments label="Who delivers" value={tipChoice} options={TIP_CHOICES} onChange={onTipChoice} stacked />
@@ -176,7 +179,6 @@ export const DeliveryMenu = ({ form, defaultRouter, onChange, tipChoice, onTipCh
       </button>
       {advanced ? (
         <div className="zb-menu-advanced">
-          {control(gasLimit)}
           <label className="zb-menu-row">
             <span>Relay router</span>
             <input className="zb-menu-field zb-mono" spellCheck={false} placeholder={defaultRouter ?? "default"} value={tip.routerText ?? ""} onChange={(event) => onChange({ ...form, tip: { ...tip, routerText: event.target.value === "" ? undefined : event.target.value } })} />
@@ -190,6 +192,26 @@ export const DeliveryMenu = ({ form, defaultRouter, onChange, tipChoice, onTipCh
               <span>Call data</span>
               <input className="zb-menu-field zb-mono" spellCheck={false} placeholder="0x" value={form.callData ?? ""} onChange={(event) => writeCall(form.callTarget, event.target.value === "" ? undefined : event.target.value)} />
             </label>
+          )}
+          {form.callTarget === undefined ? null : (
+            <label className="zb-menu-row">
+              <span>Call gas</span>
+              <input
+                className="zb-menu-field zb-mono"
+                inputMode="numeric"
+                autoComplete="off"
+                placeholder="the exact gas the call gets"
+                aria-label="Call gas"
+                value={form.callGas ?? ""}
+                onChange={(event) => onChange({ ...form, callGas: event.target.value === "" ? undefined : event.target.value })}
+              />
+            </label>
+          )}
+          {callbackGas === null ? null : (
+            <div className="zb-menu-row" data-testid="callback-gas">
+              <span>Callback gas</span>
+              <span className="zb-mono">{callbackGas.toLocaleString("en-US")} (set for you: the call gas plus the router's own work)</span>
+            </div>
           )}
         </div>
       ) : null}

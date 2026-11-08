@@ -12,10 +12,9 @@ import { decideDelivery, valueFeeInWei } from "../../src/runner/fee.ts";
 import type { PrerequisiteLedger } from "../../src/runner/prerequisite-ledger.ts";
 import {
   DELIVERY_ROUTER,
-  FEED_REQUIRED_GAS,
   MULTICALL,
   REWARD_ADDRESS,
-  TEST_PROOF_CHECK_GAS,
+  TEST_DELIVERY_GAS_FALLBACK,
   WRAPPED_NATIVE,
   BRIDGE,
   address,
@@ -34,7 +33,7 @@ import {
   word,
 } from "../support/builders.ts";
 
-const DIRECTOR = { recipient: REWARD_ADDRESS, settings: 1n, limit: 10n ** 18n, multiplier: 0n };
+const DIRECTOR = { recipient: REWARD_ADDRESS, settings: 1n, limit: 10n ** 18n, multiplier: 0n, callGas: 0n };
 
 function ledger(): PrerequisiteLedger & { losses: bigint[] } {
   const losses: bigint[] = [];
@@ -74,7 +73,7 @@ function dependencies(overrides: Partial<DeliveryDependencies> = {}): DeliveryDe
       maximumLossPercent: 20,
       deliverWithoutOffer: false,
       tokenValuationsWei: {},
-      proofCheckGas: TEST_PROOF_CHECK_GAS,
+      deliveryGasFallback: TEST_DELIVERY_GAS_FALLBACK,
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: 300_000n,
       maximumPrerequisiteSpendPerSweepWei: 10n ** 18n,
@@ -199,7 +198,7 @@ describe("red team: delivery decisions of the runner", () => {
     // the source chain carries the real message, whose data is empty (no tip).
     const item = feedItem({ id: 1, token: WRAPPED_NATIVE });
     const lie = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: WRAPPED_NATIVE });
-    const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, gasLimit: Number(item.gasLimit) } };
+    const evidence = { ...evidenceFor(), message: { ...evidenceFor().message } };
     const deps = dependencies({ indexer: fakeIndexer([item], { [item.messageId]: lie }), prover: fakeProver({ evidence: () => evidence }) });
     const preparation = await prepareItem(deps, item, ledger());
     expect(evidence.message.data).toBe("0x");
@@ -207,21 +206,12 @@ describe("red team: delivery decisions of the runner", () => {
     expect(deps.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(0);
   });
 
-  it("ATTACK lying indexer: a gas limit that is not the proven one is skipped (BLOCKED, was B-1)", async () => {
-    const item = feedItem({ id: 1, token: WRAPPED_NATIVE });
-    const offer = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: WRAPPED_NATIVE });
-    const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data: offer, gasLimit: Number(item.gasLimit) + 1 } };
-    const deps = dependencies({ indexer: fakeIndexer([item], { [item.messageId]: offer }), prover: fakeProver({ evidence: () => evidence }) });
-    const preparation = await prepareItem(deps, item, ledger());
-    expect(preparation).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "indexer-disagrees-with-evidence" } });
-  });
-
   it("ATTACK lying indexer: a valued destination token that the message does not release is skipped before pricing (BLOCKED, follow-up of B-1)", async () => {
     // The message releases a worthless token native on the destination; the indexer names a token with a valuation.
     const valued = address(0x66);
     const item = feedItem({ id: 1, token: valued });
     const data = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: address(0x44) });
-    const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data, gasLimit: Number(item.gasLimit) } };
+    const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data } };
     const deps = dependencies({
       indexer: fakeIndexer([item], { [item.messageId]: data }),
       prover: fakeProver({ evidence: () => evidence }),
@@ -238,7 +228,7 @@ describe("red team: delivery decisions of the runner", () => {
     const data = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: address(0x55), handler: "bridged" });
     const run = async (token: typeof valued) => {
       const item = feedItem({ id: 1, token });
-      const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data, gasLimit: Number(item.gasLimit) } };
+      const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data } };
       const deps = dependencies({
         indexer: fakeIndexer([item], { [item.messageId]: data }),
         prover: fakeProver({ evidence: () => evidence }),
@@ -268,7 +258,7 @@ describe("red team: delivery decisions of the runner", () => {
   it("ATTACK evidence for another message is skipped before any gas is spent (BLOCKED, was B-2)", async () => {
     const item = feedItem({ id: 7, token: WRAPPED_NATIVE });
     const offer = feeOfferData({ director: DIRECTOR, value: 10n ** 18n, token: WRAPPED_NATIVE });
-    const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data: offer, gasLimit: Number(item.gasLimit) } }; // names message word(1), not word(7)
+    const evidence = { ...evidenceFor(), message: { ...evidenceFor().message, data: offer } }; // names message word(1), not word(7)
     const deps = dependencies({ indexer: fakeIndexer([item], { [item.messageId]: offer }), prover: fakeProver({ evidence: () => evidence }) });
     const preparation = await prepareItem(deps, item, ledger());
     expect(evidence.message.messageId).not.toBe(item.messageId);
@@ -295,8 +285,7 @@ describe("red team: delivery decisions of the runner", () => {
       messageId: word(1),
       offer: { kind: "offer", director: DIRECTOR, value: 1000n, call: null },
       proof: decoded.args[0],
-      requiredGas: FEED_REQUIRED_GAS,
-      assumedGas: 300_000n,
+        assumedGas: 300_000n,
       prerequisiteCostWei: 0n,
     };
     const report = await sendBatch(deps, ledger(), { readies: [ready], update: null });
@@ -320,8 +309,7 @@ describe("red team: delivery decisions of the runner", () => {
         messageId: word(id),
         offer: { kind: "offer", director: DIRECTOR, value: 1000n, call: null },
         proof: decoded.args[0],
-        requiredGas: FEED_REQUIRED_GAS,
-        assumedGas: 300_000n,
+            assumedGas: 300_000n,
         prerequisiteCostWei: 0n,
       };
     });
@@ -350,7 +338,7 @@ describe("red team: tip accounting", () => {
     const deps = dependencies({ settings: { ...dependencies().settings, tokenValuationsWei: { [token.toLowerCase()]: 10n ** 18n } } });
     deps.chain.feeTokens = 10n ** 17n;
     const item = feedItem({ id: 1, token, decimals: 0 });
-    const quoted = await quoteFee(deps, item, { kind: "offer", director: DIRECTOR, value: 1000n, call: null }, 300_000n, 300_000n);
+    const quoted = await quoteFee(deps, item, { kind: "offer", director: DIRECTOR, value: 1000n, call: null }, 300_000n);
     expect(quoted).toMatchObject({ ok: true, feeWei: 10n ** 17n });
     // valueFeeInWei itself trusts the decimals that it is given.
     expect(valueFeeInWei({ fee: 1n, token, director: DIRECTOR, wrappedNative: WRAPPED_NATIVE, valuationsWei: { [token.toLowerCase()]: 10n ** 18n }, decimals: 0 })).toEqual({ ok: true, wei: 10n ** 18n });

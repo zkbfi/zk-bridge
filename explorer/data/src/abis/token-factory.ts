@@ -136,6 +136,17 @@ export const tokenFactoryAbi = [
   },
   {
     "type": "error",
+    "name": "HomeChainNameTooLong",
+    "inputs": [
+      {
+        "name": "length",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "NotMediator",
     "inputs": [
       {

@@ -12,7 +12,7 @@ The full relayer used to run on this network. It posted the updates, opened the 
 |---|---|
 | `chain-a` | An Anvil chain with identifier 1 and the `cancun` hardfork. RPC on `http://127.0.0.1:28545`. |
 | `chain-b` | An Anvil chain with identifier 369 and the `shanghai` hardfork. RPC on `http://127.0.0.1:28546`. |
-| `deploy` | A one-shot job. It deploys the wrapped native tokens, the test tokens, the oracle verifiers, and on each chain the light client, the gate, the message bridge, the token mediator (with its token factory) and the native coin router. |
+| `deploy` | A one-shot job. It deploys the wrapped native tokens, the test tokens, the oracle verifiers, and on each chain the light client, the gate, the libraries of the bridge and of the mediator, the message bridge, the token factory, the token mediator and the native coin router. |
 
 Both chains mine one block every 2 seconds. They use the standard Anvil mnemonic. The ports bind to localhost only. They differ from the ports of the tests (18545 and 18546), so both can run together.
 

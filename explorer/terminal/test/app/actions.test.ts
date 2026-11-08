@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { buildBridgeSteps, deliveryRouterOf, relayGasFactsOf, type BridgeContext } from '../../src/app/actions'
+import { buildBridgeSteps, buildMessageSteps, deliveryRouterOf, type BridgeContext } from '../../src/app/actions'
 import type { ChainSnapshotResult } from '../../src/chain/live-reads'
 import { createFixtureChainAccess } from '../../src/chain/fixture-chain-access'
 import { FIXTURE_ACCOUNT, FIXTURE_NOW, FIXTURE_PAIR, FIXTURE_TOKENS, buildFixtureDeliveryCost } from '../../src/data/fixtures'
 import { PlanInputError } from '../../src/tx/plan'
+import { FIXED_FEE, MAX_CALLBACK_GAS, encodeFeeDirector, routerCallbackGas } from '@zk-bridge/shared'
 
 const usdc = FIXTURE_TOKENS[0]!
 const zkUsdc = FIXTURE_TOKENS[1]!
@@ -68,69 +69,62 @@ describe('deliveryRouterOf', () => {
   })
 })
 
-describe('relayGasFactsOf', () => {
-  const acknowledged = { kind: 'acknowledged' } as const
-  const unacknowledged = { kind: 'unacknowledged', nameAndSymbolBytes: 8 } as const
-  const copy = { kind: 'copy' } as const
+describe('the callback gas of a relay with a call', () => {
+  const callValues = { ...values, mode: 'call', data: '0xdeadbeef' }
 
-  /** Sets the relay gas of the position of one token on every loaded snapshot of one side. */
-  function withRelayGas(snapshots: readonly ChainSnapshotResult[], side: 'first' | 'second', token: string, relayGas: (typeof unacknowledged) | (typeof copy)) {
-    return snapshots.map((result) =>
-      result.status === 'ok' && result.snapshot.chain.side === side
-        ? {
-            ...result,
-            snapshot: {
-              ...result.snapshot,
-              positions: result.snapshot.positions.map((position) => (position.token.address === token ? { ...position, relayGas } : position)),
-            },
-          }
-        : result,
-    )
+  test('a receiver that is not a router needs a callback gas, and the plan carries it as the last argument', async () => {
+    const context = await contextOf()
+    expect(() => buildBridgeSteps(callValues, FIXTURE_TOKENS, context)).toThrow(/Enter the callback gas/)
+    const steps = buildBridgeSteps({ ...callValues, callbackGas: ' 350000 ' }, FIXTURE_TOKENS, context)
+    expect(steps.at(-1)!.plan.arguments.at(-1)).toMatchObject({ name: 'callbackGas', value: '350000' })
+  })
+
+  test('a callback gas that is zero or not a whole number is refused with a sentence', async () => {
+    const context = await contextOf()
+    for (const callbackGas of ['0', '-1', '1.5', 'abc']) {
+      expect(() => buildBridgeSteps({ ...callValues, callbackGas }, FIXTURE_TOKENS, context)).toThrow(new PlanInputError('The callback gas must be a whole number above zero.'))
+    }
+  })
+
+  /** A direct relay to the delivery router of the deployment, with terms that ask for a call of `callGas`. */
+  const routerCallValues = (callGas: bigint) => {
+    const router = FIXTURE_PAIR.second.contracts.deliveryRouter!
+    const director = { recipient: receiver as `0x${string}`, settings: FIXED_FEE, limit: 1n, multiplier: 0n, callGas }
+    const context = { router, protectedAddresses: [], destinationToken: null, destinationWrappedNative: null }
+    const data = encodeFeeDirector(director, context, { target: '0x00000000000000000000000000000000000000c1', data: '0x' })
+    return { ...values, receiver: router, mode: 'call', data }
   }
 
-  test('the native coin route is a release, the lowest minimum, because it moves no token the mediator must name', async () => {
+  test('a direct relay to the router of the deployment refuses a typed callback gas below what the terms need', async () => {
     const context = await contextOf()
-    expect(relayGasFactsOf({ token: 'first:native' }, FIXTURE_TOKENS, context)).toEqual(acknowledged)
+    const needed = routerCallbackGas({ callGas: 200_000n })
+    expect(() => buildBridgeSteps({ ...routerCallValues(200_000n), callbackGas: String(needed - 1n) }, FIXTURE_TOKENS, context)).toThrow(
+      new PlanInputError(`The callback gas is too low for the router. It needs at least ${needed}: the router's own work and the gas of the call.`),
+    )
+    const exact = buildBridgeSteps({ ...routerCallValues(200_000n), callbackGas: String(needed) }, FIXTURE_TOKENS, context)
+    expect(exact.at(-1)!.plan.arguments.at(-1)).toMatchObject({ name: 'callbackGas', value: String(needed) })
+    const derived = buildBridgeSteps(routerCallValues(200_000n), FIXTURE_TOKENS, context)
+    expect(derived.at(-1)!.plan.arguments.at(-1)).toMatchObject({ name: 'callbackGas', value: String(needed) })
   })
 
-  test('a token with no loaded snapshot for its side is a release, so the form never invents a higher minimum', async () => {
-    const loaded = (await contextOf()).snapshots!
-    const onlySecond = loaded.filter((result) => result.status === 'ok' && result.snapshot.chain.side === 'second')
-    const context = await contextOf({ snapshots: onlySecond })
-    expect(relayGasFactsOf(values, FIXTURE_TOKENS, context)).toEqual(acknowledged)
-    expect(relayGasFactsOf(values, FIXTURE_TOKENS, await contextOf({ snapshots: null }))).toEqual(acknowledged)
+  test('a callback gas above the most a delivery can carry is refused, for any receiver', async () => {
+    const context = await contextOf()
+    expect(() => buildBridgeSteps({ ...callValues, callbackGas: String(MAX_CALLBACK_GAS + 1n) }, FIXTURE_TOKENS, context)).toThrow(
+      new PlanInputError(`The callback gas is above ${MAX_CALLBACK_GAS}, the most that a delivery can carry.`),
+    )
   })
 
-  test('a snapshot with a status other than ok is a release, because a failed read carries no facts to trust', async () => {
-    const loaded = (await contextOf()).snapshots!
-    const marked = withRelayGas(loaded, 'first', usdc.address, copy)
-    const second = marked.filter((result) => result.status === 'ok' && result.snapshot.chain.side === 'second')
-    const failed: ChainSnapshotResult = { status: 'error', chain: FIXTURE_PAIR.first, message: 'down' }
-    const context = await contextOf({ snapshots: [failed, ...second] })
-    expect(relayGasFactsOf(values, FIXTURE_TOKENS, context)).toEqual(acknowledged)
+  test('a plain relay has no gas number, and the form values carry none into the plan', async () => {
+    const context = await contextOf()
+    const steps = buildBridgeSteps({ ...values, callbackGas: '350000' }, FIXTURE_TOKENS, context)
+    expect(steps.at(-1)!.plan.arguments.map((argument) => argument.name)).toEqual(['token', 'receiver', 'value'])
   })
+})
 
-  test('a loaded snapshot without a position for the token is a release, because nothing was read for that token', async () => {
-    const loaded = (await contextOf()).snapshots!
-    const withoutPositions = loaded.map((result) => (result.status === 'ok' ? { ...result, snapshot: { ...result.snapshot, positions: [] } } : result))
-    const context = await contextOf({ snapshots: withoutPositions })
-    expect(relayGasFactsOf(values, FIXTURE_TOKENS, context)).toEqual(acknowledged)
-  })
-
-  test('a loaded position gives its own relay gas, so the minimum of the gas limit follows what the mediator said', async () => {
-    const loaded = (await contextOf()).snapshots!
-    const unnamed = await contextOf({ snapshots: withRelayGas(loaded, 'first', usdc.address, unacknowledged) })
-    expect(relayGasFactsOf(values, FIXTURE_TOKENS, unnamed)).toEqual(unacknowledged)
-    const copied = await contextOf({ snapshots: withRelayGas(loaded, 'first', usdc.address, copy) })
-    expect(relayGasFactsOf(values, FIXTURE_TOKENS, copied)).toEqual(copy)
-  })
-
-  test('the snapshot of the other side is not used, because the same facts on the wrong chain would set the wrong minimum', async () => {
-    const loaded = (await contextOf()).snapshots!
-    const otherSideOnly = withRelayGas(loaded, 'second', zkUsdc.address, copy)
-    const context = await contextOf({ snapshots: otherSideOnly })
-    expect(relayGasFactsOf(values, FIXTURE_TOKENS, context)).toEqual(acknowledged)
-    const own = withRelayGas(otherSideOnly, 'first', usdc.address, unacknowledged)
-    expect(relayGasFactsOf(values, FIXTURE_TOKENS, await contextOf({ snapshots: own }))).toEqual(unacknowledged)
+describe('buildMessageSteps', () => {
+  test('sends the message with no gas number: the bridge ignores it', () => {
+    const steps = buildMessageSteps({ chain: 'first', target: receiver, data: '0x1234' }, FIXTURE_PAIR)
+    expect(steps).toHaveLength(1)
+    expect(steps[0]!.plan.arguments.find((argument) => argument.name === 'gas')?.value).toBe('0')
   })
 })

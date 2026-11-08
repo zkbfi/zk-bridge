@@ -78,7 +78,6 @@ contract HistoricalAncestryTest is MessageScenes {
         vm.chainId(CHAIN_B);
         return new MessageBridge(
             address(lightClientForB),
-            CHAIN_B,
             CHAIN_A,
             MessageFixtures.REMOTE_BRIDGE,
             MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max),

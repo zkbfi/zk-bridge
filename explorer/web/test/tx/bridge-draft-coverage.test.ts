@@ -8,7 +8,7 @@ import { buildDeliveryReport, buildFixtureContext } from "../helpers";
 
 const usdc = FIXTURE_TOKENS[0]!;
 const receiver = getAddress(`0x${"cd".repeat(20)}`);
-const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => ({ token: `first:${usdc.address}`, amount: "100", receiver, mode: "plain", data: "", gasLimit: "", ...overrides });
+const values = (overrides: Partial<BridgeFormValues> = {}): BridgeFormValues => ({ token: `first:${usdc.address}`, amount: "100", receiver, mode: "plain", data: "", callGas: "", callbackGas: "", ...overrides });
 /** The percentage mode: these tests read the percentage rules. The default mode is the gas based mode. */
 const PERCENT: DeliveryOptions = { ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage" };
 const options = (overrides: Partial<DeliveryOptions> = {}): DeliveryOptions => ({ ...PERCENT, ...overrides });

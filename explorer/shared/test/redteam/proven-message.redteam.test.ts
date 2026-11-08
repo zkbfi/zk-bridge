@@ -329,7 +329,7 @@ const evidence = (calldata: Hex, changes: Record<string, unknown> = {}): string 
     route: "ethereum_to_pulsechain",
     sourceTransactionHash: proven.sourceTransactionHash,
     logIndex: 0,
-    message: { messageId: proven.messageId, sender: proven.sender, executor: proven.executor, gasLimit: Number(proven.gasLimit), dataType: 0, data: "0xabcdef", sourceBlockNumber: 15, sourceBlockHash: word("d"), sourceSlot: 14_099_000 },
+    message: { messageId: proven.messageId, sender: proven.sender, executor: proven.executor, gasLimit: 0, dataType: 0, data: "0xabcdef", sourceBlockNumber: 15, sourceBlockHash: word("d"), sourceSlot: 14_099_000 },
     destination: { chainId: 369, bridge, lightClient },
     anchor: { slot: 14_100_000, root: word("e") },
     deliveryStatus: "notDelivered",

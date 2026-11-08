@@ -25,7 +25,7 @@ const token = addressOf("33");
 
 const send = (executor: string, data: `0x${string}`, id = messageId) =>
   encodeAmbMessage({
-    header: { messageId: id, sender, executor: executor as `0x${string}`, gasLimit: 250_000, dataType: 0, sourceChainId: 1n, destinationChainId: 369n },
+    header: { messageId: id, sender, executor: executor as `0x${string}`, reservedGas: 0, dataType: 0, sourceChainId: 1n, destinationChainId: 369n },
     data,
   });
 
@@ -87,7 +87,7 @@ describe("MessageBridge:UserRequestForAffirmation", () => {
     const data = encodeFunctionData({
       abi: tokenMediatorAbi,
       functionName: "handleBridgedTokensAndCall",
-      args: [token, recipient, 42n, "0xc0ffee"],
+      args: [token, recipient, 42n, "0xc0ffee", 400_000n],
     });
     await callHandler(name, { event: createEvent({ messageId, encodedData: send(MEDIATOR_ON_PULSECHAIN, data) }), context });
     expect(database.row(transfers, { messageId })).toMatchObject({ hasCallback: true, handler: "handleBridgedTokensAndCall" });
@@ -132,17 +132,9 @@ describe("MessageBridge:AffirmationCompleted", () => {
       deliveredTransactionHash: hashOf("aa"),
       deliveredBlockNumber: 100n,
       deliveredTimestamp: 1_000n,
-      deliveredSuccess: true,
       executedBy: addressOf("f0"),
     });
     expect(database.rows(transactionCosts)).toEqual([expect.objectContaining({ chainId: 369, transactionHash: hashOf("aa"), costWei: 63_000n })]);
-  });
-
-  it("marks a reverted call as a failed call", async () => {
-    const fixture = createContext(369);
-    fixture.client.getTransactionReceipt.mockResolvedValue({ logs: [completed] });
-    await callHandler(name, { event: createEvent({ messageId, status: false }), context: fixture.context });
-    expect(fixture.database.row(messages, { messageId })).toMatchObject({ status: "failed_call", deliveredSuccess: false });
   });
 
   it("reads the receipt of the transaction and stores the gas of a single delivery", async () => {

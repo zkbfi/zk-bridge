@@ -82,6 +82,15 @@ describe("the Activity screen", () => {
     expect(screen.getByRole("link", { name: /Deliver it yourself/ })).toBeInTheDocument();
   });
 
+  it("says that a failed release is final and offers no delivery for it", async () => {
+    window.history.replaceState(null, "", "#/activity");
+    const base = buildTestServices();
+    const failed = [item({ id: `0x${"04".repeat(32)}`, status: "release_failed", sentAt: NOW - 3600 })];
+    renderWithWallet(<Shell />, { wallet: connectedWallet(), services: { dataSource: { ...base.dataSource, getFeed: async () => ({ items: failed, hasMore: false }) } } });
+    await waitFor(() => expect(screen.getByText(/the release failed\. This is final/)).toBeInTheDocument());
+    expect(screen.queryByRole("link", { name: /Deliver it yourself/ })).toBeNull();
+  });
+
   it("opens a delivered row in place to the joined steps with explorer links, and Bridge again", async () => {
     renderActivity();
     const row = await screen.findByRole("button", { expanded: false, name: /ago/ });

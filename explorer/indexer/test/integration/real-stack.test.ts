@@ -64,7 +64,6 @@ type Feed = {
     status: string;
     sender: string;
     executor: string;
-    gasLimit: number;
     direction: { label: string };
     sent: { blockNumber: number } | null;
     transfer: null | {
@@ -228,7 +227,6 @@ describe("the indexer follows the real contracts of the local stack", () => {
       executor: b.mediator.toLowerCase(),
     });
     expect(item.sent?.blockNumber).toBe(sends.relayA?.block);
-    expect(item.gasLimit).toBeGreaterThan(0);
     expect(item.transfer).toMatchObject({
       value: (5n * PRICE_ONE).toString(),
       sender: (chainA.accounts[0] as string).toLowerCase(),
@@ -264,7 +262,6 @@ describe("the indexer follows the real contracts of the local stack", () => {
       kind: "message",
       sender: (chainA.accounts[2] as string).toLowerCase(),
       executor: target.toLowerCase(),
-      gasLimit: 200_000,
       transfer: null,
     });
   });

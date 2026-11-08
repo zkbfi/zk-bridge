@@ -784,7 +784,7 @@ A deposit on chain X at beacon slot `s` is paid by the vault on chain Y, which r
 
 The contracts need no administrator, and the repository has no relayer. A stateful server of the operator does the steps below. It runs the producer (`zk-bridge-prover prove` and `evidence`) for the parts that make proofs or evidence, and it sends every transaction itself. The key of the server pays for them. Anyone can open a bridge and deliver a message.
 
-1. **Deploy** with `script/hardened/DeployBridge.s.sol`. On each chain it deploys, in the order of the nonce table in the script: the light client, the own-chain light client and the fork registry (where the gate mode needs them), the gate, the `MessageBridge`, the `TokenMediator` (which creates its `TokenFactory`), and optionally the `DeliveryRouter`, the one router of the chain (it needs a wrapped native token). Each side learns the bridge, the mediator and the light client of the other side from predicted addresses. Both bridges start locked. The read-back checks every address, every immutable, the pinned verifier code hash, `remoteLightClient`, and a false `depositsOpen`.
+1. **Deploy** with `script/hardened/DeployBridge.s.sol`. On each chain it deploys, in the order of the nonce table in the script: the light client, the own-chain light client and the fork registry (where the gate mode needs them), the gate, the three libraries of the bridge, the `MessageBridge`, the library of the mediator, the `TokenFactory` (naming the predicted mediator), the `TokenMediator`, and optionally the `DeliveryRouter`, the one router of the chain (it needs a wrapped native token). Each side learns the bridge, the mediator and the light client of the other side from predicted addresses. Both bridges start locked. The read-back checks every address, every immutable, the pinned verifier code hash, `remoteLightClient`, and a false `depositsOpen`.
 2. **Post light-client updates.** For each route, run `prove`. It exits with code 0 and one proof package, or with code 3 when the light client holds the newest final header. Send `updateCalldata` of the package to `destination.lightClient`. Repeat until `prove` exits with code 3. `latestFinalizedSlot` in the package shows whether the head still lags by more than one fold.
 3. **Open the bridges.** Call `openDeposits` on the `MessageBridge` of each chain. The call needs a proof that the remote light client stored a head: a block of the other chain whose hash the own light client stored, the state proof of the remote light client in that block (from `eth_getProof`), and the storage proof of one stored head. The server builds this proof: the delivery runner (`explorer/bots`, `runner.openDeposits`) does it on its own after each light-client update it posts or sees, while the bridge on its destination chain is closed, and sends the call from its signer. A bridge opens only when its own light client has stored a block of the other chain that came after the first update of the other light client. A chain needs about two epochs to finalize, so the first round of updates for one direction only prepares the second. Repeat steps 2 and 3 until both bridges report `depositsOpen()`.
 4. **Announce.** Tell users only after both bridges report open. A send before that reverts with `DepositsNotOpen()` and spends nothing but gas. This covers token relays too, because the mediator sends through the bridge.
@@ -803,7 +803,7 @@ The vault today mixes four jobs: proving a log, lock-and-release token accountin
 
 | Question | Decision |
 |---|---|
-| Delivery of a message | Final. The bridge marks a message delivered whether the target call succeeds or reverts. Downstream contracts handle their own failures. |
+| Delivery of a message | Final. The bridge marks a message delivered whether the target call succeeds or reverts. Downstream contracts handle their own failures. **Superseded 2026-11-01:** a failed call reverts the delivery and the message waits; see "Gas reverts up, and three layers (user decisions 2026-11-01)". |
 | Fees | The sender names a fee contract in the message. The bridge calls it after delivery through a fixed interface. Any failure of the fee contract falls back to the default: no payment. |
 | Order | Messages are independent. No per-sender sequence. |
 | PulseChain's existing OmniBridge tokens | Ignored. This bridge cannot mint them, so it deploys its own bridged tokens. |
@@ -904,8 +904,8 @@ The user asked for the same interfaces as OmniBridge wherever possible, one to o
 | `event RelayedMessage(...)` | Not emitted (one execution event is enough). |
 | `messageSender()`, `messageId()`, `messageSourceChainId() returns (bytes32)` | Same. Set only during the call to the target. |
 | `transactionHash()` | Same name. Returns the source transaction hash when the proof carries it (to decide: proving it needs a transaction trie branch; otherwise it returns zero). |
-| `messageCallStatus(bytes32)`, `failedMessageDataHash`, `failedMessageReceiver`, `failedMessageSender` | Same. Recorded on a failed call. Delivery stays final; these are data for downstream contracts. |
-| `maxGasPerTx()` | Same. A constant ceiling for `_gas`. |
+| `messageCallStatus(bytes32)`, `failedMessageDataHash`, `failedMessageReceiver`, `failedMessageSender` | Same names. Since 2026-11-01 a failed call reverts the delivery, so `messageCallStatus` is true once delivered and the three `failedMessage...` views always return zero. |
+| `maxGasPerTx()` | Same name. Since 2026-11-01 it returns `2^32 - 1`: the bridge ignores `_gas`, writes zero in the gas field, and gives the target all the gas. |
 | `sourceChainId()`, `destinationChainId()` | Same. |
 
 #### Token mediator: the OmniBridge interface
@@ -914,9 +914,9 @@ The user asked for the same interfaces as OmniBridge wherever possible, one to o
 |---|---|
 | `relayTokens(address _token, address _receiver, uint256 _value)` | Same. |
 | `relayTokens(address _token, uint256 _value)` | Same. |
-| `relayTokensAndCall(address _token, address _receiver, uint256 _value, bytes _data)` | Same. |
+| `relayTokensAndCall(address _token, address _receiver, uint256 _value, bytes _data)` | Replaced on 2026-11-01 by `relayTokensAndCall(token, receiver, value, data, callbackGas)`: the sender states the gas of the callback and there is no default. |
 | `onTokenTransfer(address _from, uint256 _value, bytes _data) returns (bool)` | Same (ERC-677 entry). |
-| `handleNativeTokens`, `handleNativeTokensAndCall`, `handleBridgedTokens`, `handleBridgedTokensAndCall`, `deployAndHandleBridgedTokens`, `deployAndHandleBridgedTokensAndCall` | Same names and parameters, callable only through the message bridge by the mediator on the other side. So the message payloads match OmniBridge's. |
+| `handleNativeTokens`, `handleNativeTokensAndCall`, `handleBridgedTokens`, `handleBridgedTokensAndCall`, `deployAndHandleBridgedTokens`, `deployAndHandleBridgedTokensAndCall` | Same names, callable only through the message bridge by the mediator on the other side. The three plain handlers keep the OmniBridge parameters and payloads. Since 2026-11-01 the three `...AndCall` handlers take one more argument after `data`: `uint256 callbackGas`. |
 | `event TokensBridgingInitiated(address indexed token, address indexed sender, uint256 value, bytes32 indexed messageId)` | Same. |
 | `event TokensBridged(address indexed token, address indexed recipient, uint256 value, bytes32 indexed messageId)` | Same. |
 | `event NewTokenRegistered(address indexed nativeToken, address indexed bridgedToken)` | Same. |
@@ -1082,7 +1082,7 @@ The build follows the design. This list holds every place where it differs from 
 - The nonce of the sender feeds the message identifier, in the OmniBridge format: version `0x00050000`, twenty bytes of the hash of the source chain and the bridge, and an eight byte nonce. It implies no order.
 - The message names a destination chain and a target. It does not name a destination bridge, as the vault log did. A second bridge on the destination chain that trusts the same remote bridge delivers the same message to a target of its own, through its own delivery book. A target must therefore trust one bridge only, with `msg.sender == bridge`. The mediator does so, and `test_secondBridge_*` in `MessageBridgeGaps.t.sol` shows it refuses a handler call from another bridge with `NotBridge`.
 
-**Gas**
+**Gas** (superseded on 2026-11-01: see "Gas reverts up, and three layers (user decisions 2026-11-01)")
 - `MAX_GAS_PER_TX` is 10,000,000. `MIN_GAS_PER_CALL` is 100. The send refuses a gas value outside this range with `GasOutOfRange`.
 - The gas guard keeps back `gasLimit + gasLimit / 63 + 1 + EXECUTION_OVERHEAD_GAS` (100,000). The call to the target forwards exactly the gas of the message. A test reads the gas at the first instruction of the target and finds the message gas to within 200 gas.
 - The mediator asks for 250,000 gas for a release, 1,000,000 with a callback, 2,000,000 for a deployment of a copy, and 2,750,000 for both. These are the defaults. The sender can ask for more (see "Mediator" below). The mediator constructor reads `maxGasPerTx()` of its bridge and reverts with `GasLimitAboveBridgeMaximum` when the bridge allows less than the largest default message. A test of the deploy script checks the same fact on the deployed pair.
@@ -1103,9 +1103,9 @@ The build follows the design. This list holds every place where it differs from 
 - A copy takes the name `<native name> from <home chain name>` (for example `Wrapped Ether from Ethereum`) and the symbol prefix `z` with no separator (`zWETH`) (decision 2026-10-26; the prefix was `zkb` until 2026-10-31, when the owner shortened it to `z`). The prefix is one letter, so no code may tell a copy from a native token by its symbol (`ZRX` and `zkSync` start with it): off-chain code asks the indexer (`isBridgedCopy`) or the mediator mappings, and takes the prefix from `BRIDGED_SYMBOL_PREFIX` in `@zkb/core`. The home chain name is the `remoteChainName` constructor term of the mediator. The mediator passes it to its factory, which stores it once (`TokenFactory.homeChainName()`), with no setter. The deploy configuration holds it per chain. The salt of the copy is `keccak256(homeChainId, homeToken)`.
 - A failed release emits `ReleaseFailed` and nothing else. The record of a native token falls by every release, paid or failed, so `mediatorBalance(token)` equals the supply of the copy on the other chain plus the messages in flight. The balance of the mediator is at least the record, and the surplus is the sum of failed releases and plain transfers.
 - A defect that the invariant tests found: `_tryRelease` wrote a stale copy of the record back after a refused transfer. A hostile token could relay tokens from inside `transfer` and then refuse, and the write erased the nested lock. The function now writes to storage after the call. `test_aTokenThatRelaysDuringAReleaseAndThenRefusesKeepsTheNestedLock` covers it.
-- **The sender sets the gas limit (2026-10-27).** OmniBridge sets the gas limit for each selector and token through an owner. This mediator has no owner, so the sender chooses. The entry points of OmniBridge (`relayTokens`, `relayTokensAndCall`, `onTokenTransfer`) keep the default limits. Two new overloads take a trailing gas limit: `relayTokens(token, receiver, value, gasLimit)` and `relayTokensAndCall(token, receiver, value, data, gasLimit)`. All arguments are positional and there is no struct. A value of zero gives the default of the message kind, and that default is also the minimum. A value above zero and below the default reverts with `GasLimitBelowMinimum(gasLimit, minimum)` (2026-10-28; before that the mediator raised a low value to the default). A value above `maxGasPerTx()` of the bridge reverts with `GasLimitAboveBridgeMaximum(gasLimit, maximum)`. Any other value is the gas limit of the message, unchanged. A plain message has no default: the bridge itself refuses a limit below `MIN_GAS_PER_CALL` (100) with `GasOutOfRange`, so it needs at least 100. The mediator never reads `data`: a router that puts a fee schedule in it owns the meaning. The sender pays for the gas that it asks for, and nobody else.
-- **A token that uses too much gas cannot make the handler revert (2026-10-27).** The bridge marks a message as delivered whether or not the call works. A handler that reverts loses the tokens for good. The call into a native token used to take all the gas but 1/64. A token that burned all of it left too little gas for what follows, so the handler reverted. Now the transfer attempt gets the gas that is left, less `TRANSFER_GAS_RESERVE`. A transfer that fails, for any reason, is a failed release and the handler goes on. The call reads at most 32 bytes of the answer, so a token cannot spend the reserve on a large answer. **Measured reserve.** `forge test --isolate`, with the real bridge and a token that runs the INVALID opcode. The figure was measured when a claim record was written; with no claim record the handler needs less after the attempt (the event of a failed release, about 2,000 gas), so the constant of 60,000 stays as a wide margin. The tests `TokenMediatorHostileGas.t.sol` check the outcome. A token that needs more gas than the message gives (the test token burns 300,000 against the default 250,000) ends with a failed release, and the same token is paid when the sender asks for 800,000. A delivery that reaches the transfer with no more than the reserve left makes no call to the token and ends as a failed release (`TokenMediatorGaps.t.sol`).
-- **The deploy gas follows the length of the name and symbol (2026-10-27).** The copy stores the name and the symbol, and the factory holds them while it deploys, so the cost grows with their length. Measured: 1,058,000 gas for a short name when each call is its own transaction and 1,153,000 in one test transaction. Each byte of name and symbol together costs 1,142 gas (isolated) to 1,419 gas (one transaction). A fixed limit of 2,000,000 ran out at about 627 bytes, and then every later relay of that token failed. On the source side, the default limit of a first message is the larger of `DEPLOY_GAS_LIMIT` (2,000,000) and `DEPLOY_GAS_BASE` (1,300,000) plus `DEPLOY_GAS_PER_BYTE` (1,600) for each byte of name and symbol. It is above 2,000,000 from 437 bytes. The callback limit comes on top for a first message with a call. A name so long that the limit passes the maximum of the bridge (above 5,437 bytes) is refused at the source with `GasLimitAboveBridgeMaximum`, before any token moves. A test deploys a 5,000-byte name through the real bridge. The sender can still ask for more gas.
+- **The sender sets the gas limit (2026-10-27; superseded 2026-11-01, the mediator has no gas rules).** OmniBridge sets the gas limit for each selector and token through an owner. This mediator has no owner, so the sender chooses. The entry points of OmniBridge (`relayTokens`, `relayTokensAndCall`, `onTokenTransfer`) keep the default limits. Two new overloads take a trailing gas limit: `relayTokens(token, receiver, value, gasLimit)` and `relayTokensAndCall(token, receiver, value, data, gasLimit)`. All arguments are positional and there is no struct. A value of zero gives the default of the message kind, and that default is also the minimum. A value above zero and below the default reverts with `GasLimitBelowMinimum(gasLimit, minimum)` (2026-10-28; before that the mediator raised a low value to the default). A value above `maxGasPerTx()` of the bridge reverts with `GasLimitAboveBridgeMaximum(gasLimit, maximum)`. Any other value is the gas limit of the message, unchanged. A plain message has no default: the bridge itself refuses a limit below `MIN_GAS_PER_CALL` (100) with `GasOutOfRange`, so it needs at least 100. The mediator never reads `data`: a router that puts a fee schedule in it owns the meaning. The sender pays for the gas that it asks for, and nobody else.
+- **A token that uses too much gas cannot make the handler revert (2026-10-27; changed 2026-11-01: a transfer that used up its gas now reverts the delivery, a refusal is still recorded).** The bridge marks a message as delivered whether or not the call works. A handler that reverts loses the tokens for good. The call into a native token used to take all the gas but 1/64. A token that burned all of it left too little gas for what follows, so the handler reverted. Now the transfer attempt gets the gas that is left, less `TRANSFER_GAS_RESERVE`. A transfer that fails, for any reason, is a failed release and the handler goes on. The call reads at most 32 bytes of the answer, so a token cannot spend the reserve on a large answer. **Measured reserve.** `forge test --isolate`, with the real bridge and a token that runs the INVALID opcode. The figure was measured when a claim record was written; with no claim record the handler needs less after the attempt (the event of a failed release, about 2,000 gas), so the constant of 60,000 stays as a wide margin. The tests `TokenMediatorHostileGas.t.sol` check the outcome. A token that needs more gas than the message gives (the test token burns 300,000 against the default 250,000) ends with a failed release, and the same token is paid when the sender asks for 800,000. A delivery that reaches the transfer with no more than the reserve left makes no call to the token and ends as a failed release (`TokenMediatorGaps.t.sol`).
+- **The deploy gas follows the length of the name and symbol (2026-10-27; superseded 2026-11-01, a first message carries no gas number).** The copy stores the name and the symbol, and the factory holds them while it deploys, so the cost grows with their length. Measured: 1,058,000 gas for a short name when each call is its own transaction and 1,153,000 in one test transaction. Each byte of name and symbol together costs 1,142 gas (isolated) to 1,419 gas (one transaction). A fixed limit of 2,000,000 ran out at about 627 bytes, and then every later relay of that token failed. On the source side, the default limit of a first message is the larger of `DEPLOY_GAS_LIMIT` (2,000,000) and `DEPLOY_GAS_BASE` (1,300,000) plus `DEPLOY_GAS_PER_BYTE` (1,600) for each byte of name and symbol. It is above 2,000,000 from 437 bytes. The callback limit comes on top for a first message with a call. A name so long that the limit passes the maximum of the bridge (above 5,437 bytes) is refused at the source with `GasLimitAboveBridgeMaximum`, before any token moves. A test deploys a 5,000-byte name through the real bridge. The sender can still ask for more gas.
 - **Decimals (2026-10-27).** Amounts are integers everywhere. Decimals are metadata that the copy takes when it is created, and nothing else reads them. The source refuses the first relay of a token whose `decimals()` returns more than 255: `TokenReader.DecimalsOutOfRange(token, value)`. The old reader returned 0 for such a value. The destination refuses a deploy message whose decimals are above 255 too: the four `deployAndHandle...` handlers take a `uint8`, so the decoder of the call reverts before the handler runs, no copy is made and the message fails. A mediator of this repository never sends such a message, because the source refuses first. The mediator runs on both chains, so both sides check. **A missing `decimals()` is still read as 0.** The rule is kept: when both selectors fail or return less than one word, the copy has 0 decimals. A holder loses nothing but the display, because the amounts are exact integers.
 - **A recipient may be a contract (2026-10-27, by design).** This is an arbitrary message bus. Contract senders, routers and contract recipients are allowed, and a release to a contract such as Multicall3 works as a release to any account. The payload names the receiver only, so a contract sender need not exist on the other chain. A test shows two messages through Multicall3 with the same payload.
 - **No fallback in the mediator, and no claim records (2026-10-27).** The mediator does not carry a fallback recipient in its message and does not take one in calldata. `relayTokensWithFallback`, `relayTokensWithOptions` and the `RelayOptions` struct are deleted, with the six `...WithFallback` handlers, the `FallbackUsed` event and `ZeroFallback`. A release that the recipient cannot take is final: the mediator emits `ReleaseFailed` and keeps the tokens, and there is no `claim`, no `claimable` mapping and no claim event. The mediator never pays anyone but the recipient. Fallback handling, if wanted, belongs in a router, as an opt-in option and never as a default. "If tokens get stuck, they are stuck for good." **Books of the two chains.** The record of a native token falls by the value of every release, paid or failed, because the other chain burned the copies when it sent the message. The balance of the mediator is at least the record, and the surplus belongs to nobody. **Bridged copies.** A failed release of a copy mints nothing. The mint of `BridgedToken` has no block list and no pause, so it fails only for the zero address, and a sender cannot name that address (`InvalidReceiver`). Only a forged message could reach that case, and the native tokens would then stay locked on the other chain. A test shows it.
@@ -1124,7 +1124,7 @@ The build follows the design. This list holds every place where it differs from 
 - `test/hardened/mediator/DeliveryRouterBatching.t.sol`: Multicall3 and the delivery router through the real bridge, the real mediator and real proofs. An update and good messages with one refused proof (the others deliver, and the refusal carries the exact revert data); an already delivered message that fails alone; a target that reverts (the bridge records it); a delivery by an arbitrary caller (the tip reaches the reward address); an empty list; a gas based tip that the callback of each call pays; the update call (permissionless, and a failed or repeated update does not stop the messages); the gas of one update and two messages. `DeliveryRouter.t.sol` also shows that a copy of a delivery pays the same tip to the reward address.
 - `test/hardened/MessageBridgeShapes.t.sol`: every receipt type, high transaction indices, long log lists, two messages in one receipt, and transaction branch checks.
 - `test/hardened/MessageBridgeGaps.t.sol`: the checks that the vault tests held and that had no counterpart.
-- `test/hardened/mediator/TokenMediatorGasLimit.t.sol`: the gas limit of the sender. The existing entry points keep the default of each message kind. A request above the default is used exactly, a request of zero gives the default, a request above zero and below it is refused with `GasLimitBelowMinimum` (including a deploy whose name and symbol raise the default), a request at the default is accepted, a fuzz test over any request keeps every sent limit between the minimum of its kind and the bridge maximum, a request above the maximum of the bridge reverts and moves nothing, the overloads keep the receiver and amount checks, the payload does not change with the gas limit, the data passes through unchanged, and a callback that needs more than the default gas runs only when the sender asks for more.
+- `test/hardened/mediator/TokenMediatorGasLimit.t.sol` (deleted 2026-11-01 with the gas rule it tested): the gas limit of the sender. The existing entry points keep the default of each message kind. A request above the default is used exactly, a request of zero gives the default, a request above zero and below it is refused with `GasLimitBelowMinimum` (including a deploy whose name and symbol raise the default), a request at the default is accepted, a fuzz test over any request keeps every sent limit between the minimum of its kind and the bridge maximum, a request above the maximum of the bridge reverts and moves nothing, the overloads keep the receiver and amount checks, the payload does not change with the gas limit, the data passes through unchanged, and a callback that needs more than the default gas runs only when the sender asks for more.
 - `test/hardened/mediator/TokenMediatorHostileGas.t.sol` (tokens in `utils/HostileTokens.sol`): the real bridge and a token that burns 300,000 gas on transfer, a token that runs the INVALID opcode (with the default gas and with 5,000,000), a token that reverts on every transfer, and a blocked recipient. Each ends with the handler not reverting, one `ReleaseFailed` event, no payout, the record lowered by the release and the whole amount still in the mediator. Unblocking the recipient later pays nothing. The heavy token is paid when the sender asks for 800,000 gas, and `relayTokensAndCall` with a gas limit pays a contract recipient that the default gas cannot.
 - `test/hardened/mediator/TokenMediatorDeployGas.t.sol`: a 5,000-byte name deploys through the real bridge and a later message of that token delivers; the limit of the message follows the rule for six lengths of name and symbol; a first message with a call adds the callback limit; a name beyond the bridge maximum is refused at the source.
 - `test/hardened/mediator/TokenMediatorDecimals.t.sol` and `TokenReader.t.sol`: decimals above 255 are refused at the source and at the destination in all four deploy forms, 255 passes, and a token with no `decimals()` gives a copy with 0 decimals.
@@ -1132,6 +1132,166 @@ The build follows the design. This list holds every place where it differs from 
 - `test/hardened/mediator/TokenMediatorGaps.t.sol`, `TokenMediatorInvariant.t.sol`, `TokenMediatorFuzz.t.sol`: token behaviour, the limiter and fee rules, and the solvency invariants of the mediator.
 
 **Gas of the stack** (`forge test`, one transaction per test, without the base cost and the calldata; `--isolate` figures in brackets): a token round trip costs 2,065,511 gas in four steps (2,146,744): send on chain A 155,589; execute on chain B with the deployment of the copy 1,423,690; send on chain B 90,499; execute on chain A 395,733. A later relay of the same token costs 410,423 to execute on chain B in the short form. An arbitrary message costs 37,405 to send and 484,919 to execute, 522,324 in all (588,844).
+
+## Gas reverts up, and three layers (user decisions 2026-11-01) (built)
+
+This section supersedes every gas rule above: the gas range of a send, the gas guard of the bridge, the gas defaults and
+minimums of the mediator, the deploy gas rule, and "delivery is final".
+
+### The owner's words, in order
+
+- "i think that the message has to pass the gas limit. there should be no defaults"
+- "well, no i think you may be misunderstanding. the erc20 mediators on both sides do not need to understand this limit. they need to pass/use it for use in the delivery router"
+- "when i have been talking about the gas limits, i have only been talking about the gas limit set during the onTokensBridged call to the delivery router. that is it. i do not know that we need gas limits for other pieces. why do you think that we do? if anyone can call them and they run out of gas, does it not just revert up the chain? up from token mediator through messagebridge?"
+- "yes, build it test-first and show me the redeploy plan. does it make sense to extend this to the deliveryrouter too?"
+- "so here is the thing, the first layer is neutral, anyone can use it. what likely happens in the second layer is that many people use it so it needs to be mosty trusted / immutable as well. the 3rd layer (deliveryrouter) can be swapped out at the will of the frontends that point to it"
+- "would it be better if 3 bubbled up its errors? or is that too difficult given the ability for errors to surface"
+- "lets go through those arguments and figure out which ones are missing. many of them should probably also be immutables /constants"
+
+### The three layers
+
+| Layer | Contract | Who uses it | What it may know |
+|---|---|---|---|
+| 1 | `MessageBridge` | Anyone. Neutral. | Nothing about tokens or routers. It proves a message and calls its target. |
+| 2 | `TokenMediator` (with `TokenFactory`, `BridgedToken`) | Everyone who moves tokens. Shared, so immutable: no owner, no upgrade, no setting. | Tokens. It names no router: any contract can be a receiver. |
+| 3 | `DeliveryRouter` | The frontends that point to it. Swappable. | Fees, unwrapping, the follow-up call and their gas. |
+
+No contract in layers 1 and 2 holds a router address. `isKnownDeliveryRouter` in `@zkb/core` and the router list of the
+runner are an allowlist of a frontend or an operator, not a rule of the protocol. A new router can be deployed alone
+(`script/hardened/RedeployLayers.s.sol`, mode `router`), and frontends move to it with no change to layers 1 and 2.
+
+### The rule, the same at every layer
+
+Not enough gas reverts the whole delivery: the message stays `NotDelivered`, and anyone can deliver it again with more
+gas. A callee that says no, with the gas it was promised, is recorded and the delivery completes.
+
+- **Layer 1.** `executeMessage` calls the target with all the gas that is left. When the call fails, the delivery
+  reverts with the error data of the target (or `TargetCallFailed(messageId)` when there is none). There is no
+  `Failed` status (`DeliveryStatus` is `NotDelivered`, `InProgress`, `Succeeded`; view `deliveryStatus`). The gas
+  argument of `requireToPassMessage` is accepted for the OmniBridge interface and ignored. The 4 byte gas field of the
+  encoding stays, always zero, so the layout of the message does not change (decision: keep the slot, because the prover
+  evidence, the indexer, the data package and the fixtures decode that layout; removing it would buy 4 bytes). Removed:
+  `MAX_GAS_PER_TX`, `MIN_GAS_PER_CALL`, `EXECUTION_OVERHEAD_GAS`, `GasOutOfRange`, `InsufficientGas`, the failure
+  records. `maxGasPerTx()` returns `2^32 - 1`. An executor that brings too little gas loses only its own transaction, so
+  the bridge needs no guard.
+- **Layer 2.** The mediator has no gas rules and no defaults. Its one gas number is the callback gas `N`: a sender of
+  `relayTokensAndCall(token, receiver, value, data, callbackGas)` states it (zero reverts `ZeroCallbackGas`), the
+  message carries it as the last argument of the `...AndCall` handler, and the handler calls `onTokenBridged` with
+  exactly `N` through `ExactGasCall`, for any receiver. ERC-677 data carries it after the receiver (20 bytes receiver,
+  32 bytes gas, then the callback data; 21 to 51 bytes revert `MalformedTransferData`). A plain relay has no callback
+  and no gas number. The token transfer, the mint and the flow limiter are called with all the gas (the transfer less
+  `TRANSFER_GAS_RESERVE`); a call that fails after using up its gas reverts with `ReleaseOutOfGas`, and a call that
+  fails with gas to spare is a refusal: `ReleaseFailed`, final, as before.
+- **Layer 3.** The router's terms (`FeeDirector`) gain a fifth word, `callGas`: the exact gas of the follow-up call.
+  Before the call, the router needs `callGas + callGas / 63 + CALL_GAS_RESERVE` (else it reverts with `InsufficientGas`);
+  a call that fails with `callGas` emits `CallFailed(target, recipient, callGas)` and the recipient keeps the tokens.
+  Payout refusals keep their hand-off. The gas based tip counts `startingGas - gasleft()` at the callback plus
+  `callGas`. The callback runs with exactly `N`, and the bridge and the mediator keep the rest of the supplied gas, so
+  the measure still counts the gas that the deliverer supplies above what the delivery needs: a deliverer can raise a
+  gas based tip up to `limit`, as before this redesign (when the bridge forwarded only the gas limit of the message).
+  `limit` stays the signed ceiling, and the most a frontend may show is `min(limit, value)`.
+
+`ExactGasCall` holds the two checks of a call with a stated gas, used by layers 2 and 3. (a) Before the call:
+`gasleft() >= gas + gas / 63 + reserve`, else `InsufficientGas(available, required)`. (b) After a failed call: when
+`gasleft() < gas / 63`, the callee got less than its gas (a few operations run between the check and the call), so the
+call reverts with `CallOutOfGas(gas)`. The call copies no return data, so a callee that returns a large error costs
+the caller nothing.
+
+**What "revert up" means inside a guarantee.** The mediator guarantees `N` to the router. Inside `N`, a lack of gas
+for the router's own work or its follow-up call is the sender's choice of `N`, not the executor's: retrying would not
+help. So when the router reverts there (its `InsufficientGas`), the mediator sees a callback that failed with the gas
+it was promised and records `CallbackFailed`; the tokens stay in the router and anyone may `sweep` them to
+`failedDeliveryAddress`. A frontend must therefore state `N >= ROUTER_CALLBACK_GAS_BASE + callGas + ceil(callGas / 63)
++ CALL_GAS_RESERVE` (`routerCallbackGas` in `@zkb/core`).
+
+**The price of the rule.** A token whose transfer burns all the gas it gets (an `INVALID` opcode, an endless loop)
+cannot be told apart from a starved one, so its release reverts at any gas and the message waits, instead of ending
+as `ReleaseFailed`. Before, the same release ended as a final failure with the tokens kept in the mediator; now the
+release can still be delivered if the token ever stops doing that. A token that catches the out-of-gas of a hook of
+its own and reverts cheaply looks like a refusal; the mediator cannot see inside it.
+
+Sizes after the change (`forge build --sizes`, runtime bytes): `MessageBridge` 22,554 (2,022 bytes of room),
+`TokenMediator` 12,291, `TokenFactory` 7,272, `DeliveryRouter` 7,993 (before the split of 2026-11-07, below). The storage of `MessageBridge` lost the two
+failure mappings, so its layout tables moved to slots 4, 5 and 6.
+
+### Immutables instead of arguments (2026-11-01)
+
+- `MessageBridge` takes no `localChainId` argument: `localChainId` is `block.chainid` at deployment.
+  `LocalChainIdMismatch` is gone.
+- `TokenMediator.MediatorTerms` has no `remoteChainId`: the constructor reads `destinationChainId()` of its bridge
+  once, so the two cannot disagree.
+- `TokenFactory` keeps the home chain name in two immutables (a word and a length) instead of a storage string, and
+  refuses a name above 32 bytes (`HomeChainNameTooLong`). `homeChainName()` still returns a `string`. The name of a
+  copy stays `<name> from <home chain>`; `NAME_CONNECTOR` (" from ") and `SYMBOL_PREFIX` ("z") stay constants.
+
+### Split for the per-transaction gas cap (2026-11-07)
+
+Owner, 2026-11-07, verbatim: "lets just split them now".
+
+EIP-7825 caps one transaction at 16,777,216 gas. Sepolia charges about 1,580 to 1,600 gas per byte of runtime code for a
+creation (the receipts of 2026-10-26: 35,555,393 gas for the 22,465 bytes of the old bridge; `eth_estimateGas` on
+2026-11-07: 1,580 to 1,601 gas per byte), so one creation fits only up to about 10,000 bytes. On 2026-11-07 the cap did
+not bind on Sepolia (it mined transactions of 30 to 37 million gas that day), but the bridge and the mediator are split
+now so that no creation depends on it:
+
+| Creation | Runtime bytes | What it holds |
+|---|---|---|
+| `ReceiptProofLib` (external library) | 8,697 | Checks 5 to 7 and the log of a delivery: the execution header roots, the receipt (it must record success), the transaction at the same key, the log, its emitter and topics, the event data. |
+| `OpeningProofLib` (external library) | 6,210 | The execution part of the opening proof: the state root, the account of the remote light client, its `executionBlockHashes` entry. |
+| `BeaconLayoutLib` (external library) | 8,231 | Checks 1 to 4 (stored anchor, ancestry on both paths, the block hash branch with the Gloas rule), the three `add...Layout` rules and the range rule, run in the storage of the bridge (the tables are `storage` arguments). |
+| `MessageBridge` | 9,292 | Sending, the codec, `executeMessage` (calls the two delivery libraries), `openDeposits`, the context, the views, the layout tables. |
+| `MediatorPayloads` (external library) | 6,102 | The sending side of the mediator in its storage (receiver, amount and callback gas checks, the limiter, lock or burn, the message encodings, `TokenReader`), the reading of ERC-677 data, and the deployment of a copy (`copyOrDeploy`). |
+| `TokenFactory` | 7,272 | Unchanged code. Deployed on its own, before the mediator, naming the predicted mediator. |
+| `TokenMediator` | 8,536 | Everything else: the handlers, the release with its reserve, the callback with `ExactGasCall`, the views. `MediatorTerms.remoteChainName` is replaced by `tokenFactory`; the constructor requires that the factory has code, names this mediator (`FactoryOfAnotherMediator`) and carries a home chain name. |
+| `DeliveryRouter` | 7,993 | Unchanged. |
+
+Layers 1 and 2 stay immutable. A linked library has no owner and no storage, its address is fixed in the bytecode of the
+contract that calls it, and its state-changing functions take `storage` arguments, so they run only by DELEGATECALL
+from that contract (a direct call is refused by the library call guard). The errors and the events stay declared on
+`BeaconProofVerifier`, `MessageBridge` and `TokenMediator` and the libraries use the same signatures, so a revert or a
+log reads as before; `explorer/data/scripts/generate-abis.mjs` appends the errors and events of the linked libraries to
+the ABI of the bridge and of the mediator. The constants that the libraries read have one copy each (file-level
+constants for the era numbers and the copy name rule; the position rules live only in `BeaconLayoutLib`).
+
+The cost on a delivery is the library calls (a DELEGATECALL each, and the copy of the proof into the call):
+`executeMessage` on the recent path 367,373 to 379,905 gas (+12,532), on the historical path 396,171 to 406,495
+(+10,324); a token delivery about +13,400 (523,070 to 536,487 for the short form); a relay about +5,000; `openDeposits`
++5,506 (local figures of the forge tests of this build, `MessageBridgeGas`, `BridgeWorld`, `DepositOpening`).
+
+The deploy scripts deploy the libraries from the deployer's own nonces and link them by hand
+(`script/hardened/LinkedCode.sol`): they read the creation code of the bridge, the mediator, the factory and the router
+from `out/`, put the library addresses in the placeholders and refuse code with a placeholder left. The read-back checks the code of each
+library, every link site, and that the bridge, the mediator, the factory and the router are the compiled code byte for
+byte apart from their immutables. `test/hardened/CreationGasCap.t.sol` fails a build in which any creation of the
+deploy scripts would pass 90% of the cap at 1,600 gas per byte.
+
+### Tests
+
+- `MessageBridgeDelivery.t.sol`: a reverting target reverts the delivery with its error and the message delivers
+  later; a target with no error data reverts with `TargetCallFailed`; one unit below the least gas reverts and leaves
+  the message `NotDelivered`; the target gets all the gas whatever the gas field says; replay after success is refused.
+- `MessageBridgeSend.t.sol`: any gas argument passes and the gas field is zero; the local chain is `block.chainid`.
+- `mediator/TokenMediatorStarvation.t.sol` (new): sweeps over the gas of the executor for a native release, a mint,
+  a release with a flow limiter and a release with a callback. At every gas a delivery either reverts or pays with no
+  failure event. A burner callee that got a little less than `N` reverts with `CallOutOfGas`; with all of `N` its
+  failure is `CallbackFailed`. Clean reverts (with and without data) are recorded; a 100,000 byte error costs the
+  mediator nothing.
+- `mediator/TokenMediatorHostileGas.t.sol`: a heavy token is paid once the executor brings the gas, and every
+  attempt below that reverts and moves nothing; an INVALID token reverts at 1,000,000 and 10,000,000 gas and delivers
+  after its code is fixed; a blocked recipient and a reverting token end with `ReleaseFailed`, the message delivered.
+- `mediator/TokenMediatorDeployGas.t.sol`: the first send of a token needs no gas number (600,000 reverts, 3,000,000
+  deploys the copy); a 9,000-byte name, refused at the source before, relays and deploys.
+- `mediator/DeliveryRouterCall.t.sol`, `DeliveryRouterGas.t.sol`: the follow-up call gets exactly `callGas`; too little
+  gas reverts the callback; a reverting call is `CallFailed` with the recipient paid.
+- `mediator/TokenMediatorGasLimit.t.sol` is deleted with the rule it tested.
+- `CreationGasCap.t.sol` (2026-11-07): every creation of `RedeployLayers` and `DeployBridge` stays under 90% of
+  16,777,216 gas at 1,600 gas per byte of runtime code (the budget is 9,437 bytes; the unsplit bridge of 22,465 bytes is
+  over the cap itself).
+- `RedeployLayers.t.sol`: eight creations at consecutive nonces; the deployment ends on `n + 8` on each chain; the read
+  back refuses a bridge linked to other libraries (`LinkMismatch`), a library at the address of another
+  (`LibraryCodeMismatch`) and a factory that is other code (`BuiltCodeMismatch`).
+- `Immutability.t.sol`: the four libraries have no state and no state-changing entry point. `Bytecode.t.sol` scans
+  them for MCOPY, TSTORE and TLOAD with the other contracts.
 
 ## Fork gate by shape (2026-10-27) (built)
 

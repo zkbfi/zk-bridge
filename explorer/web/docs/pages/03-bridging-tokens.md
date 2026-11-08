@@ -63,16 +63,16 @@ The same address on the other chain may belong to someone else, or to nobody. Th
 
 ## A link that fills in the form
 
-A link to the Bridge screen can carry the direction, the token and the amount; these are filled in quietly. When a link also fills in anything that changes where the tokens go or what you pay, such as the destination, the fee settings, the relay router, the gas limit or a call, the screen names those fields in a warning. The review names them again. Check them before you confirm.
+A link to the Bridge screen can carry the direction, the token and the amount; these are filled in quietly. When a link also fills in anything that changes where the tokens go or what you pay, such as the destination, the fee settings, the relay router, the call gas or a call, the screen names those fields in a warning. The review names them again. Check them before you confirm.
 
-## Advanced: gas limit and a call after delivery
+## Advanced: a call after delivery
 
 The delivery menu (tap the fee) has an **Advanced** part.
 
-- **Gas limit.** The gas the message may use on the destination. It starts at the recommended amount. Raise it only if the receiver runs code that needs more. The mediator uses the larger of your number and its default, and refuses a number above the bridge maximum.
 - **Call after delivery.** A contract on the destination chain that the delivery router calls once it has paid the recipient, and the call data to send it. The call comes from the router. It sends no coin. It runs only after the payment succeeded, and a call that fails does not undo the delivery: the recipient keeps the tokens.
+- **Call gas.** The exact gas the call gets, as a whole number. It has no default: enter it when you name a call. The callback gas that the transfer carries is worked out from it (the call gas plus the router's own work) and shown beside it, read only. A plain transfer has no gas number at all.
 
-A call costs gas, so a gas-based fee rises with it. The control names the call, the router and a gas limit you set, for example "A bot delivers it on PulseChain · fee 0.39%, then calls 0x12…ab".
+A call costs gas, so a gas-based fee rises with it. The control names the call, its gas and the router, for example "A bot delivers it on PulseChain · fee 0.39%, then calls 0x12…ab with 200,000 gas".
 
 ## The allowance
 

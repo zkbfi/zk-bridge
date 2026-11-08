@@ -63,7 +63,7 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
         deployCodeTo(
             "MessageBridge.sol:MessageBridge",
             abi.encode(
-                address(lightClientForA), CHAIN_A, CHAIN_B, DESTINATION_BRIDGE,
+                address(lightClientForA), CHAIN_B, DESTINATION_BRIDGE,
                 MessageBridge.BridgeTerms(cutoff, address(lightClientForB), type(uint64).max), DEFAULT_CAPELLA_ERA, gate
             ),
             MessageFixtures.REMOTE_BRIDGE
@@ -93,7 +93,7 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
         deployCodeTo(
             "MessageBridge.sol:MessageBridge",
             abi.encode(
-                address(client), CHAIN_B, CHAIN_A, MessageFixtures.REMOTE_BRIDGE,
+                address(client), CHAIN_A, MessageFixtures.REMOTE_BRIDGE,
                 MessageBridge.BridgeTerms(cutoff, address(lightClientForA), bridgeGloasForkSlot), capellaEra, gate
             ),
             DESTINATION_BRIDGE

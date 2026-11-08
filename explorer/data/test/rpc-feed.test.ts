@@ -7,7 +7,7 @@ const EXPECTED_STATUS: Readonly<Record<MessageName, string>> = {
   delivered: "delivered",
   returned: "delivered",
   plain: "delivered",
-  failed: "failed_call",
+  failed: "waiting_for_finality",
   paid: "delivered",
   stuck: "release_failed",
   callbackFailed: "delivered",
@@ -83,10 +83,10 @@ describe("the feed from the chains", () => {
     const harness = createRpcHarness();
     const feed = await harness.body("/api/feed?limit=50");
     const item = feed.items.find((entry: { messageId: string }) => entry.messageId === harness.scenario.ids.delivered);
-    expect(item.delivered).toMatchObject({ success: true, executedBy: `0x${"e0".repeat(20)}` });
+    expect(item.delivered).toMatchObject({ executedBy: `0x${"e0".repeat(20)}` });
     expect(item.covered).toEqual({ headSlot: 300, timestamp: Number(harness.scenario.timestampOf(369, 215n)) });
     const failed = feed.items.find((entry: { messageId: string }) => entry.messageId === harness.scenario.ids.failed);
-    expect(failed.delivered.success).toBe(false);
+    expect(failed.delivered).toBeNull();
     expect(failed.covered).toBeNull();
   });
 
@@ -110,8 +110,9 @@ describe("the filters of the feed", () => {
     expect((await harness.body("/api/feed?direction=369>1")).items.map((item: { messageId: string }) => item.messageId)).toEqual([ids.backward, ids.returned]);
     const messages = await harness.body("/api/feed?kind=message");
     expect(messages.items.map((item: { messageId: string }) => item.messageId).sort()).toEqual([ids.plain, ids.failed, ids.waiting].sort());
-    const failed = await harness.body("/api/feed?status=failed_call,release_failed");
-    expect(failed.items.map((item: { status: string }) => item.status).sort()).toEqual(["failed_call", "release_failed"]);
+    const failed = await harness.body("/api/feed?status=release_failed,delivered");
+    expect(failed.items.map((item: { status: string }) => item.status).sort()).toContain("release_failed");
+    expect((await harness.answer("/api/feed?status=failed_call")).status).toBe(400);
   });
 
   it("filters by token on either side of the transfer", async () => {
@@ -213,7 +214,7 @@ describe("reading the history in bounded windows", () => {
 
   it("reads the cursor boundary when a request finds no row, so the next request goes further back", async () => {
     const harness = createRpcHarness({ api: { blockSpan: 20, maxWindowsPerRequest: 1 } });
-    const feed = await harness.body("/api/feed?status=failed_call&limit=5");
+    const feed = await harness.body("/api/feed?status=release_failed&limit=5");
     expect(feed.items).toEqual([]);
     expect(feed.nextCursor).toBe(encodeCursor({ sentTimestamp: BigInt(feed.coverage.coveredFrom), messageId: `0x${"f".repeat(64)}` }));
   });

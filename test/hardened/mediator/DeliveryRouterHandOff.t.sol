@@ -8,7 +8,7 @@ import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol"
 import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
-import {MediatorFixture, DenyListToken, CoinRefuser} from "./utils/MediatorSupport.sol";
+import {MediatorFixture, DenyListToken, CoinRefuser, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 import {MedCutToken, MedDenyListWrappedNative, MedToggleReceiver} from "./utils/MedMocks.sol";
 
 /// @notice The router never keeps a delivery that it cannot pay, and never burns it. It takes the tip first when the
@@ -52,14 +52,14 @@ contract DeliveryRouterHandOffTest is MediatorFixture {
         pure
         returns (DeliveryRouter.FeeDirector memory)
     {
-        return DeliveryRouter.FeeDirector(to, settings, limit, multiplier);
+        return DeliveryRouter.FeeDirector(to, settings, limit, multiplier, 0);
     }
 
     /// @dev Sends the copy of the deny list token from chain B to the router, with `data`, and returns the message.
     function _sendCopy(bytes memory data, uint256 value) internal returns (uint256) {
         vm.startPrank(alice);
         IERC20(copy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokensAndCall(copy, address(router), value, data);
+        mediatorB.relayTokensAndCall(copy, address(router), value, data, TEST_CALLBACK_GAS);
         vm.stopPrank();
         return _lastIndexB();
     }
@@ -74,7 +74,7 @@ contract DeliveryRouterHandOffTest is MediatorFixture {
         address wrappedCopy = _copyOf(address(weth));
         vm.startPrank(alice);
         IERC20(wrappedCopy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokensAndCall(wrappedCopy, address(router), value, data);
+        mediatorB.relayTokensAndCall(wrappedCopy, address(router), value, data, TEST_CALLBACK_GAS);
         vm.stopPrank();
         return _lastIndexB();
     }
@@ -237,7 +237,7 @@ contract DeliveryRouterHandOffTest is MediatorFixture {
         cutToken.setCut(address(mediatorA), 1_000);
         vm.startPrank(alice);
         IERC20(cutCopy).approve(address(mediatorB), type(uint256).max);
-        mediatorB.relayTokensAndCall(cutCopy, address(router), 100 ether, abi.encode(_share(recipient, 0, 0, 0)));
+        mediatorB.relayTokensAndCall(cutCopy, address(router), 100 ether, abi.encode(_share(recipient, 0, 0, 0)), TEST_CALLBACK_GAS);
         vm.stopPrank();
         _run(_lastIndexB());
         assertEq(cutToken.balanceOf(recipient), 90 ether);
@@ -317,7 +317,7 @@ contract DeliveryRouterHandOffTest is MediatorFixture {
     }
 
     /// Claim: a director whose recipient word has bits above 160 is data of no known shape, so the callback does not
-    /// revert and the whole value is handed off. Shows: a 128 byte director with a dirty first word, delivered through
+    /// revert and the whole value is handed off. Shows: a 160 byte director with a dirty first word, delivered through
     /// the router, ends at the failed delivery address in full, the reward address gets no tip, and the event names the
     /// zero address. Matters: `abi.decode` would revert on that word, and a revert in the callback strands the tokens.
     function test_aDirtyRecipientWordHandsTheWholeValueOff() public {

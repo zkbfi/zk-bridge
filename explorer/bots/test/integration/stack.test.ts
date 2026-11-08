@@ -312,7 +312,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
   const abiOf = (name: string) => artifacts[name]?.abi as never;
   const balanceOf = (holder: Address) => stack.chain.publicClient.readContract({ address: stack.token, abi: abiOf("MockERC20"), functionName: "balanceOf", args: [holder] }) as Promise<bigint>;
 
-  const director = (fields: { settings: bigint; limit: bigint; multiplier: bigint }) => ({ recipient: recipient(), ...fields });
+  const director = (fields: { settings: bigint; limit: bigint; multiplier: bigint }) => ({ recipient: recipient(), callGas: 0n, ...fields });
   /**
    * The callback data of an offer, from the shared encoder. The context names the fee token as the wrapped native token,
    * so the guard accepts every setting: one test offers an unwrap request on a plain token, as a hand written relay could.
@@ -352,7 +352,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
           deliverWithoutOffer: false,
           // One whole fee token is worth one whole native coin.
           tokenValuationsWei: overrides.tokenValuationsWei ?? { [stack.token.toLowerCase()]: 10n ** 18n },
-          proofCheckGas: 400_000n,
+          deliveryGasFallback: 1_500_000n,
           maximumPrerequisiteRounds: 2,
           prerequisiteGasFallback: 300_000n,
           maximumPrerequisiteSpendPerSweepWei: 10n ** 24n,
@@ -406,7 +406,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
   });
 
   it("skips a message whose fee is far below the gas cost, and sends no transaction", async () => {
-    const offer = { settings: 1n, limit: 1_000_000_000n, multiplier: 0n }; // a fixed fee of 1e9 wei
+    const offer = { settings: 1n, limit: 1_000_000_000n, multiplier: 0n, callGas: 0n }; // a fixed fee of 1e9 wei
     const callback = callbackOf(offer);
     await arm(callback, 2);
     const stingy = item(2);
@@ -472,7 +472,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
     expect(outcomes.records.map((record) => (record.status === "skipped" ? record.reason : record.status)).sort()).toEqual(["already-delivered", "delivered"]);
   });
   it("delivers through executeMessage of the router: the batch holds the call with the proof only, and the signer is not named anywhere", async () => {
-    const offer = { settings: 1n, limit: 10n ** 17n, multiplier: 0n };
+    const offer = { settings: 1n, limit: 10n ** 17n, multiplier: 0n, callGas: 0n };
     await arm(callbackOf(offer), 8);
     const only = item(8);
     const { runner, outcomes, signer } = await makeRunner([only], { [only.messageId]: offerData(offer) });
@@ -493,7 +493,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
   });
 
   it("pays the tip to the reward address when another account sends a copy of the delivery, so the copy gains nothing", async () => {
-    const offer = { settings: 1n, limit: 10n ** 17n, multiplier: 0n };
+    const offer = { settings: 1n, limit: 10n ** 17n, multiplier: 0n, callGas: 0n };
     await arm(callbackOf(offer), 9);
     const reward = account(ACCOUNT.reward).address;
     const copier = account(ACCOUNT.copier).address;

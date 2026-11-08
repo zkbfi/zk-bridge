@@ -37,13 +37,18 @@ contract MessageBridgeGasTest is MessageScenes {
         assertLt(used, 450_000);
     }
 
-    /// Gas of a delivery whose call fails (the failure data costs two more storage words and the status word changes).
+    /// Gas of a delivery whose call fails. The delivery reverts with the error of the target, so the executor pays the
+    /// proof and the call and nothing is stored. Measured with a low-level call, which returns false.
     function test_gas_executeMessage_failedCall() public {
         // PUSH1 0, PUSH1 0, REVERT: a target that always reverts, as cheap as it can be.
         vm.etch(MessageFixtures.TARGET_REVERTER, hex"60006000fd");
         Scene memory scene = _messageScene(bridge);
-        uint256 used = _measure(_messageProof(scene, MessageFixtures.reverting()));
-        emit log_named_uint("executeMessage, recent path, call that reverts", used);
+        MessageBridge.MessageProof memory proof = _messageProof(scene, MessageFixtures.reverting());
+        uint256 before = gasleft();
+        (bool ok,) = address(bridge).call(abi.encodeCall(MessageBridge.executeMessage, (proof)));
+        uint256 used = before - gasleft();
+        assertFalse(ok, "the delivery reverts");
+        emit log_named_uint("executeMessage, recent path, call that reverts (the delivery reverts)", used);
         assertLt(used, 450_000);
     }
 }

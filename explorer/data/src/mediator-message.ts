@@ -19,6 +19,8 @@ export type MediatorMessage = {
   readonly value: bigint;
   /** The callback data, or null for a plain release. */
   readonly callbackData: Hex | null;
+  /** The exact gas that `onTokenBridged` gets on the destination chain, or null for a plain release. */
+  readonly callbackGas: bigint | null;
   /** Name, symbol and decimals, for a deploying message only. */
   readonly metadata: { readonly name: string; readonly symbol: string; readonly decimals: number } | null;
 };
@@ -51,6 +53,7 @@ export const decodeMediatorMessage = (data: Hex): MediatorMessage | null => {
     recipient: asAddress(named.recipient),
     value: named.value as bigint,
     callbackData: handler.includes("AndCall") ? (named.data as Hex) : null,
+    callbackGas: handler.includes("AndCall") ? (named.callbackGas as bigint) : null,
     metadata: handler.startsWith("deployAndHandle")
       ? { name: named.name as string, symbol: named.symbol as string, decimals: Number(named.decimals) }
       : null,

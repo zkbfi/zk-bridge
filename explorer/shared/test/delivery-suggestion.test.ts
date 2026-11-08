@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseDeliveryCostReport, type DeliveryCostReport } from "../src/delivery-cost-report.js";
 import { buildFeeSuggestions, DEFAULT_GAS_MARGIN, describeDataSource, describeFee, gasPriceBasisFor, SUGGESTED_TIP_RANGE, suggestedTipRange, tipVersusCost } from "../src/delivery-suggestion.js";
-import { minimumGasLimitOf, requiredDeliveryGas } from "../src/gas-limit.js";
 import { expectedFee, TOKEN_GAS_OVERHEAD } from "../src/delivery-terms.js";
 import { EXCLUDE_PRIORITY, FIXED_FEE, UNWRAP } from "../src/delivery-terms.js";
 
@@ -120,7 +119,7 @@ describe("describeFee", () => {
   const context = { transferValue: 1_000n, token: { symbol: "TKN", decimals: 0, valueInWei: wei }, gasUsed: 0n, baseFeeWei: 0n, priorityFeeWei: 0n, cost: null };
 
   it("states a fixed fee as exact", () => {
-    const description = describeFee({ recipient, settings: FIXED_FEE, limit: 30n, multiplier: 0n }, context);
+    const description = describeFee({ recipient, settings: FIXED_FEE, limit: 30n, multiplier: 0n, callGas: 0n }, context);
     expect(description.summary).toBe("30 TKN (exact)");
     expect(description.maximumUnits).toBe(30n);
     expect(description.breakdown).toEqual([]);
@@ -128,7 +127,7 @@ describe("describeFee", () => {
 
   it("states a gas based fee as an estimate and shows the cap", () => {
     const description = describeFee(
-      { recipient, settings: 0n, limit: 50n, multiplier: wei },
+      { recipient, settings: 0n, limit: 50n, multiplier: wei, callGas: 0n },
       { ...context, gasUsed: 100n, baseFeeWei: 1n },
     );
     expect(description.summary).toBe("about 50 TKN now (estimate, at most 50 TKN)");
@@ -238,11 +237,11 @@ describe("the suggested tip range", () => {
     expect(spoiled.tipRange).toEqual({ kind: "unavailable", reason: "the margin must be above zero" });
   });
 
-  it("prices a kind with no measure at the gas that a delivery must supply, when that is more than the configured default", () => {
+  it("prices a kind with no measure at the configured default gas, and nothing else", () => {
     const source = describeDataSource(report(), "token_callback");
     expect(source.kind).toBe("measured");
     const unmeasured = describeDataSource(report({ kinds: { token_callback: kind(), token: kind(), message: kind() } }), "token_callback");
-    expect(unmeasured.gas).toBe(requiredDeliveryGas(minimumGasLimitOf({ kind: "token-release", withCall: true })));
+    expect(unmeasured.gas).toBe(550_000n);
     expect(describeDataSource(report(), "message").gas).toBe(550_000n);
   });
 });
@@ -269,7 +268,7 @@ describe("a tip against the cost", () => {
 
   it("describes a zero fixed tip with a negative margin line", () => {
     const description = describeFee(
-      { recipient, settings: FIXED_FEE, limit: 0n, multiplier: 0n },
+      { recipient, settings: FIXED_FEE, limit: 0n, multiplier: 0n, callGas: 0n },
       { transferValue: 1_000n, token, gasUsed: 100n, baseFeeWei: 1n, priorityFeeWei: 0n, cost: { gasCostWei: 100n, totalWei: 100n } },
     );
     expect(description.nowUnits).toBe(0n);

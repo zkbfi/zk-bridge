@@ -17,7 +17,7 @@ import type { ChainReceipt, ViewCall } from "../../src/rpc/chain-reader.js";
  * - `delivered`: a token send from chain 1, delivered on chain 369, which deploys the bridged copy.
  * - `returned`: the copy sent back from chain 369 and delivered on chain 1.
  * - `plain`: an arbitrary message sent and delivered.
- * - `failed`: an arbitrary message whose call reverted (`failed_call`).
+ * - `failed`: an arbitrary message whose delivery attempt reverted. A failed delivery leaves no log, so it stays undelivered (`covered`).
  * - `paid`: a token delivery that paid the recipient (`delivered`).
  * - `stuck`: a token delivery that the recipient could not take. The mediator emitted `ReleaseFailed` and the release is final (`release_failed`).
  * - `callbackFailed`: a token delivery that paid the recipient, whose `onTokenBridged` callback failed (`delivered`).
@@ -141,7 +141,7 @@ export const buildScenario = (
   const send = (from: typeof first, to: typeof first, messageId: Hex, executor: Address, data: Hex): { messageId: Hex; encodedData: Hex } => ({
     messageId,
     encodedData: encodeAmbMessage({
-      header: { messageId, sender: accounts.sender, executor, gasLimit: 250_000, dataType: 0, sourceChainId: BigInt(from.chainId), destinationChainId: BigInt(to.chainId) },
+      header: { messageId, sender: accounts.sender, executor, reservedGas: 0, dataType: 0, sourceChainId: BigInt(from.chainId), destinationChainId: BigInt(to.chainId) },
       data,
     }),
   });
@@ -224,7 +224,6 @@ export const buildScenario = (
     add("lightClient", "HeadUpdated", { slot: 299n, headerRoot: byte("d3", 32), executionBlockHash: byte("c3", 32) });
   });
   transaction(second.chainId, 220, (add) => {
-    add("bridge", "AffirmationCompleted", delivered(ids.failed, false, accounts.executor));
   });
   transaction(second.chainId, 225, (add) => {
     add("bridge", "AffirmationCompleted", delivered(ids.plain, true, accounts.executor));

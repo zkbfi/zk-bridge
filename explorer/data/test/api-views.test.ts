@@ -142,7 +142,6 @@ describe("feedItemView", () => {
         deliveredTimestamp: 2_000n,
         deliveredTransactionHash: hashOf("ef"),
         deliveredBlockNumber: 55n,
-        deliveredSuccess: false,
         executedBy: addressOf("f0"),
       },
       null,
@@ -153,7 +152,6 @@ describe("feedItemView", () => {
       transactionHash: hashOf("ef"),
       blockNumber: 55,
       timestamp: 2_000,
-      success: false,
       executedBy: addressOf("f0"),
     });
   });

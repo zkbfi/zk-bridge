@@ -26,7 +26,7 @@ const evidence = (changes: Record<string, unknown> = {}) => ({
   route: "ethereum_to_pulsechain",
   sourceTransactionHash: PROVEN.sourceTransactionHash,
   logIndex: 2,
-  message: { messageId: PROVEN.messageId, sender: PROVEN.sender, executor: PROVEN.executor, gasLimit: Number(PROVEN.gasLimit), sourceSlot: 14_099_000 },
+  message: { messageId: PROVEN.messageId, sender: PROVEN.sender, executor: PROVEN.executor, sourceSlot: 14_099_000 },
   destination: { chainId: 369, bridge, lightClient },
   anchor: { slot: 14_100_000, root: word("e") },
   deliveryStatus: "notDelivered",

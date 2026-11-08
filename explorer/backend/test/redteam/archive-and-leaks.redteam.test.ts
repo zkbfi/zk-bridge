@@ -20,7 +20,7 @@ const evidenceFor = (messageId: string) => ({
   route: "pulsechain_to_ethereum",
   sourceTransactionHash: id("a"),
   logIndex: 1,
-  message: { messageId, sender: `0x${"7".repeat(40)}`, executor: `0x${"8".repeat(40)}`, gasLimit: 250000, data: "0x" },
+  message: { messageId, sender: `0x${"7".repeat(40)}`, executor: `0x${"8".repeat(40)}`, data: "0x" },
   destination: { chainId: 1, bridge: `0x${"b".repeat(40)}`, lightClient: `0x${"c".repeat(40)}` },
   anchor: { slot: 90, root: id("d") },
   deliveryStatus: "notDelivered",

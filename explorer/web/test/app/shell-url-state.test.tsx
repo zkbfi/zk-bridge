@@ -49,14 +49,14 @@ describe("a dialog in the address", () => {
     renderWithWallet(<Shell />, { wallet: connectedWallet() });
     await screen.findByRole("table", { name: "Transfers and messages" });
     act(() => {
-      window.history.pushState(null, "", `#/pair/${FIXTURE_PAIR.id}?dialog=message&msg.gas=250000`);
+      window.history.pushState(null, "", `#/pair/${FIXTURE_PAIR.id}?dialog=message&msg.data=0xabcd`);
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     const dialog = await screen.findByRole("dialog", { name: "Send a message" });
-    expect(await within(dialog).findByLabelText(/^Gas for the call/)).toHaveValue("250000");
+    expect(await within(dialog).findByLabelText("Call data")).toHaveValue("0xabcd");
     const before = window.history.length;
     await userEvent.type(within(dialog).getByLabelText(/Target contract/), "0x12");
-    await waitFor(() => expect(window.location.hash).toBe(`#/pair/${FIXTURE_PAIR.id}?dialog=message&msg.target=0x12&msg.gas=250000`));
+    await waitFor(() => expect(window.location.hash).toBe(`#/pair/${FIXTURE_PAIR.id}?dialog=message&msg.target=0x12&msg.data=0xabcd`));
     expect(window.history.length).toBe(before);
     act(() => {
       window.history.replaceState(null, "", `#/pair/${FIXTURE_PAIR.id}`);

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {MediatorBuild} from "./utils/MediatorBuild.sol";
 import {MessageScenes} from "./utils/MessageScenes.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {GateGenuineBeaconRoots} from "./utils/GateMocks.sol";
@@ -58,15 +59,13 @@ contract BytecodeTest is MessageScenes {
     function _mediatorTerms() private returns (TokenMediator.MediatorTerms memory terms) {
         terms.bridge = address(bridge);
         terms.remoteMediator = makeAddr("remote mediator");
-        terms.remoteChainId = CHAIN_A;
-        terms.remoteChainName = "Chain A";
     }
 
     function _mediatorContracts()
         internal
         returns (TokenMediator mediator, TokenFactory factory, address copy, DeliveryRouter deliveryRouter)
     {
-        mediator = new TokenMediator(_mediatorTerms());
+        mediator = MediatorBuild.deploy(_mediatorTerms(), "Chain A");
         factory = mediator.tokenFactory();
         vm.prank(address(mediator));
         copy = factory.deploy("Copy", "CPY", 18, CHAIN_A, makeAddr("native token"));
@@ -78,7 +77,7 @@ contract BytecodeTest is MessageScenes {
 
     /// @dev The runtime code of every contract that runs on both chains, with the names that the logs print. The fork
     /// gate in enforcing mode and the fork registry are scanned in other tests, with the probe.
-    function _deployedContracts() internal returns (string[8] memory names, bytes[8] memory codes) {
+    function _deployedContracts() internal returns (string[12] memory names, bytes[12] memory codes) {
         (TokenMediator mediator, TokenFactory factory, address copy, DeliveryRouter deliveryRouter) =
             _mediatorContracts();
         names = [
@@ -89,7 +88,11 @@ contract BytecodeTest is MessageScenes {
             "TokenMediator",
             "TokenFactory",
             "BridgedToken",
-            "DeliveryRouter"
+            "DeliveryRouter",
+            "ReceiptProofLib",
+            "OpeningProofLib",
+            "BeaconLayoutLib",
+            "MediatorPayloads"
         ];
         codes = [
             address(lightClientForA).code,
@@ -99,18 +102,22 @@ contract BytecodeTest is MessageScenes {
             address(mediator).code,
             address(factory).code,
             copy.code,
-            address(deliveryRouter).code
+            address(deliveryRouter).code,
+            vm.getDeployedCode("ReceiptProofLib.sol:ReceiptProofLib"),
+            vm.getDeployedCode("OpeningProofLib.sol:OpeningProofLib"),
+            vm.getDeployedCode("BeaconLayoutLib.sol:BeaconLayoutLib"),
+            vm.getDeployedCode("MediatorPayloads.sol:MediatorPayloads")
         ];
     }
 
     /// Claim: no hardened contract contains MCOPY or TSTORE (or TLOAD). Shows: the count is zero for each opcode in
     /// the runtime code of the light client, both message bridges, the fork gate (detection mode and enforcing mode),
-    /// the token mediator, its factory, a bridged token, the delivery router, with the vendored
-    /// libraries linked in. Matters: R2-10 (the repository compiled for cancun, and PulseChain rejects those
+    /// the token mediator, its factory, a bridged token, the delivery router, and the four external libraries that the
+    /// bridge and the mediator link (`ReceiptProofLib`, `OpeningProofLib`, `BeaconLayoutLib`, `MediatorPayloads`). Matters: R2-10 (the repository compiled for cancun, and PulseChain rejects those
     /// opcodes). Every contract that runs on both chains must pass. The storage reentrancy guard, not the transient
     /// one, is what makes this pass for the bridge and the mediator.
     function test_R2_10_noMcopyOrTstoreInHardenedBytecode() public {
-        (string[8] memory names, bytes[8] memory codes) = _deployedContracts();
+        (string[12] memory names, bytes[12] memory codes) = _deployedContracts();
         for (uint256 i = 0; i < codes.length; i++) {
             assertGt(codes[i].length, 500, string.concat(names[i], " has code"));
             _assertNoNewOpcodes(codes[i]);
@@ -156,7 +163,7 @@ contract BytecodeTest is MessageScenes {
     /// is below the limit, for the light client, both message bridges, the fork gate, the token mediator, its factory,
     /// a bridged token, the delivery router. Matters: each contract is deployable on both chains.
     function test_R2_10_hardenedContractsFitTheSizeLimit() public {
-        (string[8] memory names, bytes[8] memory codes) = _deployedContracts();
+        (string[12] memory names, bytes[12] memory codes) = _deployedContracts();
         for (uint256 i = 0; i < codes.length; i++) {
             emit log_named_uint(names[i], codes[i].length);
             assertLt(codes[i].length, 24_576, names[i]);

@@ -355,6 +355,11 @@ export const deliveryRouterAbi = [
             "name": "multiplier",
             "type": "uint256",
             "internalType": "uint256"
+          },
+          {
+            "name": "callGas",
+            "type": "uint256",
+            "internalType": "uint256"
           }
         ]
       }
@@ -409,27 +414,9 @@ export const deliveryRouterAbi = [
         "name": "data",
         "type": "bytes",
         "internalType": "bytes"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "payable"
-  },
-  {
-    "type": "function",
-    "name": "relayTokensAndCall",
-    "inputs": [
-      {
-        "name": "receiver",
-        "type": "address",
-        "internalType": "address"
       },
       {
-        "name": "data",
-        "type": "bytes",
-        "internalType": "bytes"
-      },
-      {
-        "name": "gasLimit",
+        "name": "callbackGas",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -480,24 +467,6 @@ export const deliveryRouterAbi = [
     "type": "function",
     "name": "wrapAndRelayTokens",
     "inputs": [],
-    "outputs": [],
-    "stateMutability": "payable"
-  },
-  {
-    "type": "function",
-    "name": "wrapAndRelayTokens",
-    "inputs": [
-      {
-        "name": "receiver",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
-        "name": "gasLimit",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
     "outputs": [],
     "stateMutability": "payable"
   },
@@ -610,6 +579,17 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "error",
+    "name": "CallOutOfGas",
+    "inputs": [
+      {
+        "name": "gasAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "DeliveryInProgress",
     "inputs": []
   },
@@ -617,6 +597,22 @@ export const deliveryRouterAbi = [
     "type": "error",
     "name": "EmptyData",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientGas",
+    "inputs": [
+      {
+        "name": "available",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "required",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",

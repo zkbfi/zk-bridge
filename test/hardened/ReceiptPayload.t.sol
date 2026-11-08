@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
+import {ReceiptProofLib} from "../../src/hardened/ReceiptProofLib.sol";
 import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";
 import {RLPReader} from "../../src/hardened/vendor/optimism/rlp/RLPReader.sol";
 import {MessageScenes} from "./utils/MessageScenes.sol";
@@ -18,17 +19,17 @@ contract ReceiptPayloadBridge is MessageBridge {
         BridgeTerms memory terms,
         uint64 capellaEraValue,
         address gate
-    ) MessageBridge(lightClient, localChainId, remoteChainId, remoteBridgeAddress, terms, capellaEraValue, gate) {}
+    ) MessageBridge(lightClient, remoteChainId, remoteBridgeAddress, terms, capellaEraValue, gate) {}
 
     /// @dev The bytes that the payload item covers, and its length.
     function payloadBytes(bytes memory receipt) external pure returns (bytes memory) {
-        RLPReader.RLPItem memory payload = _receiptPayload(receipt);
+        RLPReader.RLPItem memory payload = ReceiptProofLib.receiptPayload(receipt);
         if (payload.length == 0) return "";
         return RLPReader.readRawBytes(payload);
     }
 
     function payloadLength(bytes memory receipt) external pure returns (uint256) {
-        return _receiptPayload(receipt).length;
+        return ReceiptProofLib.receiptPayload(receipt).length;
     }
 }
 

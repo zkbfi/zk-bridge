@@ -99,6 +99,14 @@ describe("suggestGasMultiplier", () => {
     expect(director.settings).toBe(0n);
   });
 
+  it("counts the call gas in the limit and carries it in the director", () => {
+    const director = suggestGasMultiplier({ ...input, callGas: 50_000n });
+    expect(director.callGas).toBe(50_000n);
+    expect(director.limit).toBe(((400_000n + 50_000n + 100_000n) * 12n * 20n) / 10n);
+    expect(suggestGasMultiplier(input).callGas).toBe(0n);
+    expect(() => suggestGasMultiplier({ ...input, callGas: -1n })).toThrow(RangeError);
+  });
+
   it("enforces the ceiling: a spike in the base fee cannot take more than the limit", () => {
     const director = suggestGasMultiplier(input);
     const spike = expectedFee(director, { value: 10n ** 30n, gasUsed: 400_000n, baseFeeWei: 20_000n });
@@ -157,7 +165,7 @@ describe("suggestGasMultiplier", () => {
 describe("defaultTip", () => {
   it("is 0.1 percent in the share mode, and takes exactly that from a transfer", () => {
     const director = defaultTip(recipient);
-    expect(director).toEqual({ recipient, settings: MULTIPLIER_OF_TOTAL, limit: 0n, multiplier: 10n ** 15n });
+    expect(director).toEqual({ recipient, settings: MULTIPLIER_OF_TOTAL, limit: 0n, multiplier: 10n ** 15n, callGas: 0n });
     expect(feeModeOf(director.settings)).toBe("share");
     expect(expectedFee(director, { value: 100n * wei, gasUsed: 0n, baseFeeWei: 0n })).toEqual({ fee: wei / 10n, toRecipient: 100n * wei - wei / 10n });
   });
@@ -185,6 +193,6 @@ describe("the price check and a zero cost", () => {
 
   it("gives a fixed fee of zero for a cost of zero, whatever the margin", () => {
     const director = suggestFixed({ recipient, ...goodPrice, marginRate: 10n ** 17n, costWei: 0n, transferValue: 0n });
-    expect(director).toEqual({ recipient, settings: FIXED_FEE, limit: 0n, multiplier: 0n });
+    expect(director).toEqual({ recipient, settings: FIXED_FEE, limit: 0n, multiplier: 0n, callGas: 0n });
   });
 });

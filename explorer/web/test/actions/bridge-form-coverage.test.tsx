@@ -7,6 +7,7 @@ import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fi
 import type { PairConfig, TokenInfo } from "@terminal/model/types";
 import { type BridgeFormProps } from "../../src/actions/BridgeForm";
 import type { WebStep } from "../../src/tx/bridge-steps";
+import { MAX_CALL_GAS, routerCallbackGas } from "@zk-bridge/shared";
 import { buildFixtureContext } from "../helpers";
 import { renderPage, type RenderPageOptions } from "../render";
 import { connectedWallet, walletWrapper } from "../app/support";
@@ -115,6 +116,7 @@ describe("the receiver modes without a tip", () => {
     const data = screen.getByLabelText("Data for the receiver");
     await userEvent.type(data, "0xabcd");
     expect(data).toHaveValue("0xabcd");
+    await userEvent.type(screen.getByLabelText("Callback gas"), "300000");
     expect(screen.queryByLabelText("Fallback recipient")).toBeNull();
     expect(screen.queryByRole("option", { name: /fallback/i })).toBeNull();
     const review = screen.getByRole("button", { name: "Review transaction" });
@@ -131,11 +133,12 @@ describe("the receiver modes without a tip", () => {
     expect(options).toEqual(["plain", "call"]);
   });
 
-  it("sends the plain function when the gas limit is empty", async () => {
+  it("sends the plain function and shows no gas field for a plain transfer", async () => {
     const { onReview } = await renderForm();
     await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
     await chooseNoTip();
-    expect(screen.getByLabelText("Gas limit")).toHaveValue("");
+    expect(screen.queryByLabelText("Gas limit")).toBeNull();
+    expect(screen.queryByLabelText("Callback gas")).toBeNull();
     const review = screen.getByRole("button", { name: "Review transaction" });
     await waitFor(() => expect(review).toBeEnabled());
     await userEvent.click(review);
@@ -143,44 +146,36 @@ describe("the receiver modes without a tip", () => {
     expect(steps.at(-1)!.plan.functionSignature).toBe("relayTokens(address,address,uint256)");
   });
 
-  it("sends the gas limit overload of relayTokens when a gas limit is typed", async () => {
-    const { onReview } = await renderForm();
-    await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
-    await chooseNoTip();
-    await userEvent.type(screen.getByLabelText("Gas limit"), "900000");
-    const review = screen.getByRole("button", { name: "Review transaction" });
-    await waitFor(() => expect(review).toBeEnabled());
-    await userEvent.click(review);
-    const steps = onReview.mock.calls[0]![0] as readonly WebStep[];
-    expect(steps.at(-1)!.plan.functionSignature).toBe("relayTokens(address,address,uint256,uint256)");
-  });
-
-  it("sends the gas limit overload of relayTokensAndCall for a transfer with a call", async () => {
+  it("sends relayTokensAndCall with the callback gas for a transfer with a call", async () => {
     const { onReview } = await renderForm();
     await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
     await chooseNoTip();
     await userEvent.selectOptions(screen.getByLabelText("How the receiver gets it"), "call");
     await userEvent.type(screen.getByLabelText("Data for the receiver"), "0xabcd");
-    await userEvent.type(screen.getByLabelText("Gas limit"), "1100000");
+    await userEvent.type(screen.getByLabelText("Callback gas"), "1100000");
     const review = screen.getByRole("button", { name: "Review transaction" });
     await waitFor(() => expect(review).toBeEnabled());
     await userEvent.click(review);
     const steps = onReview.mock.calls[0]![0] as readonly WebStep[];
     expect(steps.at(-1)!.plan.functionSignature).toBe("relayTokensAndCall(address,address,uint256,bytes,uint256)");
+    expect(steps.at(-1)!.plan.arguments.at(-1)?.value).toBe("1100000");
   });
 
-  it("blocks the review and says why when the gas limit is not a whole number", async () => {
+  it("blocks the review and says why when a transfer with a call has no callback gas, or one that is not a whole number", async () => {
     await renderForm();
     await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
     await chooseNoTip();
-    await userEvent.type(screen.getByLabelText("Gas limit"), "abc");
-    await waitFor(() => expect(screen.getByText(/gas limit must be a whole number above zero/i)).toBeInTheDocument());
+    await userEvent.selectOptions(screen.getByLabelText("How the receiver gets it"), "call");
+    await waitFor(() => expect(screen.getByText(/Enter the callback gas/)).toBeInTheDocument());
+    await userEvent.type(screen.getByLabelText("Callback gas"), "abc");
+    await waitFor(() => expect(screen.getByText(/callback gas must be a whole number above zero/i)).toBeInTheDocument());
     expect(screen.getByRole("button", { name: "Review transaction" })).toBeDisabled();
   });
 
-  it("hides the gas limit on the wrap form, which has no such overload", async () => {
+  it("hides the callback gas on the wrap form, which has no call", async () => {
     await renderForm({ variant: "wrap" });
-    expect(screen.queryByLabelText("Gas limit")).toBeNull();
+    expect(screen.queryByLabelText("Callback gas")).toBeNull();
+    expect(screen.queryByLabelText("Call gas")).toBeNull();
   });
 });
 
@@ -301,6 +296,33 @@ describe("the call fields", () => {
     await userEvent.click(screen.getByRole("radio", { name: /No tip: deliver directly, no router/ }));
     await userEvent.type(screen.getByLabelText("Call target"), `0x${"77".repeat(20)}`);
     expect(await screen.findByText(/A call after the delivery needs a tip/)).toBeVisible();
+  });
+
+  it("shows the call gas field once a call is named, and the callback gas that follows from it, read only", async () => {
+    await renderForm();
+    expect(screen.queryByLabelText("Call gas")).toBeNull();
+    expect(screen.queryByTestId("callback-gas")).toBeNull();
+    await userEvent.type(screen.getByLabelText("Call target"), `0x${"77".repeat(20)}`);
+    await userEvent.type(screen.getByLabelText("Call gas"), "200000");
+    expect(screen.getByTestId("callback-gas")).toHaveTextContent(`Callback gas: ${routerCallbackGas({ callGas: 200_000n })} (the call gas plus the router's own work; the page sets it for you)`);
+  });
+
+  it("shows no callback gas and says why when the call gas is above what a delivery can carry", async () => {
+    await renderForm();
+    await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
+    await userEvent.type(screen.getByLabelText("Call target"), `0x${"77".repeat(20)}`);
+    await userEvent.type(screen.getByLabelText("Call gas"), String(MAX_CALL_GAS + 1n));
+    expect(screen.queryByTestId("callback-gas")).toBeNull();
+    expect((await screen.findAllByText(new RegExp(`The call gas is above ${MAX_CALL_GAS}, the most that a delivery can carry`))).length).toBeGreaterThan(0);
+  });
+
+  it("asks for the call gas when a call has none", async () => {
+    await renderForm();
+    await userEvent.type(screen.getByLabelText(/^Amount to send/), "250");
+    await userEvent.type(screen.getByLabelText("Call target"), `0x${"77".repeat(20)}`);
+    expect(screen.getByLabelText("Call gas")).toHaveValue("");
+    expect(screen.queryByTestId("callback-gas")).toBeNull();
+    expect((await screen.findAllByText(/Enter the call gas: the exact gas the call gets/)).length).toBeGreaterThan(0);
   });
 
   it("offers no call fields on the wrap form", async () => {

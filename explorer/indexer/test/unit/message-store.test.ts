@@ -91,7 +91,7 @@ describe("writeMessage", () => {
   it("does not cover a message with no send block, as when the delivery arrives first", async () => {
     const database = createFakeDatabase();
     database.seed(lightClientHeads, head(100n));
-    expect(await write(database, { deliveredSuccess: true, deliveredTimestamp: 2_000n })).toMatchObject({
+    expect(await write(database, { deliveredBlockNumber: 150n, deliveredTimestamp: 2_000n })).toMatchObject({
       status: "delivered",
       coveredByHeadSlot: null,
     });
@@ -108,7 +108,7 @@ describe("writeMessage", () => {
   it("updates the row of a known message and keeps its earlier facts", async () => {
     const database = createFakeDatabase();
     await write(database, send);
-    const row = await write(database, { deliveredSuccess: true, deliveredTimestamp: 2_000n });
+    const row = await write(database, { deliveredBlockNumber: 150n, deliveredTimestamp: 2_000n });
     expect(row).toMatchObject({ status: "delivered", sentBlockNumber: 100n, deliveredTimestamp: 2_000n });
     expect(database.rows(messages)).toHaveLength(1);
   });

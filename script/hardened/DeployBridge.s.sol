@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {Script, console2} from "forge-std/Script.sol";
+import {console2} from "forge-std/Script.sol";
+import {LinkedCode} from "./LinkedCode.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
@@ -34,18 +35,25 @@ import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 /// | [own-chain light client]| -                   | n + 1                 | gate mode `DetectBeaconRootsAndRegistry` |
 /// | [fork registry]         | -                   | n + 2                 | gate mode `DetectBeaconRootsAndRegistry` |
 /// | deposit gate            | n + 1               | n + 3                 | always                             |
-/// | message bridge          | n + 2               | n + 4                 | always                             |
-/// | token mediator          | n + 3               | n + 5                 | always                             |
-/// | [delivery router]       | n + 4               | n + 6                 | `deployDeliveryRouter` is `true`   |
+/// | `ReceiptProofLib`       | n + 2               | n + 4                 | always                             |
+/// | `OpeningProofLib`       | n + 3               | n + 5                 | always                             |
+/// | `BeaconLayoutLib`       | n + 4               | n + 6                 | always                             |
+/// | message bridge          | n + 5               | n + 7                 | always                             |
+/// | `MediatorPayloads`      | n + 6               | n + 8                 | always                             |
+/// | token factory           | n + 7               | n + 9                 | always                             |
+/// | token mediator          | n + 8               | n + 10                | always                             |
+/// | [delivery router]       | n + 9               | n + 11                | `deployDeliveryRouter` is `true`   |
 ///
-/// The mediator creates its token factory inside its constructor. The factory is the first contract of the mediator,
-/// so it sits at `computeCreateAddress(mediator, 1)` and takes no deployer nonce. The delivery router is the one router
+/// The four libraries are external libraries linked into the bridge and the mediator (see `LinkedCode`): each is a
+/// transaction of its own, so that every creation stays under the per-transaction gas cap of EIP-7825. The token factory
+/// is deployed before the mediator and names the predicted mediator; the mediator takes it as a term and refuses a
+/// factory that names another mediator. The delivery router is the one router
 /// of a chain: it wraps and sends the native coin, and it delivers, tips and unwraps. A chain without a wrapped native
 /// token gets no delivery router, and the configuration that asks for one is refused. The delivery router also needs `deliveryRouter.rewardAddress` (the one address that
 /// receives the tips) and `deliveryRouter.failedDeliveryAddress` (the address that receives what the router cannot
 /// deliver; it may equal the reward address). Anyone may call the router, so it has no runner. The deployment reads
 /// both addresses back from the router and refuses a mismatch.
-contract DeployBridge is Script {
+contract DeployBridge is LinkedCode {
     /// @notice Whether a router is deployed.
     enum RouterChoice {
         Skip,
@@ -133,9 +141,13 @@ contract DeployBridge is Script {
         address observedLightClient;
         address registry;
         address gate;
+        address receiptProofLib;
+        address openingProofLib;
+        address beaconLayoutLib;
         address bridge;
-        address mediator;
+        address mediatorPayloadsLib;
         address factory;
+        address mediator;
         address deliveryRouter;
     }
 
@@ -355,8 +367,7 @@ contract DeployBridge is Script {
     /// everything back.
     /// @dev The caller selects the right fork first.
     /// @param deployment The deployment of one chain.
-    /// @return deployed The addresses of the deployed contracts. The mediator creates the factory, and the script reads
-    /// its address from the mediator.
+    /// @return deployed The addresses of the deployed contracts.
     function deployChain(ChainDeployment memory deployment) public returns (ChainAddresses memory deployed) {
         assertChainEnvironment(deployment.chain, deployment.deployer);
         ChainConfig memory chain = deployment.chain;
@@ -368,9 +379,15 @@ contract DeployBridge is Script {
             deployed.registry = _deployRegistry(chain, deployed.observedLightClient);
         }
         deployed.gate = _deployGate(chain.gate, deployed.registry);
-        deployed.bridge = _deployBridge(deployment, deployed.lightClient, deployed.gate);
-        deployed.mediator = _deployMediator(deployment, deployed.bridge);
-        deployed.factory = address(TokenMediator(deployed.mediator).tokenFactory());
+        deployed.receiptProofLib = deployLibrary("ReceiptProofLib");
+        deployed.openingProofLib = deployLibrary("OpeningProofLib");
+        deployed.beaconLayoutLib = deployLibrary("BeaconLayoutLib");
+        deployed.bridge = _deployBridge(deployment, deployed, deployed.lightClient, deployed.gate);
+        deployed.mediatorPayloadsLib = deployLibrary("MediatorPayloads");
+        deployed.factory = deployBuilt(
+            "TokenFactory", _librariesOf(deployed), abi.encode(deployment.plan.mediator, chain.remoteChainName)
+        );
+        deployed.mediator = _deployMediator(deployment, deployed, deployed.bridge, deployed.factory);
         if (chain.deliveryRouter == RouterChoice.Deploy) {
             deployed.deliveryRouter = _deployDeliveryRouter(
                 deployed.mediator,
@@ -392,9 +409,13 @@ contract DeployBridge is Script {
         ChainAddresses memory plan = deployment.plan;
         _requireAsPredicted("lightClient", plan.lightClient, deployed.lightClient);
         _requireAsPredicted("gate", plan.gate, deployed.gate);
+        _requireAsPredicted("receiptProofLib", plan.receiptProofLib, deployed.receiptProofLib);
+        _requireAsPredicted("openingProofLib", plan.openingProofLib, deployed.openingProofLib);
+        _requireAsPredicted("beaconLayoutLib", plan.beaconLayoutLib, deployed.beaconLayoutLib);
         _requireAsPredicted("bridge", plan.bridge, deployed.bridge);
-        _requireAsPredicted("mediator", plan.mediator, deployed.mediator);
+        _requireAsPredicted("mediatorPayloadsLib", plan.mediatorPayloadsLib, deployed.mediatorPayloadsLib);
         _requireAsPredicted("factory", plan.factory, deployed.factory);
+        _requireAsPredicted("mediator", plan.mediator, deployed.mediator);
         _requireAsPredicted("deliveryRouter", plan.deliveryRouter, deployed.deliveryRouter);
         _requireVerifierPin(deployment.chain);
         _verifyLightClient(deployment.chain, deployed.lightClient);
@@ -402,6 +423,19 @@ contract DeployBridge is Script {
         _verifyBridge(deployment, deployed);
         _verifyMediator(deployment, deployed);
         _verifyRouters(deployment.chain, deployed);
+        // Last: the code of each library, and every link site of the bridge and the mediator.
+        requireLibraryCode("ReceiptProofLib", deployed.receiptProofLib);
+        requireLibraryCode("OpeningProofLib", deployed.openingProofLib);
+        requireLibraryCode("BeaconLayoutLib", deployed.beaconLayoutLib);
+        requireLibraryCode("MediatorPayloads", deployed.mediatorPayloadsLib);
+        requireLinked("MessageBridge", deployed.bridge, _librariesOf(deployed));
+        requireLinked("TokenMediator", deployed.mediator, _librariesOf(deployed));
+        requireBuiltCode("MessageBridge", deployed.bridge, _librariesOf(deployed));
+        requireBuiltCode("TokenMediator", deployed.mediator, _librariesOf(deployed));
+        requireBuiltCode("TokenFactory", deployed.factory, _librariesOf(deployed));
+        if (deployed.deliveryRouter != address(0)) {
+            requireBuiltCode("DeliveryRouter", deployed.deliveryRouter, _librariesOf(deployed));
+        }
     }
 
     /// @notice Reads back the fork registry and the own-chain light client behind the gate. In other modes it checks
@@ -453,8 +487,8 @@ contract DeployBridge is Script {
 
     // ------------------------------------------------------------------ internals
 
-    /// @dev Follows the table in the contract comment. The factory takes no deployer nonce: the mediator creates it.
-    /// A router that the chain does not get stays zero and takes no nonce.
+    /// @dev Follows the table in the contract comment. A router that the chain does not get stays zero and takes no
+    /// nonce.
     function _predictChain(address deployer, ChainConfig memory chain)
         private
         pure
@@ -467,9 +501,13 @@ contract DeployBridge is Script {
             plan.registry = vm.computeCreateAddress(deployer, nonce++);
         }
         plan.gate = vm.computeCreateAddress(deployer, nonce++);
+        plan.receiptProofLib = vm.computeCreateAddress(deployer, nonce++);
+        plan.openingProofLib = vm.computeCreateAddress(deployer, nonce++);
+        plan.beaconLayoutLib = vm.computeCreateAddress(deployer, nonce++);
         plan.bridge = vm.computeCreateAddress(deployer, nonce++);
+        plan.mediatorPayloadsLib = vm.computeCreateAddress(deployer, nonce++);
+        plan.factory = vm.computeCreateAddress(deployer, nonce++);
         plan.mediator = vm.computeCreateAddress(deployer, nonce++);
-        plan.factory = vm.computeCreateAddress(plan.mediator, 1);
         if (chain.deliveryRouter == RouterChoice.Deploy) {
             plan.deliveryRouter = vm.computeCreateAddress(deployer, nonce);
         }
@@ -487,9 +525,13 @@ contract DeployBridge is Script {
         console2.log("  own-chain light client", plan.observedLightClient);
         console2.log("  fork registry", plan.registry);
         console2.log("  deposit gate", plan.gate);
+        console2.log("  ReceiptProofLib", plan.receiptProofLib);
+        console2.log("  OpeningProofLib", plan.openingProofLib);
+        console2.log("  BeaconLayoutLib", plan.beaconLayoutLib);
         console2.log("  message bridge", plan.bridge);
-        console2.log("  token mediator", plan.mediator);
+        console2.log("  MediatorPayloads", plan.mediatorPayloadsLib);
         console2.log("  token factory", plan.factory);
+        console2.log("  token mediator", plan.mediator);
         console2.log("  delivery router", plan.deliveryRouter);
         if (chain.wrappedNative != address(0)) return;
         console2.log("  WARNING: no wrapped native token is configured. This chain cannot get a delivery router.");
@@ -562,15 +604,17 @@ contract DeployBridge is Script {
         );
     }
 
-    function _deployBridge(ChainDeployment memory deployment, address lightClient, address gate)
-        private
-        returns (address)
-    {
+    function _deployBridge(
+        ChainDeployment memory deployment,
+        ChainAddresses memory deployed,
+        address lightClient,
+        address gate
+    ) private returns (address) {
         ChainConfig memory chain = deployment.chain;
-        return address(
-            new MessageBridge(
+        return deployLinkedBridge(
+            _librariesOf(deployed),
+            abi.encode(
                 lightClient,
-                chain.chainId,
                 deployment.remoteChainId,
                 deployment.remoteBridge,
                 MessageBridge.BridgeTerms({
@@ -584,6 +628,19 @@ contract DeployBridge is Script {
         );
     }
 
+    /// @dev No libraries: for a contract that links none.
+    function _noLibraries() private pure returns (Libraries memory none) {}
+
+    /// @dev The library addresses of the deployed contracts of a chain.
+    function _librariesOf(ChainAddresses memory deployed) private pure returns (Libraries memory) {
+        return Libraries({
+            receiptProof: deployed.receiptProofLib,
+            openingProof: deployed.openingProofLib,
+            beaconLayout: deployed.beaconLayoutLib,
+            mediatorPayloads: deployed.mediatorPayloadsLib
+        });
+    }
+
     /// @dev The optional key `gloasForkEpoch` of the remote chain, as a slot. Absent means the chain has no Gloas fork.
     function _readGloasForkSlot(string memory json, string memory client) private view returns (uint64) {
         string memory key = string.concat(client, ".gloasForkEpoch");
@@ -593,16 +650,20 @@ contract DeployBridge is Script {
                 * uint64(_readNonZeroUint(json, string.concat(client, ".slotsPerEpoch")));
     }
 
-    function _deployMediator(ChainDeployment memory deployment, address bridge) private returns (address) {
-        ChainConfig memory chain = deployment.chain;
-        return address(
-            new TokenMediator(
+    function _deployMediator(
+        ChainDeployment memory deployment,
+        ChainAddresses memory deployed,
+        address bridge,
+        address factory
+    ) private returns (address) {
+        return deployLinkedMediator(
+            _librariesOf(deployed),
+            abi.encode(
                 TokenMediator.MediatorTerms({
                     bridge: bridge,
                     remoteMediator: deployment.remoteMediator,
-                    remoteChainId: deployment.remoteChainId,
-                    flowLimiter: chain.flowLimiter,
-                    remoteChainName: chain.remoteChainName
+                    flowLimiter: deployment.chain.flowLimiter,
+                    tokenFactory: factory
                 })
             )
         );
@@ -615,7 +676,13 @@ contract DeployBridge is Script {
         address failedDeliveryAddress
     ) private returns (address) {
         return address(
-            new DeliveryRouter(ITokenMediator(mediator), IWETH(wrappedNative), rewardAddress, failedDeliveryAddress)
+            DeliveryRouter(
+                payable(deployBuilt(
+                        "DeliveryRouter",
+                        _noLibraries(),
+                        abi.encode(mediator, wrappedNative, rewardAddress, failedDeliveryAddress)
+                    ))
+            )
         );
     }
 
