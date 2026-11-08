@@ -39,6 +39,11 @@ export type StepDisclosure = {
 export type WebStep = {
   readonly plan: PlannedTransaction;
   readonly disclosure: StepDisclosure;
+  /**
+   * Set on the step that the sequence inserts before a send on a chain whose deposit gate enforces: `confirm(evidence)`
+   * for the epoch, with the gas of its simulation from the sender and the first second at which it would revert.
+   */
+  readonly gateConfirm?: { readonly epoch: bigint; readonly gas: bigint; readonly validUntil: bigint };
 };
 
 /** The values of the bridge form, as text. */

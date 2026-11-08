@@ -23,7 +23,7 @@ export const StepList = ({ steps, current }: { readonly steps: readonly Step[]; 
       const state = index < current ? "done" : index === current ? "now" : "ahead";
       const reached = index <= current;
       return (
-        <li key={step.label} className="zb-step" data-state={state}>
+        <li key={`${index}-${step.label}`} className="zb-step" data-state={state}>
           <span className="zb-step-dot" aria-hidden="true" />
           <span>{step.label}</span>
           <span className="zb-step-time">{reached ? step.at : step.estimate}</span>
