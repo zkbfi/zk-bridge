@@ -74,21 +74,21 @@ Evidence, read with public RPCs only (nothing sent):
    the errors and events of the linked libraries appended), the TypeScript packages and the prover, from the same commit.
 2. **Drain or pause in-flight traffic on the old contracts** (see "Tokens in flight"): stop the traffic bot (it sends
    through the old mediator), and let the runner deliver what is waiting.
-3. **Choose the deployer, and write it into the configuration.** `script/testnet/redeploy.config.testnet.json` names
-   `deployer` `0x444b15380A4560555326158D6799914186937Ec2`, but the running contracts were deployed by
-   `0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc` (the broadcast receipts of 2026-10-26; it is also the `minter` of the
-   test tokens). Either account can deploy the new layers: they have no owner, and the script reads every kept value from
-   the running contracts. The script refuses a signer that is not `deployer`, so set `deployer` to the address of the
-   keystore that will sign (`cast wallet address --account "$KEYSTORE_NAME"`). On 2026-11-07: `0xF71c...5eAc` had nonce 14
-   and 3.41 ETH on Sepolia, nonce 18 and about 45,000,000 PLS on 943; `0x444b...7Ec2` had nonce 4 and 4.0 ETH on Sepolia,
-   nonce 0 and 10 PLS on 943. The whole run needs about 99,000,000 gas on Sepolia (under 0.01 ETH at the fees of
-   2026-11-07: a base fee of 14 wei, and Foundry estimated 0.03 gwei per gas) and about 17,000,000 gas on 943 (under
-   0.001 PLS at a priority fee of 0.01 gwei); both accounts have enough.
+3. **The deployer.** The testnet deployer is `0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc`, the key of the item "testnet deployer wallet" in the 1Password
+   vault zkb.fi. It deployed the running contracts of 2026-10-26 (the broadcast receipts of that day; it is also the
+   `minter` of the test tokens) and this redeploy. `0x444b15380A4560555326158D6799914186937Ec2`, an earlier key that
+   older notes name, deployed nothing that runs. Owner, 2026-11-08: "ok, keep 0xF71c and fix the docs".
+   `script/testnet/redeploy.config.testnet.json` names it as `deployer`; the script refuses any other signer, so the
+   keystore named by `$KEYSTORE_NAME` must hold this key (`cast wallet address --account "$KEYSTORE_NAME"` prints
+   `0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc`). On 2026-11-07 it had nonce 14 and 3.41 ETH on Sepolia, nonce 18 and about 45,000,000 PLS on 943. The
+   whole run needs about 99,000,000 gas on Sepolia (under 0.01 ETH at the fees of 2026-11-07: a base fee of 14 wei, and
+   Foundry estimated 0.03 gwei per gas) and about 17,000,000 gas on 943 (under 0.001 PLS at a priority fee of
+   0.01 gwei).
 4. **Read the deployer nonces** and write them into the configuration (the file refuses its placeholders by name):
 
    ```sh
-   cast nonce "$DEPLOYER" --rpc-url sepolia
-   cast nonce "$DEPLOYER" --rpc-url pulsechain_testnet_v4
+   cast nonce 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc --rpc-url sepolia
+   cast nonce 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc --rpc-url pulsechain_testnet_v4
    ```
 
    The script reads the running contracts from `previousBridge`, `previousMediator` and `previousRouter` (filled from
@@ -100,25 +100,26 @@ Evidence, read with public RPCs only (nothing sent):
    ```sh
    REDEPLOY_CONFIG=script/testnet/redeploy.config.testnet.json REDEPLOY_MODE=layers \
      forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers \
-     --account "$KEYSTORE_NAME" --sender "$DEPLOYER" 2>&1 | redact | tee "$RUN_DIR/redeploy-dry-run.log"
+     --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc 2>&1 | redact | tee "$RUN_DIR/redeploy-dry-run.log"
    ```
 
-   Done on 2026-11-07 for both candidate deployers (with the current nonces, public RPCs as `rpcAlias`, no keystore):
-   both ran through `deployed on chain 11155111` and `deployed on chain 943`, so every read-back passed on the forks.
+   Done on 2026-11-07 (with the current nonces, public RPCs as `rpcAlias`, no keystore; it was also run for the
+   unused earlier key `0x444b...7Ec2`): both ran through `deployed on chain 11155111` and `deployed on chain 943`, so
+   every read-back passed on the forks.
    Foundry names some transactions of the dry run with a wrong `contractName` (`None`, or the name of another contract
    at the same address on the other chain): it cannot match linked code, and one deployer with overlapping nonce ranges
    creates different roles at the same address on the two chains. The printed plan and the read-back are what count.
 
 ## The deployment (sends transactions)
 
-Order: Sepolia first, then chain 943, eight transactions on each, all from `deployer`. Both bridges and both mediators
+Order: Sepolia first, then chain 943, eight transactions on each, all from the deployer `0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc`. Both bridges and both mediators
 name their twins on the other chain by predicted address, so the nonce of each chain must not move between the dry run
 and the run; nothing else may send from the deployer meanwhile.
 
 ```sh
 REDEPLOY_CONFIG=script/testnet/redeploy.config.testnet.json REDEPLOY_MODE=layers \
   forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers \
-  --account "$KEYSTORE_NAME" --sender "$DEPLOYER" \
+  --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc \
   --broadcast --slow --skip-simulation 2>&1 | redact | tee "$RUN_DIR/redeploy.log"
 ```
 
@@ -218,7 +219,7 @@ A new router needs no change to layers 1 and 2. On one chain:
 
 ```sh
 REDEPLOY_CONFIG=<file whose previousRouter is the router to replace> REDEPLOY_MODE=router REDEPLOY_CHAIN=chainA \
-  forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers --account "$KEYSTORE_NAME" --sender <deployer> \
+  forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc \
   --broadcast --slow --skip-simulation
 ```
 
