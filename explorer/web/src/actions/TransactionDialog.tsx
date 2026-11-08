@@ -3,7 +3,7 @@ import { useEffect, type ReactNode } from "react";
 import { useRouterAddresses } from "../app/queries";
 import { buildConfirmView, type ConfirmLine, type ConfirmView } from "../tx/confirm-model";
 import type { WebStep } from "../tx/bridge-steps";
-import type { SequenceState } from "../tx/transaction-sequence";
+import { canRetry, type SequenceState } from "../tx/transaction-sequence";
 import { formatUnits, shortenHex } from "../ui/format";
 import { Modal } from "../ui/Modal";
 import { DataRow, Mono, Notice } from "../ui/primitives";
@@ -209,16 +209,21 @@ export const TransactionDialog = ({ steps, onClose, variant = "modal", onFinishe
       {variant === "sheet" ? (
         <div style={{ marginBottom: 12 }}>
           <StepList
-            steps={steps.map((planned, index) => ({
+            steps={(state.steps.length === 0 ? steps : state.steps).map((planned, index) => ({
               label: planned.plan.title,
               ...(index < state.outcomes.length ? { at: state.outcomes[index]!.status } : index === state.stepIndex ? { at: state.phase === "wallet" ? "in your wallet" : state.phase === "confirming" ? "confirming" : "" } : { estimate: "next" }),
             }))}
-            current={state.phase === "finished" ? steps.length : state.stepIndex}
+            current={state.phase === "finished" ? Math.max(steps.length, state.steps.length) : state.stepIndex}
           />
         </div>
       ) : null}
       <Box aria-live="polite">
         {state.phase === "preparing" ? <Text>Preparing the transaction: estimating gas and fees…</Text> : null}
+        {state.phase === "waiting" && state.gateWait != null ? (
+          <Notice tone="info">
+            The {state.gateWait.chainName} deposit gate needs a beacon header of epoch {state.gateWait.epoch.toString()} on chain before this epoch can be confirmed. Checking again in {state.gateWait.seconds} seconds.
+          </Notice>
+        ) : null}
         {state.phase === "wallet" ? <Notice tone="info">Confirm in your wallet. With a hardware wallet, read the screen of the device too.</Notice> : null}
         {state.phase === "confirming" ? <Notice tone="info">Submitted{state.submittedHash === null ? "" : ` as ${shortenHex(state.submittedHash, 8)}`}. Waiting for the chain to confirm it…</Notice> : null}
         {state.phase === "error" ? <Notice tone="error">{state.error}</Notice> : null}
@@ -260,11 +265,11 @@ export const TransactionDialog = ({ steps, onClose, variant = "modal", onFinishe
             <Button variant="outline" onClick={onClose}>
               Close
             </Button>
-            {state.outcomes.some((outcome) => outcome.status === "reverted") ? null : <Button onClick={() => sequence.retry()}>Try again</Button>}
+            {canRetry(state) ? <Button onClick={() => sequence.retry()}>Try again</Button> : null}
           </>
         ) : null}
         {state.phase === "finished" || state.phase === "cancelled" ? <Button onClick={onClose}>Close</Button> : null}
-        {state.phase === "preparing" ? (
+        {state.phase === "preparing" || state.phase === "waiting" ? (
           <Button variant="outline" onClick={cancel}>
             Cancel
           </Button>
