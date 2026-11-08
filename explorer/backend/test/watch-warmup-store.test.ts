@@ -3,8 +3,8 @@ import { openStorage } from "../src/storage.ts";
 import { DEFAULT_WARMUP } from "../src/watch/warmup.ts";
 import { CAP_WINDOW_MILLISECONDS, OBSERVATIONS_KEPT, SESSION_RETENTION_MILLISECONDS, createWarmupStore, noteJobWorkerWait } from "../src/watch/warmup-store.ts";
 
-/** The settings before 2026-11-06 (p90, no margin, 90 s grace): the scenarios of these tests rest on them. */
-const LEGACY_WARMUP = { ...DEFAULT_WARMUP, leadP: 0.9, leadMarginSeconds: 0, minLeadSeconds: 30, graceSeconds: 90 };
+/** The settings before 2026-11-06 (p90, no margin, 90 s grace, hold 40 s under a 60 s idle timeout): the scenarios of these tests rest on them. */
+const LEGACY_WARMUP = { ...DEFAULT_WARMUP, holdIntervalSeconds: 40, idleTimeoutSeconds: 60, leadP: 0.9, leadMarginSeconds: 0, minLeadSeconds: 30, graceSeconds: 90 };
 
 const HOUR = 3_600_000;
 const T = 1_800_000_000_000;

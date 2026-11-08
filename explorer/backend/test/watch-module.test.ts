@@ -56,13 +56,31 @@ describe("watchedDirections", () => {
     expect(() => makeConfig({ watch: { unknown: 1 } })).toThrow(BackendConfigError);
   });
 
+  it("owns the endpoint's idle timeout: the hold interval follows it and must stay below it", () => {
+    const warmup = (settings: Record<string, unknown>) => makeConfig({ watch: { warmup: settings } }).watch.warmup;
+    // Derived: two seconds under the idle timeout, at least 1.
+    expect(warmup({}).holdIntervalSeconds).toBe(3);
+    expect(warmup({ idleTimeoutSeconds: 60 }).holdIntervalSeconds).toBe(58);
+    expect(warmup({ idleTimeoutSeconds: 2 }).holdIntervalSeconds).toBe(1);
+    // Explicit: 40 stays valid under 60, and anything from the idle timeout up is refused with both numbers named.
+    expect(warmup({ idleTimeoutSeconds: 60, holdIntervalSeconds: 40 })).toMatchObject({ holdIntervalSeconds: 40, idleTimeoutSeconds: 60 });
+    expect(warmup({ idleTimeoutSeconds: 10, holdIntervalSeconds: 9 }).holdIntervalSeconds).toBe(9);
+    expect(() => warmup({ holdIntervalSeconds: 40 })).toThrow(/holdIntervalSeconds must be below idleTimeoutSeconds/);
+    expect(() => warmup({ idleTimeoutSeconds: 5, holdIntervalSeconds: 5 })).toThrow(/holdIntervalSeconds must be below idleTimeoutSeconds/);
+    // No hold interval fits under 1 s.
+    expect(() => warmup({ idleTimeoutSeconds: 1 })).toThrow(/holdIntervalSeconds must be below idleTimeoutSeconds/);
+    expect(() => warmup({ idleTimeoutSeconds: 0 })).toThrow(BackendConfigError);
+    expect(() => warmup({ idleTimeoutSeconds: 2.5 })).toThrow(BackendConfigError);
+    expect(warmup({ syncIdleTimeout: false }).syncIdleTimeout).toBe(false);
+  });
+
   it("checks the warm-up settings", () => {
-    expect(makeConfig({ watch: { warmup: { leadP: 0.5, dailyCapSeconds: 7200 } } }).watch.warmup).toMatchObject({ leadP: 0.5, dailyCapSeconds: 7200, holdIntervalSeconds: 40 });
+    expect(makeConfig({ watch: { warmup: { leadP: 0.5, dailyCapSeconds: 7200 } } }).watch.warmup).toMatchObject({ leadP: 0.5, dailyCapSeconds: 7200, holdIntervalSeconds: 3 });
     expect(() => makeConfig({ watch: { warmup: { leadP: 0 } } })).toThrow(BackendConfigError);
     expect(() => makeConfig({ watch: { warmup: { leadP: 1.5 } } })).toThrow(BackendConfigError);
     expect(() => makeConfig({ watch: { warmup: { minLeadSeconds: 700 } } })).toThrow(/minLeadSeconds must not be above maxLeadSeconds/);
     // The lead (p75 plus 5 s), the grace and the cost estimate are configurable.
-    expect(makeConfig({}).watch.warmup).toMatchObject({ leadP: 0.75, leadMarginSeconds: 5, graceSeconds: 45, idleTimeoutSeconds: 60, gpuUsdPerHour: 2.25 });
+    expect(makeConfig({}).watch.warmup).toMatchObject({ leadP: 0.75, leadMarginSeconds: 5, graceSeconds: 45, idleTimeoutSeconds: 5, syncIdleTimeout: true, holdIntervalSeconds: 3, gpuUsdPerHour: 2.25 });
     expect(makeConfig({ watch: { warmup: { leadMarginSeconds: 0, idleTimeoutSeconds: 5, gpuUsdPerHour: 1 } } }).watch.warmup).toMatchObject({ leadMarginSeconds: 0, idleTimeoutSeconds: 5, gpuUsdPerHour: 1 });
     expect(() => makeConfig({ watch: { warmup: { gpuUsdPerHour: -1 } } })).toThrow(BackendConfigError);
     // The fixed lead time of before 2026-11-01 still loads, and does nothing.

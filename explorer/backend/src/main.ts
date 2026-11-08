@@ -16,6 +16,7 @@ import { createProverFactories } from "./requests/job-prover.ts";
 import { createProofNeedReader, withoutIndexer } from "./requests/proof-need.ts";
 import { openStorage } from "./storage.ts";
 import { billingEndpoints, createBillingReader } from "./billing.ts";
+import { createIdleTimeoutSync } from "./idle-timeout.ts";
 import { createProverPing } from "./watch/ping.ts";
 import { watchedDirections } from "./watch/module.ts";
 import * as webhook from "./webhook/module.ts";
@@ -98,8 +99,26 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
   const pingProver = createProverPing({ ...warmupTarget(config, secrets), timeoutMilliseconds: config.watch.warmup.pingTimeoutSeconds * 1000 });
   const runpodEndpoints = billingEndpoints(config, secrets);
   const billing = runpodEndpoints.length === 0 ? undefined : createBillingReader({ endpoints: runpodEndpoints, now, logger });
-  const context: BackendModuleContext = { storage, config, pair: input.pair, prover: provers.utilityProver, proverForJob: provers.proverForJob, readProofNeed, now, logger, pingProver, ...(billing === undefined ? {} : { billing }) };
+  const idleSync =
+    runpodEndpoints.length === 0
+      ? undefined
+      : createIdleTimeoutSync({ endpoints: runpodEndpoints, idleTimeoutSeconds: config.watch.warmup.idleTimeoutSeconds, sync: config.watch.warmup.syncIdleTimeout, logger });
+  const context: BackendModuleContext = {
+    storage,
+    config,
+    pair: input.pair,
+    prover: provers.utilityProver,
+    proverForJob: provers.proverForJob,
+    readProofNeed,
+    now,
+    logger,
+    pingProver,
+    ...(billing === undefined ? {} : { billing }),
+    ...(idleSync === undefined ? {} : { endpointIdleTimeoutSeconds: () => idleSync.endpointIdleTimeoutSeconds() }),
+  };
   const app = createApp({ context, modules: MODULES, enabled: input.enabled });
+  // In the background: a slow or failing RunPod never delays start-up.
+  const idleSynced = idleSync?.run();
   const stoppers = await Promise.all(input.enabled.map((name) => MODULES[name].start(context)));
   const server = await new Promise<ReturnType<typeof serve> & { port: number }>((resolve) => {
     const listening = serve({ fetch: app.fetch, hostname: config.listen.host, port: config.listen.port }, (address) => resolve(Object.assign(listening, { port: address.port })));
@@ -110,6 +129,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     async stop() {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await Promise.all(stoppers.map((stop) => stop()));
+      await idleSynced;
       storage.close();
     },
   };

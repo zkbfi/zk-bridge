@@ -46,6 +46,6 @@
       "eth-pls": { "minIntervalSeconds": 0 },
       "sepolia-pls943": { "minIntervalSeconds": 3600 }
     },
-    "warmup": { "enabled": true, "leadP": 0.9, "leadObservations": 20, "defaultLeadSeconds": 90, "minLeadSeconds": 30, "maxLeadSeconds": 600, "holdIntervalSeconds": 40, "intervalSeconds": 30, "graceSeconds": 90, "minGapSeconds": 300, "dailyCapSeconds": 3600, "pingTimeoutSeconds": 300 }
+    "warmup": { "enabled": true, "leadP": 0.9, "leadObservations": 20, "defaultLeadSeconds": 90, "minLeadSeconds": 30, "maxLeadSeconds": 600, "intervalSeconds": 30, "graceSeconds": 90, "minGapSeconds": 300, "dailyCapSeconds": 3600, "pingTimeoutSeconds": 300 }
   }
 }

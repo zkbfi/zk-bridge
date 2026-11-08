@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_WARMUP, IDLE, leadFrom, nextHoldAt, predictionOf, warmupStep, type WarmupSession, type WarmupStepInput, type WarmupTarget } from "../src/watch/warmup.ts";
+import { DEFAULT_WARMUP, IDLE, holdIntervalFor, leadFrom, nextHoldAt, predictionOf, warmupStep, type WarmupSession, type WarmupStepInput, type WarmupTarget } from "../src/watch/warmup.ts";
 
-const config = DEFAULT_WARMUP;
+/** The settings before 2026-11-08 (hold 40 s under a 60 s idle timeout): the scenarios of these tests rest on them. */
+const config = { ...DEFAULT_WARMUP, holdIntervalSeconds: 40, idleTimeoutSeconds: 60 };
 
 describe("leadFrom", () => {
   it("is the default lead time while there is no observation", () => {
@@ -134,5 +135,31 @@ describe("warmupStep", () => {
   it("ends a warm session at its next hold once the daily cap is spent", () => {
     expect(step({ session: warm, capReached: true })).toEqual({ kind: "none" });
     expect(step({ session: warm, capReached: true, nowSeconds: target.at - 60 + config.holdIntervalSeconds })).toEqual({ kind: "end", reason: "cap" });
+  });
+});
+
+describe("holding with the default idle timeout of 5 s", () => {
+  const fast = DEFAULT_WARMUP;
+  const target: WarmupTarget = { at: 10_000, why: "message", keys: ["a"] };
+  const warm: WarmupSession = { phase: "warm", id: "s", target, startedAt: 9_900, readyAt: 9_950, lastReadyAt: 9_950, lastPingAt: 9_950, holds: 0 };
+  const step = (session: WarmupSession, nowSeconds: number) =>
+    warmupStep({ nowSeconds, targets: [target], live: new Set(["a"]), session, config: fast, leadSeconds: 90, pingOutstanding: false, capReached: false, jobActive: false, predictionStarted: () => false });
+
+  it("derives a 3 s hold under the 5 s idle timeout", () => {
+    expect(fast.idleTimeoutSeconds).toBe(5);
+    expect(fast.holdIntervalSeconds).toBe(3);
+    expect(fast.holdIntervalSeconds).toBe(holdIntervalFor(fast.idleTimeoutSeconds));
+    expect(holdIntervalFor(60)).toBe(58);
+    expect(holdIntervalFor(1)).toBe(1);
+    expect(fast.syncIdleTimeout).toBe(true);
+  });
+
+  it("pings a ready worker 3 s after its last ready answer, before the 5 s timeout stops it", () => {
+    expect(nextHoldAt(warm, fast)).toBe(9_953);
+    expect(step(warm, 9_952)).toEqual({ kind: "none" });
+    expect(step(warm, 9_953)).toEqual({ kind: "hold" });
+    // The next hold follows the answer to this one, again 3 s later: the worker never idles 5 s.
+    expect(nextHoldAt({ ...warm, lastReadyAt: 9_953, lastPingAt: 9_953 }, fast)).toBe(9_956);
+    expect(nextHoldAt(warm, fast) - warm.lastReadyAt).toBeLessThan(fast.idleTimeoutSeconds);
   });
 });

@@ -79,8 +79,8 @@ const signedDollars = (value: number) => `${value < 0 ? "-" : ""}$${Math.abs(val
  * the line says so and gives what our records hold, at the assumed price.
  *
  * Degraded when the balance covers fewer than {@link BALANCE_WARNING_DAYS} days, and when the unaccounted dollars are
- * more than {@link UNACCOUNTED_WARNING_SHARE} of the bill of 24 hours (our records do not match the bill); the line
- * gives both numbers. Otherwise ok: an unused worker is a cost, not an outage.
+ * more than {@link UNACCOUNTED_WARNING_SHARE} of the bill of 24 hours (our records do not match the bill), and when the
+ * idle timeout RunPod reports for the endpoint differs from the backend's configuration; the line gives both numbers. Otherwise ok: an unused worker is a cost, not an outage.
  */
 export const gpuBillingCheck = (backendBase: string): Spec => ({
   id: "gpu-billing",
@@ -117,6 +117,14 @@ export const gpuBillingCheck = (backendBase: string): Spec => ({
       }));
 
     const tail: string[] = [];
+    // The backend sets the endpoint to its configured idle timeout at start-up; a difference means that did not happen or was undone.
+    const assumptions = record(body.assumptions);
+    const configured = number(assumptions?.idleTimeoutSeconds);
+    const endpointIdle = number(assumptions?.endpointIdleTimeoutSeconds);
+    if (configured !== null && endpointIdle !== null && configured !== endpointIdle) {
+      state = "degraded";
+      tail.push(`RunPod idle timeout is ${endpointIdle} s, the backend config says ${configured} s`);
+    }
     const age = number(body.ageSeconds);
     if (spendKnown && age !== null && age > BILLING_STALE_SECONDS) tail.push(`RunPod figures are ${duration(age)} old`);
     const account = record(body.account);

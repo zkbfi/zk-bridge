@@ -216,6 +216,10 @@ describe("secrets in the log", () => {
       const url = String(input);
       if (!url.includes("runpod.")) return real(input, init);
       seen.push(`${url} ${new Headers(init?.headers).get("authorization")}`);
+      if (url.includes("/v1/endpoints/")) {
+        if ((init?.method ?? "GET") === "PATCH") return Response.json({ idleTimeout: 5 });
+        return Response.json({ idleTimeout: 60, workersMin: 0, workersMax: 1 });
+      }
       if (url.includes("graphql")) return Response.json({ data: { myself: { clientBalance: 153.38, currentSpendPerHr: 0, spendLimit: 80 } } });
       const today = new Date().toISOString().slice(0, 10);
       return Response.json([{ time: `${today} 00:00:00`, amount: 0.76, timeBilledMs: 3_600_000 }]);
@@ -231,8 +235,33 @@ describe("secrets in the log", () => {
       await running.stop();
       vi.unstubAllGlobals();
     }
-    expect(seen.length).toBe(3);
+    // The day and hour billing and the balance, and at start-up the endpoint's idle timeout: read, then set from 60 to 5.
+    expect(seen.length).toBe(5);
+    expect(seen.filter((entry) => entry.includes("/v1/endpoints/abc123 "))).toHaveLength(2);
     expect(seen.every((entry) => entry.endsWith(`Bearer ${SECRETS.runpodApiKey}`))).toBe(true);
+    expect(lines.join("\n")).toContain('"runpod_idle_timeout_set"');
+    expect(lines.join("\n")).toContain('"from":60,"to":5');
+    expect(lines.join("\n")).not.toContain(SECRETS.runpodApiKey);
+  });
+
+  it("starts, serves both idle timeouts on /billing, and keeps the key out of the log when RunPod cannot be reached for the idle timeout", async () => {
+    const real = globalThis.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes("runpod.")) return real(input, init);
+      throw new TypeError(`fetch failed for ${url}`);
+    });
+    const lines: string[] = [];
+    const config = makeConfig({ ...configFor(workspace(), await needyIndexer()), remote: { endpoint: "https://abc123.api.runpod.ai" } });
+    const running = await startBackend({ config, pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, write: (line) => lines.push(line) });
+    try {
+      const body = (await (await real(`http://127.0.0.1:${running.port}/billing`)).json()) as { assumptions: { idleTimeoutSeconds: number; endpointIdleTimeoutSeconds: number | null } };
+      expect(body.assumptions).toMatchObject({ idleTimeoutSeconds: 5, endpointIdleTimeoutSeconds: null });
+    } finally {
+      await running.stop();
+      vi.unstubAllGlobals();
+    }
+    expect(lines.join("\n")).toContain('"runpod_idle_timeout_failed"');
     expect(lines.join("\n")).not.toContain(SECRETS.runpodApiKey);
   });
 

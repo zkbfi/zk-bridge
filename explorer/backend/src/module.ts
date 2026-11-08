@@ -30,6 +30,8 @@ export type BackendModuleContext = {
   readonly pingProver?: () => Promise<number>;
   /** What RunPod billed, cached. Absent when no endpoint is a RunPod endpoint with a key; the summary then uses the assumed rate. */
   readonly billing?: BillingReader;
+  /** The idle timeout that RunPod reports for the prover endpoint, from the start-up sync; null while unknown. Absent without a RunPod endpoint. */
+  readonly endpointIdleTimeoutSeconds?: () => number | null;
 };
 
 /** The two functions every module exports, plus an optional health report. */

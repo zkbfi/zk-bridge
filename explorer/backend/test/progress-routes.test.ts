@@ -34,8 +34,10 @@ function fakeIndexer() {
   return { state, reads };
 }
 
-function setup(options: { indexer?: IndexerReads | null; billing?: BillingReader } = {}) {
-  const backend = makeBackend();
+function setup(options: { indexer?: IndexerReads | null; billing?: BillingReader; endpointIdle?: () => number | null; idleTimeoutSeconds?: number } = {}) {
+  // The scenarios of these tests rest on a 60 s idle timeout, the setting before 2026-11-08.
+  const backend = makeBackend({ config: makeConfig({ watch: { enabled: false, warmup: { idleTimeoutSeconds: options.idleTimeoutSeconds ?? 60 } } }) });
+  if (options.endpointIdle !== undefined) (backend.context as { endpointIdleTimeoutSeconds?: () => number | null }).endpointIdleTimeoutSeconds = options.endpointIdle;
   if (options.billing !== undefined) (backend.context as { billing?: BillingReader }).billing = options.billing;
   const indexer = fakeIndexer();
   const app = new Hono();
@@ -199,6 +201,14 @@ describe("GET /benchmarks (2026-11-01)", () => {
     expect((await run.get("/benchmarks")).body).toMatchObject({ indexer: "unavailable" });
     expect(run.log.lines.some((line) => line.includes("benchmarks_indexer_unreadable"))).toBe(true);
     expect((await setup({ indexer: null }).get("/benchmarks")).body).toMatchObject({ indexer: "unavailable" });
+  });
+});
+
+describe("the idle timeout on /billing (2026-11-08)", () => {
+  it("gives the configured idle timeout and what RunPod reports for the endpoint, null while unknown or without a RunPod endpoint", async () => {
+    expect(((await setup().get("/billing")).body as Record<string, any>).assumptions).toMatchObject({ idleTimeoutSeconds: 60, endpointIdleTimeoutSeconds: null });
+    expect(((await setup({ endpointIdle: () => null }).get("/billing")).body as Record<string, any>).assumptions.endpointIdleTimeoutSeconds).toBeNull();
+    expect(((await setup({ endpointIdle: () => 5, idleTimeoutSeconds: 5 }).get("/billing")).body as Record<string, any>).assumptions).toMatchObject({ idleTimeoutSeconds: 5, endpointIdleTimeoutSeconds: 5 });
   });
 });
 
