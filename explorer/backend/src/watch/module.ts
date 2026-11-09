@@ -5,7 +5,7 @@
  */
 import { createPublicClient, http, type Hex } from "viem";
 import { z } from "zod";
-import { PROOF_DIRECTIONS, messageBridgeAbi, secondsPerSlot, type ContractCaller, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
+import { PROOF_DIRECTIONS, epochSeconds, messageBridgeAbi, secondsPerSlot, type ContractCaller, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
 import { BackendConfigError, type BackendConfig } from "../config.ts";
 import { DEFAULT_POLICY, type LightClientFacts } from "../keepalive/plan.ts";
 import { fetchJsonGet, handoffSources, readHistoryFrom, readLightClient, type JsonGet } from "../keepalive/sources.ts";
@@ -15,7 +15,7 @@ import { readHeldProofs } from "../requests/held-proofs.ts";
 import { findActiveJob, lastProofStartedAt } from "../requests/jobs.ts";
 import type { RequestService } from "../requests/service.ts";
 import { batchRuleFor, deprecatedBatchKeys } from "./batch.ts";
-import { MIN_PARTICIPANTS, SLOTS_PER_EPOCH } from "./decide.ts";
+import { MIN_PARTICIPANTS } from "./decide.ts";
 import { createEconomicsReader, type DestinationToken } from "./economics.ts";
 import { createFinalityFeed } from "./feed.ts";
 import { createDepositsReader } from "./deposits.ts";
@@ -159,7 +159,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
   for (const direction of directions) {
     const { source, destination } = sidesOf(pair, direction);
     const beaconUrl = source.beaconUrl as string;
-    const batchRule = batchRuleFor(config.watch, config.pair, direction, SLOTS_PER_EPOCH * secondsPerSlot(source.chainId));
+    const batchRule = batchRuleFor(config.watch, config.pair, direction, epochSeconds(source.chainId));
     const destinationClient = chainClient(destination);
     // The deposit rule of this direction S to D reads the bridge on D (its opening needs an update of the light client
     // on D, which this direction feeds) and the light client on S (it must hold a head first): see `DepositsFacts`.
@@ -229,7 +229,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
       await watcher.stop();
     });
   }
-  const batches = Object.fromEntries(directions.map((direction) => [direction, batchRuleFor(config.watch, config.pair, direction, SLOTS_PER_EPOCH * secondsPerSlot(sidesOf(pair, direction).source.chainId))]));
+  const batches = Object.fromEntries(directions.map((direction) => [direction, batchRuleFor(config.watch, config.pair, direction, epochSeconds(sidesOf(pair, direction).source.chainId))]));
   logger.info("watch_started", {
     directions,
     sse: config.watch.sse,

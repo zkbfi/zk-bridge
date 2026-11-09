@@ -20,7 +20,7 @@ import { TokenIcon } from "../bridge/TokenIcon";
 import { loadImageServer } from "../bridge/image-server";
 import { iconSubjectOf, iconUrl } from "../bridge/image-source";
 import { priceNumber, type PriceQuote } from "../bridge/price-oracle";
-import { DEFAULT_GAS_LEVEL, type CostInput } from "@zk-bridge/shared";
+import { DEFAULT_GAS_LEVEL, slotStartTime, type CostInput } from "@zk-bridge/shared";
 import { usePrices } from "../bridge/use-prices";
 import { durationText, exploreNumbers, lightClientCards, statusWord } from "./explore-model";
 import { ExplorePageView } from "./ExplorePages";
@@ -266,7 +266,7 @@ const useProofReach = (enabled: boolean, heads: ExploreData["heads"]): { readonl
       ["second-to-first", back.data, pair.second],
     ] as const) {
       const clock = clocks.data?.find((row) => row.trackedChainId === source.chainId);
-      if (reading?.kind === "found" && clock !== undefined) reach[direction] = clock.genesisTime + Number(reading.message.newSlot) * clock.secondsPerSlot;
+      if (reading?.kind === "found" && clock !== undefined) reach[direction] = slotStartTime(Number(reading.message.newSlot), clock);
     }
     return reach;
   }, [out.data, back.data, clocks.data, pair]);

@@ -44,6 +44,7 @@ export * from "./proven-message.js";
 export * from "./call-display.js";
 export * from "./tip-coverage.js";
 export * from "./transfer-timing.js";
+export * from "./wait-estimates.js";
 export * from "./pulsex-oracle.js";
 export * from "./bridged-symbol.js";
 export * from "./search.js";

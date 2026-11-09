@@ -18,6 +18,8 @@
  * moves the head to the newest finalized header and the next committee it proves pushes the deadline one period out.
  */
 
+import { slotAtTime, slotStartTime, strandingDeadline, syncCommitteePeriodOf } from "@zk-bridge/shared";
+
 /** What the light client contract reports. Slots and times are whole numbers well below 2^53. */
 export type LightClientFacts = {
   readonly headSlot: number;
@@ -108,14 +110,7 @@ export type Assessment = {
   readonly waitForFinality: boolean;
 };
 
-const periodOf = (slot: number, slotsPerPeriod: number): number => Math.floor(slot / slotsPerPeriod);
-
 const range = (start: number, end: number): number[] => Array.from({ length: Math.max(0, end - start) }, (_, index) => start + index);
-
-/** The current slot of the source chain by the clock of the light client. */
-export function currentSlotAt(facts: LightClientFacts, nowSeconds: number): number {
-  return Math.max(0, Math.floor((nowSeconds - facts.genesisTime) / facts.secondsPerSlot));
-}
 
 /**
  * The periods whose handoff update moves the light client to the source chain as it is now: from the last stored
@@ -123,10 +118,10 @@ export function currentSlotAt(facts: LightClientFacts, nowSeconds: number): numb
  * Empty when the stored committees cover both. The caller asks the source node for these, and only these.
  */
 export function neededHandoffPeriods(facts: LightClientFacts, source: SourceFacts, nowSeconds: number): number[] {
-  const headPeriod = periodOf(facts.headSlot, facts.slotsPerPeriod);
+  const headPeriod = syncCommitteePeriodOf(facts.headSlot, facts.slotsPerPeriod);
   const lastKnown = headPeriod + (facts.nextCommitteeKnown ? 1 : 0);
-  const signing = periodOf(currentSlotAt(facts, nowSeconds), facts.slotsPerPeriod);
-  const finalized = periodOf(source.finalizedSlot, facts.slotsPerPeriod);
+  const signing = syncCommitteePeriodOf(slotAtTime(nowSeconds, facts), facts.slotsPerPeriod);
+  const finalized = syncCommitteePeriodOf(source.finalizedSlot, facts.slotsPerPeriod);
   return range(lastKnown, Math.max(signing, finalized));
 }
 
@@ -148,13 +143,10 @@ export function assess(input: {
 }): Assessment {
   const { facts, source, history, policy, nowSeconds } = input;
   const perPeriod = facts.slotsPerPeriod;
-  const headPeriod = periodOf(facts.headSlot, perPeriod);
-  const lastKnownPeriod = headPeriod + (facts.nextCommitteeKnown ? 1 : 0);
-  const currentSlot = currentSlotAt(facts, nowSeconds);
-  const currentPeriod = periodOf(currentSlot, perPeriod);
-  const finalizedPeriod = periodOf(source.finalizedSlot, perPeriod);
-  const slotTime = (slot: number) => facts.genesisTime + slot * facts.secondsPerSlot;
-  const deadlineSeconds = slotTime((lastKnownPeriod + 1) * perPeriod);
+  const { headPeriod, lastKnownPeriod, deadlineSeconds } = strandingDeadline(facts, facts);
+  const currentSlot = slotAtTime(nowSeconds, facts);
+  const currentPeriod = syncCommitteePeriodOf(currentSlot, perPeriod);
+  const finalizedPeriod = syncCommitteePeriodOf(source.finalizedSlot, perPeriod);
   const handoffPeriods = neededHandoffPeriods(facts, source, nowSeconds);
   const moves = source.finalizedSlot > facts.headSlot;
   const steps: Step[] = [
@@ -169,7 +161,7 @@ export function assess(input: {
     currentPeriod,
     finalizedPeriod,
     periodsBehind: Math.max(0, currentPeriod - headPeriod),
-    headAgeSeconds: Math.max(0, nowSeconds - slotTime(facts.headSlot)),
+    headAgeSeconds: Math.max(0, nowSeconds - slotStartTime(facts.headSlot, facts)),
     deadlineSeconds,
     secondsUntilDeadline: deadlineSeconds - nowSeconds,
     handoffPeriods,
@@ -229,10 +221,8 @@ export type Deadline = {
 
 /** The {@link Deadline} of a light client at `nowSeconds`. */
 export function deadlineOf(facts: LightClientFacts, nowSeconds: number): Deadline {
-  const headPeriod = periodOf(facts.headSlot, facts.slotsPerPeriod);
-  const lastKnownPeriod = headPeriod + (facts.nextCommitteeKnown ? 1 : 0);
-  const deadlineSeconds = facts.genesisTime + (lastKnownPeriod + 1) * facts.slotsPerPeriod * facts.secondsPerSlot;
-  return { headSlot: facts.headSlot, headPeriod, lastKnownPeriod, strandPeriod: lastKnownPeriod + 1, deadlineSeconds, secondsLeft: deadlineSeconds - nowSeconds };
+  const deadline = strandingDeadline(facts, facts);
+  return { headSlot: facts.headSlot, ...deadline, secondsLeft: deadline.deadlineSeconds - nowSeconds };
 }
 
 /** Hours with one decimal, such as `12.5 h`. */

@@ -130,6 +130,18 @@ const pool = poolOf(pair, USDC, { token0: USDC, reserve0, reserve1 }); // Pool |
 const pls = plsQuoteOf(pool === null ? [] : [stablePoolEntry(pool, 6)], block); // { usdE18, block, pool } | null
 ```
 
+Wait-time estimates (`wait-estimates`), shared by the backend and the dapp. Times are numbers (seconds, or
+milliseconds where a name says `Ms`), not bigints; money in them stays USD × 1e18:
+
+| Export | What it does |
+| --- | --- |
+| `SLOTS_PER_EPOCH`, `FINALITY_EPOCHS`, `SLOTS_PER_SYNC_COMMITTEE_PERIOD`, `secondsPerSlot`, `epochSeconds`, `defaultFinalitySeconds` | The chains' timing. |
+| `clockFromSlot`, `slotAtTime`, `slotStartTime`, `expectedFinalityAt`, `finalizedSlotAt`, `finalityWaitRange` | The beacon clock and when a block is expected final (the next epoch's checkpoint, two epochs later, plus one slot). |
+| `syncCommitteePeriodOf`, `strandingDeadline`, `hoursUntil`, `hoursUntilRounded` | When a light client strands, and the hours until it. |
+| `marginWadOf`, `withMargin`, `batchCostUsd`, `feesPay`, `intervalAllows`, `batchDueAt`, `proofWaitRange` | The proof rule: when fees pay for a proof and when a batch is due. |
+| `provingPartsOf`, `saneProvingParts`, `provingRangeOf`, `deliveryRangeOfStat`, `MIN_SAMPLES`, `SANE_LIMITS`, `PROVING_DEFAULT`, `DELIVERY_DEFAULT` | Measured step times, the samples they need, their sanity limits and the fallbacks. |
+| `waitEstimate`, `feeVerdict`, `remainingWait`, `waitDurationText` | The timeline of a direction (Sent, Final, Proved, Delivered; typical and worst case) and the time left of a transfer. |
+
 ## Test vectors
 
 `@zkb/core/vectors` is `vectors/fee-rules-vectors.json`: for each fee rule, a list of `{ input, output }` cases (plus a
@@ -142,6 +154,13 @@ import vectors from "@zkb/core/vectors" with { type: "json" };
 To run them against this build: `pnpm test` in `explorer/core` (the "the fixed vectors" block of `test/fee-rules.test.ts`
 checks every case, `test/vectors.test.ts` checks the file and the groups). To check a port in another language, read the
 same JSON file, convert strings to your big integer type, call your function per group and compare the output exactly.
+
+`@zkb/core/wait-vectors` is `vectors/wait-estimates-vectors.json`: the chains' timing, a message's finality and batch
+due times, stranding deadlines, the proof rule and the live case of 2026-11-08 (testnet rule 3600 s and that day's
+measured times, with Final on the source by the watcher's finality rule: Sepolia to 943 about 48 min typical and 83 min
+worst, 943 to Sepolia about 46 and 80). `test/wait-estimates.test.ts`
+pins them here; the backend (`backend/test/wait-estimates-parity.test.ts`) and the dapp
+(`web/test/wait/wait-estimates-parity.test.ts`) compute the same vectors through their own paths.
 
 The router vectors (`test/fixtures/delivery-*.jsonl`) come from the compiled contract; regenerate them with
 `vectors/GenerateDeliveryFeeVectors.s.sol` (the command is in its header).

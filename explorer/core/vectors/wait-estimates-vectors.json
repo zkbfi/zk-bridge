@@ -1,0 +1,534 @@
+{
+  "_about": "Pinned outputs of @zkb/core wait-estimates. Seconds unless a name says Ms; money is USD x 1e18 as decimal text. The backend (test/wait-estimates-parity.test.ts) and the dapp (test/wait/wait-estimates-parity.test.ts) compute these through their own paths. The live case: the testnet rule of 2026-11-08 (minimum interval 3600 s) and that day's measured times; Final on the source always follows the watcher's finality rule (owner, 2026-11-08: \"yes, use the watcher's rule\").",
+  "chains": [
+    {
+      "chainId": 1,
+      "secondsPerSlot": 12,
+      "finalitySeconds": 768,
+      "epochSeconds": 384,
+      "finalityWait": {
+        "typical": 978.0,
+        "worst": 1164
+      }
+    },
+    {
+      "chainId": 369,
+      "secondsPerSlot": 10,
+      "finalitySeconds": 640,
+      "epochSeconds": 320,
+      "finalityWait": {
+        "typical": 815.0,
+        "worst": 970
+      }
+    },
+    {
+      "chainId": 11155111,
+      "secondsPerSlot": 12,
+      "finalitySeconds": 768,
+      "epochSeconds": 384,
+      "finalityWait": {
+        "typical": 978.0,
+        "worst": 1164
+      }
+    },
+    {
+      "chainId": 943,
+      "secondsPerSlot": 10,
+      "finalitySeconds": 640,
+      "epochSeconds": 320,
+      "finalityWait": {
+        "typical": 815.0,
+        "worst": 970
+      }
+    },
+    {
+      "chainId": 5,
+      "secondsPerSlot": 12,
+      "finalitySeconds": 768,
+      "epochSeconds": 384,
+      "finalityWait": {
+        "typical": 978.0,
+        "worst": 1164
+      }
+    }
+  ],
+  "clock": {
+    "genesisTime": 1655733600,
+    "secondsPerSlot": 12
+  },
+  "slots": [
+    {
+      "slot": 0,
+      "slotStartTime": 1655733600,
+      "expectedFinalityAt": 1655734764
+    },
+    {
+      "slot": 31,
+      "slotStartTime": 1655733972,
+      "expectedFinalityAt": 1655734764
+    },
+    {
+      "slot": 96,
+      "slotStartTime": 1655734752,
+      "expectedFinalityAt": 1655735916
+    },
+    {
+      "slot": 100,
+      "slotStartTime": 1655734800,
+      "expectedFinalityAt": 1655735916
+    },
+    {
+      "slot": 127,
+      "slotStartTime": 1655735124,
+      "expectedFinalityAt": 1655735916
+    },
+    {
+      "slot": 128,
+      "slotStartTime": 1655735136,
+      "expectedFinalityAt": 1655736300
+    },
+    {
+      "slot": 9000017,
+      "slotStartTime": 1763733804,
+      "expectedFinalityAt": 1763734764
+    }
+  ],
+  "finalizedSlots": [
+    {
+      "seconds": 1655733500,
+      "finalizedSlotAt": 0
+    },
+    {
+      "seconds": 1655733600,
+      "finalizedSlotAt": 0
+    },
+    {
+      "seconds": 1655735916,
+      "finalizedSlotAt": 128
+    },
+    {
+      "seconds": 1655735915,
+      "finalizedSlotAt": 96
+    },
+    {
+      "seconds": 1655734764,
+      "finalizedSlotAt": 32
+    }
+  ],
+  "message": {
+    "sourceChainId": 11155111,
+    "head": {
+      "slot": 9000000,
+      "slotTime": 1763733600
+    },
+    "clock": {
+      "genesisTime": 1655733600,
+      "secondsPerSlot": 12
+    },
+    "sentAt": 1763733804,
+    "slot": 9000017,
+    "expectedFinalityAt": 1763734764,
+    "waitSeconds": 960,
+    "batch": [
+      {
+        "lastProofAt": null,
+        "minIntervalSeconds": 3600,
+        "dueAt": 1763734764,
+        "allowsAtFinality": true
+      },
+      {
+        "lastProofAt": 1763733564,
+        "minIntervalSeconds": 3600,
+        "dueAt": 1763737164,
+        "allowsAtFinality": false
+      },
+      {
+        "lastProofAt": 1763730764,
+        "minIntervalSeconds": 3600,
+        "dueAt": 1763734764,
+        "allowsAtFinality": true
+      },
+      {
+        "lastProofAt": 1763735364,
+        "minIntervalSeconds": 3600,
+        "dueAt": 1763738964,
+        "allowsAtFinality": false
+      },
+      {
+        "lastProofAt": 1763734754,
+        "minIntervalSeconds": 0,
+        "dueAt": 1763734764,
+        "allowsAtFinality": true
+      }
+    ]
+  },
+  "stranding": {
+    "clock": {
+      "genesisTime": 1655733600,
+      "secondsPerSlot": 12
+    },
+    "slotsPerPeriod": 8192,
+    "cases": [
+      {
+        "headSlot": 819205,
+        "nextCommitteeKnown": true,
+        "deadline": {
+          "headPeriod": 100,
+          "lastKnownPeriod": 101,
+          "strandPeriod": 102,
+          "deadlineSeconds": 1665760608
+        },
+        "hours": [
+          {
+            "nowMs": 1665741888000,
+            "hoursUntil": 5.2,
+            "hoursUntilRounded": 5.2
+          },
+          {
+            "nowMs": 1665748262322,
+            "hoursUntil": 3.429355,
+            "hoursUntilRounded": 3.43
+          },
+          {
+            "nowMs": 1665766008000,
+            "hoursUntil": -1.5,
+            "hoursUntilRounded": -1.5
+          }
+        ]
+      },
+      {
+        "headSlot": 819205,
+        "nextCommitteeKnown": false,
+        "deadline": {
+          "headPeriod": 100,
+          "lastKnownPeriod": 100,
+          "strandPeriod": 101,
+          "deadlineSeconds": 1665662304
+        },
+        "hours": []
+      }
+    ]
+  },
+  "fee": {
+    "proofCostUsd": "25000000000000000",
+    "cases": [
+      {
+        "margin": 1.5,
+        "marginWad": "1500000000000000000",
+        "costUsd": "100000000000000000",
+        "withMargin": "150000000000000000",
+        "pays": [
+          {
+            "feesUsd": "150000000000000000",
+            "pays": true
+          },
+          {
+            "feesUsd": "149999999999999999",
+            "pays": false
+          }
+        ]
+      },
+      {
+        "margin": 1,
+        "marginWad": "1000000000000000000",
+        "costUsd": "100000000000000000",
+        "withMargin": "100000000000000000",
+        "pays": [
+          {
+            "feesUsd": "100000000000000000",
+            "pays": true
+          }
+        ]
+      },
+      {
+        "margin": 1.25,
+        "marginWad": "1250000000000000000",
+        "costUsd": "1",
+        "withMargin": "2",
+        "pays": [
+          {
+            "feesUsd": "1",
+            "pays": false
+          },
+          {
+            "feesUsd": "2",
+            "pays": true
+          }
+        ]
+      }
+    ],
+    "batchCost": [
+      {
+        "count": 2,
+        "deliveryUsd": "10000000000000000",
+        "marginWad": "1000000000000000000",
+        "costUsd": "45000000000000000"
+      },
+      {
+        "count": 0,
+        "deliveryUsd": "0",
+        "marginWad": "1000000000000000000",
+        "costUsd": "25000000000000000"
+      }
+    ]
+  },
+  "live": {
+    "rule": {
+      "minIntervalSeconds": 3600,
+      "lookaheadSeconds": null,
+      "profitMargin": 1,
+      "proofCostUsd": 0.025,
+      "priced": false
+    },
+    "benchmarks": {
+      "total": {
+        "count": 236,
+        "medianMs": 49200,
+        "p90Ms": 71300
+      },
+      "webhookToBoard": {
+        "count": 236,
+        "medianMs": 16700,
+        "p90Ms": 55600
+      },
+      "proofToOnChain": {
+        "count": 20,
+        "medianMs": 7500,
+        "p90Ms": 12800
+      },
+      "coveredToDelivered": {
+        "count": 14,
+        "medianMs": 48000,
+        "p90Ms": 84000
+      }
+    },
+    "proving": {
+      "typical": 73.4,
+      "worst": 139.7
+    },
+    "directions": [
+      {
+        "sourceChainId": 11155111,
+        "destinationChainId": 943,
+        "timing": {
+          "count": 14,
+          "steps": [
+            {
+              "median": 768,
+              "p90": 768
+            },
+            {
+              "median": 963,
+              "p90": 3202.4
+            },
+            {
+              "median": 48,
+              "p90": 84
+            }
+          ]
+        },
+        "expected": {
+          "sent": {
+            "typical": 12,
+            "worst": 24
+          },
+          "final": {
+            "typical": 966.0,
+            "worst": 1152
+          },
+          "proved": {
+            "typical": 1873.4,
+            "worst": 3739.7
+          },
+          "delivered": {
+            "typical": 48,
+            "worst": 84
+          },
+          "total": {
+            "typical": 2899.4,
+            "worst": 4999.7
+          },
+          "text": {
+            "typical": "48 min",
+            "worst": "83 min"
+          }
+        }
+      },
+      {
+        "sourceChainId": 943,
+        "destinationChainId": 11155111,
+        "timing": {
+          "count": 14,
+          "steps": [
+            {
+              "median": 640,
+              "p90": 640
+            },
+            {
+              "median": 963,
+              "p90": 3202.4
+            },
+            {
+              "median": 48,
+              "p90": 84
+            }
+          ]
+        },
+        "expected": {
+          "sent": {
+            "typical": 10,
+            "worst": 20
+          },
+          "final": {
+            "typical": 805.0,
+            "worst": 960
+          },
+          "proved": {
+            "typical": 1873.4,
+            "worst": 3739.7
+          },
+          "delivered": {
+            "typical": 48,
+            "worst": 84
+          },
+          "total": {
+            "typical": 2736.4,
+            "worst": 4803.7
+          },
+          "text": {
+            "typical": "46 min",
+            "worst": "80 min"
+          }
+        }
+      }
+    ],
+    "derived": [
+      {
+        "sourceChainId": 11155111,
+        "expected": {
+          "sent": {
+            "typical": 12,
+            "worst": 24
+          },
+          "final": {
+            "typical": 966.0,
+            "worst": 1152
+          },
+          "proved": {
+            "typical": 1873.4,
+            "worst": 3739.7
+          },
+          "delivered": {
+            "typical": 60,
+            "worst": 300
+          },
+          "total": {
+            "typical": 2911.4,
+            "worst": 5215.7
+          },
+          "text": {
+            "typical": "49 min",
+            "worst": "87 min"
+          }
+        }
+      },
+      {
+        "sourceChainId": 943,
+        "expected": {
+          "sent": {
+            "typical": 10,
+            "worst": 20
+          },
+          "final": {
+            "typical": 805.0,
+            "worst": 960
+          },
+          "proved": {
+            "typical": 1873.4,
+            "worst": 3739.7
+          },
+          "delivered": {
+            "typical": 60,
+            "worst": 300
+          },
+          "total": {
+            "typical": 2748.4,
+            "worst": 5019.7
+          },
+          "text": {
+            "typical": "46 min",
+            "worst": "84 min"
+          }
+        }
+      }
+    ],
+    "remaining": [
+      {
+        "status": "waiting_for_finality",
+        "elapsedSeconds": 600,
+        "left": {
+          "typical": 2299.4,
+          "worst": 4399.7,
+          "late": false
+        }
+      },
+      {
+        "status": "covered",
+        "elapsedSeconds": 99999,
+        "left": {
+          "typical": 48,
+          "worst": 84,
+          "late": false
+        }
+      },
+      {
+        "status": "sent",
+        "elapsedSeconds": 5000,
+        "left": {
+          "typical": 48,
+          "worst": 84,
+          "late": true
+        }
+      },
+      {
+        "status": "delivered",
+        "elapsedSeconds": 5,
+        "left": null
+      }
+    ],
+    "fees": [
+      {
+        "rule": {
+          "minIntervalSeconds": 3600,
+          "profitMargin": 1.5,
+          "proofCostUsd": 0.025,
+          "priced": true
+        },
+        "feeUsd": "150000000000000000",
+        "costUsd": "100000000000000000",
+        "verdict": "pays",
+        "proved": {
+          "typical": 73.4,
+          "worst": 139.7
+        },
+        "start": "at-finality"
+      },
+      {
+        "rule": {
+          "minIntervalSeconds": 3600,
+          "profitMargin": 1.5,
+          "proofCostUsd": 0.025,
+          "priced": true
+        },
+        "feeUsd": "149999999999999999",
+        "costUsd": "100000000000000000",
+        "verdict": "short",
+        "proved": {
+          "typical": 1873.4,
+          "worst": 3739.7
+        },
+        "start": "batch"
+      }
+    ]
+  }
+}

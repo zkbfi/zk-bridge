@@ -38,13 +38,6 @@ export const stepWords = (item: FeedItem, destination: ChainConfig, now: number)
  */
 export const groupOf = (item: FeedItem, now: number): ActivityGroup => groupOfStatus(item.status, item.sentAt, now);
 
-/** Seconds left for a transfer in flight, from the step estimates, at least 0. */
-export const secondsLeft = (item: FeedItem, pair: PairConfig, now: number): number => {
-  const { source, destination } = chainsFor(pair, item.direction);
-  const total = transferSteps(source, destination).reduce((sum, step) => sum + step.seconds, 0);
-  return Math.max(0, total - (now - item.sentAt));
-};
-
 /** "~6 min", "~40 s", "any moment". */
 export const leftText = (seconds: number): string => (seconds <= 0 ? "any moment" : seconds < 60 ? `~${seconds} s` : `~${Math.round(seconds / 60)} min`);
 

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { USD, WAD } from "@zk-bridge/shared";
+import { USD, WAD, expectedFinalityAt, finalizedSlotAt } from "@zk-bridge/shared";
 import { DEFAULT_POLICY, type LightClientFacts } from "../src/keepalive/plan.ts";
 import type { BatchRule, Economics } from "../src/watch/batch.ts";
-import { MIN_PARTICIPANTS, decideProof, expectedFinalityAt, finalizedSlotAt, handoffKey, warmupPlan, type WaitingMessage } from "../src/watch/decide.ts";
+import { MIN_PARTICIPANTS, decideProof, handoffKey, warmupPlan, type WaitingMessage } from "../src/watch/decide.ts";
 
 // The warm-up's due time is the first moment at which decideProof says due: these tests state each rule of the decision
 // as the forecast sees it (2026-11-06: warm-ups for proofs that decideProof then refused cost about $28 a month).

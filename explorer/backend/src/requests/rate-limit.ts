@@ -1,3 +1,4 @@
+import { SLOTS_PER_EPOCH } from "@zk-bridge/shared";
 import type { Job } from "./jobs.ts";
 
 /** The limits on the request service. Every number comes from the configuration file. */
@@ -111,9 +112,6 @@ export function directionWaitSeconds(input: { latest: Job | null; now: number; l
   const readyAt = latest.updatedAt + limits.secondsBeforeRetryAfterFailure * 1000;
   return readyAt <= now ? 0 : secondsUntil(readyAt, now);
 }
-
-/** Slots in an epoch on every beacon chain the bridge follows. */
-const SLOTS_PER_EPOCH = 32;
 
 /** The finalities a chain makes in a day: one per epoch (225 with 12 s slots, 270 with 10 s slots). */
 export function epochsPerDay(secondsPerSlot: number): number {

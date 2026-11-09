@@ -78,39 +78,6 @@ export const IN_FLIGHT_STATUSES = ["sent", "waiting_for_finality", "covered"] as
  */
 export const isInFlight = (status: MessageStatus): boolean => (IN_FLIGHT_STATUSES as readonly string[]).includes(status);
 
-/**
- * The seconds of one beacon slot, by chain identifier. Ethereum and Sepolia have 12 second slots. PulseChain and
- * PulseChain testnet v4 have 10 second slots.
- */
-export const SECONDS_PER_SLOT = {
-  1: 12,
-  369: 10,
-  11155111: 12,
-  943: 10,
-} as const satisfies Readonly<Record<number, number>>;
-
-/** The slot length of a chain that has no entry in the table. */
-const DEFAULT_SECONDS_PER_SLOT = 12;
-
-/** The slots of one epoch on every beacon chain that the bridge follows. */
-const SLOTS_PER_EPOCH = 32;
-
-/** The epochs that a send waits for finality. */
-const FINALITY_EPOCHS = 2;
-
-/**
- * The seconds of one slot on a chain.
- *
- * @param chainId The chain identifier. A chain with no entry gets 12 seconds.
- */
-export const secondsPerSlot = (chainId: number): number =>
-  (SECONDS_PER_SLOT as Readonly<Record<number, number>>)[chainId] ?? DEFAULT_SECONDS_PER_SLOT;
-
-/**
- * The seconds a send needs to become final by default: two epochs of 32 slots on the beacon chain of the source.
- * The same formula serves every chain: Ethereum 768, PulseChain 640, Sepolia 768, PulseChain testnet v4 640.
- *
- * @param chainId The source chain identifier.
- */
-export const defaultFinalitySeconds = (chainId: number): number =>
-  secondsPerSlot(chainId) * SLOTS_PER_EPOCH * FINALITY_EPOCHS;
+// The chain's timing moved to @zkb/core (wait-estimates), where the backend and the dapp share it; this path keeps
+// every existing import working.
+export { SECONDS_PER_SLOT, secondsPerSlot, defaultFinalitySeconds } from "@zkb/core";

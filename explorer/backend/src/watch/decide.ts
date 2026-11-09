@@ -3,7 +3,8 @@
  * network, no clock. The keep-alive rules are the planner's (`keepalive/plan.ts`); this file only asks it.
  */
 import type { Hex } from "viem";
-import { assess, currentSlotAt, formatHours, type Assessment, type LightClientFacts, type Policy, type SourceHistory } from "../keepalive/plan.ts";
+import { SLOTS_PER_EPOCH, expectedFinalityAt, finalizedSlotAt, slotAtTime, slotStartTime } from "@zk-bridge/shared";
+import { assess, formatHours, type Assessment, type LightClientFacts, type Policy, type SourceHistory } from "../keepalive/plan.ts";
 import type { ProofPlace } from "../requests/held-proofs.ts";
 import { planBatch, usdText, type BatchPlan, type BatchRule, type Economics } from "./batch.ts";
 import type { WarmupTarget } from "./warmup.ts";
@@ -17,9 +18,6 @@ export const SYNC_COMMITTEE_SIZE = 512;
  * the two equal.
  */
 export const MIN_PARTICIPANTS = Math.ceil((SYNC_COMMITTEE_SIZE * 2) / 3);
-
-/** Slots of one epoch on every beacon chain the bridge follows. */
-export const SLOTS_PER_EPOCH = 32;
 
 /** A message of the direction that the indexer does not show as covered yet, with the beacon slot of its block. */
 export type WaitingMessage = { readonly messageId: Hex; readonly slot: number };
@@ -205,7 +203,7 @@ export function keepAliveCall(assessment: Assessment, facts: LightClientFacts, p
 /** Why a keep-alive the planner calls for is not due: the head and the finality share a period. */
 function noProgressDetail(assessment: Assessment, facts: LightClientFacts, policy: Policy, nowSeconds: number): string {
   const next = assessment.headPeriod + 1;
-  const begins = facts.genesisTime + next * facts.slotsPerPeriod * facts.secondsPerSlot;
+  const begins = slotStartTime(next * facts.slotsPerPeriod, facts);
   const ageLeft = policy.keepAliveSeconds - assessment.headAgeSeconds;
   return `the head (slot ${facts.headSlot}) and the source's finality are both in period ${assessment.headPeriod}: a proof cannot hand off to a new committee before period ${next} begins at ${new Date(begins * 1000).toISOString()} (in ${formatHours(begins - nowSeconds)}) and the source finalizes in it; the age rule calls for one in ${formatHours(ageLeft)} (${assessment.reason})`;
 }
@@ -311,34 +309,6 @@ export function decideProof(input: DecisionInput): ProofDecision {
   return { due: false, why: "nothing-due", detail: noProgressDetail(assessment, facts, policy, nowSeconds) };
 }
 
-/** The beacon slot of an execution block time (a block after the merge carries its slot's start time). */
-export function slotAtTime(seconds: number, facts: Pick<LightClientFacts, "genesisTime" | "secondsPerSlot">): number {
-  return Math.max(0, Math.floor((seconds - facts.genesisTime) / facts.secondsPerSlot));
-}
-
-/** The start of a slot, in seconds since 1970. */
-const slotTime = (slot: number, facts: Pick<LightClientFacts, "genesisTime" | "secondsPerSlot">) => facts.genesisTime + slot * facts.secondsPerSlot;
-
-/**
- * When the source chain is expected to finalize a block of `slot`, in seconds since 1970. The checkpoint at the start
- * of the next epoch (e + 1) covers it, and that checkpoint finalizes at the start of epoch e + 3 when the chain runs
- * normally. The signatures over that finality arrive one slot later.
- */
-export function expectedFinalityAt(slot: number, facts: Pick<LightClientFacts, "genesisTime" | "secondsPerSlot">): number {
-  const epoch = Math.floor(slot / SLOTS_PER_EPOCH);
-  return slotTime((epoch + 3) * SLOTS_PER_EPOCH + 1, facts);
-}
-
-/**
- * The finalized slot the source is expected to have at a time (seconds since 1970): the checkpoint that finalized at
- * the start of the latest epoch E, which is the first slot of epoch E - 2. Consistent with {@link expectedFinalityAt}:
- * a block of slot `s` is covered from the time it returns.
- */
-export function finalizedSlotAt(seconds: number, facts: Pick<LightClientFacts, "genesisTime" | "secondsPerSlot">): number {
-  const epoch = Math.floor(((seconds - facts.genesisTime) / facts.secondsPerSlot - 1) / SLOTS_PER_EPOCH);
-  return Math.max(0, (epoch - 2) * SLOTS_PER_EPOCH);
-}
-
 /** What the warm-up looks at: the time a proof is expected (at most one target), and the keys that still wait for one. */
 export type WarmupPlan = { readonly targets: readonly WarmupTarget[]; readonly live: ReadonlySet<string> };
 
@@ -407,9 +377,9 @@ export function warmupPlan(input: WarmupPlanInput): WarmupPlan {
     // Due now: the proof starts with the finality that made it due, a warm-up would only race it.
     if (dueNow === "handoff") live.add(key);
     // The source has served the handoffs so far; a period it has not been asked for yet is not counted as missing.
-    const firstEpoch = Math.floor(currentSlotAt(facts, nowSeconds) / SLOTS_PER_EPOCH) + 1;
+    const firstEpoch = Math.floor(slotAtTime(nowSeconds, facts) / SLOTS_PER_EPOCH) + 1;
     for (let epoch = firstEpoch; dueNow === null; epoch += 1) {
-      const finalityAt = slotTime(epoch * SLOTS_PER_EPOCH + 1, facts);
+      const finalityAt = slotStartTime(epoch * SLOTS_PER_EPOCH + 1, facts);
       // The next finality is always looked at; later ones while they lie within the horizon.
       if (epoch > firstEpoch && finalityAt > nowSeconds + input.horizonSeconds) break;
       // At the start of epoch E the checkpoint of epoch E - 2 finalizes.
@@ -446,7 +416,7 @@ export function warmupPlan(input: WarmupPlanInput): WarmupPlan {
     if (decision.why === "keep-alive") {
       // The age rule is the indexer's gate, not the warm-up's. The watcher also holds a second keep-alive of a period back.
       if (!decision.handoff) continue;
-      const headAge = moment - (facts.genesisTime + facts.headSlot * facts.secondsPerSlot);
+      const headAge = moment - slotStartTime(facts.headSlot, facts);
       if (input.keepAlivePeriod === Math.floor(finalized / facts.slotsPerPeriod) && headAge <= policy.keepAliveSeconds) continue;
     }
     const handoff = handoffAt.has(moment) ? [handoffKey(facts.headSlot)] : [];

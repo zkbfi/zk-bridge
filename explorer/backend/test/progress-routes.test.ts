@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import { MIN_SAMPLES } from "@zk-bridge/shared";
 import { insertJob, updateJob } from "../src/requests/jobs.ts";
 import { recordBoardPost, recordProveTiming } from "../src/requests/timings.ts";
 import { decisionBoardOf } from "../src/watch/decisions.ts";
@@ -84,11 +85,15 @@ describe("GET /progress/:messageId (2026-11-01)", () => {
     const run = setup();
     const now = run.clock.now();
     const genesis = Math.floor(now / 1000) - 100_000 * SLOT;
-    // An earlier proof: a cold worker took 60 s, the whole run 100 s, the board post 8 s.
-    insertJob(run.storage, { id: "old", direction: "first-to-second", now: now - 900_000 });
-    updateJob(run.storage, "old", { status: "on-chain", startSlot: "1", newSlot: "2" }, now - 800_000, ["queued"]);
-    recordProveTiming(run.storage, { jobId: "old", direction: "first-to-second", startedAt: now - 900_000, provedAt: now - 800_000, timing: { wait_worker_ms: 60_000, not_ready_count: 1, total_ms: 100_000 } });
-    recordBoardPost(run.storage, { jobId: "old", direction: "first-to-second", storedAt: now - 799_000, postedAt: now - 790_000, grindMs: 8_000 });
+    // Earlier proofs, as many as the estimates need (MIN_SAMPLES): a cold worker took 60 s, the whole run 100 s, the board post 8 s.
+    for (let index = 0; index < MIN_SAMPLES; index += 1) {
+      const id = `old-${index}`;
+      const at = now - 900_000 - index * 1_000;
+      insertJob(run.storage, { id, direction: "first-to-second", now: at });
+      updateJob(run.storage, id, { status: "on-chain", startSlot: "1", newSlot: "2" }, at + 100_000, ["queued"]);
+      recordProveTiming(run.storage, { jobId: id, direction: "first-to-second", startedAt: at, provedAt: at + 100_000, timing: { wait_worker_ms: 60_000, not_ready_count: 1, total_ms: 100_000 } });
+      recordBoardPost(run.storage, { jobId: id, direction: "first-to-second", storedAt: at + 101_000, postedAt: at + 110_000, grindMs: 8_000 });
+    }
     // A proof of an older prover reports nothing and changes no estimate.
     recordProveTiming(run.storage, { jobId: "older", direction: "first-to-second", startedAt: now - 990_000, provedAt: now - 980_000, timing: null });
     run.indexer.state.message = sentMessage(now, 1_200, { status: "waiting_for_finality" });

@@ -11,10 +11,10 @@
  * last proof proves at its finality.
  *
  * A batch is the waiting messages of one direction that the light client does not cover yet. It pays when the fees its
- * messages carry for the fee address reach the cost of proving and delivering them: {@link PROOF_COST_USD} plus the
+ * messages carry for the fee address reach the cost of proving and delivering them: `PROOF_COST_USD` (`@zkb/core`, as `batchCostUsd`) plus the
  * delivery gas of each message on the destination, times a margin. Dollars are integers, USD × 1e18, as in `@zkb/core`.
  */
-import { PROOF_COST_USD, USD, WAD, type ProofDirection } from "@zk-bridge/shared";
+import { USD, batchCostUsd, batchDueAt, intervalAllows, marginWadOf, type ProofDirection } from "@zk-bridge/shared";
 import type { BackendConfig } from "../config.ts";
 
 /** The batching of one direction, resolved from the configuration. */
@@ -29,9 +29,6 @@ export type BatchRule = {
   /** The fees must reach the cost times this (1e18 = 1). */
   readonly marginWad: bigint;
 };
-
-/** A margin as a number (1.0) to WAD, to six decimals. */
-export const marginWadOf = (margin: number): bigint => BigInt(Math.round(margin * 1_000_000)) * (WAD / 1_000_000n);
 
 /** The batch fields of one level of `watch`: the global ones, a pair's, or a direction's. */
 type BatchLevel = { readonly minIntervalSeconds?: number | undefined; readonly maxWaitSeconds?: number | undefined; readonly lookaheadSeconds?: number | undefined; readonly profitMargin?: number | undefined };
@@ -80,12 +77,6 @@ export function deprecatedBatchKeys(watch: BackendConfig["watch"]): string[] {
 export type Economics =
   | { readonly kind: "known"; readonly feesUsd: ReadonlyMap<string, bigint>; readonly deliveryUsd: bigint; readonly unpriced: number; readonly block: string | null }
   | { readonly kind: "unknown"; readonly why: string };
-
-/** The cost of proving and delivering `count` messages, times the margin, rounded up. */
-export function batchCostUsd(count: number, deliveryUsd: bigint, marginWad: bigint): bigint {
-  const cost = (PROOF_COST_USD + BigInt(count) * deliveryUsd) * marginWad;
-  return (cost + WAD - 1n) / WAD;
-}
 
 /** USD × 1e18 as text with six decimals, rounded down: "0.025000". */
 export function usdText(value: bigint): string {
@@ -160,8 +151,7 @@ export function planBatch(input: BatchInput): BatchPlan | null {
   const ready = byFinality.filter((message) => message.slot <= input.finalizedSlot);
   const upcoming = byFinality.filter((message) => message.slot > input.finalizedSlot);
   const oldestFinalAt = Math.min(...(ready.length > 0 ? ready : upcoming).map((message) => message.finalAt));
-  const intervalAt = input.lastProofAt === null ? Number.NEGATIVE_INFINITY : input.lastProofAt + rule.minIntervalSeconds;
-  const dueAt = Math.max(oldestFinalAt, intervalAt);
+  const dueAt = batchDueAt(oldestFinalAt, input.lastProofAt, rule.minIntervalSeconds);
   const known = economics.kind === "known" ? economics : null;
   const feeOf = (message: BatchMessage) => known?.feesUsd.get(message.messageId) ?? 0n;
   const costOf = (count: number) => (known === null ? null : batchCostUsd(count, known.deliveryUsd, rule.marginWad));
@@ -169,7 +159,7 @@ export function planBatch(input: BatchInput): BatchPlan | null {
   const costUsd = costOf(ready.length);
   if (ready.length > 0) {
     const paid = feesUsd !== null && costUsd !== null && feesUsd >= costUsd;
-    if (paid || rule.minIntervalSeconds === 0 || nowSeconds >= intervalAt) {
+    if (paid || intervalAllows(nowSeconds, input.lastProofAt, rule.minIntervalSeconds)) {
       return {
         due: true,
         trigger: paid ? "profit" : "interval",

@@ -16,11 +16,13 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./vectors": "./vectors/fee-rules-vectors.json"
+    "./vectors": "./vectors/fee-rules-vectors.json",
+    "./wait-vectors": "./vectors/wait-estimates-vectors.json"
   },
   "files": [
     "dist",
     "vectors/fee-rules-vectors.json",
+    "vectors/wait-estimates-vectors.json",
     "README.md"
   ],
   "scripts": {

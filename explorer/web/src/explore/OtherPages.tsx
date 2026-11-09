@@ -12,7 +12,7 @@ import { useAudit, useDeliveryCost, useFeed, useTokens } from "../app/queries";
 import { useServices } from "../app/services";
 import { relativeTime } from "../bridge/activity-model";
 import { amountText, chainsFor, nativeTokensOf } from "../bridge/bridge-model";
-import { PROOF_COST_USD as PROOF_COST, WAD } from "@zk-bridge/shared";
+import { PROOF_COST_USD as PROOF_COST, WAD, slotStartTime } from "@zk-bridge/shared";
 import { usePrices } from "../bridge/use-prices";
 import { dollarsText } from "../bridge/number";
 
@@ -87,7 +87,7 @@ export const ProofPage = ({ chainId, number }: { readonly chainId: number; reado
   if (proof === undefined) return <XBand label={label} big={`Proof #${number}`} sub={proofs.length === 0 ? "Reading…" : "The indexer has no such proof."} />;
   const previous = proofs.find((row) => row.chainId === chainId && row.number === number - 1);
   const next = proofs.find((row) => row.chainId === chainId && row.number === number + 1);
-  const slotTime = (slot: bigint): number | null => (clock === undefined ? null : clock.genesisTime + Number(slot) * clock.secondsPerSlot);
+  const slotTime = (slot: bigint): number | null => (clock === undefined ? null : slotStartTime(Number(slot), clock));
   const toTime = slotTime(proof.slot);
   const price = prices?.get(`native:${chainId}`) ?? null;
   const costUsd = price === null ? null : (proof.costWei * price.usdE18) / WAD;

@@ -6,11 +6,14 @@
  * manage their expectations", and "for the proved section, this will probably change the most for mainnet, when there
  * is real money and tiping/delivery".
  *
- * Where each range comes from:
+ * The numbers are `waitEstimate` of `@zkb/core`, the same functions the backend's progress and watcher use; this file
+ * adds the words. Where each range comes from:
  *
  * - Sent: one block of the source chain (typical one slot, worst case two).
- * - Final on the source: the chain's own rule, two epochs. The indexer's measured send-to-final time over the last 7
- *   days when it has {@link MIN_SAMPLES} deliveries, else the two epochs; the block of the send is taken off it.
+ * - Final on the source: the chain's rule as the backend's watcher reads it (`expectedFinalityAt`: the next epoch's
+ *   checkpoint finalizes two epochs later, 66 to 97 slots after the send), less the block of the send. The indexer's
+ *   send-to-final is its window (send plus two epochs), not a measurement, so it is not used. Owner, 2026-11-08: "yes,
+ *   use the watcher's rule".
  * - Proved: set by the proof rule and the user's fee. A fee that pays for a proof starts it at finality; a fee that
  *   does not waits for a batch, up to the direction's minimum interval. The proving time itself is the backend's
  *   measured total for the last 7 days, else {@link PROVING_DEFAULT}.
@@ -20,63 +23,34 @@
  * left out, the step falls back to the chain's or the rule's figure, and the line under the timeline says so. On
  * 2026-11-08 a backend fault read the proof's time to the chain as 52 h and the timeline showed "~57 h 7 min".
  */
-import { defaultFinalitySeconds, secondsPerSlot } from "@zk-bridge/shared";
+import {
+  DELIVERY_DEFAULT,
+  MIN_SAMPLES,
+  PROVING_DEFAULT,
+  SANE_LIMITS,
+  feeVerdict,
+  provingPartsOf,
+  provingRangeOf,
+  remainingWait,
+  waitDurationText,
+  waitEstimate,
+  type Basis,
+  type BenchmarkSteps,
+  type CheckedStep,
+  type FeeReading,
+  type ProofRule,
+  type ProofStart,
+  type Range,
+  type WaitInputs as SharedWaitInputs,
+} from "@zk-bridge/shared";
 import type { DirectionTiming, WindowTiming } from "../explore/explore-source";
 
-/** Deliveries needed in the window before a measured range is used. */
-export const MIN_SAMPLES = 5;
+// The numbers come from `@zkb/core` (wait-estimates), which the backend uses too; this file adds the words.
+export { DELIVERY_DEFAULT, MIN_SAMPLES, PROVING_DEFAULT, SANE_LIMITS, feeVerdict };
+export type { Basis, BenchmarkSteps, FeeReading, ProofRule, ProofStart, Range };
 
-/** Proving a header and posting the proof, when the backend has measured none: 2 min typical, 4 min worst case. */
-export const PROVING_DEFAULT: Range = { typical: 120, worst: 240 };
-
-/** Covered to delivered by a runner or by the user, when the indexer has measured none. */
-export const DELIVERY_DEFAULT: Range = { typical: 60, worst: 300 };
-
-/**
- * The longest worst case, in seconds, a measured range may have before it is left out as a measuring fault:
- * proving and posting a proof 30 min (it takes about two); covered to delivered 30 min (a runner delivers within
- * minutes); send to final three times the chain's two epochs; the measured proof wait twice the batch interval plus
- * the proving limit.
- */
-export const SANE_LIMITS = { provingSeconds: 30 * 60, deliverySeconds: 30 * 60, finalityFactor: 3 } as const;
-
-/** A typical and a worst-case wait, in seconds. */
-export type Range = { readonly typical: number; readonly worst: number };
-
-/** How a direction's proofs start, as the backend reports it (`rule` of `GET /directions/:direction/pipeline`). */
-export type ProofRule = {
-  readonly minIntervalSeconds: number;
-  readonly profitMargin: number;
-  /** The proof's share of the cost of one message, in dollars. */
-  readonly proofCostUsd: number;
-  /** False on a testnet: no token has a price, so no fee pays for a proof. */
-  readonly priced: boolean;
-};
-
-/** What the user's fee does to the proof step. */
-export type FeeReading =
-  /** The fee and the cost of one message (proof plus delivery gas), in dollars. */
-  | { readonly kind: "known"; readonly feeUsd: number; readonly costUsd: number }
-  /** No fee is chosen (Activity, Explore). */
-  | { readonly kind: "unknown" }
-  /** Use the proof waits that were measured, whatever fees paid. */
-  | { readonly kind: "observed" };
-
-/** Everything a timeline is made from. */
-export type WaitInputs = {
-  readonly sourceChainId: number;
-  /** The last 7 days of deliveries from the source chain, from the indexer; null when it gave none. */
-  readonly timing: WindowTiming | null;
-  readonly rule: ProofRule | null;
-  /** The backend's measured proving time (total plus the time to the chain); null when it gave none. */
-  readonly proving: Range | null;
-};
-
-/** What a step's range rests on. */
-export type Basis = "measured" | "chain" | "rule";
-
-/** How the proof step starts. */
-export type ProofStart = "at-finality" | "batch" | "testnet" | "measured" | "unknown";
+/** Everything a timeline is made from: the indexer's window, the backend's rule and proving time. */
+export type WaitInputs = SharedWaitInputs & { readonly timing: WindowTiming | null };
 
 /** One step of the timeline. */
 export type WaitStep = {
@@ -100,19 +74,11 @@ export type Timeline = {
   /** The wait for a batch in seconds, when the proof may wait for one. */
   readonly batchSeconds: number | null;
   /** The steps whose measured range was past its {@link SANE_LIMITS} and left out. */
-  readonly ignored: readonly ("final" | "proved" | "delivered")[];
+  readonly ignored: readonly CheckedStep[];
 };
 
 /** Seconds as "45 s", "18 min", "2 h" or "2 h 10 min". */
-export const durationText = (seconds: number): string => {
-  const whole = Math.max(0, Math.round(seconds));
-  if (whole < 60) return `${whole} s`;
-  const minutes = Math.round(whole / 60);
-  if (minutes < 120) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
-};
+export const durationText = waitDurationText;
 
 /** "typical 18 min · up to 75 min". */
 export const rangeText = (range: Range): string => `typical ${durationText(range.typical)} · up to ${durationText(range.worst)}`;
@@ -120,100 +86,37 @@ export const rangeText = (range: Range): string => `typical ${durationText(range
 /** The interval in words: "hourly" for an hour, else "every 90 min". */
 const everyText = (seconds: number): string => (seconds === 3600 ? "hourly" : `every ${durationText(seconds)}`);
 
-const add = (...ranges: readonly Range[]): Range => ({ typical: ranges.reduce((sum, range) => sum + range.typical, 0), worst: ranges.reduce((sum, range) => sum + range.worst, 0) });
-
-/** The measured median and p90 of a step, or null. */
-const measuredOf = (step: { readonly median: number | null; readonly p90: number | null } | undefined): Range | null =>
-  step === undefined || step.median === null || step.p90 === null ? null : { typical: step.median, worst: Math.max(step.median, step.p90) };
-
-/**
- * Whether a fee pays for a proof alone: the backend's profit rule, fees at least cost times the margin.
- *
- * @param rule The direction's rule.
- * @param fee What the user pays.
- * @returns `"pays"`, `"short"` (it does not) or `"unknown"` (no fee chosen, or no price).
- */
-export const feeVerdict = (rule: ProofRule, fee: FeeReading): "pays" | "short" | "unknown" => {
-  if (fee.kind !== "known" || !rule.priced) return "unknown";
-  // A hair of tolerance: 0.1 x 1.5 is 0.15000000000000002 in floating point.
-  return fee.feeUsd >= fee.costUsd * rule.profitMargin - 1e-9 ? "pays" : "short";
+/** What the proof step says, by how it starts. */
+const provedNoteOf = (start: ProofStart, batchSeconds: number | null, fee: FeeReading): string => {
+  switch (start) {
+    case "measured":
+      return "The wait for a proof, as measured";
+    case "unknown":
+      return "A proof of the finalized block is made and posted";
+    case "at-finality":
+      return "A proof starts at finality";
+    case "testnet":
+      return `Testnet: proofs run at least ${everyText(batchSeconds as number)}`;
+    default:
+      return `Waits for a batch: up to ${durationText(batchSeconds as number)}${fee.kind === "known" ? "; your fee does not pay for a proof alone" : ""}`;
+  }
 };
 
 /**
- * The timeline of a direction.
+ * The timeline of a direction: the ranges of `waitEstimate` (`@zkb/core`) with a label and a note for each step.
  *
  * @param inputs The measured and rule data.
  * @param fee What the user pays, when known.
  */
 export const buildTimeline = (inputs: WaitInputs, fee: FeeReading): Timeline => {
-  const slot = secondsPerSlot(inputs.sourceChainId);
-  const finality = defaultFinalitySeconds(inputs.sourceChainId);
-  const rule = inputs.rule;
-  const interval = rule === null ? 0 : rule.minIntervalSeconds;
-  const ignored: ("final" | "proved" | "delivered")[] = [];
-  /** The range when its worst case is within `limit`, else null, and the step is named as left out. */
-  const sane = (range: Range | null, limit: number, key: "final" | "proved" | "delivered"): Range | null => {
-    if (range === null || range.worst <= limit) return range;
-    if (!ignored.includes(key)) ignored.push(key);
-    return null;
-  };
-  const timing = inputs.timing !== null && inputs.timing.count >= MIN_SAMPLES ? inputs.timing : null;
-  const [sentToFinal, wait, delivery] =
-    timing === null
-      ? [null, null, null]
-      : [
-          sane(measuredOf(timing.steps[0]), SANE_LIMITS.finalityFactor * finality, "final"),
-          // Without a rule the interval is unknown: an hour, the testnet's, stands in.
-          sane(measuredOf(timing.steps[1]), 2 * (rule === null ? 3600 : interval) + SANE_LIMITS.provingSeconds, "proved"),
-          sane(measuredOf(timing.steps[2]), SANE_LIMITS.deliverySeconds, "delivered"),
-        ];
-  const sent: Range = { typical: slot, worst: 2 * slot };
-
-  // Final on the source: the chain's rule; the send's own block is part of the sent step.
-  const finalSource = sentToFinal ?? { typical: finality, worst: finality };
-  const final: Range = { typical: Math.max(0, finalSource.typical - sent.typical), worst: Math.max(0, finalSource.worst - sent.typical) };
-
-  const measuredProving = sane(inputs.proving, SANE_LIMITS.provingSeconds, "proved");
-  const proving = measuredProving ?? PROVING_DEFAULT;
-  const provingBasis: Basis = measuredProving === null ? "chain" : "measured";
-  let start: ProofStart;
-  let proved: Range;
-  let provedBasis: Basis;
-  let provedNote: string;
-  let batchSeconds: number | null = null;
-  const waitsText = (seconds: number) => `Waits for a batch: up to ${durationText(seconds)}`;
-  if (rule === null || fee.kind === "observed") {
-    // No rule to apply, or the caller wants what happened: the measured wait, else the proving time alone.
-    start = wait === null ? "unknown" : "measured";
-    proved = wait ?? proving;
-    provedBasis = wait === null ? provingBasis : "measured";
-    provedNote = wait === null ? "A proof of the finalized block is made and posted" : "The wait for a proof, as measured";
-  } else if (interval === 0 || feeVerdict(rule, fee) === "pays") {
-    start = "at-finality";
-    proved = proving;
-    provedBasis = provingBasis;
-    provedNote = "A proof starts at finality";
-  } else {
-    batchSeconds = interval;
-    proved = { typical: interval / 2 + proving.typical, worst: interval + proving.worst };
-    provedBasis = "rule";
-    if (!rule.priced) {
-      start = "testnet";
-      provedNote = `Testnet: proofs run at least ${everyText(interval)}`;
-    } else {
-      start = "batch";
-      provedNote = `${waitsText(interval)}${fee.kind === "known" ? "; your fee does not pay for a proof alone" : ""}`;
-    }
-  }
-  const delivered = delivery ?? DELIVERY_DEFAULT;
-  const measured = sentToFinal !== null && delivery !== null;
+  const estimate = waitEstimate(inputs, fee);
   const steps = [
-    { key: "sent", label: "Sent", note: "The transaction is in a block", range: sent, basis: "chain" },
-    { key: "final", label: "Final on the source", note: "Set by the chain: two epochs", range: final, basis: sentToFinal === null ? "chain" : "measured" },
-    { key: "proved", label: "Proved", note: provedNote, range: proved, basis: provedBasis },
-    { key: "delivered", label: "Delivered", note: "A delivery bot or you delivers it once proved", range: delivered, basis: delivery === null ? "chain" : "measured" },
+    { key: "sent", label: "Sent", note: "The transaction is in a block", range: estimate.sent, basis: "chain" },
+    { key: "final", label: "Final on the source", note: "Set by the chain: finality, as the prover waits for it", range: estimate.final, basis: estimate.basis.final },
+    { key: "proved", label: "Proved", note: provedNoteOf(estimate.start, estimate.batchSeconds, fee), range: estimate.proved, basis: estimate.basis.proved },
+    { key: "delivered", label: "Delivered", note: "A delivery bot or you delivers it once proved", range: estimate.delivered, basis: estimate.basis.delivered },
   ] as const satisfies readonly WaitStep[];
-  return { steps, total: add(...steps.map((step) => step.range)), basis: measured ? "measured" : "derived", samples: measured ? (timing as WindowTiming).count : 0, start, batchSeconds, ignored };
+  return { steps, total: estimate.total, basis: estimate.measured ? "measured" : "derived", samples: estimate.samples, start: estimate.start, batchSeconds: estimate.batchSeconds, ignored: estimate.ignored };
 };
 
 /** The line under a timeline: what its numbers rest on. A measured proof time that was left out is named. */
@@ -225,21 +128,16 @@ export const basisText = (timeline: Timeline): string => {
 };
 
 /**
- * What is left of a transfer that is in flight: the timeline's total less the time since the send, and never less than
- * the delivery step. A transfer past its worst case is `late` and has the delivery step left.
+ * What is left of a transfer that is in flight (`remainingWait` of `@zkb/core`): the timeline's total less the time since
+ * the send, and never less than the delivery step. A transfer past its worst case is `late`.
  *
  * @param timeline The direction's timeline.
  * @param status The transfer's status.
  * @param elapsedSeconds Seconds since it was sent.
  * @returns The range left, or null for a transfer that is not in flight.
  */
-export const remainingOf = (timeline: Timeline, status: string, elapsedSeconds: number): (Range & { readonly late: boolean }) | null => {
-  if (status === "delivered" || status === "release_failed") return null;
-  const delivered = timeline.steps[3].range;
-  if (status === "covered") return { ...delivered, late: false };
-  const elapsed = Math.max(0, elapsedSeconds);
-  return { typical: Math.max(delivered.typical, timeline.total.typical - elapsed), worst: Math.max(delivered.worst, timeline.total.worst - elapsed), late: elapsed > timeline.total.worst };
-};
+export const remainingOf = (timeline: Timeline, status: string, elapsedSeconds: number): (Range & { readonly late: boolean }) | null =>
+  remainingWait({ delivered: timeline.steps[3].range, total: timeline.total }, status, elapsedSeconds);
 
 /** A clock time, "14:32", of `unix` seconds in the viewer's zone. */
 export const clockText = (unix: number): string => new Date(unix * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -248,26 +146,14 @@ export const clockText = (unix: number): string => new Date(unix * 1000).toLocal
 export const timingFor = (timings: readonly { readonly sourceChainId: number; readonly timing: DirectionTiming | null }[], sourceChainId: number): WindowTiming | null =>
   timings.find((row) => row.sourceChainId === sourceChainId)?.timing?.last7d ?? null;
 
-type BenchmarkStat = { readonly count: number; readonly medianMs: number | null; readonly p90Ms: number | null };
-
-/** The part of `GET /benchmarks` the proving time is read from (`webhookToBoard` is absent from an older backend). */
-export type BenchmarkSteps = Readonly<Record<"total" | "proofToOnChain", BenchmarkStat>> & { readonly webhookToBoard?: BenchmarkStat };
-
 /**
- * The proving time of a direction from the backend's benchmarks: the prover's total, the time from its answer to the
- * board post, and the time from the board to the light client on chain, typical and worst case. Null with fewer than
- * {@link MIN_SAMPLES} proofs. The timeline leaves out a result past {@link SANE_LIMITS}.
+ * The proving time of a direction from the backend's benchmarks (`provingPartsOf` of `@zkb/core`): the prover's total,
+ * the time from its answer to the board post, and the time from the board to the light client on chain, typical and
+ * worst case. Null with fewer than {@link MIN_SAMPLES} proofs. The timeline leaves out a result past {@link SANE_LIMITS}.
  *
  * @param steps The direction's steps over the window.
  */
-export const provingOf = (steps: BenchmarkSteps | undefined): Range | null => {
-  if (steps === undefined || steps.total.count < MIN_SAMPLES || steps.total.medianMs === null || steps.total.p90Ms === null) return null;
-  const after = [steps.webhookToBoard, steps.proofToOnChain];
-  return {
-    typical: after.reduce((sum, step) => sum + (step?.medianMs ?? 0), steps.total.medianMs) / 1000,
-    worst: after.reduce((sum, step) => sum + (step?.p90Ms ?? 0), steps.total.p90Ms) / 1000,
-  };
-};
+export const provingOf = (steps: BenchmarkSteps | undefined): Range | null => provingRangeOf(provingPartsOf(steps));
 
 /** The part of `GET /directions/:direction/pipeline` the rule is read from. */
 export type PipelineRuleWire = {

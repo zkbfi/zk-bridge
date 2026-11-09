@@ -4,7 +4,7 @@
  * never name an endpoint, a key or a path. Each caller may read {@link READS_PER_CALLER_PER_MINUTE} times a minute.
  */
 import type { Context, Hono } from "hono";
-import { PROOF_DIRECTIONS, secondsPerSlot, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
+import { PROOF_DIRECTIONS, deliveryRangeOfStat, epochSeconds, provingPartsOf, saneProvingParts, secondsPerSlot, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
 import { figuresOf, publicFiguresOf } from "../billing.ts";
 import { accountTimeline, billedThroughOf, breakdownOfSpans, daySpan, hourSpans, sumBreakdowns } from "../billing-breakdown.ts";
 import { createIdleHistory } from "../idle-history.ts";
@@ -18,7 +18,6 @@ import { buildBenchmarks, parseWindow, WINDOW_LIMITS, type Benchmarks } from "./
 import { createIndexerReads, type IndexedHead, type IndexerReads } from "./indexer.ts";
 import { buildPipeline, knownProofs, pipelineRuleOf } from "./pipeline.ts";
 import { batchRuleFor } from "../watch/batch.ts";
-import { SLOTS_PER_EPOCH } from "../watch/decide.ts";
 import { buildProgress, clockFromHead, type Estimates } from "./progress.ts";
 
 /** How many reads of these routes one caller may make in a minute. */
@@ -111,23 +110,30 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
   /** The batch rule of a direction, as the watcher resolves it, and whether the pair has a PulseChain mainnet side to price on. */
   const ruleOf = (direction: ProofDirection) =>
     pipelineRuleOf(
-      batchRuleFor(context.config.watch, context.config.pair, direction, SLOTS_PER_EPOCH * secondsPerSlot(sidesOf(pair, direction).source.chainId)),
+      batchRuleFor(context.config.watch, context.config.pair, direction, epochSeconds(sidesOf(pair, direction).source.chainId)),
       pair.sides.some((side) => side.chainId === 369),
     );
 
   let estimateCache: { at: number; value: Promise<Benchmarks> } | null = null;
 
-  /** Medians for the `eta` of a stage: the prover's from the newest proofs, the on-chain ones from a day of benchmarks. */
+  /**
+   * Medians for the `eta` of a stage: the prover's run from the newest proofs, the steps after it and the delivery from
+   * a day of benchmarks. The proving steps go through the dapp's own rules (`provingPartsOf`, `saneProvingParts`,
+   * `deliveryRangeOfStat` in `@zkb/core`): too few runs, or a sum past the sanity limit, gives no `eta`.
+   */
   async function estimates(): Promise<Estimates> {
     const recent = recentTimings(storage, ESTIMATE_SAMPLE);
     if (estimateCache === null || now() - estimateCache.at >= ESTIMATE_REUSE_MILLISECONDS) estimateCache = { at: now(), value: benchmarks("24h", 86_400) };
     const day = await estimateCache.value;
+    const total = statOf(recent.map((timing) => timing.totalMs));
+    const proving = saneProvingParts(provingPartsOf({ total, webhookToBoard: day.steps.webhookToBoard, proofToOnChain: day.steps.proofToOnChain }));
+    const delivery = deliveryRangeOfStat(day.steps.coveredToDelivered);
     return {
       workerWaitMs: statOf(recent.filter((timing) => (timing.notReadyCount ?? 0) > 0).map((timing) => timing.waitWorkerMs)).medianMs,
-      totalMs: statOf(recent.map((timing) => timing.totalMs)).medianMs,
-      grindMs: statOf(recent.map((timing) => timing.grindMs)).medianMs,
-      proofToOnChainMs: day.steps.proofToOnChain.medianMs,
-      coveredToDeliveredMs: day.steps.coveredToDelivered.medianMs,
+      totalMs: proving === null ? null : total.medianMs,
+      webhookToBoardMs: proving === null ? null : day.steps.webhookToBoard.medianMs,
+      proofToOnChainMs: proving === null ? null : day.steps.proofToOnChain.medianMs,
+      coveredToDeliveredMs: delivery === null ? null : day.steps.coveredToDelivered.medianMs,
     };
   }
 

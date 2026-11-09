@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, encodeFunctionData, type Address, type Hex } from "viem";
-import { PROOF_COST_USD, PULSEX_FACTORIES, STABLES, USD, WAD, WPLS, tokenMediatorAbi } from "@zk-bridge/shared";
+import { PROOF_COST_USD, PULSEX_FACTORIES, STABLES, USD, WAD, WPLS, tokenMediatorAbi, batchCostUsd, marginWadOf } from "@zk-bridge/shared";
 import { makeConfig } from "./support.ts";
-import { batchCostUsd, batchRuleFor, deprecatedBatchKeys, marginWadOf, planBatch, usdText, type BatchMessage, type BatchRule, type Economics } from "../src/watch/batch.ts";
+import { batchRuleFor, deprecatedBatchKeys, planBatch, usdText, type BatchMessage, type BatchRule, type Economics } from "../src/watch/batch.ts";
 import { DELIVERY_GAS, createEconomicsReader, type DestinationToken } from "../src/watch/economics.ts";
 
 const RULE: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 384, marginWad: WAD };

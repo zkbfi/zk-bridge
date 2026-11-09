@@ -6,11 +6,10 @@
  *
  * Pure: the route reads the indexer, the database and the watcher, and passes the facts in.
  */
-import type { ProofDirection } from "@zk-bridge/shared";
+import { clockFromSlot, expectedFinalityAt, slotAtTime, type ProofDirection, type SlotClock } from "@zk-bridge/shared";
 import type { Job, PlannedJob } from "../requests/jobs.ts";
 import type { HeldProof } from "../requests/held-proofs.ts";
 import type { JobTiming } from "../requests/timings.ts";
-import { expectedFinalityAt, slotAtTime } from "../watch/decide.ts";
 import type { WatchDecision } from "../watch/decisions.ts";
 import type { IndexedHead, IndexedMessage } from "./indexer.ts";
 
@@ -60,17 +59,21 @@ export type Progress = {
   readonly job?: { readonly jobId: string; readonly status: string };
 };
 
-/** The slot clock of a source chain: the start of slot 0 in seconds since 1970, and the slot length. */
-export type SlotClock = { readonly genesisTime: number; readonly secondsPerSlot: number };
+/** The slot clock of a source chain (`@zkb/core`): the start of slot 0 in seconds since 1970, and the slot length. */
+export type { SlotClock };
 
-/** Medians from recent proofs, in milliseconds, or null without data. They make the `eta` of a stage. */
+/**
+ * Medians from recent proofs, in milliseconds, or null without data. They make the `eta` of a stage. The proving steps
+ * are the parts of the dapp's proof step (`provingPartsOf` and `saneProvingParts` in `@zkb/core`): null with too few
+ * prover runs or when their sum is past the sanity limit. Covered to delivered is `deliveryRangeOfStat`.
+ */
 export type Estimates = {
   /** The wait for a worker of a job that met a cold one. */
   readonly workerWaitMs: number | null;
   /** The whole prover run. */
   readonly totalMs: number | null;
-  /** The proof of work of a board post. */
-  readonly grindMs: number | null;
+  /** From the webhook storing the proof to its board post (the proof of work and the post). */
+  readonly webhookToBoardMs: number | null;
   /** From the board post to the light client update on chain. */
   readonly proofToOnChainMs: number | null;
   /** From the light client update to the delivery. */
@@ -78,12 +81,12 @@ export type Estimates = {
 };
 
 /** No estimates. */
-export const NO_ESTIMATES: Estimates = { workerWaitMs: null, totalMs: null, grindMs: null, proofToOnChainMs: null, coveredToDeliveredMs: null };
+export const NO_ESTIMATES: Estimates = { workerWaitMs: null, totalMs: null, webhookToBoardMs: null, proofToOnChainMs: null, coveredToDeliveredMs: null };
 
 /** The slot clock from the light client head the indexer reports: its slot and the start time of that slot. */
 export function clockFromHead(head: IndexedHead | null, secondsPerSlot: number): SlotClock | null {
   if (head === null || head.storedHeadSlot === null || head.storedHeadSlotTimestamp === null || head.storedHeadSlotTimestamp === undefined) return null;
-  return { genesisTime: head.storedHeadSlotTimestamp - head.storedHeadSlot * secondsPerSlot, secondsPerSlot };
+  return clockFromSlot(head.storedHeadSlot, head.storedHeadSlotTimestamp, secondsPerSlot);
 }
 
 /** The slots a job proves to: what the prover reported, else what the watcher planned. Null when neither is known. */
@@ -259,7 +262,7 @@ function waitFor(stage: StageKey, since: number, facts: WaitFacts): WaitingOn {
       return jobStep({ job, workerWarm: input.workerWarmFor(job), estimates, now: input.now });
     }
     case "proof-ready":
-      return { service: "board-post", since, ...plus(since, estimates.grindMs), detail: "the backend has the proof and posts it to the msgboard (proof of work first)" };
+      return { service: "board-post", since, ...plus(since, estimates.webhookToBoardMs), detail: "the backend has the proof and posts it to the msgboard (proof of work first)" };
     case "update-posted":
       return { service: "light-client-update", since, ...plus(since, estimates.proofToOnChainMs), detail: "the proof is on the msgboard; a runner posts it to the destination light client" };
     default:

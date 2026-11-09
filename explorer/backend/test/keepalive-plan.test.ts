@@ -1,5 +1,6 @@
+import { slotAtTime } from "@zk-bridge/shared";
 import { describe, expect, it } from "vitest";
-import { assess, currentSlotAt, deadlineOf, DEFAULT_POLICY, formatHours, neededHandoffPeriods, worseExitCode, EXIT_READ_FAILED, VERDICT_EXIT_CODES, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
+import { assess, deadlineOf, DEFAULT_POLICY, formatHours, neededHandoffPeriods, worseExitCode, EXIT_READ_FAILED, VERDICT_EXIT_CODES, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
 
 // A PulseChain-like clock: 10 s slots, 8192 slots per period (22.75 hours), genesis at time 0 for easy numbers.
 const PERIOD = 8192;
@@ -139,7 +140,7 @@ describe("assess", () => {
 
 describe("helpers", () => {
   it("the clock never goes below slot zero", () => {
-    expect(currentSlotAt(facts(0), -50)).toBe(0);
+    expect(slotAtTime(-50, facts(0))).toBe(0);
   });
 
   it("formats hours with one decimal", () => {

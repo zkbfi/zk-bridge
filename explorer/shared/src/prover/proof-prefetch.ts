@@ -1,4 +1,5 @@
 import { encodeAbiParameters, keccak256, numberToHex, zeroHash, type Address, type Hex, type PublicClient } from "viem";
+import { SLOTS_PER_EPOCH as SLOTS_PER_EPOCH_NUMBER } from "@zkb/core";
 import { beaconLightClientAbi } from "../abis/index.js";
 import type { ProofCacheStore } from "./proof-cache.js";
 
@@ -22,7 +23,7 @@ import type { ProofCacheStore } from "./proof-cache.js";
 export const EXECUTION_BLOCK_HASHES_MAPPING_SLOT = 3n;
 
 /** The slots of one epoch on every beacon chain that the bridge follows. */
-export const SLOTS_PER_EPOCH = 32n;
+export const SLOTS_PER_EPOCH = BigInt(SLOTS_PER_EPOCH_NUMBER);
 
 /** The storage key of `executionBlockHashes[storedSlot]`: `keccak256(abi.encode(uint256(storedSlot), 3))`. */
 export function openingStorageKey(storedSlot: bigint): Hex {

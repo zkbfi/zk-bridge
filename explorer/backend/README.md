@@ -432,12 +432,17 @@ pair), 503 when the indexer is not configured or cannot be read.
   | `proof-dedup-pending` | a proof we have from the head waits to land; this message goes in the next proof | none |
   | `gpu-worker-start` | the job is queued, or (estimated) a cold worker starts | job start + median prover run |
   | `gpu-proving` | the job runs past the median cold start, or a warm-up had a worker ready | job start + median prover run |
-  | `board-post` | "I have the proof but it is not on chain": the proof is stored and is posted to the msgboard | + median grind |
+  | `board-post` | "I have the proof but it is not on chain": the proof is stored and is posted to the msgboard | + median webhook-to-board |
   | `light-client-update` | the proof is on the msgboard; a runner posts the update | + median board-to-chain |
   | `delivery` | the light client covers the message; a runner delivers it | + median covered-to-delivered |
   | `none` | delivered, or the delivery ended (`release_failed`; `detail` says so) | none |
 
   The prover reports its steps only when it ends, so the two GPU services are an estimate from the newest 20 proofs.
+  The stage times are computed with the dapp's own functions (`@zkb/core`, `wait-estimates.ts`): the expected finality
+  is `expectedFinalityAt`; the prover run, webhook-to-board and board-to-chain medians are left out (no `eta`) with
+  fewer than 5 prover runs or when their 90th percentiles add up past 30 minutes; covered-to-delivered needs 5
+  deliveries and a 90th percentile under 30 minutes. `test/wait-estimates-parity.test.ts` checks the backend against
+  the shared vectors (`core/vectors/wait-estimates-vectors.json`), as the dapp's twin test does.
 - `proof`, once a proof reaches the message: `{ startSlot, newSlot, where }`, `where` is `stored` (made, not on the
   board), `board` (on the msgboard, not on chain) or `applied` (the head reaches it).
 - `slot` is null when the backend knows no slot clock (no watcher decision and no indexer head).
