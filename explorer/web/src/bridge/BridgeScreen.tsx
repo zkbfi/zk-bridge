@@ -19,7 +19,7 @@ import { WaitTimeline } from "../wait/WaitTimeline";
 import { durationText, type FeeReading } from "../wait/wait-model";
 import { useTimeline } from "../wait/use-wait";
 import { arrivesAsSymbol, isNativeToken, lightClientDelay, maxSendable, nativeTokensOf, tokenBalance } from "./bridge-model";
-import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferEstimate, transferSteps, withLightClientStep } from "./bridge-model";
+import { amountText, chainsFor, choiceOf, counterpartOf, directionFrom, reverse, sourceSide, tokenFor, transferSteps, withLightClientStep } from "./bridge-model";
 import { DeliveryMenu, deliverySummary, type TipChoiceKey } from "./DeliveryMenu";
 import { nativeSymbolOf, ceilingCostUsd, ceilingWeiOf, DEFAULT_GAS_LEVEL, deliveryGasUsd, feeSpanUsd, GAS_LEVELS, gasLevelOfCeiling, gasRange, PROOF_COST_USD, shareWadOfPercentText, totalCostUsd, routerCallbackGas, MAX_CALL_GAS, usdOf, WAD, type CostInput, type GasLevel } from "@zk-bridge/shared";
 import { formatUnits } from "viem";
@@ -258,7 +258,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   // The automatic fee is the rule's own figure; a share the draft signs from it rounds down by at most a unit.
   const feeUsd = automatic && auto.feeUsd !== null && tipUnits !== null ? auto.feeUsd : valueOf(tipUnits);
   // The wait the pill shows follows the fee: one that pays for a proof starts it at finality, one that does not waits for a batch.
-  const waitFee: FeeReading = feeUsd !== null && costDefaultUsd !== null && feeState === "known" ? { kind: "known", feeUsd: Number(feeUsd) / 1e18, costUsd: Number(costDefaultUsd) / 1e18 } : { kind: "unknown" };
+  const waitFee: FeeReading = feeUsd !== null && costDefaultUsd !== null && feeState === "known" ? { kind: "known", feeUsd, costUsd: costDefaultUsd } : { kind: "unknown" };
   const timeline = useTimeline(route.dir, waitFee);
   const gasBased = options.mode === "gas-multiplier";
   const expandedUsd = (() => {
@@ -897,7 +897,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             {breakdown.map((line) => (
               <ReviewRow key={line.label} label={line.label} sub><span title={PRICE_NOTE}>{line.value}</span></ReviewRow>
             ))}
-            <ReviewRow label="Time"><span>{transferEstimate(source, destination)}</span></ReviewRow>
+            <ReviewRow label="Time"><span>{`~${durationText(timeline.total.typical)}`}</span></ReviewRow>
             <ReviewRow label="To"><span className="zb-mono" style={{ wordBreak: "break-all", textAlign: "right" }}>{receiver}{account !== null && receiver.toLowerCase() !== account.toLowerCase() ? " (not your wallet)" : ""}</span></ReviewRow>
             {delivery === null ? null : (
               <ReviewRow label="Relay router"><span className="zb-mono" style={{ wordBreak: "break-all", textAlign: "right" }}>{delivery.router}</span></ReviewRow>

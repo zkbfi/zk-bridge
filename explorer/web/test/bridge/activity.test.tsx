@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FeedItem } from "@terminal/model/types";
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
-import { groupOf, NEEDS_YOU_AFTER_SECONDS, positionOf, stepsOf, stepWords, txUrl } from "../../src/bridge/activity-model";
+import { groupOf, leftText, NEEDS_YOU_AFTER_SECONDS, positionOf, stepsOf, stepWords, txUrl } from "../../src/bridge/activity-model";
 import { ActivityPulse } from "../../src/bridge/ActivityScreen";
 import { addPending, clearPending } from "../../src/bridge/pending";
 import { buildTestServices } from "../render";
@@ -46,6 +46,10 @@ describe("the activity model", () => {
     expect(detail.current).toBe(2);
     expect(detail.steps[0]!.href).toBe(txUrl(FIXTURE_PAIR.first.chainId, `0x${"11".repeat(32)}`));
     expect(detail.steps.at(-1)!.href).toBeUndefined();
+  });
+
+  it("time left in words: any moment, seconds under a minute, else minutes", () => {
+    expect([0, 40, 60, 750].map(leftText)).toEqual(["any moment", "~40 s", "~1 min", "~13 min"]);
   });
 });
 

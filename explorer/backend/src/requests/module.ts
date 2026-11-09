@@ -1,10 +1,9 @@
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
-import { PROOF_DIRECTIONS, secondsPerSlot, type ProofDirection } from "@zk-bridge/shared";
+import { PROOF_DIRECTIONS, SLOTS_PER_EPOCH, secondsPerSlot, type ProofDirection } from "@zk-bridge/shared";
 import { figuresOf } from "../billing.ts";
 import { decisionBoardOf } from "../watch/decisions.ts";
-import { SLOTS_PER_EPOCH } from "../watch/decide.ts";
 import { epochsPerDay } from "./rate-limit.ts";
 import type { BackendModuleContext } from "../module.ts";
 import { UNKNOWN_CALLER, callerKey } from "./caller.ts";

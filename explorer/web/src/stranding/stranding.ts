@@ -2,8 +2,10 @@
  * The time until a light client strands. A light client strands when the source chain signs in the period after its
  * last stored sync committee and nothing moved it; the backend computes the moment (`deadline.at`), and these helpers
  * turn it into the line that the pages show. Hours are computed from `at` and the clock, never from the backend's
- * `hoursLeft`, so the line keeps ticking between answers.
+ * `hoursLeft`, so the line keeps ticking between answers. The hours are `hoursUntil` of `@zkb/core`, which the backend
+ * rounds for its `hoursLeft`.
  */
+import { hoursUntil } from "@zk-bridge/shared";
 
 /** The backend's deadline for one direction's light client (the one on the direction's destination). */
 export type StrandingDeadline = { readonly at: number; readonly period: number };
@@ -17,7 +19,7 @@ export const STRANDING_WARN_HOURS = 12;
 export const STRANDING_BAD_HOURS = 6;
 
 /** The hours left, negative once passed. */
-export const hoursLeftOf = (deadline: StrandingDeadline, nowMs: number): number => (deadline.at - nowMs) / 3_600_000;
+export const hoursLeftOf = (deadline: StrandingDeadline, nowMs: number): number => hoursUntil(deadline.at, nowMs);
 
 /** Hours as text: one decimal under 10 h, whole hours from 10 h (9.96 h reads 10, not 10.0). */
 export const hoursText = (hours: number): string => (hours < 9.95 ? hours.toFixed(1) : String(Math.round(hours)));

@@ -4,6 +4,7 @@
  * a timer it wakes the remote prover a learned lead time before a proof is expected and keeps the worker warm until the
  * job starts ({@link warmupStep}), so a worker is ready when the job starts.
  */
+import { slotAtTime } from "@zk-bridge/shared";
 import type { Hex } from "viem";
 import type { ProofDirection } from "@zk-bridge/shared";
 import { deadlineOf, neededHandoffPeriods, type LightClientFacts, type Policy, type SourceHistory } from "../keepalive/plan.ts";
@@ -12,7 +13,7 @@ import { pendingFrom, type HeldProof } from "../requests/held-proofs.ts";
 import type { Job } from "../requests/jobs.ts";
 import type { ProofRequest, SubmitResult } from "../requests/service.ts";
 import { usdText, type BatchRule, type Economics } from "./batch.ts";
-import { decideProof, slotAtTime, warmupPlan, type DecisionInput, type DepositsFacts, type PendingProof, type WaitingMessage } from "./decide.ts";
+import { decideProof, warmupPlan, type DecisionInput, type DepositsFacts, type PendingProof, type WaitingMessage } from "./decide.ts";
 import type { DestinationToken } from "./economics.ts";
 import type { DecisionOutcome, WatchDecision } from "./decisions.ts";
 import type { FinalityObservation } from "./feed.ts";

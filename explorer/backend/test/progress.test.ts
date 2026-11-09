@@ -1,7 +1,7 @@
+import { expectedFinalityAt } from "@zk-bridge/shared";
 import { describe, expect, it } from "vitest";
 import type { PlannedJob } from "../src/requests/jobs.ts";
 import type { JobTiming } from "../src/requests/timings.ts";
-import { expectedFinalityAt } from "../src/watch/decide.ts";
 import type { WatchDecision } from "../src/watch/decisions.ts";
 import type { IndexedHead } from "../src/progress/indexer.ts";
 import { NO_ESTIMATES, buildProgress, clockFromHead, coveringJob, jobStep, type ProgressInput } from "../src/progress/progress.ts";
@@ -136,7 +136,7 @@ describe("the progress of a transfer (2026-11-01)", () => {
 
   it("the proof is stored but not on the board: the board post is what it waits on, with the proof and where it is", () => {
     const stored = buildProgress(
-      input({ jobs: [job({ startSlot: "9900", newSlot: "10016" })], timingOf: () => timing({ provedAt: FINAL_MS + 100_000, webhookStoredAt: FINAL_MS + 99_000 }), estimates: { ...NO_ESTIMATES, grindMs: 20_000 } }),
+      input({ jobs: [job({ startSlot: "9900", newSlot: "10016" })], timingOf: () => timing({ provedAt: FINAL_MS + 100_000, webhookStoredAt: FINAL_MS + 99_000 }), estimates: { ...NO_ESTIMATES, webhookToBoardMs: 20_000 } }),
     );
     expect(statuses(stored)).toMatchObject({ proving: "done", "proof-ready": "current" });
     expect(stored.stages[3]).toEqual({ key: "proving", status: "done", at: FINAL_MS + 99_000 });

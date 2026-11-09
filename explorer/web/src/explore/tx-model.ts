@@ -3,7 +3,7 @@
  * it sits: the steps from the user's action to delivery (spec "Address and transaction pages"). No prose about what it
  * did (owner: it reads as temporary); the kind, the details and the steps say it.
  */
-import { beaconForkGateAbi, beaconLightClientAbi, deliveryRouterAbi, messageBridgeAbi, tokenMediatorAbi } from "@zk-bridge/shared";
+import { SLOTS_PER_SYNC_COMMITTEE_PERIOD, beaconForkGateAbi, beaconLightClientAbi, deliveryRouterAbi, messageBridgeAbi, tokenMediatorAbi } from "@zk-bridge/shared";
 import { decodeEventLog, decodeFunctionData, getAddress, type Abi, type AbiFunction, type Address, type Hex, type Transaction, type TransactionReceipt } from "viem";
 import type { ChainConfig, FeedItem, PairConfig } from "@terminal/model/types";
 import { formatRoute } from "../app/route";
@@ -12,7 +12,7 @@ import { CONTRACT_NAMES } from "./contract-names";
 import type { ProofRow } from "./explore-source";
 
 /** Slots per sync-committee period on the beacon chain. */
-export const SLOTS_PER_PERIOD = 8192n;
+export const SLOTS_PER_PERIOD = BigInt(SLOTS_PER_SYNC_COMMITTEE_PERIOD);
 
 const CONTRACTS: readonly { readonly key: keyof ChainConfig["contracts"]; readonly name: string; readonly kind: string; readonly abi: Abi }[] = [
   { key: "lightClient", name: "Light client", kind: "Light-client update", abi: beaconLightClientAbi as Abi },

@@ -2,7 +2,7 @@
  * The proving pipeline of one direction: the batch that waits, the job that runs and its step, the newest proof and
  * where it is, the light client head, and the watcher's latest decision.
  */
-import { PROOF_COST_USD, USD, type ProofDirection } from "@zk-bridge/shared";
+import { PROOF_COST_USD, USD, hoursUntilRounded, marginOfWad, type ProofDirection } from "@zk-bridge/shared";
 import type { HeldProof } from "../requests/held-proofs.ts";
 import type { Job } from "../requests/jobs.ts";
 import type { Storage } from "../storage.ts";
@@ -30,7 +30,7 @@ export function pipelineRuleOf(rule: { readonly minIntervalSeconds: number; read
   return {
     minIntervalSeconds: rule.minIntervalSeconds,
     lookaheadSeconds: rule.lookaheadSeconds,
-    profitMargin: Number(rule.marginWad) / 1e18,
+    profitMargin: marginOfWad(rule.marginWad),
     proofCostUsd: `${PROOF_COST_USD / USD}.${(PROOF_COST_USD % USD).toString().padStart(18, "0").slice(0, 6)}`,
     priced,
   };
@@ -187,6 +187,6 @@ export function buildPipeline(input: {
     deadline:
       decision?.deadline === undefined
         ? null
-        : { at: decision.deadline.at, hoursLeft: Math.round((decision.deadline.at - now) / 36_000) / 100, period: decision.deadline.period, headSlot: decision.headSlot, headPeriod: decision.deadline.headPeriod },
+        : { at: decision.deadline.at, hoursLeft: hoursUntilRounded(decision.deadline.at, now), period: decision.deadline.period, headSlot: decision.headSlot, headPeriod: decision.deadline.headPeriod },
   };
 }

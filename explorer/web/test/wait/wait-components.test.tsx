@@ -11,6 +11,9 @@ import { WAIT_REFRESH_MILLISECONDS, useTimeline } from "../../src/wait/use-wait"
 import { buildTimeline } from "../../src/wait/wait-model";
 import { buildTestServices } from "../render";
 
+/** Dollars as USD × 1e18. */
+const usd = (dollars: number): bigint => BigInt(Math.round(dollars * 1e6)) * 10n ** 12n;
+
 const NOW = 1_800_000_000;
 const spread = (median: number, p90: number) => ({ avg: null, median, p90 });
 const window = (count: number) => ({ count, sentToDelivered: spread(900, 4000), steps: [spread(760, 790), spread(600, 3600), spread(30, 200)] as const });
@@ -59,7 +62,8 @@ const inputs = { sourceChainId: FIXTURE_PAIR.first.chainId, timing: null, rule: 
 describe("the timeline panel (2026-11-07)", () => {
   it("lists the four steps with a typical and a worst case each, the total on top, and what it rests on", () => {
     const { container } = render(<WaitTimeline timeline={buildTimeline(inputs, { kind: "unknown" })} sourceName="Sepolia" />);
-    expect(screen.getByText(/^typical 46 min · up to 82 min$/)).toBeInTheDocument();
+    // Final by the chain's rule: 81.5 to 97 slots after the send (expectedFinalityAt, the backend's watcher too).
+    expect(screen.getByText(/^typical 49 min · up to 89 min$/)).toBeInTheDocument();
     const rows = within(container.querySelector(".zb-wait-steps") as HTMLElement).getAllByRole("listitem");
     expect(rows.map((row) => row.querySelector(".zb-wait-label")?.firstChild?.textContent)).toEqual(["Sent", "Final on Sepolia", "Proved", "Delivered"]);
     expect(rows[2]).toHaveTextContent("Testnet: proofs run at least hourly");
@@ -69,7 +73,7 @@ describe("the timeline panel (2026-11-07)", () => {
   });
 
   it("names Request a proof only when the proof may wait for a batch", () => {
-    render(<WaitTimeline timeline={buildTimeline({ ...inputs, rule: { ...inputs.rule, priced: true } }, { kind: "known", feeUsd: 1, costUsd: 0.1 })} sourceName="Ethereum" />);
+    render(<WaitTimeline timeline={buildTimeline({ ...inputs, rule: { ...inputs.rule, priced: true } }, { kind: "known", feeUsd: usd(1), costUsd: usd(0.1) })} sourceName="Ethereum" />);
     expect(screen.getByText("A proof starts at finality")).toBeInTheDocument();
     expect(screen.queryByText(/Request a proof/)).toBeNull();
   });

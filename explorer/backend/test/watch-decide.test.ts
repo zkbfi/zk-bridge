@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { DEFAULT_POLICY, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
-import { USD, WAD } from "@zk-bridge/shared";
+import { USD, WAD, expectedFinalityAt, slotAtTime } from "@zk-bridge/shared";
 import type { BatchRule, Economics } from "../src/watch/batch.ts";
-import { DEPOSITS_LOCKED_RETRY_SECONDS, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE, decideProof, urgentReasons, expectedFinalityAt, handoffKey, slotAtTime, warmupPlan, type WaitingMessage } from "../src/watch/decide.ts";
+import { DEPOSITS_LOCKED_RETRY_SECONDS, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE, decideProof, urgentReasons, handoffKey, warmupPlan, type WaitingMessage } from "../src/watch/decide.ts";
 
 // A PulseChain-like clock: 10 s slots, 32 slots per epoch, 8192 slots per period, genesis at 0 for easy numbers.
 const PERIOD = 8192;

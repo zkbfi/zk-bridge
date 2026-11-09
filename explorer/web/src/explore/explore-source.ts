@@ -4,7 +4,7 @@
  * strictly; a value the indexer does not have stays null and shows as "—".
  */
 import { getAddress, type Address, type Hex } from "viem";
-import { createBrowseClient, secondsPerSlot, type BrowseClient } from "@zk-bridge/shared";
+import { clockFromSlot, createBrowseClient, secondsPerSlot, type BrowseClient } from "@zk-bridge/shared";
 
 /** A light-client update: one proof posted on a chain. `number` counts from 1 per chain, oldest first. */
 export type ProofRow = {
@@ -118,7 +118,7 @@ export const parseBeaconClocks = (body: unknown): readonly BeaconClock[] =>
     if (slot === null || slotTime === null) return [];
     const trackedChainId = int(row.trackedChainId, "trackedChainId");
     const seconds = secondsPerSlot(trackedChainId);
-    return [{ trackedChainId, genesisTime: slotTime - slot * seconds, secondsPerSlot: seconds }];
+    return [{ trackedChainId, ...clockFromSlot(slot, slotTime, seconds) }];
   });
 
 /** What Explore reads from the indexer. */

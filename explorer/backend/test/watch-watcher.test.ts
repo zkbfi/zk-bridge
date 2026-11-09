@@ -1,10 +1,11 @@
+import { expectedFinalityAt } from "@zk-bridge/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Hex } from "viem";
 import { DEFAULT_POLICY, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
 import { insertJob, lastProofStartedAt, type Job } from "../src/requests/jobs.ts";
 import type { ProofRequest, SubmitResult } from "../src/requests/service.ts";
 import { openStorage, type Storage } from "../src/storage.ts";
-import { MIN_PARTICIPANTS, expectedFinalityAt, type DepositsFacts } from "../src/watch/decide.ts";
+import { MIN_PARTICIPANTS, type DepositsFacts } from "../src/watch/decide.ts";
 import { DEFAULT_WARMUP, type WarmupConfig } from "../src/watch/warmup.ts";
 import { createWarmupStore } from "../src/watch/warmup-store.ts";
 import type { FinalityObservation } from "../src/watch/feed.ts";

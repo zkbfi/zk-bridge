@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Hex } from "viem";
+import { DELIVERY_DEFAULT } from "@zk-bridge/shared";
 import { FIXTURE_NOW, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { FEED_STATUSES, type FeedItem } from "@terminal/model/types";
 import { estimatedFeeUsd, orbitLeftSeconds, orbitStepOf, orbitTracks, planetRadius, planetTone, PLANET_CAP, PROOF_USD, proofCoversWith, stepSummary, toneKey } from "../../src/explore/orbit-model";
@@ -87,7 +88,7 @@ describe("planets", () => {
     // Overdue at Sent: what comes after finality is still ahead.
     expect(orbitLeftSeconds(0, first, second, 10_000)).toBeGreaterThan(100);
     // Overdue at Proof ready: only the delivery is ahead.
-    expect(orbitLeftSeconds(2, first, second, 10_000)).toBeLessThan(60);
+    expect(orbitLeftSeconds(2, first, second, 10_000)).toBe(DELIVERY_DEFAULT.typical);
   });
 });
 

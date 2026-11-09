@@ -4,7 +4,7 @@
  */
 import type { ChainSnapshotResult } from "@terminal/chain/live-reads";
 import type { ChainConfig, ChainSide, Direction, LightClientHead, PairConfig, TokenInfo } from "@terminal/model/types";
-import { bridgedSymbolOf, nativeSymbolOf } from "@zk-bridge/shared";
+import { bridgedSymbolOf, nativeSymbolOf, secondsPerSlot, waitEstimate } from "@zk-bridge/shared";
 import { formatUnits } from "../ui/format";
 
 /** The source and destination chains of a direction. */
@@ -112,9 +112,6 @@ export const counterpartOf = (token: TokenInfo, tokens: readonly TokenInfo[], pa
 /** The steps a transfer goes through, with an estimate each, for the time drawer. */
 export type TransferStep = { readonly label: string; readonly estimate: string; readonly seconds: number };
 
-/** Ethereum-like chains finalize in about two epochs; PulseChain's epochs are shorter (10 s slots). */
-const finalitySeconds = (chainId: number): number => (chainId === 369 || chainId === 943 ? 32 * 10 * 2 + 60 : 32 * 12 * 2 + 30);
-
 const minutes = (seconds: number): string => (seconds < 60 ? `~${seconds} s` : `~${Math.round(seconds / 60)} min`);
 
 /**
@@ -125,17 +122,19 @@ const minutes = (seconds: number): string => (seconds < 60 ? `~${seconds} s` : `
  * @param destination The chain it arrives on.
  */
 export const transferSteps = (source: ChainConfig, destination: ChainConfig): readonly TransferStep[] => {
+  // The typical figures of the shared estimate (`waitEstimate` of `@zkb/core`) from the chain alone: no measured times
+  // and no proof rule here, so the proof step is the proving time without a batch wait.
+  const estimate = waitEstimate({ sourceChainId: source.chainId, timing: null, rule: null, proving: null }, { kind: "unknown" });
   const rows: Array<[string, number]> = [
-    [`Sent on ${source.name}`, source.chainId === 369 || source.chainId === 943 ? 10 : 12],
-    [`Final on ${source.name}`, finalitySeconds(source.chainId)],
-    [`Proof of the finalized block`, 120],
-    [`${destination.name}'s light client checks it`, destination.chainId === 369 || destination.chainId === 943 ? 10 : 12],
-    [`Delivered to the address`, destination.chainId === 369 || destination.chainId === 943 ? 10 : 12],
+    [`Sent on ${source.name}`, estimate.sent.typical],
+    [`Final on ${source.name}`, estimate.final.typical],
+    [`Proof of the finalized block`, estimate.proved.typical],
+    [`${destination.name}'s light client checks it`, secondsPerSlot(destination.chainId)],
+    [`Delivered to the address`, estimate.delivered.typical],
   ];
   return rows.map(([label, seconds]) => ({ label, seconds, estimate: minutes(seconds) }));
 };
 
-/** The total of {@link transferSteps}, as "~15 min". */
 /**
  * How far behind the light client a transfer from `sourceSide` waits for is (the destination's head of the source
  * chain, from the indexer's heads), when it is over an hour; else null.
@@ -167,8 +166,6 @@ export const withLightClientStep = (steps: readonly TransferStep[], delay: { rea
   return at < 0 ? [...steps, row] : [...steps.slice(0, at + 1), row, ...steps.slice(at + 1)];
 };
 
-export const transferEstimate =(source: ChainConfig, destination: ChainConfig): string =>
-  minutes(transferSteps(source, destination).reduce((sum, step) => sum + step.seconds, 0));
 
 /**
  * A plain decimal text of an amount for display (no grouping, at most 6 decimals, trailing zeros dropped), so the
