@@ -80,7 +80,7 @@ export const verdictOf = (input: VerdictInput): Verdict => {
     }
     if (input.tipBelowBreakEven) {
       const numbers = input.lowFee == null ? "The fee is under twice what delivering and proving it should cost" : `The fee (${input.lowFee.feeText}) is under twice what delivering and proving it should cost (${input.lowFee.costText} now)`;
-      return { kind: "warn", label: "Tip too low · may not be delivered", detail: `${numbers}, so bots likely skip it and you would deliver it yourself. Raise it with the tip.` };
+      return { kind: "warn", label: "Low tip · may take about an hour longer", detail: `${numbers}. Bots that need a profit skip it; the zkb.fi runner delivers it once it has waited an hour, and you can deliver it yourself. Raise the tip to go sooner.` };
     }
     if (input.highTip != null) {
       return { kind: "warn", label: "High cap %", detail: `The tip, before gas, is ${input.highTip.tipText}, over the ${input.highTip.thresholdText} of the amount a tip should stay under. A lower tip still gets delivered; lower it with the tip.` };

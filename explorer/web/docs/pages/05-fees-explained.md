@@ -114,12 +114,12 @@ The warnings about the fee are these. The page shows one at a time, the most imp
 | Warning | When it shows | What you can do |
 |---|---|---|
 | Small transfer · may not be delivered in a timely manner | The cost is more than your automatic fee cap allows for this amount. | Raise the automatic fee cap, send more, or deliver it yourself. |
-| Tip too low · may not be delivered | The fee is under twice the cost. Bots are likely to skip it. | Raise the tip, or deliver it yourself. |
+| Low tip · may take about an hour longer | The fee is under twice the cost. Bots are likely to skip it. | Raise the tip, or deliver it yourself. |
 | High cap % | The tip, the part of the fee above the cost, is a large share of the amount: over 1% up to $100, over $1 between $100 and $1,000, over 0.1% from $1,000. | Lower the tip. A lower tip still gets delivered. |
 
 "High cap %" does not show for a small transfer: there, any fee that covers the cost is a large share.
 
-Without a dollar price, "Tip too low" compares the fee with what a bot needs at today's gas price, and "High cap %" compares the whole fee with 1% of the amount.
+Without a dollar price, "Low tip" compares the fee with what a bot needs at today's gas price, and "High cap %" compares the whole fee with 1% of the amount.
 
 ## Who delivers: the fee choices
 

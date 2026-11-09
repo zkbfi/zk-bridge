@@ -93,7 +93,7 @@ Minimal example: the Bridge button's verdict, and a delivery status in words. Th
 import { verdictOf, stepWords, groupOf } from "@zkb/react";
 
 verdictOf({ connected: true, draft: { status: "ready", reason: null }, amountEntered: true, overBalance: false, symbol: "USDC", paused: null, tipBelowBreakEven: true });
-// { kind: "warn", label: "Tip too low · may not be delivered", detail: "The fee is under twice what delivering and proving it should cost, so bots likely skip it and you would deliver it yourself. Raise it with the tip." }
+// { kind: "warn", label: "Low tip · may take about an hour longer", detail: "The fee is under twice what delivering and proving it should cost. Bots that need a profit skip it; the zkb.fi runner delivers it once it has waited an hour, and you can deliver it yourself. Raise the tip to go sooner." }
 
 const now = Math.floor(Date.now() / 1000);
 stepWords({ status: "covered", sentAt: now - 20 * 60, destinationName: "PulseChain", now }); // "Proven · waiting for a deliverer for 20 min"

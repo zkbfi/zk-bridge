@@ -28,7 +28,7 @@ describe("the fee warnings on the Bridge pill, at the sample prices", () => {
   });
 
   it("moves the line with the cap: $4 to PulseChain (about $0.025 of cost) is not small at 1%; the capped $0.04 only reads as a low fee", async () => {
-    expect((await pillAt("bridge.amount=4")).label).toBe("Tip too low · may not be delivered");
+    expect((await pillAt("bridge.amount=4")).label).toBe("Low tip · may take about an hour longer");
   });
 
   it("is small at a 0.5% cap", async () => {
@@ -39,7 +39,7 @@ describe("the fee warnings on the Bridge pill, at the sample prices", () => {
 
   it("shows the low fee with its numbers when the cap holds the fee under twice the cost", async () => {
     const { label, detail } = await pillAt(`dir=second-to-first&bridge.amount=1000`);
-    expect(label).toBe("Tip too low · may not be delivered");
+    expect(label).toBe("Low tip · may take about an hour longer");
     expect(detail).toMatch(/^The fee \(\$10\.00\) is under twice what delivering and proving it should cost \(\$7\.59 now\)/);
   });
 

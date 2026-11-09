@@ -52,7 +52,7 @@ Do not use it to follow a transfer that is already sent (use `check-transfer-sta
 | Look | Labels you may see | What to do |
 |---|---|---|
 | Solid | Bridge | Ready. |
-| Orange outline | "Small transfer · may not be delivered in a timely manner"; "Tip too low · may not be delivered"; "High cap %"; "Already bridged by the Omnibridge · wraps twice"; "First time this token is bridged · keep the amount low" | A warning. Read the line under the button. The person can still go ahead. At most one shows at a time. |
+| Orange outline | "Small transfer · may not be delivered in a timely manner"; "Low tip · may take about an hour longer"; "High cap %"; "Already bridged by the Omnibridge · wraps twice"; "First time this token is bridged · keep the amount low" | A warning. Read the line under the button. The person can still go ahead. At most one shows at a time. |
 | Grey | "Enter an amount"; "Not enough <symbol>"; "Check the destination"; "Check the transfer"; "Fee above your <cap> cap"; "<route> is paused" | Fix what the line under the button says. For "Fee above your <cap> cap", the button "Raise cap to <n>%" raises the hard cap to the smallest step that admits the fee. |
 
 ## Expected result
@@ -66,7 +66,7 @@ Do not use it to follow a transfer that is already sent (use `check-transfer-sta
 
 - **The button is grey.** Read the line under it. The labels in the table above each name one cause.
 - **"Fee above your <cap> cap".** The fee, or for a gas-based fee the most it could reach, is above the hard cap. Raise the cap, or lower the fee.
-- **A warning about the fee ("Tip too low", "Small transfer").** Bots are likely to skip the transfer. Raise the tip or the automatic cap, send more, or plan to deliver it yourself (see `deliver-it-yourself`).
+- **A warning about the fee ("Low tip", "Small transfer").** Bots that need a profit skip the transfer; the zkb.fi runner delivers it once it has waited an hour. Raise the tip or the automatic cap, send more, or plan to deliver it yourself (see `deliver-it-yourself`).
 - **The transfer waits.** If it is proven and still undelivered 30 minutes after sending, it moves to **Needs you** on the Activity screen. See `deliver-it-yourself`.
 - **The receiver cannot take the tokens** (for example a deny-listed address). The status becomes `release_failed`. This is final: the tokens stay in the token mediator, with no claim and no fallback address. Check the destination address before you send.
 - **The wallet rejects, or a transaction fails.** The dialog shows the error with **Close** and **Try again**. When one of its transactions reverted, it shows only **Close**: start again from the Bridge screen.

@@ -28,14 +28,14 @@ describe("the Bridge pill's verdict", () => {
   it("warns, but still lets the user go, when the tip is below what bots need", () => {
     const verdict = verdictOf({ ...base, tipBelowBreakEven: true });
     expect(verdict.kind).toBe("warn");
-    expect(verdict.label).toBe("Tip too low · may not be delivered");
+    expect(verdict.label).toBe("Low tip · may take about an hour longer");
     expect(verdict.detail).toMatch(/deliver it yourself/);
     expect(pressable(verdict)).toBe(true);
   });
 
   it("names the numbers in the low-fee detail when it has them", () => {
     const verdict = verdictOf({ ...base, tipBelowBreakEven: true, lowFee: { feeText: "$0.05", costText: "$0.04" } });
-    expect(verdict.detail).toBe("The fee ($0.05) is under twice what delivering and proving it should cost ($0.04 now), so bots likely skip it and you would deliver it yourself. Raise it with the tip.");
+    expect(verdict.detail).toBe("The fee ($0.05) is under twice what delivering and proving it should cost ($0.04 now). Bots that need a profit skip it; the zkb.fi runner delivers it once it has waited an hour, and you can deliver it yourself. Raise the tip to go sooner.");
   });
 
   it("warns, overridably, when the tip is high for the amount, naming the tip and the threshold", () => {
@@ -44,7 +44,7 @@ describe("the Bridge pill's verdict", () => {
     expect(verdict.detail).toBe("The tip, before gas, is $1.40, over the 0.32% of the amount a tip should stay under. A lower tip still gets delivered; lower it with the tip.");
     expect(pressable(verdict)).toBe(true);
     // A low fee says so first.
-    expect(verdictOf({ ...base, tipBelowBreakEven: true, highTip: { thresholdText: "1%", tipText: "$1" } }).label).toBe("Tip too low · may not be delivered");
+    expect(verdictOf({ ...base, tipBelowBreakEven: true, highTip: { thresholdText: "1%", tipText: "$1" } }).label).toBe("Low tip · may take about an hour longer");
   });
 
   it("warns that a small transfer may not be delivered in a timely manner, ahead of every other warning", () => {
@@ -56,7 +56,7 @@ describe("the Bridge pill's verdict", () => {
   });
 
   it("puts the fee warnings ahead of the token warnings, one at a time", () => {
-    expect(verdictOf({ ...base, tipBelowBreakEven: true, firstBridge: true }).label).toBe("Tip too low · may not be delivered");
+    expect(verdictOf({ ...base, tipBelowBreakEven: true, firstBridge: true }).label).toBe("Low tip · may take about an hour longer");
     expect(verdictOf({ ...base, highTip: { thresholdText: "1%", tipText: "$1" }, omnibridge: true }).label).toBe("High cap %");
     expect(verdictOf({ ...base, firstBridge: true, omnibridge: true }).label).toMatch(/^Already bridged/);
     expect(verdictOf({ ...base, firstBridge: true }).label).toMatch(/^First time/);
