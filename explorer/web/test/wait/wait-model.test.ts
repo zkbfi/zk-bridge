@@ -89,9 +89,9 @@ describe("the timeline from the chain and the rule only (2026-11-07)", () => {
 });
 
 describe("the timeline from the last 7 days (2026-11-07)", () => {
-  it("uses the measured send-to-final and covered-to-delivered, takes the send's block off the first, and says how many transfers", () => {
+  it("uses the measured covered-to-delivered, keeps final on the watcher's rule (not the indexer's send-to-final), and says how many transfers", () => {
     const timeline = buildTimeline(inputs({ timing: timing(20) }), unknown);
-    expect(timeline.steps[1]).toMatchObject({ range: { typical: 748, worst: 778 }, basis: "measured" });
+    expect(timeline.steps[1]).toMatchObject({ range: { typical: 978 - 12, worst: 1164 - 12 }, basis: "chain" });
     expect(timeline.steps[3]).toMatchObject({ range: { typical: 30, worst: 200 }, basis: "measured" });
     expect(timeline).toMatchObject({ basis: "measured", samples: 20 });
     expect(basisText(timeline)).toBe("Based on 20 transfers in the last 7 days; the proof step follows the proof rule.");
@@ -191,7 +191,7 @@ describe("a measured range past what its step can take is left out (2026-11-08)"
     expect(basisText(measured)).toBe("Based on 14 transfers in the last 7 days; the proof step is based on the chain and the proof rule.");
   });
 
-  it("with the backend fixed (proofs land seconds after the board post), the Sepolia timeline is about 45 min typical and 77 min worst", () => {
+  it("with the backend fixed (proofs land seconds after the board post), the Sepolia timeline is about 48 min typical and 84 min worst (final by the watcher's rule, this answer's 40/120 s deliveries)", () => {
     // The 20 newest proofs of the same answer, each matched to its own light client update: 7.4 s median, 11.5 s p90.
     const proving = provingOf({ ...live, proofToOnChain: stat(20, 7_446, 11_520) });
     expect(proving).toEqual({ typical: (49_235 + 16_667 + 7_446) / 1000, worst: (71_322 + 55_589 + 11_520) / 1000 });
@@ -199,14 +199,14 @@ describe("a measured range past what its step can take is left out (2026-11-08)"
     expect(timeline.ignored).toEqual([]);
     expect(timeline.steps[2].range.typical).toBeCloseTo(1800 + 73.348);
     expect(timeline.steps[2].range.worst).toBeCloseTo(3600 + 138.431);
-    expect(durationText(timeline.total.typical)).toBe("45 min");
-    expect(durationText(timeline.total.worst)).toBe("77 min");
+    expect(durationText(timeline.total.typical)).toBe("48 min");
+    expect(durationText(timeline.total.worst)).toBe("84 min");
   });
 
-  it("a measured send-to-final, proof wait or delivery past its limit falls back to the chain's figure", () => {
+  it("a measured proof wait or delivery past its limit falls back to the chain's figure; the indexer's send-to-final is never read", () => {
     const wild = timing(20, { steps: [spread(760, 768 * 3 + 1), spread(600, 2 * 3600 + 1801), spread(30, 1801)] });
     const timeline = buildTimeline(inputs({ timing: wild }), { kind: "observed" });
-    expect(timeline.ignored).toEqual(["final", "proved", "delivered"]);
+    expect(timeline.ignored).toEqual(["proved", "delivered"]);
     expect(timeline.steps.map((step) => step.basis)).toEqual(["chain", "chain", "chain", "chain"]);
     expect(timeline.basis).toBe("derived");
     expect(basisText(timeline)).toBe("Based on the chain and the proof rule.");

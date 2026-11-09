@@ -199,14 +199,14 @@ describe("measured step times", () => {
 describe("the timeline of a direction (vectors)", () => {
   const inputsOf = (sourceChainId: number, timing: MeasuredSteps | null): WaitInputs => ({ sourceChainId, timing, rule: liveRule, proving: liveProving });
 
-  it("the live case of 2026-11-08: testnet rule 3600 s, Sepolia to 943 about 45 min typical and 77 min worst, 943 to Sepolia about 43 and 75", () => {
+  it("the live case of 2026-11-08: testnet rule 3600 s, Sepolia to 943 about 48 min typical and 83 min worst, 943 to Sepolia about 46 and 80", () => {
     for (const direction of live.directions) {
       const estimate = waitEstimate(inputsOf(direction.sourceChainId, direction.timing as unknown as MeasuredSteps), unknown);
       const expected = direction.expected;
       for (const key of ["sent", "final", "proved", "delivered", "total"] as const) closeRange(estimate[key], expected[key]);
       expect(waitDurationText(estimate.total.typical)).toBe(expected.text.typical);
       expect(waitDurationText(estimate.total.worst)).toBe(expected.text.worst);
-      expect(estimate).toMatchObject({ measured: true, samples: direction.timing.count, start: "testnet", batchSeconds: 3600, ignored: [], basis: { final: "measured", proved: "rule", delivered: "measured" } });
+      expect(estimate).toMatchObject({ measured: true, samples: direction.timing.count, start: "testnet", batchSeconds: 3600, ignored: [], basis: { final: "chain", proved: "rule", delivered: "measured" } });
     }
   });
 
@@ -242,13 +242,14 @@ describe("the timeline of a direction (vectors)", () => {
     expect(waitEstimate(inputsOf(11155111, { ...timing, count: MIN_SAMPLES - 1 }), unknown).measured).toBe(false);
     const wild: MeasuredSteps = { count: 20, steps: [{ median: 760, p90: 768 * 3 + 1 }, { median: 600, p90: 2 * 3600 + 1801 }, { median: 30, p90: 1801 }] };
     const estimate = waitEstimate({ ...inputsOf(11155111, wild), proving: { typical: 9_999, worst: 99_999 } }, { kind: "observed" });
-    expect(estimate.ignored).toEqual(["final", "proved", "delivered"]);
+    expect(estimate.ignored).toEqual(["proved", "delivered"]);
     expect(estimate.measured).toBe(false);
     // Without a rule an hour stands in for the interval; at the limits the measured ranges stay.
     const edge: MeasuredSteps = { count: 20, steps: [{ median: 760, p90: 768 * 3 }, { median: 600, p90: 2 * 3600 + 1800 }, { median: 30, p90: 1800 }] };
     expect(waitEstimate({ ...inputsOf(11155111, edge), rule: null }, { kind: "observed" }).ignored).toEqual([]);
-    // A send's block longer than the measured send-to-final leaves 0, not less.
-    expect(waitEstimate(inputsOf(11155111, { ...timing, steps: [{ median: 5, p90: 5 }, timing.steps[1], timing.steps[2]] }), unknown).final).toEqual({ typical: 0, worst: 0 });
+    // The indexer's send-to-final is its window, not a measurement: whatever it says, the step follows the watcher's rule.
+    const ruled = waitEstimate(inputsOf(11155111, null), unknown).final;
+    expect(waitEstimate(inputsOf(11155111, { ...timing, steps: [{ median: 5, p90: 99_999 }, timing.steps[1], timing.steps[2]] }), unknown).final).toEqual(ruled);
   });
 
   it("what is left of a transfer in flight (vectors)", () => {

@@ -54,7 +54,7 @@ const deliveredAnswer = {
 };
 
 describe("the live case through the dapp's paths (vectors)", () => {
-  it("Sepolia to 943 about 45 min typical and 77 min worst, 943 to Sepolia about 43 and 75, from the backend client and the indexer parser", async () => {
+  it("Sepolia to 943 about 48 min typical and 83 min worst, 943 to Sepolia about 46 and 80, from the backend client and the indexer parser", async () => {
     const delivered = parseDelivered(deliveredAnswer);
     for (const direction of live.directions) {
       const name = direction.sourceChainId === 11155111 ? "first-to-second" : "second-to-first";

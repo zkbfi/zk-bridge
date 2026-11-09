@@ -219,10 +219,9 @@ export const DELIVERY_DEFAULT: Range = { typical: 60, worst: 300 };
 /**
  * The longest worst case, in seconds, a measured range may have before it is left out as a measuring fault: proving
  * and posting a proof 30 min (it takes about two); covered to delivered 30 min (a runner delivers within minutes);
- * send to final three times the chain's finality window; the measured proof wait twice the batch interval plus the
- * proving limit. On 2026-11-08 a backend fault read the proof's time to the chain as 52 h.
+ * the measured proof wait twice the batch interval plus the proving limit. On 2026-11-08 a backend fault read the proof's time to the chain as 52 h.
  */
-export const SANE_LIMITS = { provingSeconds: 30 * 60, deliverySeconds: 30 * 60, finalityFactor: 3 } as const;
+export const SANE_LIMITS = { provingSeconds: 30 * 60, deliverySeconds: 30 * 60 } as const;
 
 /** The interval that stands in when the rule is unknown: an hour, the testnet's. */
 export const UNKNOWN_INTERVAL_SECONDS = 3600;
@@ -298,7 +297,11 @@ export type FeeReading =
   /** Use the proof waits that were measured, whatever fees paid. */
   | { readonly kind: "observed" };
 
-/** The indexer's measured steps of a window: send to final, the wait for a proof after finality, covered to delivered. */
+/**
+ * The indexer's measured steps of a window: send to final, the wait for a proof after finality, covered to delivered.
+ * The first is not read: the indexer defines it as the send plus two epochs, not a measurement, and the timeline uses
+ * the watcher's finality rule instead (owner, 2026-11-08: "yes, use the watcher's rule").
+ */
 export type MeasuredSteps = { readonly count: number; readonly steps: readonly [Spread, Spread, Spread] };
 
 /** Everything a timeline is made from. */
@@ -318,7 +321,7 @@ export type Basis = "measured" | "chain" | "rule";
 export type ProofStart = "at-finality" | "batch" | "testnet" | "measured" | "unknown";
 
 /** A step of the timeline that a measured range can be left out of. */
-export type CheckedStep = "final" | "proved" | "delivered";
+export type CheckedStep = "proved" | "delivered";
 
 /** The ranges of a timeline, without its words. */
 export type WaitEstimate = {
@@ -328,7 +331,7 @@ export type WaitEstimate = {
   readonly delivered: Range;
   readonly basis: { readonly final: Basis; readonly proved: Basis; readonly delivered: Basis };
   readonly total: Range;
-  /** "measured" when the send-to-final and covered-to-delivered ranges are measured; else from the chain and the rule. */
+  /** True when the covered-to-delivered range is measured; else from the chain and the rule. */
   readonly measured: boolean;
   /** Deliveries behind the measured ranges (0 when derived). */
   readonly samples: number;
@@ -353,8 +356,8 @@ export const feeVerdict = (rule: ProofRule, fee: FeeReading): "pays" | "short" |
  * The ranges of a direction's timeline.
  *
  * - Sent: one block of the source chain (one slot typical, two worst).
- * - Final on the source: the measured send-to-final of the window with {@link MIN_SAMPLES} deliveries, else
- *   {@link finalityWaitRange}; the send's own block is taken off it.
+ * - Final on the source: always {@link finalityWaitRange}, the watcher's rule (66 to 97 slots after the send), less
+ *   the send's own block. The indexer's send-to-final is its window, not a measurement, so it is not read.
  * - Proved: {@link proofWaitRange} by the rule and the fee, with the measured proving time or {@link PROVING_DEFAULT};
  *   without a rule, or for `observed`, the measured wait.
  * - Delivered: the measured covered-to-delivered time, else {@link DELIVERY_DEFAULT}.
@@ -374,17 +377,15 @@ export const waitEstimate = (inputs: WaitInputs, fee: FeeReading): WaitEstimate 
     return kept;
   };
   const timing = inputs.timing !== null && inputs.timing.count >= MIN_SAMPLES ? inputs.timing : null;
-  const [sentToFinal, wait, delivery] =
+  const [wait, delivery] =
     timing === null
-      ? [null, null, null]
+      ? [null, null]
       : [
-          sane(rangeOfSpread(timing.steps[0]), SANE_LIMITS.finalityFactor * defaultFinalitySeconds(inputs.sourceChainId), "final"),
           sane(rangeOfSpread(timing.steps[1]), 2 * (rule === null ? UNKNOWN_INTERVAL_SECONDS : interval) + SANE_LIMITS.provingSeconds, "proved"),
           sane(rangeOfSpread(timing.steps[2]), SANE_LIMITS.deliverySeconds, "delivered"),
         ];
   const sent: Range = { typical: slot, worst: 2 * slot };
-  const finalSource = sentToFinal ?? finality;
-  const final: Range = { typical: Math.max(0, finalSource.typical - sent.typical), worst: Math.max(0, finalSource.worst - sent.typical) };
+  const final: Range = { typical: finality.typical - sent.typical, worst: finality.worst - sent.typical };
 
   const measuredProving = sane(inputs.proving, SANE_LIMITS.provingSeconds, "proved");
   const proving = measuredProving ?? PROVING_DEFAULT;
@@ -410,13 +411,13 @@ export const waitEstimate = (inputs: WaitInputs, fee: FeeReading): WaitEstimate 
     }
   }
   const delivered = delivery ?? DELIVERY_DEFAULT;
-  const measured = sentToFinal !== null && delivery !== null;
+  const measured = delivery !== null;
   return {
     sent,
     final,
     proved,
     delivered,
-    basis: { final: sentToFinal === null ? "chain" : "measured", proved: provedBasis, delivered: delivery === null ? "chain" : "measured" },
+    basis: { final: "chain", proved: provedBasis, delivered: delivery === null ? "chain" : "measured" },
     total: addRanges(sent, final, proved, delivered),
     measured,
     samples: measured ? (timing as MeasuredSteps).count : 0,

@@ -157,7 +157,8 @@ same JSON file, convert strings to your big integer type, call your function per
 
 `@zkb/core/wait-vectors` is `vectors/wait-estimates-vectors.json`: the chains' timing, a message's finality and batch
 due times, stranding deadlines, the proof rule and the live case of 2026-11-08 (testnet rule 3600 s and that day's
-measured times: Sepolia to 943 about 45 min typical and 77 min worst, 943 to Sepolia about 43 and 75). `test/wait-estimates.test.ts`
+measured times, with Final on the source by the watcher's finality rule: Sepolia to 943 about 48 min typical and 83 min
+worst, 943 to Sepolia about 46 and 80). `test/wait-estimates.test.ts`
 pins them here; the backend (`backend/test/wait-estimates-parity.test.ts`) and the dapp
 (`web/test/wait/wait-estimates-parity.test.ts`) compute the same vectors through their own paths.
 

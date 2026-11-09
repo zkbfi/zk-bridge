@@ -1,5 +1,5 @@
 {
-  "_about": "Pinned outputs of @zkb/core wait-estimates. Seconds unless a name says Ms; money is USD x 1e18 as decimal text. The backend (test/wait-estimates-parity.test.ts) and the dapp (test/wait/wait-estimates-parity.test.ts) compute these through their own paths. The live case: the testnet rule of 2026-11-08 (minimum interval 3600 s) and that day's measured times.",
+  "_about": "Pinned outputs of @zkb/core wait-estimates. Seconds unless a name says Ms; money is USD x 1e18 as decimal text. The backend (test/wait-estimates-parity.test.ts) and the dapp (test/wait/wait-estimates-parity.test.ts) compute these through their own paths. The live case: the testnet rule of 2026-11-08 (minimum interval 3600 s) and that day's measured times; Final on the source always follows the watcher's finality rule (owner, 2026-11-08: \"yes, use the watcher's rule\").",
   "chains": [
     {
       "chainId": 1,
@@ -333,8 +333,8 @@
             "worst": 24
           },
           "final": {
-            "typical": 756,
-            "worst": 756
+            "typical": 966.0,
+            "worst": 1152
           },
           "proved": {
             "typical": 1873.4,
@@ -345,12 +345,12 @@
             "worst": 84
           },
           "total": {
-            "typical": 2689.4,
-            "worst": 4603.7
+            "typical": 2899.4,
+            "worst": 4999.7
           },
           "text": {
-            "typical": "45 min",
-            "worst": "77 min"
+            "typical": "48 min",
+            "worst": "83 min"
           }
         }
       },
@@ -380,8 +380,8 @@
             "worst": 20
           },
           "final": {
-            "typical": 630,
-            "worst": 630
+            "typical": 805.0,
+            "worst": 960
           },
           "proved": {
             "typical": 1873.4,
@@ -392,12 +392,12 @@
             "worst": 84
           },
           "total": {
-            "typical": 2561.4,
-            "worst": 4473.7
+            "typical": 2736.4,
+            "worst": 4803.7
           },
           "text": {
-            "typical": "43 min",
-            "worst": "75 min"
+            "typical": "46 min",
+            "worst": "80 min"
           }
         }
       }
@@ -467,8 +467,8 @@
         "status": "waiting_for_finality",
         "elapsedSeconds": 600,
         "left": {
-          "typical": 2089.4,
-          "worst": 4003.7,
+          "typical": 2299.4,
+          "worst": 4399.7,
           "late": false
         }
       },

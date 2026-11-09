@@ -10,9 +10,10 @@
  * adds the words. Where each range comes from:
  *
  * - Sent: one block of the source chain (typical one slot, worst case two).
- * - Final on the source: the indexer's measured send-to-final time over the last 7 days when it has {@link MIN_SAMPLES}
- *   deliveries, else the chain's rule as the backend's watcher reads it (`expectedFinalityAt`: the next epoch's
- *   checkpoint finalizes two epochs later, 66 to 97 slots after the send); the block of the send is taken off it.
+ * - Final on the source: the chain's rule as the backend's watcher reads it (`expectedFinalityAt`: the next epoch's
+ *   checkpoint finalizes two epochs later, 66 to 97 slots after the send), less the block of the send. The indexer's
+ *   send-to-final is its window (send plus two epochs), not a measurement, so it is not used. Owner, 2026-11-08: "yes,
+ *   use the watcher's rule".
  * - Proved: set by the proof rule and the user's fee. A fee that pays for a proof starts it at finality; a fee that
  *   does not waits for a batch, up to the direction's minimum interval. The proving time itself is the backend's
  *   measured total for the last 7 days, else {@link PROVING_DEFAULT}.
@@ -111,7 +112,7 @@ export const buildTimeline = (inputs: WaitInputs, fee: FeeReading): Timeline => 
   const estimate = waitEstimate(inputs, fee);
   const steps = [
     { key: "sent", label: "Sent", note: "The transaction is in a block", range: estimate.sent, basis: "chain" },
-    { key: "final", label: "Final on the source", note: "Set by the chain: final two epochs after the next epoch begins", range: estimate.final, basis: estimate.basis.final },
+    { key: "final", label: "Final on the source", note: "Set by the chain: finality, as the prover waits for it", range: estimate.final, basis: estimate.basis.final },
     { key: "proved", label: "Proved", note: provedNoteOf(estimate.start, estimate.batchSeconds, fee), range: estimate.proved, basis: estimate.basis.proved },
     { key: "delivered", label: "Delivered", note: "A delivery bot or you delivers it once proved", range: estimate.delivered, basis: estimate.basis.delivered },
   ] as const satisfies readonly WaitStep[];

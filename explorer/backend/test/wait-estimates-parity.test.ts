@@ -126,7 +126,7 @@ async function liveBackend(proofToOnChainMs?: number) {
 }
 
 describe("the live case through the backend's routes (vectors)", () => {
-  it("GET /benchmarks and the pipeline's rule give the dapp's timeline: Sepolia to 943 about 45/77 min, 943 to Sepolia about 43/75; the progress answer times its stages from the same steps", async () => {
+  it("GET /benchmarks and the pipeline's rule give the dapp's timeline: Sepolia to 943 about 48/83 min, 943 to Sepolia about 46/80; the progress answer times its stages from the same steps", async () => {
     const { backend, now, slot, state, get, bench } = await liveBackend();
     const benchmarks = await get("/benchmarks?window=7d");
     for (const direction of live.directions) {
