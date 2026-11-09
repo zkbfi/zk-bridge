@@ -5,13 +5,14 @@ import type { Logger } from "../logging/logger.ts";
 import type { StateStore } from "../runtime/state-file.ts";
 import { sendBatch, type UpdateFate, type UpdateOffer } from "./batch.ts";
 import { planBatches } from "./batch-plan.ts";
-import { isFinal, prepareItem, type DeliveryDependencies, type DeliveryOutcome, type Preparation, type ReadyDelivery } from "./delivery.ts";
+import { isFinal, prepareItem, skip, type DeliveryDependencies, type DeliveryOutcome, type Preparation, type ReadyDelivery } from "./delivery.ts";
 import { createPrerequisiteLedger, type BudgetStore, type PrerequisiteLedger } from "./prerequisite-ledger.ts";
 import type { OutcomeSink } from "./outcomes.ts";
 import { assessProofPayload, payloadKey, type LightClientReader, type ProofRefusal, type VerifyGuard } from "@zk-bridge/shared/prover";
 import { createSerialQueue, type SerialQueue } from "./serial-queue.ts";
 import type { PrerequisiteBudgetState, RunnerState } from "./state.ts";
 import { postUpdate } from "./update.ts";
+import { unpaidSpentWei, withUnpaidSpend } from "./unpaid-spend.ts";
 
 /** Everything the runner needs for one pair and direction. */
 export interface RunnerDependencies {
@@ -92,6 +93,14 @@ const PAGE_SIZE = 100;
  * stored) wait for a light client update that may land any moment.
  */
 const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit", "no-price-for-fee-token", "anchor-not-stored"]);
+
+/** Skip reasons of an item that the delayed unpaid rule may still deliver: no offer, or an offer below the cost. */
+const UNPAID_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit"]);
+/**
+ * The loss limit of an unpaid delivery, in percent. Above 100 so that even a fee of zero, a loss of the whole cost,
+ * passes the fee check: the item is delivered whatever its fee, and the daily cap bounds the spend.
+ */
+const UNPAID_LOSS_PERCENT = 101;
 
 /** Builds the runner. It keeps in memory only caches that a restart may lose; the state file keeps what must last. */
 export function createRunner(dependencies: RunnerDependencies): Runner {
@@ -255,9 +264,9 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     },
   };
 
-  async function attempt(item: FeedItem, ledger: PrerequisiteLedger): Promise<Preparation | null> {
+  async function attempt(item: FeedItem, ledger: PrerequisiteLedger, delivery: DeliveryDependencies = dependencies.delivery): Promise<Preparation | null> {
     try {
-      return await queue.run(() => prepareItem(dependencies.delivery, item, ledger));
+      return await queue.run(() => prepareItem(delivery, item, ledger));
     } catch (error) {
       logger.error("delivery_error", { messageId: item.messageId, error });
       retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
@@ -272,8 +281,27 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     readonly spentOnPrerequisites: boolean;
   }
 
-  /** Records an outcome, counts it, schedules the next look at the item and stores a final result. */
-  async function settleOutcome(item: FeedItem, outcome: DeliveryOutcome, summary: SweepCounts, options: { readonly spentOnPrerequisites: boolean }): Promise<void> {
+  /** How long the item has been deliverable, in seconds, when the delayed unpaid rule applies to it now. Null otherwise. */
+  function unpaidWaitSeconds(item: FeedItem): number | null {
+    const after = dependencies.delivery.settings.deliverUnpaidAfterSeconds ?? null;
+    const coveredAt = item.covered?.timestamp;
+    if (after === null || coveredAt === undefined) return null;
+    const waited = Math.floor(dependencies.now() / 1000) - coveredAt;
+    return waited >= after ? waited : null;
+  }
+
+  /** Records an outcome, counts it, schedules the next look at the item and stores a final result. An unpaid candidate is only collected in `candidates`. */
+  async function settleOutcome(
+    item: FeedItem,
+    outcome: DeliveryOutcome,
+    summary: SweepCounts,
+    options: { readonly spentOnPrerequisites: boolean; readonly candidates?: FeedItem[] },
+  ): Promise<void> {
+    // A candidate is settled by the unpaid pass at the end of the sweep, which delivers it or says why not.
+    if (options.candidates !== undefined && outcome.status === "skipped" && UNPAID_REASONS.has(outcome.reason) && unpaidWaitSeconds(item) !== null) {
+      options.candidates.push(item);
+      return;
+    }
     await record(outcome);
     if (outcome.status === "delivered") summary.delivered += 1;
     if (outcome.status === "skipped") summary.skipped += 1;
@@ -290,10 +318,16 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
    * Sends one batch. A send that throws may have broadcast the transaction, so every item of the batch counts as failed
    * and waits. The delivery reservation stays charged in the ledger. The layout calls of the items are a loss.
    */
-  async function deliverBatch(batch: readonly Pending[], ledger: PrerequisiteLedger, summary: SweepCounts, update: UpdateOffer | null): Promise<void> {
+  async function deliverBatch(
+    batch: readonly Pending[],
+    ledger: PrerequisiteLedger,
+    summary: SweepCounts,
+    update: UpdateOffer | null,
+    options: { readonly candidates?: FeedItem[]; readonly delivery?: DeliveryDependencies } = {},
+  ): Promise<readonly DeliveryOutcome[]> {
     let report;
     try {
-      report = await queue.run(() => sendBatch(dependencies.delivery, ledger, { readies: batch.map((pending) => pending.ready), update }));
+      report = await queue.run(() => sendBatch(options.delivery ?? dependencies.delivery, ledger, { readies: batch.map((pending) => pending.ready), update }));
     } catch (error) {
       logger.error("delivery_batch_error", { messageIds: batch.map((pending) => pending.item.messageId), error });
       await ledger.recordLoss(batch.reduce((sum, pending) => sum + pending.ready.prerequisiteCostWei, 0n));
@@ -302,12 +336,58 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
         const wait = pending.spentOnPrerequisites ? dependencies.prerequisiteLossRefusalMilliseconds : RETRY_AFTER_MILLISECONDS;
         retryAfter.set(pending.item.messageId, dependencies.now() + wait);
       }
-      return;
+      return [];
     }
     for (const [index, pending] of batch.entries()) {
-      await settleOutcome(pending.item, report.outcomes[index] as DeliveryOutcome, summary, { spentOnPrerequisites: pending.spentOnPrerequisites });
+      await settleOutcome(pending.item, report.outcomes[index] as DeliveryOutcome, summary, { spentOnPrerequisites: pending.spentOnPrerequisites, candidates: options.candidates });
     }
     await settleUpdateFate(update, report.update);
+    return report.outcomes;
+  }
+
+  /** Logs a delivery that nobody paid for and charges its receipt cost to the rolling cap. */
+  async function recordUnpaid(outcome: Extract<DeliveryOutcome, { status: "delivered" }>, waitedSeconds: number): Promise<void> {
+    const costWei = outcome.gasCostWei + outcome.prerequisiteCostWei;
+    const now = dependencies.now();
+    await dependencies.state.update((current) => withUnpaidSpend(current, { id: outcome.transactionHash, atMilliseconds: now, wei: costWei.toString() }, now));
+    logger.info("delivered_unpaid", { messageId: outcome.messageId, waitedSeconds, gasUsed: outcome.gasUsed, costWei, chain: dependencies.destinationChainId });
+  }
+
+  /**
+   * The delayed unpaid rule. It runs after the paid items of the sweep went out. Each candidate is a covered item that
+   * waited long enough and that the normal rules left out: no offer, or an offer below the cost. The item is prepared
+   * again with the loss limit lifted. An item with an offer goes to the delivery router, which pays what the offer gives
+   * (the bridge alone would leave the tokens at the router); an item with none goes to the bridge. The cap of the daily
+   * spend is read before each item, from the receipts, so one delivery may pass the cap and no second follows.
+   */
+  async function deliverUnpaid(candidates: readonly FeedItem[], ledger: PrerequisiteLedger, summary: SweepCounts): Promise<void> {
+    const { settings } = dependencies.delivery;
+    const unpaidDelivery: DeliveryDependencies = { ...dependencies.delivery, settings: { ...settings, deliverWithoutOffer: true, maximumLossPercent: UNPAID_LOSS_PERCENT } };
+    for (const item of candidates.slice(0, dependencies.maximumDeliveriesPerSweep)) {
+      const waitedSeconds = unpaidWaitSeconds(item) as number;
+      const capWei = settings.maximumUnpaidSpendPerDayWei ?? null;
+      const spentWei = unpaidSpentWei(await dependencies.state.load(), dependencies.now());
+      if (capWei === null || spentWei >= capWei) {
+        const detail = capWei === null ? `no daily cap is set for chain ${dependencies.destinationChainId}` : `${spentWei} of ${capWei} wei spent on unpaid deliveries in the last 24 hours`;
+        logger.warn("unpaid_delivery_refused", { messageId: item.messageId, reason: "daily-cap", detail, chain: dependencies.destinationChainId });
+        await settleOutcome(item, skip(item.messageId as Hex, "unpaid-spend-cap", { detail }), summary, { spentOnPrerequisites: false });
+        continue;
+      }
+      const preparation = await attempt(item, ledger, unpaidDelivery);
+      if (preparation === null) {
+        summary.failed += 1;
+        continue;
+      }
+      let outcome: DeliveryOutcome | undefined;
+      if (preparation.kind === "outcome") {
+        outcome = preparation.outcome;
+        await settleOutcome(item, outcome, summary, { spentOnPrerequisites: false });
+      } else {
+        const pending: Pending = { item, ready: preparation.ready, spentOnPrerequisites: false };
+        [outcome] = await deliverBatch([pending], ledger, summary, await offerUpdate(), { delivery: unpaidDelivery });
+      }
+      if (outcome?.status === "delivered") await recordUnpaid(outcome, waitedSeconds);
+    }
   }
 
   /**
@@ -331,6 +411,7 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     });
     let attempts = 0;
     const waiting: Pending[] = [];
+    const candidates: FeedItem[] = [];
     for (const item of listed) {
       if (attempts >= dependencies.maximumDeliveriesPerSweep) break;
       if ((retryAfter.get(item.messageId) ?? 0) > dependencies.now()) continue;
@@ -353,7 +434,7 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
       }
       const { outcome } = preparation;
       if ((outcome.status === "delivered" || outcome.status === "failed") && !spentOnPrerequisites) attempts += 1;
-      await settleOutcome(item, outcome, summary, { spentOnPrerequisites });
+      await settleOutcome(item, outcome, summary, { spentOnPrerequisites, candidates });
     }
     const plan = planBatches(
       waiting.map((pending) => ({ ...pending, assumedGas: pending.ready.assumedGas })),
@@ -361,8 +442,10 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     );
     // An item above the batch maximum goes alone in a transaction of its own, after the batches.
     for (const batch of [...plan.batches, ...plan.oversize.map((pending) => [pending])]) {
-      await deliverBatch(batch, ledger, summary, await offerUpdate());
+      await deliverBatch(batch, ledger, summary, await offerUpdate(), { candidates });
     }
+    // The items that pay are done. Now the items that waited long enough without paying.
+    await deliverUnpaid(candidates, ledger, summary);
     // No batch took the update, so it goes alone, as it did before batches existed.
     if (pendingUpdate !== null) await postUpdateAlone(pendingUpdate);
     return summary;

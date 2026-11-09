@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { BotConfigError, parseBotConfig, runnerMinimumPriorityFeeWei } from "../../src/config/bot-config.ts";
+import { BotConfigError, parseBotConfig, runnerMinimumPriorityFeeWei, runnerUnpaidSpendCapWei } from "../../src/config/bot-config.ts";
 import { parseCommandLine } from "../../src/cli.ts";
 import { createLogger } from "../../src/logging/logger.ts";
 import { createSecretVault, openSecretStore } from "../../src/runtime/secrets.ts";
@@ -77,10 +77,30 @@ describe("the bot configuration", () => {
     expect(config.runner?.maximumLossPercent).toBe(20);
     expect(config.runner?.deliveryGasFallback).toBe(1_500_000);
     expect(config.runner?.deliverWithoutOffer).toBe(false);
+    expect(config.runner?.deliverUnpaidAfterSeconds).toBe(3600);
     expect(config.runner?.prerequisiteGasFallback).toBe(300_000);
     expect(config.runner?.prerequisiteLossRefusalSeconds).toBe(1800);
     expect(config.runner?.maximumBatchSize).toBe(5);
     expect(config.runner?.maximumBatchGas).toBe(6_000_000);
+  });
+
+  it("reads the delayed unpaid delivery settings: off with null, a cap by chain with a default for the testnets", () => {
+    const runner = {
+      prover: { binary: "p" },
+      indexerUrl: "http://127.0.0.1:1",
+      signer: { kind: "private-key", key: "env:RUNNER_PRIVATE_KEY" },
+      maximumPrerequisiteSpendPerSweepWei: "5000",
+      maximumPrerequisiteSpendPerDayWei: "20000",
+      maximumUnrecoveredPrerequisiteLossWei: "10000",
+    };
+    const plain = parseBotConfig({ ...minimal, runner }).runner!;
+    expect(runnerUnpaidSpendCapWei(plain, 11155111)).toBe(50_000_000_000_000_000n);
+    expect(runnerUnpaidSpendCapWei(plain, 943)).toBe(10n ** 24n);
+    expect(runnerUnpaidSpendCapWei(plain, 369)).toBeNull();
+    const custom = parseBotConfig({ ...minimal, runner: { ...runner, deliverUnpaidAfterSeconds: null, maximumUnpaidSpendPerDayWei: { "369": "7", "943": "9" } } }).runner!;
+    expect(custom.deliverUnpaidAfterSeconds).toBeNull();
+    expect(runnerUnpaidSpendCapWei(custom, 369)).toBe(7n);
+    expect(runnerUnpaidSpendCapWei(custom, 943)).toBe(9n);
   });
 
   it("refuses a reward address in the runner section, because the router decides where the tips go", () => {

@@ -142,9 +142,11 @@ describe("deliverySettingsOf", () => {
         maximumBatchGas: 17,
       }),
     }).runner!;
-    expect(deliverySettingsOf(parsed)).toEqual({
+    expect(deliverySettingsOf(parsed, 943)).toEqual({
       maximumLossPercent: 7,
       deliverWithoutOffer: true,
+      deliverUnpaidAfterSeconds: 3600,
+      maximumUnpaidSpendPerDayWei: 10n ** 24n,
       tokenValuationsWei: { [`0x${"ab".repeat(20)}`]: 1000n },
       deliveryGasFallback: 11n,
       maximumPrerequisiteRounds: 2,

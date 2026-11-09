@@ -104,6 +104,8 @@ interface WorldOptions {
   data?: Record<string, Hex>;
   maximumLossPercent?: number;
   deliverWithoutOffer?: boolean;
+  deliverUnpaidAfterSeconds?: number | null;
+  maximumUnpaidSpendPerDayWei?: bigint | null;
   valuations?: Record<string, bigint>;
   /** The gas a default item is assumed to need before a simulation. Default 300,000. */
   assumedGas?: bigint;
@@ -153,6 +155,8 @@ function world(options: WorldOptions = {}) {
     settings: {
       maximumLossPercent: options.maximumLossPercent ?? 20,
       deliverWithoutOffer: options.deliverWithoutOffer ?? false,
+      ...(options.deliverUnpaidAfterSeconds === undefined ? {} : { deliverUnpaidAfterSeconds: options.deliverUnpaidAfterSeconds }),
+      ...(options.maximumUnpaidSpendPerDayWei === undefined ? {} : { maximumUnpaidSpendPerDayWei: options.maximumUnpaidSpendPerDayWei }),
       tokenValuationsWei: options.valuations ?? {},
       deliveryGasFallback: options.assumedGas ?? TEST_DELIVERY_GAS_FALLBACK,
       maximumPrerequisiteRounds: 3,
@@ -1289,5 +1293,151 @@ describe("sweeps of one runner", () => {
     };
     await Promise.all([w.runner.sweep(), w.runner.sweep(), w.runner.sweep()]);
     expect(overlapped).toBe(false);
+  });
+});
+
+describe("the delayed unpaid delivery rule", () => {
+  const COST = 3_000_000n;
+  const NOW_SECONDS = 10_000;
+  const HOUR = 3600;
+  /** An item that a stored head covered `waited` seconds ago. */
+  const coveredFor = (id: number, waited: number, token = WRAPPED_NATIVE): FeedItem => ({ ...feedItem({ id, token }), covered: { timestamp: NOW_SECONDS - waited } });
+  const offerFor = (id: number) => ({ [word(id)]: feeOfferData({ director: fixedFee(10n), value: 1000n, token: WRAPPED_NATIVE }) });
+  const noOfferFor = (id: number) => ({ [word(id)]: feeOfferData({ director: fixedFee(10n), value: 1000n, recipient: address(0x13) }) });
+  const unpaid = (options: WorldOptions) => world({ startTime: NOW_SECONDS * 1000, deliverUnpaidAfterSeconds: HOUR, maximumUnpaidSpendPerDayWei: 10n ** 18n, ...options });
+  const sends = (w: ReturnType<typeof world>) => w.chain.log.filter((entry) => entry.kind === "send");
+
+  it("leaves an item that waited less than the threshold, with or without an offer", async () => {
+    const w = unpaid({ items: [coveredFor(1, HOUR - 1), coveredFor(2, HOUR - 1)], data: { ...offerFor(1), ...noOfferFor(2) } });
+    w.chain.feeTokens = COST / 2n;
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 0, skipped: 2 });
+    expect(sends(w)).toEqual([]);
+    expect(w.outcomes.records.map((record) => record.reason).sort()).toEqual(["loss-at-or-above-limit", "no-fee-offer"]);
+  });
+
+  it("leaves an item with no covered time, and every item when the rule is off", async () => {
+    const plain = feedItem({ id: 1, token: WRAPPED_NATIVE });
+    const noTime = unpaid({ items: [plain], data: offerFor(1) });
+    noTime.chain.feeTokens = COST / 2n;
+    expect((await noTime.runner.sweep()).delivered).toBe(0);
+    for (const off of [null, undefined]) {
+      const w = world({ startTime: NOW_SECONDS * 1000, items: [coveredFor(1, 10 * HOUR)], data: offerFor(1), deliverUnpaidAfterSeconds: off });
+      w.chain.feeTokens = COST / 2n;
+      expect((await w.runner.sweep()).delivered).toBe(0);
+      expect(sends(w)).toEqual([]);
+    }
+  });
+
+  it("delivers an offer below the cost through the delivery router once the item waited the threshold, and logs it", async () => {
+    const w = unpaid({ items: [coveredFor(1, HOUR + 5)], data: offerFor(1) });
+    w.chain.feeTokens = COST / 2n;
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 1 });
+    expect(sends(w).map((entry) => entry.request.to)).toEqual([MULTICALL]);
+    const log = w.events().find((event) => event.msg === "delivered_unpaid" || event.event === "delivered_unpaid");
+    expect(log).toMatchObject({ messageId: word(1), waitedSeconds: HOUR + 5, gasUsed: "300000", costWei: String(COST), chain: 369 });
+    expect(w.state.current.unpaidSpend).toHaveLength(1);
+    expect(w.state.current.unpaidSpend[0]).toMatchObject({ wei: String(COST) });
+  });
+
+  it("delivers an item with no offer straight to the bridge once it waited the threshold, with the exact threshold counting", async () => {
+    const w = unpaid({ items: [coveredFor(1, HOUR)], data: noOfferFor(1) });
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 1 });
+    expect(sends(w).map((entry) => entry.request.to)).toEqual([BRIDGE]);
+    expect(w.outcomes.records.filter((record) => record.status === "delivered")).toHaveLength(1);
+  });
+
+  it("delivers an offer of zero through the router: the loss limit does not apply", async () => {
+    const w = unpaid({ items: [coveredFor(1, HOUR)], data: offerFor(1) });
+    w.chain.feeTokens = 0n;
+    expect((await w.runner.sweep()).delivered).toBe(1);
+  });
+
+  it("keeps the deliverWithoutOffer rule immediate and sends no unpaid log for it", async () => {
+    const w = unpaid({ items: [coveredFor(1, 1)], data: noOfferFor(1), deliverWithoutOffer: true });
+    expect((await w.runner.sweep()).delivered).toBe(1);
+    expect(w.events().some((event) => JSON.stringify(event).includes("delivered_unpaid"))).toBe(false);
+  });
+
+  it("refuses with a logged reason when the daily cap is reached, and sends nothing", async () => {
+    const w = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1), maximumUnpaidSpendPerDayWei: 1_000n });
+    w.state.current = { ...w.state.current, unpaidSpend: [{ id: "0x1", atMilliseconds: NOW_SECONDS * 1000 - 60_000, wei: "1000" }] };
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
+    expect(sends(w)).toEqual([]);
+    expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "unpaid-spend-cap" });
+    expect(JSON.stringify(w.events())).toContain("unpaid_delivery_refused");
+  });
+
+  it("does not count spend older than 24 hours toward the cap", async () => {
+    const w = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1), maximumUnpaidSpendPerDayWei: 1_000n });
+    w.state.current = { ...w.state.current, unpaidSpend: [{ id: "0x1", atMilliseconds: NOW_SECONDS * 1000 - 25 * 3600 * 1000, wei: "1000" }] };
+    expect((await w.runner.sweep()).delivered).toBe(1);
+    // The old entry left the window when the new one was stored.
+    expect(w.state.current.unpaidSpend).toHaveLength(1);
+  });
+
+  it("refuses on a chain that has no cap", async () => {
+    const w = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1), maximumUnpaidSpendPerDayWei: null });
+    expect((await w.runner.sweep()).delivered).toBe(0);
+    expect(w.outcomes.records[0]).toMatchObject({ reason: "unpaid-spend-cap", detail: "no daily cap is set for chain 369" });
+  });
+
+  it("stops after the delivery that fills the cap: the next item of the same sweep is refused", async () => {
+    // The feed lists the newest first, so item 2 is the older one and goes first.
+    const w = unpaid({ items: [coveredFor(1, 2 * HOUR), coveredFor(2, 3 * HOUR)], data: { ...noOfferFor(1), ...noOfferFor(2) }, maximumUnpaidSpendPerDayWei: COST });
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 1, skipped: 1 });
+    expect(sends(w)).toHaveLength(1);
+    expect(w.outcomes.records.find((record) => record.status === "skipped")).toMatchObject({ messageId: word(1), reason: "unpaid-spend-cap" });
+  });
+
+  it("delivers the items that pay first, and the unpaid ones after them", async () => {
+    // Item 2 is the older one and waited long, with no offer. Item 1 pays.
+    const w = unpaid({ items: [coveredFor(1, 10), coveredFor(2, 5 * HOUR)], data: { ...offerFor(1), ...noOfferFor(2) } });
+    w.chain.feeTokens = COST * 2n;
+    w.chain.messageIdOfPosition = () => word(1);
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 2 });
+    expect(sends(w).map((entry) => entry.request.to)).toEqual([MULTICALL, BRIDGE]);
+  });
+
+  it("keeps the spend over a restart, so the cap holds", async () => {
+    const first = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1), maximumUnpaidSpendPerDayWei: COST });
+    expect((await first.runner.sweep()).delivered).toBe(1);
+    // A new runner over the same state file and a second item, as after a restart.
+    const second = unpaid({ items: [coveredFor(3, 2 * HOUR)], data: noOfferFor(3), maximumUnpaidSpendPerDayWei: COST, state: first.state });
+    expect((await second.runner.sweep()).delivered).toBe(0);
+    expect(second.outcomes.records[0]).toMatchObject({ reason: "unpaid-spend-cap" });
+    expect(sends(second)).toEqual([]);
+  });
+
+  it("counts a failed attempt as failed and charges nothing when the delivery does not happen", async () => {
+    const reverted = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1) });
+    reverted.chain.simulateOverride = () => ({ ok: false, reason: "Reverted" });
+    expect(await reverted.runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
+    expect(reverted.state.current.unpaidSpend).toEqual([]);
+
+    const broken = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1) });
+    broken.indexer.getMessage = async () => {
+      throw new Error("indexer down");
+    };
+    // The first look (normal rules) throws too, so there is no candidate: the item fails once.
+    expect(await broken.runner.sweep()).toMatchObject({ delivered: 0, failed: 1 });
+  });
+
+  it("counts a thrown attempt of the unpaid pass as failed", async () => {
+    const w = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1) });
+    let calls = 0;
+    const original = w.indexer.getMessage.bind(w.indexer);
+    w.indexer.getMessage = async (id: string) => {
+      if ((calls += 1) === 2) throw new Error("indexer down");
+      return original(id);
+    };
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 0, skipped: 0, failed: 1 });
+  });
+
+  it("does not charge an unpaid batch that throws", async () => {
+    const w = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: offerFor(1) });
+    w.chain.feeTokens = 0n;
+    w.chain.sendFailure = new Error("connection lost");
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 0, failed: 1 });
+    expect(w.state.current.unpaidSpend).toEqual([]);
   });
 });
