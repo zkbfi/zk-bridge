@@ -266,11 +266,27 @@ describe("the bridge form: the tip before any signature", () => {
     expect(steps.at(-1)!.plan.functionName).toBe("relayTokensAndCall");
   });
 
-  it("offers no tip on the wrap route, says why, and sends a plain wrap", async () => {
+  it("tips the native coin by default through the router's relayTokensAndCall, paid in the copy, with no pay-out in the native coin", async () => {
     const { onReview } = await renderForm({ variant: "wrap" });
     await typeAmount("1");
-    expect(await screen.findByText(/wrap route carries no call data, so it cannot carry a tip. The page sends a plain relay, with no tip/)).toBeInTheDocument();
-    expect(screen.queryByRole("radio", { name: /No tip/ })).toBeNull();
+    expect(screen.getByRole("radio", { name: /Gas based, up to the limit/ })).toBeChecked();
+    await choosePercentage();
+    await screen.findByTestId("delivery-quote");
+    expect(screen.queryByLabelText(/^Pay out in/)).toBeNull();
+    const review = screen.getByRole("button", { name: "Review transaction" });
+    await waitFor(() => expect(review).toBeEnabled());
+    await userEvent.click(review);
+    const steps = (onReview as ReturnType<typeof vi.fn>).mock.calls[0]![0] as readonly WebStep[];
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.plan).toMatchObject({ functionName: "relayTokensAndCall", functionSignature: "relayTokensAndCall(address,bytes,uint256)", to: FIXTURE_PAIR.first.contracts.deliveryRouter });
+    expect(steps[0]!.disclosure.delivery?.token.symbol).toBe("zETH");
+  });
+
+  it("sends a plain wrap when the user chooses No tip, and says what that means", async () => {
+    const { onReview } = await renderForm({ variant: "wrap" });
+    await typeAmount("1");
+    await userEvent.click(screen.getByRole("radio", { name: /^No tip/ }));
+    expect(screen.getByTestId("no-tip-note")).toHaveTextContent(/^No tip\. The delivery router wraps the coin you send.*Anyone can deliver it on the other chain, for free\. It may take longer/);
     const review = screen.getByRole("button", { name: "Review transaction" });
     await waitFor(() => expect(review).toBeEnabled());
     await userEvent.click(review);
@@ -285,6 +301,7 @@ describe("the bridge form: the tip before any signature", () => {
     const options = within(screen.getByLabelText("Coin to wrap")).getAllByRole("option").map((option) => option.textContent);
     expect(options).toEqual([expect.stringMatching(/^Wrap ETH on Ethereum/), expect.stringMatching(/^Wrap PLS on PulseChain/)]);
     await typeAmount("1");
+    await choosePercentage();
     await waitFor(() => expect(screen.getByRole("button", { name: "Review transaction" })).toBeEnabled());
     expect(screen.queryByTestId("bridge-fee")).toBeNull();
   });

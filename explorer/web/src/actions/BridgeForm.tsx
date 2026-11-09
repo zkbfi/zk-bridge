@@ -214,7 +214,7 @@ export const BridgeForm = ({ variant, pair, tokens, context, account, query, onQ
           </>
         ) : null}
 
-        <DeliveryFeeSection destinationNativeSymbol={destinationChain.nativeSymbol} destinationName={destinationChain.name} options={options} onChange={setOptions} draft={draft} />
+        <DeliveryFeeSection destinationNativeSymbol={destinationChain.nativeSymbol} destinationName={destinationChain.name} options={options} onChange={setOptions} draft={draft} native={effectiveToken.endsWith(":native")} />
         {report.error === null || !tipOn ? null : <Notice tone="error">The delivery cost did not load: {report.error.message}</Notice>}
 
         <Flex alignItems="center" gap="3" flexWrap="wrap">

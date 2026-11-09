@@ -2,7 +2,8 @@
  * Every transaction the dapp can put in front of the wallet must decode in the review, or the page refuses to send it.
  * Regression (2026-11-08, live dapp next.16): a 0.1 SepETH wrap on Sepolia through the DeliveryRouter
  * (`wrapAndRelayTokens(address)`) was refused with "The page cannot read this call from its bytes", because the review
- * decoded with an ABI list that held no router functions.
+ * decoded with an ABI list that held no router functions. The native coin with a tip goes to the same router as
+ * `relayTokensAndCall(address,bytes,uint256)`, which must decode too.
  */
 import { encodeFunctionData, erc20Abi, getAddress, parseAbi, type Address, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
@@ -143,6 +144,32 @@ describe("every send the dapp can produce decodes in the review", () => {
     expectSendable(approve!, "approve(address,uint256)");
     expectSendable(relay!, "relayTokensAndCall(address,address,uint256,bytes,uint256)");
     expect(buildConfirmView(relay!).delivery).not.toBeNull();
+  });
+
+  it("relayTokensAndCall(address,bytes,uint256) on the router: the native coin with a tip, the default for SepETH", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 0n });
+    const draft = computeBridgeDraft(values({ token: "first:native", amount: "0.1" }), { ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage" }, { pair: SEPOLIA_PAIR, tokens, context: { ...context, pair: SEPOLIA_PAIR }, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n });
+    expect(draft.status).toBe("ready");
+    expect(draft.steps).toHaveLength(1);
+    const relay = draft.steps[0]!;
+    expect(relay.plan.to).toBe(sepoliaRouter);
+    expectSendable(relay, "relayTokensAndCall(address,bytes,uint256)");
+    const view = buildConfirmView(relay);
+    expect(view.delivery).not.toBeNull();
+    expect(view.noRouterNotice).toBeNull();
+    expect(view.valueText).toBe("0.1 SepETH");
+    expect(view.arguments.map((argument) => argument.name)).toEqual(["receiver", "data", "callbackGas"]);
+    expect(getAddress(view.arguments[0]!.value)).toBe(getAddress(SEPOLIA_PAIR.second.contracts.deliveryRouter!));
+    expect(view).toMatchObject({ amountText: "0.1 SepETH", destinationText: "to 0x8D43…4Bdd on PulseChain" });
+  });
+
+  it("refuses a router relayTokensAndCall whose terms differ from the ones shown", async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 0n });
+    const draft = computeBridgeDraft(values({ token: "first:native", amount: "0.1" }), { ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage" }, { pair: SEPOLIA_PAIR, tokens, context: { ...context, pair: SEPOLIA_PAIR }, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n });
+    const relay = draft.steps[0]!;
+    const shown = relay.disclosure.delivery!;
+    const tampered: WebStep = { ...relay, disclosure: { ...relay.disclosure, delivery: { ...shown, director: { ...shown.director, multiplier: shown.director.multiplier + 1n } } } };
+    expect(buildConfirmView(tampered).blockedReason).toBe("The fee director in the call data differs from the one that was shown. Nothing was sent.");
   });
 
   it("approve(address,uint256) on its own", () => {

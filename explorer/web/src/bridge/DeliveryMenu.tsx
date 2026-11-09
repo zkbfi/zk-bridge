@@ -3,6 +3,12 @@ import { useState } from "react";
 import { FeeControl, type FeeSlider } from "./FeeLine";
 import { Chevron } from "./icons";
 
+/**
+ * What No tip means, said in the delivery menu when the user chooses it (a token or the native coin alike): nobody is paid
+ * from the amount, so anyone may deliver it for free, and it can wait longer for someone to do so.
+ */
+export const NO_TIP_TEXT = "No tip: anyone can deliver it, for free; it may take longer.";
+
 /** The tip modes the menu offers: the automatic fee, or a share, a fixed amount or a gas-based fee the user sets, or none. */
 export type TipChoiceKey = "automatic" | "percentage" | "fixed" | "gas-multiplier" | "none";
 
@@ -11,7 +17,7 @@ const TIP_CHOICES: readonly { readonly value: TipChoiceKey; readonly label: stri
   { value: "percentage", label: "Share" },
   { value: "fixed", label: "Fixed" },
   { value: "gas-multiplier", label: "Gas-based" },
-  { value: "none", label: "Yourself" },
+  { value: "none", label: "No tip" },
 ];
 
 /** The numbers the pill's sentence reads, worked out by the bridge screen from the draft. */
@@ -66,7 +72,7 @@ export const deliverySummary = (form: BridgeQuery, facts: DeliveryFacts): Delive
   const fixed = `${facts.fixedText ?? "a fixed fee"}${facts.fixedText !== null && share !== null ? ` (${share})` : ""}`;
   const main =
     mode === "none"
-      ? `You deliver it yourself on ${facts.destination}`
+      ? `No tip: anyone can deliver it on ${facts.destination}, for free; it may take longer`
       : mode === "gas-multiplier"
         ? `Deliver for ${share === null ? "the gas cost" : `~${share}`}${worst}`
         : mode === "fixed"
@@ -88,7 +94,7 @@ export const deliverySummary = (form: BridgeQuery, facts: DeliveryFacts): Delive
   const percent = share ?? facts.percentText ?? null;
   const short =
     mode === "none"
-      ? "You deliver it"
+      ? "No tip"
       : mode === "gas-multiplier"
         ? `${share === null ? atGas : `Deliver for ~${share}`}${worst}`
         : mode === "fixed"
@@ -159,6 +165,7 @@ export const DeliveryMenu = ({ form, defaultRouter, onChange, tipChoice, onTipCh
   return (
     <div className="zb-delivery-menu" role="group" aria-label="Delivery settings">
       <Segments label="Who delivers" value={tipChoice} options={TIP_CHOICES} onChange={onTipChoice} stacked />
+      {tipChoice === "none" ? <p className="zb-slider-note" data-testid="no-tip-note">{NO_TIP_TEXT}</p> : null}
       {value === null ? null : control(value)}
       {gas === null ? null : control(gas)}
       {caps.map(control)}

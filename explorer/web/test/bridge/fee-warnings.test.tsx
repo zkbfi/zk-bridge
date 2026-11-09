@@ -66,12 +66,18 @@ describe("the sample prices", () => {
   });
 });
 
-describe("the native coin, which carries no tip", () => {
-  it("never warns about the fee (small transfer, low tip, high cap): there is no fee", async () => {
+describe("the native coin carries a tip", () => {
+  it("prices its fee and warns about it like a token's", async () => {
     window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?dir=second-to-first&bridge.token=second:native&bridge.amount=5`);
     renderWithWallet(<Shell />, { wallet: connectedWallet() });
-    expect(await screen.findByText(/no tip; anyone can deliver it, for free/)).toBeInTheDocument();
-    // Once the draft settles the pill is a plain go, with no warning line under it.
+    await waitFor(() => expect(document.querySelector('[data-fee="tip"]')?.getAttribute("aria-label")).toMatch(/Fee \d/), { timeout: 3000 });
+    expect(screen.queryByText(/no tip/i)).toBeNull();
+  });
+
+  it("never warns about the fee when the user chooses No tip: there is no fee", async () => {
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?dir=second-to-first&bridge.token=second:native&bridge.amount=5&tip.mode=none`);
+    renderWithWallet(<Shell />, { wallet: connectedWallet() });
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Delivery settings/ })).toHaveTextContent(/^No tip$/));
     await waitFor(() => expect(document.querySelector(".zb-go")?.textContent).toBe("Bridge"));
     expect(document.querySelector(".zb-verdict")).toBeNull();
   });

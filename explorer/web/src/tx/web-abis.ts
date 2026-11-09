@@ -1,7 +1,7 @@
 /**
  * The ABI fragments that the confirm dialog decodes calldata with. The terminal fragments (`@terminal/tx/abis`) cover the
- * mediator, the message bridge and the light client. The web page adds the delivery router (the wrap route sends
- * `wrapAndRelayTokens` to it), the ERC-20 approval and the deposit gate's `confirm(evidence)`, the step that confirms an
+ * mediator, the message bridge and the light client. The web page adds the delivery router (the native coin goes to it:
+ * `relayTokensAndCall(address,bytes,uint256)` with a tip, `wrapAndRelayTokens` without), the ERC-20 approval and the deposit gate's `confirm(evidence)`, the step that confirms an
  * epoch before a send on a chain whose gate enforces.
  *
  * The router ABI is the generated one from `@zk-bridge/shared`, so a new router function reaches the review when that ABI

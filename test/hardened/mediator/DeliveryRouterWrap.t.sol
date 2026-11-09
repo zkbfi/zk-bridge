@@ -5,6 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
 import {IWETH} from "../../../src/hardened/mediator/IWETH.sol";
+import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol";
 import {MediatorFixture, MockWrappedNative, RecordingReceiver, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 
@@ -168,6 +169,74 @@ contract DeliveryRouterWrapTest is MediatorFixture {
         assertEq(receiver.lastValue(), 1 ether);
     }
 
+    /// @dev The delivery router of chain B, with its own wrapped native token, its reward address and its failed
+    /// delivery address.
+    function _routerOnB() internal returns (DeliveryRouter routerB) {
+        routerB = new DeliveryRouter(
+            ITokenMediator(address(mediatorB)),
+            IWETH(address(new MockWrappedNative())),
+            makeAddr("reward B"),
+            makeAddr("failed B")
+        );
+    }
+
+    /// Claim: the native coin carries a tip. `relayTokensAndCall` with the coin as value, the router of chain B as the
+    /// receiver and its terms as data wraps the coin, relays it, and on chain B the router pays the tip to its reward
+    /// address and the rest to the recipient of the terms, in the copy of the wrapped token. Shows: a 1% share of 2 coins
+    /// through `executeMessage` on chain B: 0.02 of the copy to the reward address, 1.98 to carol, nothing kept, and
+    /// the wrapped token locked in full on chain A. Matters: the dapp sends the native coin this way by default.
+    function test_theNativeCoinCarriesATipThroughTheRouterOnTheOtherChain() public {
+        DeliveryRouter routerB = _routerOnB();
+        bytes memory terms =
+            abi.encode(DeliveryRouter.FeeDirector(carol, routerB.MULTIPLIER_OF_TOTAL(), 0, 0.01 ether, 0));
+        vm.prank(alice);
+        routerA.relayTokensAndCall{value: 2 ether}(address(routerB), terms, TEST_CALLBACK_GAS);
+        assertEq(weth.balanceOf(address(mediatorA)), 2 ether, "the wrapped token is locked on chain A");
+        assertEq(address(routerA).balance, 0, "the router on chain A keeps no coin");
+
+        MessageBridge.MessageProof memory proof = ambB.proofOf(ambA, _lastIndexA());
+        vm.prank(bob, bob);
+        routerB.executeMessage(proof);
+
+        IERC20 copy = IERC20(_copyOf(address(weth)));
+        assertEq(copy.balanceOf(routerB.rewardAddress()), 0.02 ether, "the tip goes to the reward address");
+        assertEq(copy.balanceOf(carol), 1.98 ether, "the recipient gets the rest");
+        assertEq(copy.balanceOf(address(routerB)), 0, "the router on chain B keeps nothing");
+        assertEq(copy.balanceOf(routerB.failedDeliveryAddress()), 0, "nothing is handed off");
+    }
+
+    /// Claim: a fixed tip on the native coin works the same way. Shows: a fixed fee of 0.05 on 1 coin pays 0.05 of the
+    /// copy to the reward address and 0.95 to carol.
+    function test_theNativeCoinCarriesAFixedTip() public {
+        DeliveryRouter routerB = _routerOnB();
+        bytes memory terms = abi.encode(DeliveryRouter.FeeDirector(carol, routerB.FIXED_FEE(), 0.05 ether, 0, 0));
+        vm.prank(alice);
+        routerA.relayTokensAndCall{value: 1 ether}(address(routerB), terms, TEST_CALLBACK_GAS);
+        MessageBridge.MessageProof memory proof = ambB.proofOf(ambA, _lastIndexA());
+        vm.prank(bob, bob);
+        routerB.executeMessage(proof);
+
+        IERC20 copy = IERC20(_copyOf(address(weth)));
+        assertEq(copy.balanceOf(routerB.rewardAddress()), 0.05 ether);
+        assertEq(copy.balanceOf(carol), 0.95 ether);
+    }
+
+    /// Claim: the tip is taken only on a delivery through the router. Shows: the same tipped native send, delivered on
+    /// the bridge directly, pays carol the whole amount and the reward address nothing.
+    function test_aDirectDeliveryOfATippedNativeSendPaysNoTip() public {
+        DeliveryRouter routerB = _routerOnB();
+        bytes memory terms =
+            abi.encode(DeliveryRouter.FeeDirector(carol, routerB.MULTIPLIER_OF_TOTAL(), 0, 0.01 ether, 0));
+        vm.prank(alice);
+        routerA.relayTokensAndCall{value: 2 ether}(address(routerB), terms, TEST_CALLBACK_GAS);
+        (bool ok,) = _deliverAtoB(_lastIndexA());
+        assertTrue(ok);
+
+        IERC20 copy = IERC20(_copyOf(address(weth)));
+        assertEq(copy.balanceOf(routerB.rewardAddress()), 0, "no tip on a direct delivery");
+        assertEq(copy.balanceOf(carol), 2 ether, "the recipient gets the whole amount");
+    }
+
     function test_relayTokensAndCallNeedsData() public {
         vm.prank(alice);
         vm.expectRevert(DeliveryRouter.EmptyData.selector);
@@ -215,7 +284,9 @@ contract DeliveryRouterWrapTest is MediatorFixture {
         routerA.wrapAndRelayTokens{value: 2 ether}(bob);
         assertEq(weth.allowance(address(routerA), address(mediatorA)), 0, "after wrapAndRelayTokens(receiver)");
         routerA.relayTokensAndCall{value: 4 ether}(address(receiver), hex"7777", TEST_CALLBACK_GAS);
-        assertEq(weth.allowance(address(routerA), address(mediatorA)), 0, "after relayTokensAndCall(receiver, data, gas)");
+        assertEq(
+            weth.allowance(address(routerA), address(mediatorA)), 0, "after relayTokensAndCall(receiver, data, gas)"
+        );
         vm.stopPrank();
 
         assertEq(weth.balanceOf(address(mediatorA)), 7 ether, "the mediator took all of the wrapped token");
