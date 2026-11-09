@@ -130,6 +130,19 @@ export const publisherSchema = z
   })
   .strict();
 
+/** The default daily cap of unpaid delivery spend, by destination chain id, in wei. */
+export const DEFAULT_MAXIMUM_UNPAID_SPEND_PER_DAY_WEI: Readonly<Record<number, bigint>> = {
+  11155111: 50_000_000_000_000_000n,
+  943: 1_000_000n * 10n ** 18n,
+};
+
+/** The daily cap of unpaid delivery spend on a chain: the runner's own setting for the chain, else the default, else null (none). */
+export function runnerUnpaidSpendCapWei(runner: RunnerConfig, chainId: number): bigint | null {
+  const override = runner.maximumUnpaidSpendPerDayWei[String(chainId)];
+  if (override !== undefined) return BigInt(override);
+  return DEFAULT_MAXIMUM_UNPAID_SPEND_PER_DAY_WEI[chainId] ?? null;
+}
+
 /** The runner section. */
 export const runnerSchema = z
   .object({
@@ -145,6 +158,19 @@ export const runnerSchema = z
     maximumLossPercent: z.number().int().min(0).max(100).default(20),
     /** Deliver items that have no fee offer, for the gas cost alone. Off by default. */
     deliverWithoutOffer: z.boolean().default(false),
+    /**
+     * Deliver a covered item that has waited this many seconds since a stored head covered it, even when it has no fee
+     * offer or its offer is below the cost. An item with an offer goes through the delivery router, which pays what the
+     * offer gives; an item with none goes to the bridge. Items that pay come first in a sweep. `null` turns the rule
+     * off. Default 3600 (one hour). `deliverWithoutOffer` stays the immediate rule for items with no offer.
+     */
+    deliverUnpaidAfterSeconds: positiveSeconds.nullable().default(3600),
+    /**
+     * The most wei that such unpaid deliveries may cost in a rolling 24 hours, by the chain id of the destination
+     * (counted from the receipts). Defaults: 0.05 ETH for Sepolia (11155111), one million PLS for the PulseChain testnet
+     * (943). A chain with no entry here and no default sends no unpaid delivery. A chain id here wins over the default.
+     */
+    maximumUnpaidSpendPerDayWei: z.record(z.string().regex(/^\d+$/, "must be a chain id"), weiSchema).default({}),
     /**
      * Take proofs in the oracle form (message version 2). Set it only when the light client of the destination chain
      * uses the oracle stand-in as its verifier, for local testing. Never set it on a live deployment. Default off.

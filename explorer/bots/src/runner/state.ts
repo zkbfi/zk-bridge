@@ -36,6 +36,11 @@ export const runnerStateSchema = z.object({
    * A state file from before this list existed parses with an empty list.
    */
   deliverySpend: z.array(prerequisiteSpendEntrySchema).default([]),
+  /**
+   * The wei that deliveries without a covering fee (the delayed unpaid rule, `deliverUnpaidAfterSeconds`) cost, from the
+   * receipts, in the rolling window. The daily cap of unpaid spend reads it, so a restart cannot reset the cap.
+   */
+  unpaidSpend: z.array(prerequisiteSpendEntrySchema).default([]),
   /** The unrecovered losses of the rolling window. */
   prerequisiteLosses: z.array(prerequisiteLossEntrySchema).default([]),
   /**
@@ -52,4 +57,4 @@ export type RunnerState = z.infer<typeof runnerStateSchema>;
 export type PrerequisiteBudgetState = Pick<RunnerState, "prerequisiteSpend" | "deliverySpend" | "prerequisiteLosses">;
 
 /** The state of a runner that has done nothing yet. */
-export const INITIAL_RUNNER_STATE: RunnerState = { schemaVersion: 1, finished: {}, prerequisiteSpend: [], deliverySpend: [], prerequisiteLosses: [], depositsOpen: false };
+export const INITIAL_RUNNER_STATE: RunnerState = { schemaVersion: 1, finished: {}, prerequisiteSpend: [], deliverySpend: [], unpaidSpend: [], prerequisiteLosses: [], depositsOpen: false };

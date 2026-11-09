@@ -21,6 +21,8 @@
     "pollSeconds": 30,
     "maximumLossPercent": 20,
     "deliverWithoutOffer": false,
+    "deliverUnpaidAfterSeconds": 3600,
+    "maximumUnpaidSpendPerDayWei": { "943": "1000000000000000000000000", "11155111": "50000000000000000" },
     "maximumBatchSize": 5,
     "maximumBatchGas": 6000000,
     "tokenValuationsWei": {},

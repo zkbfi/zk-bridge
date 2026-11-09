@@ -17,6 +17,8 @@ export const feedItemSchema = z
     sender: addressSchema,
     executor: addressSchema,
     sent: z.object({ transactionHash: hexSchema, blockNumber: z.number().int(), timestamp: z.number().int() }).passthrough().nullable(),
+    // When a stored head first covered the message: the destination chain's time of that block, in seconds. Null before.
+    covered: z.object({ timestamp: z.number().int() }).passthrough().nullable().optional(),
     transfer: z
       .object({
         sourceToken: tokenSchema,

@@ -13,6 +13,10 @@ export interface DeliverySettings {
   /** The share of its cost that the runner accepts to lose on one delivery, from 0 to 100. A loss at this share or above leaves the item out. */
   readonly maximumLossPercent: number;
   readonly deliverWithoutOffer: boolean;
+  /** Seconds after which a covered item is delivered at a loss or with no offer. Null or absent: never. */
+  readonly deliverUnpaidAfterSeconds?: number | null;
+  /** The most wei that those deliveries cost in 24 hours on this chain. Null or absent: none is sent. */
+  readonly maximumUnpaidSpendPerDayWei?: bigint | null;
   /** The value of one whole token in wei, by lowercase address. */
   readonly tokenValuationsWei: Readonly<Record<string, bigint>>;
   /**
@@ -70,6 +74,7 @@ export interface DeliveryDependencies {
 /** Why the runner did not deliver an item. */
 export type SkipReason =
   | "no-fee-offer"
+  | "unpaid-spend-cap"
   | "no-price-for-fee-token"
   | "loss-at-or-above-limit"
   | "message-gas-above-batch-maximum"

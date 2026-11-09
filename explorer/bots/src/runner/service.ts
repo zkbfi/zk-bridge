@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { createPublicClient, http, type Address, type PublicClient } from "viem";
 import { beaconLightClientAbi, messageBridgeAbi, proofCategory, secondsPerSlot, type ProofDirection } from "@zk-bridge/shared";
-import { BotConfigError, runnerMinimumPriorityFeeWei, type RunnerConfig } from "../config/bot-config.ts";
+import { BotConfigError, runnerMinimumPriorityFeeWei, runnerUnpaidSpendCapWei, type RunnerConfig } from "../config/bot-config.ts";
 import { createTransactionPort, type TransactionPort } from "../chain/transactions.ts";
 import { createIndexerClient } from "../indexer/client.ts";
 import { createBoardFeed, type BoardFeed } from "@zk-bridge/shared/msgboard";
@@ -69,10 +69,12 @@ async function requireMulticall3(input: { readonly client: Pick<PublicClient, "g
 }
 
 /** The delivery settings that the runner section of the configuration sets, with the wei texts read as numbers. */
-export function deliverySettingsOf(runnerConfig: RunnerConfig): DeliverySettings {
+export function deliverySettingsOf(runnerConfig: RunnerConfig, destinationChainId: number): DeliverySettings {
   return {
     maximumLossPercent: runnerConfig.maximumLossPercent,
     deliverWithoutOffer: runnerConfig.deliverWithoutOffer,
+    deliverUnpaidAfterSeconds: runnerConfig.deliverUnpaidAfterSeconds,
+    maximumUnpaidSpendPerDayWei: runnerUnpaidSpendCapWei(runnerConfig, destinationChainId),
     tokenValuationsWei: valuations(runnerConfig.tokenValuationsWei),
     deliveryGasFallback: BigInt(runnerConfig.deliveryGasFallback),
     maximumPrerequisiteRounds: runnerConfig.maximumPrerequisiteRounds,
@@ -218,7 +220,7 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       wrappedNative: destination.contracts.wrappedNative,
       bridge: destination.contracts.bridge,
       tokenFactory: destination.contracts.tokenFactory as Address,
-      settings: deliverySettingsOf(runnerConfig),
+      settings: deliverySettingsOf(runnerConfig, destination.chainId),
       logger: directionLogger,
     };
     const state = createStateFile({
