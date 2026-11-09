@@ -10,7 +10,7 @@ export const NO_ROUTER_NOTICE =
   "No router is involved. This relay carries no tip and no fee terms, so no router can take a fee. Anyone can deliver it directly on the bridge, for free. It may take longer.";
 
 /**
- * What the confirm dialog says about the wrap route: the delivery router on this chain wraps the coin and relays it, and
+ * What the confirm dialog says about the native coin sent with No tip (`wrapAndRelayTokens`): the delivery router on this chain wraps the coin and relays it, and
  * the relay carries no tip, so the router takes nothing.
  */
 export const WRAP_NO_FEE_NOTICE =

@@ -42,14 +42,6 @@ const LinkedWarning = ({ fields }: { readonly fields: readonly string[] }) => (
   </div>
 );
 
-/**
- * What happens to a native coin's transfer, which goes by the wrap route and so carries no tip: nobody is paid from the
- * amount, so anyone may deliver it for free, and it can wait longer for someone to do so.
- *
- * @param token The native coin sent.
- */
-export const noTipText = (token: TokenInfo): string => `Sent as ${token.symbol}: no tip; anyone can deliver it, for free; it may take longer.`;
-
 /** Props of {@link BridgeScreen}. */
 export type BridgeScreenProps = {
   readonly route: Extract<Route, { name: "bridge" }>;
@@ -219,10 +211,9 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   // frontend's auto maximum whenever the frontend cannot determine the price"). A price still held (stale) is used.
   const priceKeys = token === null ? [] : [`${token.side}:${token.address}`, `native:${destination.chainId}`];
   const priceProblem = priceProblemOf(priceStates, priceKeys);
-  // The wrap route (the native coin) carries no call data, so it carries no tip (bridge-steps.ts): there is no fee to
-  // set, and the 1% fallback applies only to a route that can carry a tip.
-  const carriesTip = token !== null && !isNativeToken(token);
-  const unpriced = carriesTip && amount !== null && amount > 0n && (amountUsd === null || costUsd === null) && priceProblem !== null && priceProblem.state.kind !== "stale";
+  // The native coin carries a tip like a token (it goes through the source router's relayTokensAndCall, native-route.ts),
+  // so the same fallback applies to it.
+  const unpriced = amount !== null && amount > 0n && (amountUsd === null || costUsd === null) && priceProblem !== null && priceProblem.state.kind !== "stale";
   const { capWad, auto } = useDefaultFee({ amountUsd, costUsd, costDefaultUsd, capPercent, unpriced });
   // The automatic fee signs the default share; a gas-based fee signs a limit no higher than the cap's share (owner,
   // quotes 70–71: "limited by the cap").
@@ -246,7 +237,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const breakEven = range?.kind === "available" ? range.low.description.nowUnits : null;
   const typical = range?.kind === "available" ? range.default.description.nowUnits : null;
   const received = amount !== null && tipUnits !== null ? amount - tipUnits : amount;
-  // What the output can say about the fee: none to take (the wrap route, no tip), known, being estimated, or unknown.
+  // What the output can say about the fee: none to take (No tip, or no router on the destination), known, being estimated, or unknown.
   const feeState: "none" | "known" | "estimating" | "unknown" =
     token === null || amount === null || draft.tip?.kind !== "on" || options.mode === "none"
       ? "none"
@@ -313,7 +304,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     write({ ...form, tip: { ...rest, ...(percentText === undefined ? {} : { percentText }), ceilingGweiText: formatUnits(wei, 9) } });
   };
   const capText = `${Number(capPercent.toPrecision(3))}%`;
-  const pricesNote = !carriesTip || amount === null || amount <= 0n ? null : priceNotice({ states: priceStates, keys: priceKeys, nameOf: (key) => (key.startsWith("native:") ? destination.nativeSymbol : (token?.symbol ?? "")), unpriced: unpriced && automatic, maximumText: capText });
+  const pricesNote = amount === null || amount <= 0n ? null : priceNotice({ states: priceStates, keys: priceKeys, nameOf: (key) => (key.startsWith("native:") ? destination.nativeSymbol : (token?.symbol ?? "")), unpriced: unpriced && automatic, maximumText: capText });
   const hardCapText = `${Number(hardCapPercent.toPrecision(3))}%`;
   const setCap = (value: number): void => {
     const next = Math.min(value, hardCapPercent);
@@ -688,6 +679,14 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     write({ ...form, token: choiceOf(picked) }, directionFrom(picked.side));
   };
 
+  // The flip sits at the start of the fee pill's row, centred with it (owner: "why is the tip and the switch chain
+  // direction button not on the same line?").
+  const flipButton = (
+    <button type="button" className="zb-flip" onClick={flip} aria-label={`Flip: send from ${destination.name} instead`}>
+      <FlipIcon />
+    </button>
+  );
+
   return (
     <main className="zb-bridge">
       {fixture ? <p className="zb-col" style={{ fontSize: "var(--zb-step--1)", color: "var(--zb-muted)", margin: "0 auto 6px" }}>Sample data. Nothing here reaches a chain.</p> : null}
@@ -755,21 +754,15 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         </div>
       </section>
 
-      <div className="zb-seam">
-        <div className="zb-col">
-          <button type="button" className="zb-flip" onClick={flip} aria-label={`Flip: send from ${destination.name} instead`}>
-            <FlipIcon />
-          </button>
-        </div>
-      </div>
-
       <section className="zb-band-to" aria-label={`You receive on ${destination.name}`}>
         <div className="zb-col">
-          {token === null ? null : (
+          {token === null ? (
+            <div className="zb-fee-row">{flipButton}</div>
+          ) : (
             <FeeLine
-              tipless={!carriesTip}
-              summary={carriesTip ? summary.short : "No tip"}
-              summaryFull={!carriesTip ? noTipText(token) : `${summary.full}${tipUnits === null ? "" : `. Fee ${amountText(tipUnits, token.decimals)} ${token.symbol}${usd(tipUnits) === "—" ? "" : ` (about ${usd(tipUnits)})`}: the delivery gas at your gas level, the proof and a tip, ${automatic ? "set automatically" : "set by you"}`}`}
+              lead={flipButton}
+              summary={summary.short}
+              summaryFull={`${summary.full}${tipUnits === null ? "" : `. Fee ${amountText(tipUnits, token.decimals)} ${token.symbol}${usd(tipUnits) === "—" ? "" : ` (about ${usd(tipUnits)})`}: the delivery gas at your gas level, the proof and a tip, ${automatic ? "set automatically" : "set by you"}`}`}
               gasHelp={gasHelp}
               gasLevel={gasLevel}
               onGasLevel={setGasLevel}
@@ -811,7 +804,6 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             <span title={PRICE_NOTE}>{usd(received)}</span>
             {token === null ? null : <span className="zb-right">arrives as {arrivesAsSymbol(token)} on {destination.name}</span>}
           </div>
-          {token === null || carriesTip ? null : <p className="zb-no-tip">{noTipText(token)}</p>}
           {pricesNote === null ? null : <p className="zb-price-note" role="status">{pricesNote}</p>}
         </div>
       </section>

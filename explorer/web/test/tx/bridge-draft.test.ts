@@ -1,6 +1,6 @@
 import { decodeFunctionData, getAddress } from "viem";
 import { describe, expect, it } from "vitest";
-import { decodeFeeDirector, defaultTip, encodeFeeDirector, feeModeOf, tokenMediatorAbi } from "@zk-bridge/shared";
+import { decodeFeeDirector, defaultTip, deliveryRouterAbi, encodeFeeDirector, feeModeOf, tokenMediatorAbi } from "@zk-bridge/shared";
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS, tipStatusOf, type DeliveryOptions } from "../../src/tx/bridge-draft";
 import type { BridgeFormValues } from "../../src/tx/bridge-steps";
@@ -128,10 +128,10 @@ describe("No tip means no router at all", () => {
 });
 
 describe("when no tip can travel", () => {
-  it("sends a plain relay on the wrap route, and says why", async () => {
-    const draft = computeBridgeDraft(values({ token: "first:native", amount: "1" }), PERCENT, await data());
+  it("sends a plain wrap for the native coin only when the user chooses No tip", async () => {
+    const draft = computeBridgeDraft(values({ token: "first:native", amount: "1" }), options({ mode: "none" }), await data());
     expect(draft.status).toBe("ready");
-    expect(draft.tip).toMatchObject({ kind: "unavailable", reason: expect.stringMatching(/wrap route carries no call data.*plain relay, with no tip/) });
+    expect(draft.tip?.kind).toBe("off");
     expect(draft.delivery).toBeNull();
     expect(draft.steps.at(-1)!.plan.functionName).toBe("wrapAndRelayTokens");
   });
@@ -218,12 +218,13 @@ describe("the modes", () => {
 });
 
 describe("tipStatusOf", () => {
-  it("is on by default, off for No tip, and unavailable on the wrap route even for No tip", async () => {
+  it("is on by default, off for No tip, for a token and for the native coin alike", async () => {
     const { pair, tokens } = await data();
     const base = { pair, tokens, valuations: {} };
     expect(tipStatusOf({ ...base, values: values(), options: PERCENT }).kind).toBe("on");
     expect(tipStatusOf({ ...base, values: values(), options: options({ mode: "none" }) }).kind).toBe("off");
-    expect(tipStatusOf({ ...base, values: values({ token: "first:native" }), options: options({ mode: "none" }) }).kind).toBe("unavailable");
+    expect(tipStatusOf({ ...base, values: values({ token: "first:native" }), options: PERCENT }).kind).toBe("on");
+    expect(tipStatusOf({ ...base, values: values({ token: "first:native" }), options: options({ mode: "none" }) }).kind).toBe("off");
   });
 });
 
@@ -266,5 +267,59 @@ describe("the notice of the default tip", () => {
     const capped = computeBridgeDraft(values(), options({ mode: "gas-multiplier", senderPriceText: "3000", gasCapRate: 10n ** 13n }), await data());
     expect(free.delivery!.director.limit).toBeGreaterThan(1_000n);
     expect(capped.delivery!.director.limit).toBe(1_000n);
+  });
+});
+
+describe("the native coin carries a tip by default (owner: \"why would there be no tip by default?\")", () => {
+  it("tips through the source router's relayTokensAndCall, paid in the copy of the wrapped coin, with no unwrap", async () => {
+    const draft = computeBridgeDraft(values({ token: "first:native", amount: "1" }), PERCENT, await data());
+    expect(draft.status).toBe("ready");
+    expect(draft.tip).toMatchObject({ kind: "on", target: { isWrappedNative: false, token: { symbol: "zETH", decimals: 18 } } });
+    expect(draft.delivery?.director).toMatchObject({ recipient: receiver });
+    expect(draft.delivery!.director.settings & 2n).toBe(0n);
+    expect(draft.delivery?.description.nowUnits).toBe(10n ** 15n);
+    const [step] = draft.steps;
+    expect(step!.plan).toMatchObject({ to: FIXTURE_PAIR.first.contracts.deliveryRouter, value: 10n ** 18n, functionSignature: "relayTokensAndCall(address,bytes,uint256)" });
+    const call = decodeFunctionData({ abi: deliveryRouterAbi, data: step!.plan.data });
+    expect(getAddress(call.args![0] as string)).toBe(deliveryRouter);
+    expect(decodeFeeDirector(call.args![1] as `0x${string}`)).toEqual(draft.delivery!.director);
+  });
+
+  it("names the copy by its listed symbol when the token list knows the copy of the wrapped native token", async () => {
+    const loaded = await data();
+    const wrapped = FIXTURE_PAIR.first.contracts.wrappedNative!;
+    const copy = getAddress(`0x${"77".repeat(20)}`);
+    const tokens = [...loaded.tokens, { address: copy, symbol: "zWETH", decimals: 18, side: "second" as const, counterpart: wrapped, isBridgedCopy: true }];
+    const draft = computeBridgeDraft(values({ token: "first:native", amount: "1" }), PERCENT, { ...loaded, tokens });
+    expect(draft.tip).toMatchObject({ kind: "on", target: { token: { symbol: "zWETH" } } });
+    expect(draft.status).toBe("ready");
+  });
+
+  it("finds the copy through the wrapped native token when the list holds it on the source chain", async () => {
+    const loaded = await data();
+    const wrapped = FIXTURE_PAIR.first.contracts.wrappedNative!;
+    const copy = getAddress(`0x${"78".repeat(20)}`);
+    const tokens = [...loaded.tokens, { address: wrapped, symbol: "WETH9", decimals: 18, side: "first" as const, counterpart: copy }, { address: copy, symbol: "zWETH9", decimals: 18, side: "second" as const, counterpart: wrapped, isBridgedCopy: true }];
+    const draft = computeBridgeDraft(values({ token: "first:native", amount: "1" }), PERCENT, { ...loaded, tokens });
+    expect(draft.tip).toMatchObject({ kind: "on", target: { token: { symbol: "zWETH9" } } });
+  });
+
+  it("refuses the unwrap flag on the copy: the router of the other chain cannot unwrap it", async () => {
+    const draft = computeBridgeDraft(values({ token: "first:native", amount: "1" }), options({ payoutNative: true }), await data());
+    // The pay-out option applies only to the destination's own wrapped native token, so it is ignored here.
+    expect(draft.delivery!.director.settings & 2n).toBe(0n);
+  });
+
+  it("offers no tip toward a chain with no delivery router, and says why", async () => {
+    const withoutRouter = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, contracts: { ...FIXTURE_PAIR.second.contracts, deliveryRouter: null } } };
+    const draft = computeBridgeDraft(values({ token: "first:native", amount: "1" }), PERCENT, { ...(await data()), pair: withoutRouter });
+    expect(draft.tip).toMatchObject({ kind: "unavailable", reason: expect.stringMatching(/no delivery router for PulseChain.*plain relay, with no tip/) });
+    expect(draft.steps.at(-1)!.plan.functionName).toBe("wrapAndRelayTokens");
+  });
+
+  it("has no tip for the native coin of a chain with no wrapped native token", async () => {
+    const noWrapped = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, wrappedNative: null } } };
+    const { pair: _pair, tokens } = await data();
+    expect(tipStatusOf({ pair: noWrapped, tokens, valuations: {}, values: values({ token: "first:native" }), options: PERCENT }).kind).toBe("unavailable");
   });
 });

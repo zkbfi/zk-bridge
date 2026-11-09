@@ -257,7 +257,10 @@ const headlineOf = (step: WebStep, decoded: readonly DisplayArgument[]): Pick<Co
     case "relayTokens":
     case "relayTokensAndCall": {
       const recipient = disclosure.delivery === null ? valueOf(decoded, "receiver") : disclosure.delivery.director.recipient;
-      return { amountText: tokenAmountText(valueOf(decoded, "value"), disclosure.amountToken), destinationText: destinationOf(recipient, chainName) };
+      // The router's relayTokensAndCall(receiver, data, callbackGas) carries the native coin as the call value; the
+      // mediator's names a token and a value.
+      const amountText = valueOf(decoded, "value") === undefined ? `${formatUnits(plan.value, 18)} ${plan.chain.nativeSymbol}` : tokenAmountText(valueOf(decoded, "value"), disclosure.amountToken);
+      return { amountText, destinationText: destinationOf(recipient, chainName) };
     }
     case "approve":
       return { amountText: tokenAmountText(valueOf(decoded, "amount"), disclosure.amountToken), destinationText: null };

@@ -3,11 +3,15 @@
  * the calldata of an approval, a relay, and a relay with a call (with its callback gas) is the same as the terminal
  * builds for the same inputs. The tip path changes only three inputs: the receiver becomes the router of the
  * destination chain (the default delivery router, or the one that the user named), the mode becomes "call", and the
- * data becomes the encoded fee director. The page then adds the disclosure that the confirm dialog shows. The wrap route
- * carries no call data, so it never carries a tip.
+ * data becomes the encoded fee director. The page then adds the disclosure that the confirm dialog shows.
+ *
+ * The native coin goes through the delivery router of the source chain. With a tip it calls the router's payable
+ * `relayTokensAndCall(receiver, data, callbackGas)`: the router wraps the coin and relays the wrapped token to the router
+ * of the other chain with the same fee terms as a token relay (native-route.ts). With No tip it calls
+ * `wrapAndRelayTokens(receiver)`, which carries no terms.
  */
-import { getAddress, isAddress, type Address, type Hex } from "viem";
-import { routerCallbackGas, type DeliveryCall } from "@zk-bridge/shared";
+import { encodeFunctionData, getAddress, isAddress, type Address, type Hex } from "viem";
+import { deliveryRouterAbi, routerCallbackGas, type DeliveryCall } from "@zk-bridge/shared";
 import { buildBridgeSteps, NATIVE_CHOICE, type BridgeContext } from "@terminal/app/actions";
 import { parseUnits, AmountParseError } from "@terminal/format/amounts";
 import type { ChainSide, TokenInfo } from "@terminal/model/types";
@@ -15,6 +19,7 @@ import { encodeDirectorFor } from "@terminal/tx/fee-terms-guard";
 import { PlanInputError, parseAddress, type DisplayArgument, type PlannedTransaction } from "@terminal/tx/plan";
 import type { FlowStep } from "@terminal/flow/transaction-flow";
 import type { DeliverySelection } from "./delivery-selection";
+import { crossingCopyOf } from "./native-route";
 
 /** What the confirm dialog shows besides the decoded call. */
 export type StepDisclosure = {
@@ -163,23 +168,50 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
     return withDisclosure(steps, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, destinationChainName: destinationChain.name, delivery: null });
   }
 
-  if (isNative) throw new PlanInputError("The wrap route carries no call data, so it cannot carry a tip.");
-  // The wrap route threw above, so a token is chosen here. Its counterpart is the token that the router receives.
-  const destinationToken = (token as TokenInfo).counterpart;
+  // The token that the router of the other chain receives: the counterpart of the token, or for the native coin the copy
+  // of the wrapped native token (null while the copy is not deployed: the guard then reads no token).
+  const destinationToken = isNative ? crossingCopyOf(sourceChain, tokens) : (token as TokenInfo).counterpart;
   // The guard of the router runs on the whole data, and it refuses a zero, router, mediator or bridge target.
   const data = encodeDirectorFor(delivery.director, context.pair, { router: delivery.router, destination: destinationChain, destinationToken }, call ?? undefined);
   const deployed = getAddress(delivery.router) === getAddress(delivery.defaultRouter);
   // The callback gas of a router is worked out here, from the call gas in the terms. The relay passes it as the mediator wants it.
-  const callbackGas = String(routerCallbackGas(call === null ? {} : { callGas: delivery.director.callGas }));
-  const steps = buildBridgeSteps({ ...terminalValues, receiver: delivery.router, mode: "call", data, callbackGas }, tokens, context);
+  const callbackGasNumber = routerCallbackGas(call === null ? {} : { callGas: delivery.director.callGas });
+  const explain = (argument: DisplayArgument): DisplayArgument => explainRouterReceiver(argument, { chainName: destinationChain.name, recipient: receiver, deployed });
+  const disclosure = { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, destinationChainName: destinationChain.name, delivery, deliveryCall: call };
+  if (isNative) {
+    // The plain wrap step checks the amount, the balance, the receiver and the router of the source chain; the tipped
+    // step sends the same value to the same router, with the terms.
+    const [wrap] = buildBridgeSteps(terminalValues, tokens, context);
+    return withDisclosure([{ plan: planWrapAndRelayWithTip({ wrap: (wrap as FlowStep).plan, router: delivery.router, data, callbackGas: callbackGasNumber, explain }), skippable: false }], disclosure);
+  }
+  const steps = buildBridgeSteps({ ...terminalValues, receiver: delivery.router, mode: "call", data, callbackGas: String(callbackGasNumber) }, tokens, context);
   const adjusted = steps.map((step): FlowStep => ({
     ...step,
-    plan:
-      step.plan.functionName === "relayTokensAndCall"
-        ? { ...step.plan, arguments: step.plan.arguments.map((argument) => explainRouterReceiver(argument, { chainName: destinationChain.name, recipient: receiver, deployed })) }
-        : step.plan,
+    plan: step.plan.functionName === "relayTokensAndCall" ? { ...step.plan, arguments: step.plan.arguments.map(explain) } : step.plan,
   }));
-  return withDisclosure(adjusted, { amountToken, destinationNativeSymbol: destinationChain.nativeSymbol, destinationChainId: destinationChain.chainId, destinationChainName: destinationChain.name, delivery, deliveryCall: call });
+  return withDisclosure(adjusted, disclosure);
+};
+
+/**
+ * The tipped send of the native coin: `relayTokensAndCall(router, terms, callbackGas)` on the delivery router of the
+ * source chain, with the coin as the value. It keeps the chain, the router and the value of the plain wrap step.
+ */
+const planWrapAndRelayWithTip = (input: { wrap: PlannedTransaction; router: Address; data: Hex; callbackGas: bigint; explain: (argument: DisplayArgument) => DisplayArgument }): PlannedTransaction => {
+  const { wrap, router, data, callbackGas, explain } = input;
+  const symbol = wrap.chain.nativeSymbol;
+  return {
+    ...wrap,
+    title: `Wrap ${symbol} and relay it to the router of the other chain`,
+    functionSignature: "relayTokensAndCall(address,bytes,uint256)",
+    functionName: "relayTokensAndCall",
+    data: encodeFunctionData({ abi: deliveryRouterAbi, functionName: "relayTokensAndCall", args: [router, data, callbackGas] }),
+    arguments: [
+      explain({ name: "receiver", type: "address", value: getAddress(router) }),
+      { name: "data", type: "bytes", value: data, meaning: `${(data.length - 2) / 2} bytes` },
+      { name: "callbackGas", type: "uint256", value: callbackGas.toString(), meaning: "the exact gas that onTokenBridged gets on the other chain" },
+    ],
+    notes: [`The transaction sends ${wrap.value.toString()} wei of ${symbol}. The router wraps it, then relays it with the fee terms to the router of the other chain, which pays the tip and sends the rest to the recipient.`],
+  };
 };
 
 /**

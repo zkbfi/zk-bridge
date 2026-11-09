@@ -64,10 +64,10 @@ export type FeeLineProps = {
    */
   readonly menu: ReactNode;
   /**
-   * Set for a route that carries no tip (the wrap route of a native coin): the first segment says so and opens
-   * nothing, and the gas level is left out, since no deliverer is paid from the amount.
+   * What sits at the start of the pill's row, before the pill: the flip button of the bridge screen (owner: "why is the
+   * tip and the switch chain direction button not on the same line?"). The drawer opens under the whole row.
    */
-  readonly tipless?: boolean;
+  readonly lead?: ReactNode;
 };
 
 type Open = "tip" | "time" | null;
@@ -134,7 +134,7 @@ export const HelpButton = ({ label, text }: { readonly label: string; readonly t
  *
  * @param props The summary, the gas level, the time and steps, and the menu.
  */
-export const FeeLine = ({ summary, summaryFull, gasHelp, gasLevel, onGasLevel, time, steps, timeline, menu, tipless = false }: FeeLineProps) => {
+export const FeeLine = ({ summary, summaryFull, gasHelp, gasLevel, onGasLevel, time, steps, timeline, menu, lead }: FeeLineProps) => {
   // `open` is the segment the user chose (aria-expanded); `shown` is the content in the drawer, which lags a swap by the
   // close time; `expanded` drives the drawer's height (grid rows 0fr → 1fr) and the deck line.
   const [open, setOpen] = useState<Open>(null);
@@ -217,29 +217,25 @@ export const FeeLine = ({ summary, summaryFull, gasHelp, gasLevel, onGasLevel, t
         <GasCan title="Gas" level={gasLevel} />
       </button>
     );
-  const tooltip = hover === "tip" && open === null ? <Tip id={ids.tip} text={tipless ? summaryFull : `${summaryFull}. Tap for the delivery settings.`} /> : hover === "gas" ? <Tip id={ids.gas} text={gasHelp} /> : hover === "time" && open === null ? <Tip id={ids.time} text="How long until it arrives. Tap for every step." /> : null;
+  const tooltip = hover === "tip" && open === null ? <Tip id={ids.tip} text={`${summaryFull}. Tap for the delivery settings.`} /> : hover === "gas" ? <Tip id={ids.gas} text={gasHelp} /> : hover === "time" && open === null ? <Tip id={ids.time} text="How long until it arrives. Tap for every step." /> : null;
 
   return (
     <div ref={root}>
-      <div className="zb-joined zb-dctl">
-        {tipless ? (
-          <span className="zb-dseg zb-dsummary" tabIndex={0} aria-label={summaryFull} aria-describedby={ids.tip} data-fee="none" {...hoverProps("tip")}>
-            <TakeMyMoney />
-            <span className="zb-dsummary-text">{summary}</span>
-          </span>
-        ) : (
+      <div className="zb-fee-row">
+        {lead}
+        <div className="zb-joined zb-dctl">
           <button type="button" className="zb-dseg zb-dsummary" aria-expanded={open === "tip"} aria-controls={ids.drawer} aria-label={`Delivery settings: ${summaryFull}`} aria-describedby={ids.tip} data-fee="tip" onClick={(event) => pick(event, "tip")} {...hoverProps("tip")}>
             <TakeMyMoney />
             <span className="zb-dsummary-text">{summary}</span>
             <Chevron dir={open === "tip" ? "up" : "down"} />
           </button>
-        )}
-        {tipless ? null : gas}
-        <button type="button" className="zb-dseg zb-dtime" aria-expanded={open === "time"} aria-controls={ids.drawer} aria-describedby={ids.time} data-fee="time" onClick={(event) => pick(event, "time")} {...hoverProps("time")}>
-          <ClockIcon title="Time" />
-          {time}
-        </button>
-        {tooltip}
+          {gas}
+          <button type="button" className="zb-dseg zb-dtime" aria-expanded={open === "time"} aria-controls={ids.drawer} aria-describedby={ids.time} data-fee="time" onClick={(event) => pick(event, "time")} {...hoverProps("time")}>
+            <ClockIcon title="Time" />
+            {time}
+          </button>
+          {tooltip}
+        </div>
       </div>
       <div className={expanded ? "zb-drawer zb-open" : "zb-drawer"} id={ids.drawer} aria-hidden={!expanded} inert={!expanded}>
         <div className="zb-drawer-inner">

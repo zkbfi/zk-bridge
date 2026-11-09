@@ -20,7 +20,7 @@ describe("deliverySummary (owner, quote 88: \"just tell the user what is happeni
     expect(deliverySummary({ tip: { mode: "percentage", percentText: "0.3" } }, FACTS).text).toBe("Deliver for 0.39%, max $0.39");
     expect(deliverySummary({ tip: { mode: "gas-multiplier" } }, FACTS).text).toBe("Deliver for ~0.39%, max $0.60 (0.6%)");
     expect(deliverySummary({ tip: { mode: "fixed" } }, FACTS).text).toBe("Deliver for 0.50 USDC (0.39%)");
-    expect(deliverySummary({ tip: { mode: "none" } }, FACTS).text).toBe("You deliver it yourself on PulseChain");
+    expect(deliverySummary({ tip: { mode: "none" } }, FACTS).text).toBe("No tip: anyone can deliver it on PulseChain, for free; it may take longer");
     expect(deliverySummary({}, { ...FACTS, feeShareText: null, feeAmountText: null }).text).toBe("Deliver for a share of the amount");
     for (const mode of ["percentage", "fixed", "gas-multiplier", "none"] as const) expect(deliverySummary({ tip: { mode } }, FACTS).full).not.toMatch(/Standard|Fast/);
   });
@@ -55,7 +55,7 @@ describe("deliverySummary's short text is hard numbers, never a placeholder or a
     expect(short({ tip: { mode: "gas-multiplier" } }, { ...level, feeShareText: null })).toBe("Deliver at Normal gas, max $0.60 (0.6%)");
   });
   it("none mode is short", () => {
-    expect(short({ tip: { mode: "none" } }, level)).toBe("You deliver it");
+    expect(short({ tip: { mode: "none" } }, level)).toBe("No tip");
   });
   it("never uses a placeholder phrase", () => {
     for (const mode of ["percentage", "fixed", "gas-multiplier"] as const)
@@ -143,11 +143,13 @@ describe("the delivery settings menu", () => {
     expect(pillLabel()).toMatch(/Deliver for (~[\d.]+%|the gas cost), max \$/);
   });
 
-  it("says you deliver it yourself with no tip", async () => {
+  it("reads No tip on the pill when the user chooses it, and the menu says what that means", async () => {
     const menu = await menuOpen();
-    await userEvent.click(within(menu).getByRole("radio", { name: "Yourself" }));
-    await waitFor(() => expect(pillLabel()).toMatch(/^Delivery settings: You deliver it yourself on /));
-    expect(feeText()).toBe("You deliver it");
+    expect(within(menu).queryByTestId("no-tip-note")).toBeNull();
+    await userEvent.click(within(menu).getByRole("radio", { name: "No tip" }));
+    await waitFor(() => expect(pillLabel()).toMatch(/^Delivery settings: No tip: anyone can deliver it on .*, for free; it may take longer/));
+    expect(feeText()).toBe("No tip");
+    expect(within(menu).getByTestId("no-tip-note")).toHaveTextContent("No tip: anyone can deliver it, for free; it may take longer.");
   });
 
   it("sets the gas level from the menu as an anchor with a 15-minute range, and resets it", async () => {

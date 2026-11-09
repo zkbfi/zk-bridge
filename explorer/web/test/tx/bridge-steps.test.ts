@@ -177,9 +177,29 @@ describe("planBridgeSteps with a tip", () => {
     expect(() => planBridgeSteps({ values: values(), tokens, context, delivery })).toThrow(/unwrapping works only for the wrapped native token/);
   });
 
-  it("refuses a tip on the wrap route, which carries no call data", async () => {
+  it("sends the native coin with a tip through the source router's relayTokensAndCall(address,bytes,uint256), to the router of the other chain", async () => {
     const { context, tokens } = await buildFixtureContext();
-    expect(() => planBridgeSteps({ values: values({ token: "first:native", amount: "2" }), tokens, context, delivery: deliveryFor() })).toThrow(/wrap route carries no call data/);
+    const delivery = deliveryFor();
+    const steps = planBridgeSteps({ values: values({ token: "first:native", amount: "2" }), tokens, context, delivery });
+    expect(steps).toHaveLength(1);
+    const [step] = steps;
+    expect(step!.plan).toMatchObject({ to: FIXTURE_PAIR.first.contracts.deliveryRouter, value: 2n * 10n ** 18n, functionName: "relayTokensAndCall", functionSignature: "relayTokensAndCall(address,bytes,uint256)", contractLabel: "DeliveryRouter" });
+    const call = decodeFunctionData({ abi: deliveryRouterAbi, data: step!.plan.data });
+    expect(call.functionName).toBe("relayTokensAndCall");
+    const [routerArgument, data, callbackGas] = call.args as readonly [string, `0x${string}`, bigint];
+    expect(getAddress(routerArgument)).toBe(getAddress(deliveryRouter));
+    expect(decodeFeeDirector(data)).toEqual(delivery.director);
+    expect(callbackGas).toBe(routerCallbackGas({}));
+    expect(step!.plan.arguments.map((argument) => argument.name)).toEqual(["receiver", "data", "callbackGas"]);
+    expect(step!.plan.arguments[0]!.meaning).toMatch(new RegExp(`pays the tip to its reward address, then sends the rest to ${receiver}`));
+    expect(step!.disclosure).toMatchObject({ feesApplyTo: "this-transaction", delivery, amountToken: { symbol: "wrapped ETH", decimals: 18 } });
+  });
+
+  it("keeps the checks of the plain wrap for a tipped native send: the balance and the router of the source chain", async () => {
+    const { context, tokens } = await buildFixtureContext();
+    expect(() => planBridgeSteps({ values: values({ token: "first:native", amount: "999999999" }), tokens, context, delivery: deliveryFor() })).toThrow(/more than your/);
+    const noRouter = { ...context, pair: { ...context.pair, first: { ...context.pair.first, contracts: { ...context.pair.first.contracts, deliveryRouter: null } } } };
+    expect(() => planBridgeSteps({ values: values({ token: "first:native", amount: "1" }), tokens, context: noRouter, delivery: deliveryFor() })).toThrow(/no delivery router/);
   });
 });
 

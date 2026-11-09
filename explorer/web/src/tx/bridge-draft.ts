@@ -3,8 +3,9 @@
  * It is one pure function of the form values and the live data, so each rule has a unit test. The form never plans a
  * transaction in any other place.
  *
- * The tip for delivery is on by default. A transfer that cannot carry a tip (the wrap route, or a destination with no
- * delivery router) is a plain relay, and the draft says why, as the terminal does.
+ * The tip for delivery is on by default, for a token and for the native coin alike (the native coin goes through the
+ * source router's `relayTokensAndCall`, see native-route.ts). A transfer that cannot carry a tip (a destination with no
+ * delivery router) is a plain relay, and the draft says why, as the terminal does. No tip is the user's choice.
  */
 import { formatUnits, getAddress, type Address } from "viem";
 import { DEFAULT_GAS_MARGIN, MAX_CALL_GAS, defaultTipChoiceOf, UINT256_MAXIMUM, type DeliveryCostReport, type PayoutKind, type SenderPrice } from "@zk-bridge/shared";
@@ -15,6 +16,7 @@ import { AmountParseError, parsePercentAsRate, parseUnits, RATE_SCALE } from "@t
 import { PlanInputError } from "@terminal/tx/plan";
 import { hasCallText, planBridgeSteps, type BridgeFormValues, type WebStep } from "./bridge-steps";
 import { selectDelivery, type DeliveryMode, type DeliverySelection } from "./delivery-selection";
+import { crossingCopySymbolOf, crossingSourceOf } from "./native-route";
 
 /** What the user chose for the tip: one of the three modes, or no tip. */
 export type TipChoice = DeliveryMode | "none";
@@ -127,17 +129,20 @@ export type TipStatusInput = {
 };
 
 /**
- * Tells whether the relay carries a tip. The wrap route and a destination with no delivery router cannot carry one. Otherwise
- * the tip is on unless the user chose No tip.
+ * Tells whether the relay carries a tip. A destination with no delivery router cannot carry one. Otherwise the tip is on
+ * unless the user chose No tip, for a token and for the native coin.
  *
  * @param input The form values, the options, the pair and the token valuations.
  */
 export const tipStatusOf = (input: TipStatusInput): TipStatus => {
   const source = bridgeSourceOf(input.values, input.tokens, input.pair);
-  if (source.kind === "native") return { kind: "unavailable", reason: `The wrap route carries no call data, so it cannot carry a tip. ${PLAIN_RELAY_SENTENCE}` };
-  const resolved = resolveDeliveryTarget({ source, pair: input.pair, tokens: input.tokens, valuations: input.valuations });
+  // The native coin crosses as its wrapped native token, through the source router's relayTokensAndCall, so it carries a
+  // tip like any token (native-route.ts). Its copy is the token that the router of the other chain pays out.
+  const crossing = crossingSourceOf(source, input.tokens);
+  const resolved = resolveDeliveryTarget({ source: crossing, pair: input.pair, tokens: input.tokens, valuations: input.valuations });
   if (resolved.kind === "unavailable") return { kind: "unavailable", reason: `${resolved.reason} ${PLAIN_RELAY_SENTENCE}` };
-  return { kind: input.options.mode === "none" ? "off" : "on", target: resolved.target };
+  const target = source.kind === "native" ? { ...resolved.target, token: { ...resolved.target.token, symbol: crossingCopySymbolOf(source.chain, input.tokens) } } : resolved.target;
+  return { kind: input.options.mode === "none" ? "off" : "on", target };
 };
 
 /** The notice of the default tip, from the shared choice. Only the gas based mode of a tip that is on has one. */

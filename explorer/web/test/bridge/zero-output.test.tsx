@@ -35,8 +35,18 @@ describe("the owner's link, #/bridge/eth-pls?bridge.amount=1, with no wallet", (
     window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=1`);
     renderWithWallet(<Shell />, { wallet: disconnectedWallet(), services: servicesWith({ listTokens: async () => [] }) });
     expect(await within(await screen.findByRole("region", { name: /^You send/ })).findByRole("button", { name: /^Token: ETH/ })).toBeInTheDocument();
-    // The wrap route carries no tip, so all of it arrives.
-    await waitFor(() => expect(output()).toHaveTextContent(/^1$/));
+    // The native coin carries a tip like a token, so the output is the amount less the fee: never 0, and not all of it.
+    await waitFor(() => expect(output().textContent).toMatch(/^0\.9\d*$/));
+    expect(document.querySelector('[data-fee="tip"]')!.textContent).toMatch(/Deliver/);
+  });
+
+  it("keeps the flip on the fee row when the side has nothing to send yet", async () => {
+    const bare = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, wrappedNative: null } }, second: { ...FIXTURE_PAIR.second, contracts: { ...FIXTURE_PAIR.second.contracts, wrappedNative: null } } };
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.amount=1`);
+    renderWithWallet(<Shell />, { wallet: disconnectedWallet(), services: { ...servicesWith({ listTokens: async () => [] }), pair: bare } });
+    const flip = await screen.findByRole("button", { name: /^Flip/ });
+    expect(flip.parentElement).toHaveClass("zb-fee-row");
+    expect(screen.queryByRole("button", { name: /^Token:/ })).toBeNull();
   });
 
   it("estimates the fee without a wallet: the output is the amount less the fee, and the fee line is filled", async () => {

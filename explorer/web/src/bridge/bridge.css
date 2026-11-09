@@ -374,9 +374,9 @@
 .zb-balance .zb-right { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
 .zb-max { border-radius: 999px; padding: 2px 9px; font-weight: 700; font-size: var(--zb-step-micro); background: var(--zb-from-pill); color: var(--zb-from-pill-ink); }
 
-/* Seam: the flip button, sitting on the edge between the bands */
-.zb-seam { position: relative; height: 0; z-index: 2; }
-.zb-seam .zb-col { display: flex; align-items: center; gap: 10px; transform: translateY(-50%); }
+/* The flip button: at the start of the fee pill's row, as tall as the pill and centred with it. */
+.zb-fee-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.zb-fee-row > .zb-dctl:last-child { flex: 1; min-width: 0; margin-bottom: 0; }
 .zb-flip { width: var(--zb-joined-h); height: var(--zb-joined-h); border-radius: 50%; display: grid; place-items: center; background: var(--zb-pill); color: var(--zb-pill-ink); border: 1.5px solid var(--zb-pill-edge); flex: none; }
 .zb-raise { display: flex; margin: 8px auto 0; }
 
@@ -521,8 +521,7 @@
 .zb-dctl { margin-bottom: 6px; position: relative; overflow: visible; font-size: var(--zb-step-fee); }
 .zb-dctl > .zb-dseg { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; min-height: var(--zb-touch); background: none; border: 0; color: inherit; font: inherit; white-space: nowrap; cursor: pointer; }
 .zb-dctl > .zb-dseg + .zb-dseg { border-left: 1.5px solid var(--zb-pill-edge); }
-/* The flip button and the money icon share one centre line: the flip is as wide as the pill is tall, so its centre is half a pill from the column edge, and the icon is padded onto that centre. */
-.zb-joined.zb-dctl > :first-child { border-right: 0; padding-left: calc(var(--zb-joined-h) / 2 - 1.5px - 11px); }
+.zb-joined.zb-dctl > :first-child { border-right: 0; padding-left: 12px; }
 .zb-joined.zb-dctl > :last-child, .zb-joined.zb-dctl > .zb-tooltip { margin-left: 0; }
 .zb-dctl > .zb-dsummary { flex: 1; min-width: 0; border-radius: 999px 0 0 999px; }
 .zb-dctl > .zb-dtime { border-radius: 0 999px 999px 0; padding-right: 16px; }
@@ -532,7 +531,7 @@
 /* On a phone the summary needs the room: tighter segments, no chevron (the open segment is lit instead). */
 @media (max-width: 479px) {
   .zb-dctl > .zb-dseg { padding-inline: 7px; gap: 5px; }
-  .zb-joined.zb-dctl > :first-child { padding-left: calc(var(--zb-joined-h) / 2 - 1.5px - 10px); }
+  .zb-joined.zb-dctl > :first-child { padding-left: 9px; }
   .zb-dctl > .zb-dtime { padding-right: 11px; }
   .zb-dsummary .zb-icon { width: 20px; height: 20px; }
   .zb-dsummary .zb-chev { display: none; }
@@ -656,7 +655,7 @@ a.zb-go[aria-disabled="true"] { cursor: not-allowed; }
 .zb .zb-pill-outline { background: transparent; color: inherit; }
 .zb .zb-pill-solid { background: var(--zb-ink); color: var(--zb-page); border-color: var(--zb-ink); }
 .zb .zb-pill-solid:disabled { opacity: .5; }
-.zb-price-note, .zb-no-tip { margin: 4px 0 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-price-note { margin: 4px 0 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
 
 /* The delivery fee of a delivered transfer in Activity. */
 .zb-dopen .zb-fee-line { margin: 4px 0 8px; color: var(--zb-muted); overflow-wrap: anywhere; }

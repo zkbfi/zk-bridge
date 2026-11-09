@@ -1,7 +1,7 @@
 import { Box, Flex, Table, Text, chakra } from "@chakra-ui/react";
 import { getAddress, isAddress } from "viem";
 import { DEFAULT_GAS_MARGIN, GAS_MODE_HELP, SUGGESTED_TIP_RANGE, TIP_RANGE_HELP, TIP_RANGE_NAMES, type TipRangeOption } from "@zk-bridge/shared";
-import { GAS_MODE_LABEL, TIP_NOTES, routerWarningOf } from "../tx/tip-copy";
+import { GAS_MODE_LABEL, TIP_NOTES, WRAP_NO_FEE_NOTICE, routerWarningOf } from "../tx/tip-copy";
 import { formatUnits } from "../ui/format";
 import type { BridgeDraft, DeliveryOptions, TipChoice, TipStatus } from "../tx/bridge-draft";
 import { Field, Notice, TextInput } from "../ui/primitives";
@@ -15,6 +15,11 @@ export type DeliveryFeeSectionProps = {
   readonly options: DeliveryOptions;
   readonly onChange: (next: DeliveryOptions) => void;
   readonly draft: BridgeDraft;
+  /**
+   * True when the native coin is sent: it goes through the delivery router of this chain either way (with a tip as
+   * `relayTokensAndCall`, without as `wrapAndRelayTokens`), so No tip does not mean "no router".
+   */
+  readonly native?: boolean;
 };
 
 const MODES: readonly { readonly value: TipChoice; readonly label: string; readonly note: string }[] = [
@@ -23,6 +28,9 @@ const MODES: readonly { readonly value: TipChoice; readonly label: string; reado
   { value: "fixed", label: "Fixed amount", note: "exact amount" },
   { value: "none", label: "No tip: deliver directly, no router", note: "anyone can deliver; may take longer" },
 ];
+
+/** The modes for the native coin: No tip still goes through the router of this chain, which wraps the coin. */
+const NATIVE_MODES: typeof MODES = MODES.map((mode) => (mode.value === "none" ? { ...mode, label: "No tip", note: "anyone can deliver it, for free; it may take longer" } : mode));
 
 /**
  * The "Tip for delivery" part of the bridge form. The tip is on by default as a gas based tip at the base fee, equal to the
@@ -33,7 +41,7 @@ const MODES: readonly { readonly value: TipChoice; readonly label: string; reado
  *
  * @param props The options, the draft and the destination chain.
  */
-export const DeliveryFeeSection = ({ destinationNativeSymbol, destinationName, options, onChange, draft }: DeliveryFeeSectionProps) => {
+export const DeliveryFeeSection = ({ destinationNativeSymbol, destinationName, options, onChange, draft, native = false }: DeliveryFeeSectionProps) => {
   const { tip } = draft;
   if (tip === null) return null;
   return (
@@ -41,7 +49,7 @@ export const DeliveryFeeSection = ({ destinationNativeSymbol, destinationName, o
       <chakra.legend paddingX="1" fontWeight="medium" fontSize="sm">
         Tip for delivery
       </chakra.legend>
-      <TipPanel tip={tip} draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} />
+      <TipPanel tip={tip} draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} native={native} />
     </Box>
   );
 };
@@ -54,10 +62,11 @@ type TipPanelProps = {
   readonly onChange: (next: DeliveryOptions) => void;
   readonly destinationNativeSymbol: string;
   readonly destinationName: string;
+  readonly native: boolean;
 };
 
 /** The body of the panel: the reason when no tip can travel, or the choice of mode and what follows from it. */
-const TipPanel = ({ tip, draft, options, onChange, destinationNativeSymbol, destinationName }: TipPanelProps) => {
+const TipPanel = ({ tip, draft, options, onChange, destinationNativeSymbol, destinationName, native }: TipPanelProps) => {
   if (tip.kind === "unavailable") return <Notice tone="info">{tip.reason}</Notice>;
   return (
     <>
@@ -66,7 +75,7 @@ const TipPanel = ({ tip, draft, options, onChange, destinationNativeSymbol, dest
       </Text>
       <TipNotes />
       <Box role="radiogroup" aria-label="How to tip for delivery" marginTop="2">
-        {MODES.map((mode) => (
+        {(native ? NATIVE_MODES : MODES).map((mode) => (
           <Flex key={mode.value} alignItems="center" gap="2" paddingY="1">
             <chakra.input id={`delivery-mode-${mode.value}`} type="radio" name="delivery-mode" checked={options.mode === mode.value} onChange={() => onChange({ ...options, mode: mode.value })} />
             <chakra.label htmlFor={`delivery-mode-${mode.value}`} fontSize="sm">
@@ -78,16 +87,18 @@ const TipPanel = ({ tip, draft, options, onChange, destinationNativeSymbol, dest
           </Flex>
         ))}
       </Box>
-      <TipDetails tip={tip} draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} />
+      <TipDetails tip={tip} draft={draft} options={options} onChange={onChange} destinationNativeSymbol={destinationNativeSymbol} destinationName={destinationName} native={native} />
     </>
   );
 };
 
-const TipDetails = ({ tip, draft, options, onChange, destinationNativeSymbol, destinationName }: TipPanelProps) => {
+const TipDetails = ({ tip, draft, options, onChange, destinationNativeSymbol, destinationName, native }: TipPanelProps) => {
   if (tip.kind !== "on") {
     return (
       <Text fontSize="sm" marginTop="2" data-testid="no-tip-note">
-        No tip: the page sends a plain relay. No router and no fee terms are involved, so no router can take a fee. Anyone can deliver your transfer directly on the bridge, for free, but nobody is paid to do it, so it may take longer.
+        {native
+          ? `No tip. ${WRAP_NO_FEE_NOTICE}`
+          : "No tip: the page sends a plain relay. No router and no fee terms are involved, so no router can take a fee. Anyone can deliver your transfer directly on the bridge, for free, but nobody is paid to do it, so it may take longer."}
       </Text>
     );
   }
@@ -102,7 +113,7 @@ const TipNotes = () => (
   </Box>
 );
 
-type TipFieldsProps = Omit<TipPanelProps, "tip"> & {
+type TipFieldsProps = Omit<TipPanelProps, "tip" | "native"> & {
   /** The tip when it is on. The caller has checked the kind. */
   readonly tip: Extract<TipStatus, { readonly kind: "on" }>;
 };

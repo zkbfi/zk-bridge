@@ -82,30 +82,61 @@ describe("when the price cannot be derived", () => {
   });
 });
 
-describe("the native coin (the wrap route, which carries no tip)", () => {
-  const openNative = (amount: string) => {
-    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.token=first:native&bridge.amount=${amount}`);
+describe("the native coin carries a tip like a token (owner: \"why would there be no tip by default?\")", () => {
+  const openNative = (amount: string, extra = "") => {
+    window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?bridge.token=first:native&bridge.amount=${amount}${extra}`);
     renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
   };
 
-  it("with no market price: no fee is claimed, no 1% note, and You receive is the amount", async () => {
+  it("with no market price: the fee is the 1% automatic maximum and the line says why, as for a token", async () => {
     everyPriceIs({ kind: "no-market" });
     openNative("1000");
-    expect(await screen.findByText(`Sent as ${FIXTURE_PAIR.first.nativeSymbol}: no tip; anyone can deliver it, for free; it may take longer.`)).toBeInTheDocument();
-    await waitFor(() => expect(output()).toHaveTextContent(/^1,?000$/));
-    expect(screen.queryByText(/maximum/)).toBeNull();
-    expect(screen.queryByText(/Deliver for/)).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Delivery settings/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Gas level/ })).toBeNull();
-    expect(document.querySelector(".zb-fee-state")).toBeNull();
+    await waitFor(() => expect(output()).toHaveTextContent(/^990$/));
+    expect(await screen.findByText(/^No market price for \w+: the fee is the 1% maximum\.$/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Delivery settings/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Gas level/ })).toBeInTheDocument();
+    expect(screen.queryByText(/no tip/i)).toBeNull();
   });
 
-  it("with prices known: still no tip and You receive is the amount", async () => {
+  it("shows no no-tip note by default (owner: 'there is also this note for some reason: \"Sent as SepETH: no tip; ...\"')", async () => {
+    everyPriceIs({ kind: "known" });
+    answer.data = sample();
+    openNative("1");
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Delivery settings/ })).toHaveTextContent(/Deliver/));
+    expect(screen.queryByText(/no tip/i)).toBeNull();
+    expect(screen.queryByText(/Sent as/)).toBeNull();
+    expect(screen.queryByText(/anyone can deliver it, for free/)).toBeNull();
+  });
+
+  it("with prices known: the fee follows the curve, so You receive is less than the amount", async () => {
     everyPriceIs({ kind: "known" });
     answer.data = sample();
     openNative("2");
-    expect(await screen.findByText(/no tip; anyone can deliver it, for free/)).toBeInTheDocument();
-    await waitFor(() => expect(output()).toHaveTextContent(/^2$/));
-    expect(screen.queryByText(/Deliver for/)).toBeNull();
+    await waitFor(() => expect(output().textContent).not.toBe("0"));
+    await waitFor(() => expect(output()).not.toHaveTextContent(/^2$/));
+    expect(screen.getByRole("button", { name: /^Delivery settings/ })).toHaveTextContent(/Deliver for/);
+  });
+
+  it("says nothing about prices for a zero amount", async () => {
+    everyPriceIs({ kind: "no-market" });
+    openNative("0");
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Delivery settings/ })).toBeInTheDocument());
+    expect(document.querySelector(".zb-price-note")).toBeNull();
+  });
+
+  it("names the destination's coin when only its price is missing", async () => {
+    answer.data = sample();
+    answer.states = new Map(Object.entries({ [`native:${FIXTURE_PAIR.second.chainId}`]: { kind: "no-market" } as PriceState }));
+    openNative("1");
+    expect(await screen.findByText(new RegExp(`No market price for ${FIXTURE_PAIR.second.nativeSymbol}`))).toBeInTheDocument();
+  });
+
+  it("No tip is the user's choice: the pill reads No tip, nothing stands under the amount, and You receive is the amount", async () => {
+    everyPriceIs({ kind: "no-market" });
+    openNative("1000", "&tip.mode=none");
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Delivery settings/ })).toHaveTextContent(/^No tip$/));
+    expect(screen.queryByText(/anyone can deliver it, for free/)).toBeNull();
+    await waitFor(() => expect(output()).toHaveTextContent(/^1,?000$/));
+    expect(screen.queryByText(/maximum/)).toBeNull();
   });
 });
