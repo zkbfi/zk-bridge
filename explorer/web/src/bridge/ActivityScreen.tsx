@@ -81,10 +81,13 @@ export const ActivityScreen = () => {
   }, [items]);
 
   const rows: readonly FeedItem[] = useMemo(
-    () => [
-      ...pending.map((entry): FeedItem => ({ id: entry.sourceTransactionHash, kind: "token", direction: entry.direction, status: "sent", sender: account ?? ("0x" as Address), recipient: account ?? ("0x" as Address), token: entry.token, amount: entry.amount, sentAt: entry.sentAt, deliveredAt: null, sourceTransactionHash: entry.sourceTransactionHash, destinationTransactionHash: null }) as FeedItem),
-      ...items,
-    ],
+    () =>
+      account === null
+        ? []
+        : [
+            ...pending.map((entry): FeedItem => ({ id: entry.sourceTransactionHash, kind: "token", direction: entry.direction, status: "sent", sender: account, recipient: account, token: entry.token, amount: entry.amount, sentAt: entry.sentAt, deliveredAt: null, sourceTransactionHash: entry.sourceTransactionHash, destinationTransactionHash: null }) as FeedItem),
+            ...items,
+          ],
     [pending, items, account],
   );
   const counts = { "in-flight": 0, "needs-you": 0, delivered: 0 } as Record<ActivityGroup, number>;
@@ -215,7 +218,7 @@ const NeedsYou = ({ row, destinationChainId, destinationName, nativeSymbol, nati
   const gasWei = (cost as { gasCostWei?: bigint } | undefined)?.gasCostWei ?? 10n ** 15n;
   const state = selfDeliveryState({ nativeBalance, estimatedGasWei: gasWei, symbol: nativeSymbol, chainName: destinationName });
   const [tip, setTip] = useState(false);
-  // A failed release is final: the bridge delivered the message and the recipient could not take the tokens. Nobody
+  // Only a covered transfer (tip too low) or a failed release gets here. A failed release is final: the bridge delivered the message and the recipient could not take the tokens. Nobody
   // can deliver it again, so there is nothing to finish.
   if (row.status === "release_failed") {
     return (
@@ -227,7 +230,7 @@ const NeedsYou = ({ row, destinationChainId, destinationName, nativeSymbol, nati
   return (
     <>
       <p className="zb-small" style={{ margin: "6px 0 0", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-        {row.status === "covered" ? <>The tip is below what a delivery bot needs at today's gas price (<GasCan /> <TokenIcon subject={{ chainId: destinationChainId }} symbol={nativeSymbol} size={14} /> <Num text={amountText(gasWei, 18)} />).</> : "This transfer did not finish; you can finish it yourself."}
+        The tip is below what a delivery bot needs at today's gas price (<GasCan /> <TokenIcon subject={{ chainId: destinationChainId }} symbol={nativeSymbol} size={14} /> <Num text={amountText(gasWei, 18)} />).
       </p>
       <span style={{ position: "relative", display: "block" }} onMouseEnter={() => setTip(true)} onMouseLeave={() => setTip(false)}>
         <a
