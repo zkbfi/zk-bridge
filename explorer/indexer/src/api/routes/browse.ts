@@ -52,10 +52,12 @@ const messageOrder = (sort: BrowseMessagesQuery["sort"]) => {
 
 /** The conditions of the proof list. */
 const proofConditions = (query: BrowseProofsQuery) => {
-  const { chainId, poster, from, to, asOf } = query;
+  const { chainId, poster, slot, transactionHash, from, to, asOf } = query;
   return and(
     chainId === null ? undefined : eq(headUpdates.chainId, chainId),
     poster === null ? undefined : eq(headUpdates.poster, poster),
+    slot === null ? undefined : eq(headUpdates.slot, slot),
+    transactionHash === null ? undefined : eq(headUpdates.transactionHash, transactionHash as `0x${string}`),
     from === null ? undefined : gte(headUpdates.timestamp, from),
     to === null ? undefined : lte(headUpdates.timestamp, to),
     asOf === null ? undefined : lte(headUpdates.timestamp, asOf),

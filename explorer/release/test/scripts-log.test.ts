@@ -256,6 +256,7 @@ describe("publish-pages.sh serves the log next to version.json", () => {
   it("puts releases-log.json and its signature in the deployed site", async () => {
     const { privateKey, publicKey } = await throwawayKey();
     const release = await signedRelease(1, null, privateKey);
+    await writeFile(join(release, "public-keys.json"), await readFile(await keysFile(publicKey), "utf8"));
     // A wrangler stand-in that lists the files of the site it would deploy, instead of deploying.
     const listSite = `node -e 'console.log(require("fs").readdirSync(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).assets.directory).sort().join(" "))' "$5" > "$(dirname "$0")/ran"`;
     const result = await runScript(
@@ -266,7 +267,7 @@ describe("publish-pages.sh serves the log next to version.json", () => {
       { npx: listSite },
     );
     expect(result.status).toBe(0);
-    expect(result.ran.trim().split(" ")).toEqual(expect.arrayContaining(["index.html", "version.json", "version.json.sig", "releases-log.json", "releases-log.json.sig"]));
+    expect(result.ran.trim().split(" ")).toEqual(expect.arrayContaining(["index.html", "version.json", "version.json.sig", "releases-log.json", "releases-log.json.sig", "public-keys.json", "SHA256SUMS"]));
   });
 });
 

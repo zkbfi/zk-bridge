@@ -70,8 +70,10 @@ const useProofs = () => {
 export const ProofPage = ({ chainId, number }: { readonly chainId: number; readonly number: number }) => {
   const { pair } = useServices();
   const names = chainNamer(pair);
-  const proofs = useProofs();
-  const proof = proofs.find((row) => row.chainId === chainId && row.number === number);
+  const { explore: indexer } = useServices();
+  // Read from the indexer's paged list by number, so any update is found, not only the latest ones.
+  const found = useQuery({ queryKey: ["explore", "proof", chainId, number], queryFn: () => indexer.proofByNumber(chainId, number) });
+  const proof = found.data?.proof;
   const holder = chainOf(pair, chainId);
   const tracked = otherOf(pair, chainId);
   const reader = useChainReader()(chainId);
@@ -84,9 +86,9 @@ export const ProofPage = ({ chainId, number }: { readonly chainId: number; reado
       Light-client update <RouteIcons from={tracked.chainId} to={holder.chainId} names={names} surface="accent" />
     </>
   );
-  if (proof === undefined) return <XBand label={label} big={`Proof #${number}`} sub={proofs.length === 0 ? "Reading…" : "The indexer has no such proof."} />;
-  const previous = proofs.find((row) => row.chainId === chainId && row.number === number - 1);
-  const next = proofs.find((row) => row.chainId === chainId && row.number === number + 1);
+  if (proof === undefined) return <XBand label={label} big={`Proof #${number}`} sub={found.isError ? "The indexer could not be read." : found.isPending ? "Reading…" : "The indexer has no such proof."} />;
+  const previous = found.data?.previous ?? undefined;
+  const next = found.data?.next ?? undefined;
   const slotTime = (slot: bigint): number | null => (clock === undefined ? null : slotStartTime(Number(slot), clock));
   const toTime = slotTime(proof.slot);
   const price = prices?.get(`native:${chainId}`) ?? null;
@@ -202,7 +204,8 @@ export const BlockPage = ({ chainId, number }: { readonly chainId: number; reado
 export const SlotPage = ({ slot }: { readonly slot: bigint }) => {
   const { pair } = useServices();
   const names = chainNamer(pair);
-  const proofs = useProofs().filter((proof) => proof.slot === slot);
+  const { explore: indexer } = useServices();
+  const proofs = useQuery({ queryKey: ["explore", "proofs-of-slot", slot.toString()], queryFn: () => indexer.findProofs({ slot }) }).data ?? [];
   return (
     <>
       <XBand label="Beacon chain" big={`Slot ${slot.toLocaleString("en-US")}`} sub={`sync committee period ${(slot / SLOTS_PER_PERIOD).toLocaleString("en-US")}`} />
