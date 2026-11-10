@@ -132,3 +132,37 @@ test("the build without snapshot files, or with an incomplete set, still works a
   }
   await rm(partial, { recursive: true });
 });
+
+test("the app links and the snapshot come before the docs, the terminal downloads and the signed list", () => {
+  const html = renderLanding(verified(snapshot));
+  const at = (marker: string): number => {
+    const index = html.indexOf(marker);
+    assert.ok(index >= 0, `${marker} is missing`);
+    return index;
+  };
+  const order = [at('id="app-links"'), at('id="snapshot"'), at(`${sampleManifest.releases[0]!.cid}`), at('id="docs"'), at('id="downloads"'), at('id="verification"')];
+  assert.deepEqual(order, [...order].sort((a, b) => a - b));
+  assert.ok(html.indexOf("<h1>") < html.indexOf('id="app-links"'));
+  assert.ok(html.includes("the contracts have no owner"));
+  assert.ok(html.includes('href="./llms.txt"') && html.includes('href="./version.json.sig"'));
+});
+
+test("the build sets og:image and twitter:image from the preview image, and omits them without it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "landing-snap-"));
+  await writeFile(join(directory, "snapshot-light.webp"), "light");
+  await writeFile(join(directory, "snapshot-dark.webp"), "dark");
+  await writeFile(join(directory, "snapshot.json"), JSON.stringify({ width: 1280, height: 800 }));
+  const without = await build(directory);
+  const bare = await readFile(join(without.out, "index.html"), "utf8");
+  assert.ok(!bare.includes("og:image") && !bare.includes("twitter:image") && !bare.includes("{{meta}}"));
+  await writeFile(join(directory, "snapshot-og.jpg"), "og");
+  const withPreview = await build(directory);
+  const html = await readFile(join(withPreview.out, "index.html"), "utf8");
+  assert.ok(/<meta property="og:image" content="https:\/\/[^"]+\/snapshot-og\.jpg"/.test(html));
+  assert.ok(/<meta name="twitter:image" content="https:\/\/[^"]+\/snapshot-og\.jpg"/.test(html));
+  assert.equal(await readFile(join(withPreview.out, "snapshot-og.jpg"), "utf8"), "og");
+  const none = await build(null);
+  assert.ok(!(await readFile(join(none.out, "index.html"), "utf8")).includes("og:image"));
+  for (const out of [without.out, withPreview.out, none.out]) await rm(out, { recursive: true });
+  await rm(directory, { recursive: true });
+});

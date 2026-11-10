@@ -5,13 +5,16 @@
  *                 landing.next.config.json is the staging site next.zkb.fi, which trusts only the staging key)
  * LANDING_SNAPSHOT_DIR  a directory with snapshot-light.webp, snapshot-dark.webp and snapshot.json ({"width","height"}),
  *                 made by script/release/snapshot.sh. When all three are there they are copied into the site and the
- *                 page shows them; otherwise the page has no snapshot block.
+ *                 page shows them; otherwise the page has no snapshot block. A snapshot-og.jpg (1200x630) beside them,
+ *                 with "siteUrl" in the settings, becomes the og:image and twitter:image of the page; without it the
+ *                 page has no such tags.
  * LANDING_OUT     the output directory (default dist/)
  */
 import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { socialMeta } from "./social-meta.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const dist = process.env.LANDING_OUT ?? join(root, "dist");
@@ -26,7 +29,7 @@ function rewriteImports(source: string): string {
 await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 
-const config = JSON.parse(await readFile(join(root, configFile), "utf8")) as { title: string; snapshot?: unknown };
+const config = JSON.parse(await readFile(join(root, configFile), "utf8")) as { title: string; siteUrl?: string; snapshot?: unknown };
 
 /** The snapshot files, when the release made them. A missing or broken set means no snapshot, never a failed build. */
 async function readSnapshot(): Promise<{ light: string; dark: string; width: number; height: number } | null> {
@@ -52,13 +55,25 @@ for (const file of (await readdir(join(root, "src"))).filter((name) => name.ends
 // the favicons and touch icon, served from the site root
 await cp(join(root, "public"), dist, { recursive: true });
 
+/** The social preview image, copied into the site when it exists. Needs an absolute site address for its URL. */
+async function readPreviewMeta(): Promise<string> {
+  if (snapshotDirectory === undefined || snapshotDirectory === "" || config.siteUrl === undefined) return "";
+  try {
+    await cp(join(snapshotDirectory, "snapshot-og.jpg"), join(dist, "snapshot-og.jpg"));
+  } catch {
+    return "";
+  }
+  return socialMeta(config.title, new URL("snapshot-og.jpg", config.siteUrl).href);
+}
+
 const snapshot = await readSnapshot();
+const previewMeta = snapshot === null ? "" : await readPreviewMeta();
 if (snapshot !== null) config.snapshot = snapshot;
 else delete config.snapshot;
 
-const html = (await readFile(join(root, "index.html"), "utf8")).replace("{{title}}", () =>
-  config.title.replace(/[&<>"']/g, ""),
-);
+const html = (await readFile(join(root, "index.html"), "utf8"))
+  .replace("{{title}}", () => config.title.replace(/[&<>"']/g, ""))
+  .replace("{{meta}}", () => previewMeta);
 await writeFile(join(dist, "index.html"), html);
 await writeFile(
   join(dist, "main.js"),

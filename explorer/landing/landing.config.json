@@ -1,5 +1,6 @@
 {
   "title": "zkb.fi releases",
+  "siteUrl": "https://zkb.fi/",
   "manifestUrl": "./version.json",
   "signatureUrl": "./version.json.sig",
   "downloadBaseUrl": "https://github.com/zkbfi/releases/releases/download/v{version}",
