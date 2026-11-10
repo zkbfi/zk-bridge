@@ -44,13 +44,12 @@ export type InFlightOrbitsProps = {
 /** Whether the user asked for reduced motion, following changes. */
 export const usePrefersReducedMotion = (): boolean => {
   const query = "(prefers-reduced-motion: reduce)";
-  const [reduced, setReduced] = useState(() => typeof window.matchMedia === "function" && window.matchMedia(query).matches);
+  const [reduced, setReduced] = useState(() => window.matchMedia(query).matches);
   useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
     const media = window.matchMedia(query);
     const change = (): void => setReduced(media.matches);
-    media.addEventListener?.("change", change);
-    return () => media.removeEventListener?.("change", change);
+    media.addEventListener("change", change);
+    return () => media.removeEventListener("change", change);
   }, []);
   return reduced;
 };
@@ -96,13 +95,13 @@ export type ChainTotals = {
   readonly delivered7d: number;
 };
 
-const laneTotals = (track: OrbitTrack | undefined): ChainLaneTotals => {
-  const priced = (track?.planets ?? []).filter((planet) => planet.usd !== null);
+const laneTotals = (track: OrbitTrack): ChainLaneTotals => {
+  const priced = track.planets.filter((planet) => planet.usd !== null);
   return {
-    inFlight: track?.planets.length ?? 0,
+    inFlight: track.planets.length,
     usd: priced.length === 0 ? null : priced.reduce((sum, planet) => sum + planet.usd!, 0),
-    delivered24h: track?.delivered24h ?? 0,
-    delivered7d: track?.delivered7d ?? 0,
+    delivered24h: track.delivered24h,
+    delivered7d: track.delivered7d,
   };
 };
 
@@ -112,9 +111,9 @@ const laneTotals = (track: OrbitTrack | undefined): ChainLaneTotals => {
  * @param tracks The pair's tracks: first → second, then second → first.
  * @param index The chain.
  */
-export const chainTotals = (tracks: readonly OrbitTrack[], index: 0 | 1): ChainTotals => {
+export const chainTotals = (tracks: readonly [OrbitTrack, OrbitTrack], index: 0 | 1): ChainTotals => {
   const out = laneTotals(tracks[index]);
-  const back = laneTotals(tracks[1 - index]);
+  const back = laneTotals(tracks[index === 0 ? 1 : 0]);
   return { out, in: back, delivered24h: out.delivered24h + back.delivered24h, delivered7d: out.delivered7d + back.delivered7d };
 };
 
@@ -186,8 +185,8 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false, fe
       },
       label: (planet) => planetLabel(planet, nowRef.current),
       sunLabel: (lane, step) => {
-        const track = tracksRef.current[lane];
-        return `${ORBIT_STEPS[step]}, ${track === undefined ? "" : `${shortChain(track.from.name)} to ${shortChain(track.to.name)}`}: totals`;
+        const track = tracksRef.current[lane]!;
+        return `${ORBIT_STEPS[step]}, ${shortChain(track.from.name)} to ${shortChain(track.to.name)}: totals`;
       },
       onSunTip: setSunTip,
     });
@@ -222,6 +221,7 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false, fe
   if (out === undefined || back === undefined) return null;
   const first = out.from;
   const second = out.to;
+  const pair: readonly [OrbitTrack, OrbitTrack] = [out, back];
   const all = tracks.flatMap((track) => track.planets);
   // The tooltip shows the planet's newest data after a refresh.
   const shown = tip === null ? null : (all.find((planet) => planet.id === tip.planet.id) ?? tip.planet);
@@ -287,7 +287,7 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false, fe
         </svg>
         {[first, second].map((chain, index) => {
           const node = geometry.nodes[index]!;
-          const totals = chainTotals(tracks, index as 0 | 1);
+          const totals = chainTotals(pair, index as 0 | 1);
           const show = (target: HTMLElement): void => {
             const rect = target.getBoundingClientRect();
             setChainTip({ index: index as 0 | 1, x: rect.right, y: rect.bottom });
@@ -334,7 +334,7 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false, fe
         : createPortal(
             (() => {
               const chain = chainTip.index === 0 ? first : second;
-              const totals = chainTotals(tracks, chainTip.index);
+              const totals = chainTotals(pair, chainTip.index);
               return (
                 <div ref={chainTipNode} className="zb-orb-tip" role="tooltip">
                   <div className="zb-orb-tip-amt">
@@ -367,15 +367,15 @@ export const InFlightOrbits = ({ tracks, now, reducedMotion, loading = false, fe
                   <div className="zb-orb-tip-steps">
                     Delivered: {totals.delivered24h} in the last 24 h · {totals.delivered7d} in the last 7 days
                   </div>
-                  <ChainTiming out={tracks[chainTip.index]?.timing ?? null} back={tracks[1 - chainTip.index]?.timing ?? null} />
+                  <ChainTiming out={pair[chainTip.index].timing} back={pair[chainTip.index === 0 ? 1 : 0].timing} />
                 </div>
               );
             })(),
             document.body,
           )}
-      {sunTip === null || tracks[sunTip.lane] === undefined
+      {sunTip === null
         ? null
-        : createPortal(<SunTip ref={sunTipNode} track={tracks[sunTip.lane]!} step={sunTip.step as OrbitStep} now={now} />, document.body)}
+        : createPortal(<SunTip ref={sunTipNode} track={sunTip.lane === 0 ? out : back} step={sunTip.step as OrbitStep} now={now} />, document.body)}
       {shown === null || tip === null
         ? null
         : createPortal(

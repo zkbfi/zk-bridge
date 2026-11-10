@@ -175,9 +175,11 @@ export type OrbitEngineOptions = {
   /** A planet's accessible name. */
   readonly label: (planet: Planet) => string;
   /** A step sun's accessible name ("Sent, Ethereum to PulseChain: totals"). */
-  readonly sunLabel?: (lane: number, step: number) => string;
+  readonly sunLabel: (lane: number, step: number) => string;
   /** Show a step's summary for its sun at a viewport point, or hide it (null). */
-  readonly onSunTip?: (tip: { readonly lane: number; readonly step: number; readonly x: number; readonly y: number } | null) => void;
+  readonly onSunTip: (tip: { readonly lane: number; readonly step: number; readonly x: number; readonly y: number } | null) => void;
+  /** The clock in milliseconds, as `performance.now()` (tests pass their own). */
+  readonly clock?: () => number;
   /** The frame scheduler (tests pass their own). */
   readonly frames?: { readonly request: (callback: (time: number) => void) => number; readonly cancel: (handle: number) => void };
   readonly document?: Document;
@@ -200,6 +202,7 @@ const laneOf = (planet: Planet): number => (planet.source.side === "first" ? 0 :
 export class OrbitEngine {
   private readonly bodies = new Map<string, Body>();
   private readonly options: OrbitEngineOptions;
+  private readonly clock: () => number;
   private readonly frames: NonNullable<OrbitEngineOptions["frames"]>;
   private readonly doc: Document;
   private geometry: OrbitGeometry;
@@ -225,13 +228,11 @@ export class OrbitEngine {
     this.options = options;
     this.geometry = options.geometry;
     this.doc = options.document ?? document;
-    this.frames = options.frames ?? {
-      request: (callback) => (typeof window.requestAnimationFrame === "function" ? window.requestAnimationFrame(callback) : window.setTimeout(() => callback(performance.now()), 16)),
-      cancel: (handle) => (typeof window.cancelAnimationFrame === "function" ? window.cancelAnimationFrame(handle) : window.clearTimeout(handle)),
-    };
+    this.clock = options.clock ?? (() => performance.now());
+    this.frames = options.frames ?? { request: (callback) => window.requestAnimationFrame(callback), cancel: (handle) => window.cancelAnimationFrame(handle) };
     this.lanes = options.lanes.map(({ layer, guides }, index) => {
       const suns = STEPS.map((step) => {
-        const sun = element("circle", { r: SUN_RADIUS, class: step === 0 ? "zb-orb-stop zb-orb-stop-first" : "zb-orb-stop", "data-sun": step, "data-lane": index, tabindex: 0, role: "button", "aria-label": options.sunLabel?.(index, step) ?? `${step}` });
+        const sun = element("circle", { r: SUN_RADIUS, class: step === 0 ? "zb-orb-stop zb-orb-stop-first" : "zb-orb-stop", "data-sun": step, "data-lane": index, tabindex: 0, role: "button", "aria-label": options.sunLabel(index, step) });
         return sun;
       });
       layer.append(...suns);
@@ -242,13 +243,13 @@ export class OrbitEngine {
       state.suns.forEach((sun, step) => {
         const show = (x: number, y: number): void => {
           state.frozen = step;
-          this.options.onSunTip?.({ lane, step, x, y });
+          this.options.onSunTip({ lane, step, x, y });
           if (this.options.reduced) this.drawStill();
         };
         const hide = (): void => {
           this.sunUnderPointer = null;
           state.frozen = -1;
-          this.options.onSunTip?.(null);
+          this.options.onSunTip(null);
           if (this.options.reduced) this.drawStill();
         };
         this.hideSun.push(hide);
@@ -285,12 +286,12 @@ export class OrbitEngine {
         const under = this.sunUnderPointer;
         if (under !== null) {
           const sunLane = this.geometry.lanes[under.lane]!;
-          if (Math.hypot(x - stepX(sunLane, under.step), y - sunLane.y) > SUN_RADIUS + 3) this.hideSun[under.lane * STEP_COUNT + under.step]?.();
+          if (Math.hypot(x - stepX(sunLane, under.step), y - sunLane.y) > SUN_RADIUS + 3) this.hideSun[under.lane * STEP_COUNT + under.step]!();
         }
       };
       const leave = (): void => {
         const under = this.sunUnderPointer;
-        if (under !== null) this.hideSun[under.lane * STEP_COUNT + under.step]?.();
+        if (under !== null) this.hideSun[under.lane * STEP_COUNT + under.step]!();
         for (const lane of this.lanes) lane.frozen = -1;
         this.setHover(0, -1);
         this.hideTip();
@@ -380,7 +381,7 @@ export class OrbitEngine {
    * whose step changed travel to it, and ones no longer listed leave into their destination chain.
    */
   sync(planets: readonly Planet[], inFlight?: ReadonlySet<string>): void {
-    const now = performance.now();
+    const now = this.clock();
     const first = !this.synced;
     this.synced = true;
     const listed = new Set<string>();
@@ -450,7 +451,7 @@ export class OrbitEngine {
       this.tipId = body.planet.id;
       g.classList.add("zb-orb-hot");
       // One tooltip at a time: a planet's replaces its sun's.
-      this.options.onSunTip?.(null);
+      this.options.onSunTip(null);
       this.options.onTip({ planet: body.planet, x, y });
       if (this.options.reduced) this.drawStill();
     };
@@ -505,7 +506,7 @@ export class OrbitEngine {
   private paint(body: Body): void {
     const { radius, tone, icon, token } = body.planet;
     const letter = element("text", { class: "zb-orb-letter", "text-anchor": "middle", dy: "0.35em", "font-size": (radius * 0.95).toFixed(1) });
-    letter.textContent = (token === null || token === undefined ? "M" : nativeSymbolOf(token)).slice(0, 1).toUpperCase();
+    letter.textContent = (token === null ? "M" : nativeSymbolOf(token)).slice(0, 1).toUpperCase();
     const parts: SVGElement[] = [element("circle", { r: (radius + 1.5).toFixed(2), class: "zb-orb-halo" }), element("circle", { r: radius.toFixed(2), class: `zb-orb-body zb-orb-t${tone}` }), letter];
     const pattern = icon === null ? null : this.patternFor(icon);
     if (pattern !== null) parts.push(element("circle", { r: radius.toFixed(2), class: "zb-orb-img", fill: `url(#${pattern.id})` }));
@@ -603,7 +604,6 @@ export class OrbitEngine {
 
   private readonly frame = (time: number): void => {
     this.handle = null;
-    if (this.destroyed) return;
     const dt = this.last === null ? 16 : Math.min(48, time - this.last);
     this.last = time;
     for (const state of this.lanes) for (let step = 0; step < STEP_COUNT; step++) state.open[step]! += ((state.hover === step || state.frozen === step ? 1 : 0) - state.open[step]!) * ease(dt, 160);
