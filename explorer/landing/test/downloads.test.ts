@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -165,4 +165,20 @@ test("the build sets og:image and twitter:image from the preview image, and omit
   assert.ok(!(await readFile(join(none.out, "index.html"), "utf8")).includes("og:image"));
   for (const out of [without.out, withPreview.out, none.out]) await rm(out, { recursive: true });
   await rm(directory, { recursive: true });
+});
+
+test("sizes read in kB, MB and GB, with a decimal below 100 and none from 100, and stay in GB above a terabyte", () => {
+  assert.equal(formatSize(999), "999 B");
+  assert.equal(formatSize(54_300_000), "54.3 MB");
+  assert.equal(formatSize(123_456_789), "123 MB");
+  assert.equal(formatSize(1_500_000_000), "1.5 GB");
+  assert.equal(formatSize(2_000_000_000_000), "2000 GB");
+});
+
+test("a file for every system shows its name with and without a size, and escapes the name", () => {
+  const entry = (name: string, size?: number) => ({ name, platform: "any", file: `${name}.zip`, sha256: "d".repeat(64), ...(size === undefined ? {} : { size }) });
+  const html = renderDownloads([entry("tools & more", 2_500_000), entry("plain")], "./d", null);
+  assert.ok(html.includes("tools &amp; more</a> (2.5 MB)<br>"));
+  assert.ok(html.includes("plain</a><br>"));
+  assert.ok(html.includes("Files for every system"));
 });

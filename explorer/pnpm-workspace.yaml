@@ -11,6 +11,7 @@ packages:
   - backend
   - status
   - docs
+  - landing
   - release
 # Refuse any package version younger than 28 days (40320 minutes), direct or transitive.
 minimumReleaseAge: 40320

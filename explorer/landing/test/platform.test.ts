@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import { detectFromUserAgent, detectPlatform, platformLabel } from "../src/platform.ts";
+import { test } from "vitest";
+import { detectFromUserAgent, detectPlatform, platformLabel, platformRank } from "../src/platform.ts";
 
 const MAC = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
 const LINUX_X64 = "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0";
@@ -56,4 +56,31 @@ test("platform labels", () => {
   assert.equal(platformLabel("linux-arm64"), "Linux · Arm64");
   assert.equal(platformLabel("windows-x64"), "Windows · x64");
   assert.equal(platformLabel("plan9-mips"), "plan9-mips");
+});
+
+test("a platform the hints do not name falls back to the user agent", async () => {
+  assert.deepEqual(await detectPlatform(withHints({ platform: "ChromeOS", architecture: "x86", bitness: "64" }, WINDOWS)), { key: "windows-x64", assumed: false });
+});
+
+test("hints that leave out the platform use the one of the data, and missing parts count as unknown", async () => {
+  const data = { userAgent: "", userAgentData: { platform: "Linux", getHighEntropyValues: async () => ({ architecture: "arm" }) } };
+  assert.deepEqual(await detectPlatform(data), { key: "linux-arm64", assumed: false });
+  const bare = { userAgentData: { getHighEntropyValues: async () => ({}) } };
+  assert.deepEqual(await detectPlatform(bare), { key: null, assumed: false });
+  assert.deepEqual(await detectPlatform({}), { key: null, assumed: false });
+});
+
+test("a 32 bit x86 Mac has no known chip, and a Linux without a chip has no default", async () => {
+  assert.deepEqual(await detectPlatform(withHints({ platform: "macOS", architecture: "x86", bitness: "32" })), { key: "darwin-arm64", assumed: true });
+  assert.deepEqual(await detectPlatform(withHints({ platform: "Linux", architecture: "riscv" })), { key: null, assumed: false });
+});
+
+test("the label of the any-system entry", () => {
+  assert.equal(platformLabel("any"), "Any system");
+  assert.equal(platformLabel("linux-x64"), "Linux · x64");
+});
+
+test("the menu lists macOS, Linux and Windows in order, and an unknown platform last", () => {
+  const keys = ["windows-x64", "plan9-mips", "linux-arm64", "darwin-x64", "linux-x64", "darwin-arm64"];
+  assert.deepEqual([...keys].sort((a, b) => platformRank(a) - platformRank(b)), ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "windows-x64", "plan9-mips"]);
 });
