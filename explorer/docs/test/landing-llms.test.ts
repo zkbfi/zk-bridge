@@ -27,12 +27,16 @@ describe("landing llms.txt", () => {
     for (const skill of content.skills) expect(text).toContain(`(https://${next.dappCid}.ipfs.zkb.fi/docs/skills/${skill.name}/SKILL.md)`);
   });
 
-  it("states the channel and links the right site and key branch", () => {
+  it("states the channel and links the keys and checksums on the site", () => {
     const text = buildLandingLlmsTxt(content, next);
     expect(text).toContain("staging");
     expect(text).toContain("(https://next.zkb.fi/version.json)");
-    expect(text).toContain("/zkbfi/releases/next/public-keys.json");
-    expect(buildLandingLlmsTxt(content, stable)).toContain("(https://zkb.fi/version.json)");
+    expect(text).toContain("(https://next.zkb.fi/public-keys.json)");
+    expect(text).toContain("(https://next.zkb.fi/SHA256SUMS)");
+    expect(text).not.toContain("raw.githubusercontent.com");
+    const stableText = buildLandingLlmsTxt(content, stable);
+    expect(stableText).toContain("(https://zkb.fi/version.json)");
+    expect(stableText).toContain("(https://zkb.fi/public-keys.json)");
   });
 
   it("does not link the private repository or a docs page that is not public", () => {

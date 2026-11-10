@@ -1,6 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FIXTURE_PAIR } from "@terminal/data/fixtures";
+import { createFixtureExploreSource } from "../../src/explore/explore-fixture";
 import { Shell } from "../../src/app/Shell";
 import { connectedWallet, renderWithWallet } from "../app/support";
 
@@ -42,6 +43,15 @@ describe("Explore's other pages", () => {
   it("a slot lists the proof that stored it", async () => {
     open("#/explore/slot/11194368");
     expect(await screen.findByRole("link", { name: /Proof #1/ })).toHaveAttribute("href", "#/explore/proof/11155111/1");
+  });
+
+  it("a slot asks the indexer for that slot, so an old one is found too", async () => {
+    const base = createFixtureExploreSource();
+    const findProofs = vi.fn(async () => []);
+    window.history.replaceState(null, "", "#/explore/slot/123");
+    renderWithWallet(<Shell />, { wallet: connectedWallet(), services: { explore: { ...base, findProofs } } });
+    expect(await screen.findByText("No light client has stored this slot.")).toBeInTheDocument();
+    expect(findProofs).toHaveBeenCalledWith({ slot: 123n });
   });
 
   it("a block reads the chain and names the proof that proves it final", async () => {

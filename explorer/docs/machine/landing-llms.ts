@@ -22,9 +22,7 @@ export type LandingRelease = {
 };
 
 const SITES: Readonly<Record<LandingChannel, string>> = { stable: "https://zkb.fi", next: "https://next.zkb.fi" };
-const BRANCHES: Readonly<Record<LandingChannel, string>> = { stable: "main", next: "next" };
 const RELEASES_REPOSITORY = "https://github.com/zkbfi/releases";
-const RAW_RELEASES = "https://raw.githubusercontent.com/zkbfi/releases";
 
 /** Hosts a link may name besides the dapp's own `<cid>.ipfs.zkb.fi`. */
 export const PUBLIC_HOSTS: readonly string[] = [
@@ -36,7 +34,6 @@ export const PUBLIC_HOSTS: readonly string[] = [
   "status.zkb.fi",
   "gateway.zkb.fi",
   "github.com",
-  "raw.githubusercontent.com",
   "llmstxt.org",
 ];
 
@@ -68,7 +65,6 @@ export const buildLandingLlmsTxt = (content: MachineContent, release: LandingRel
   if (!CID.test(release.dappCid)) throw new Error("the dapp CID must be a lower-case base32 CIDv1");
   if (!/^[0-9A-Za-z.+-]+$/.test(release.version)) throw new Error("the version has an unexpected form");
   const site = SITES[release.channel];
-  const branch = BRANCHES[release.channel];
   const dapp = `https://${release.dappCid}.ipfs.zkb.fi`;
   const line = (name: string, url: string, description: string): string => `- [${name}](${url}): ${description}`;
   const out: string[] = [
@@ -92,8 +88,8 @@ export const buildLandingLlmsTxt = (content: MachineContent, release: LandingRel
     line("version.json.sig", `${site}/version.json.sig`, "The Ed25519 signature over version.json."),
     line("releases-log.json", `${site}/releases-log.json`, "The signed log of every release of this channel."),
     line("releases-log.json.sig", `${site}/releases-log.json.sig`, "The signature over releases-log.json."),
-    line("public-keys.json", `${RAW_RELEASES}/${branch}/public-keys.json`, "The release signing key of this channel."),
-    line("SHA256SUMS", `${RAW_RELEASES}/${branch}/SHA256SUMS`, "Checksums of the release files."),
+    line("public-keys.json", `${site}/public-keys.json`, "The release signing key of this channel."),
+    line("SHA256SUMS", `${site}/SHA256SUMS`, "Checksums of the release files."),
     line("Release repository", `${RELEASES_REPOSITORY}`, "Signed release lists, and the downloads of each release (terminal, prover) on the releases tab; next releases are pre-releases."),
     line("Verify-a-release skill", `${dapp}/docs/skills/verify-a-release/SKILL.md`, "Step by step: check the signature, then the CID and the hashes."),
     "",

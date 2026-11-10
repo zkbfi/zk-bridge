@@ -3,6 +3,7 @@
  * the orange search band that takes any identifier, a browse list with live counts, then the live ring map, four
  * numbers, the light clients, the latest transfers and the services. Each kind has its own page (see ExplorePages).
  */
+import type { Hex } from "viem";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useId, useMemo, useState, type FocusEvent, type KeyboardEvent } from "react";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
@@ -32,6 +33,7 @@ import type { ProofDirection } from "@zk-bridge/shared";
 import { orbitSample, SAMPLE_TICK } from "./orbit-sample";
 import { Marked, RouteIcons, XGroup, XRow } from "./parts";
 import { recognise, searchExplore } from "./search";
+import type { ProofFilter } from "./explore-source";
 import { exploreShortcuts, type Shortcut } from "./shortcuts";
 import { moveHighlight, type MoveKey } from "../search/search-model";
 import "./explore.css";
@@ -70,10 +72,19 @@ const useExploreData = () => {
 };
 
 const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
-  const data = useExploreData();
+  const loaded = useExploreData();
+  const { explore: indexer } = useServices();
   const [text, setText] = useState(route.q ?? "");
   useEffect(() => setText(route.q ?? ""), [route.q]);
   const recognised = recognise(text);
+  // A whole transaction hash or a slot is looked up in the indexer's full history, not only among the latest updates.
+  const typed = text.trim();
+  const lookup: ProofFilter | null = /^0x[0-9a-fA-F]{64}$/.test(typed) ? { transactionHash: typed.toLowerCase() as Hex } : /^\d{1,19}$/.test(typed) ? { slot: BigInt(typed) } : null;
+  const looked = useQuery({ queryKey: ["explore", "proof-lookup", typed], enabled: lookup !== null, queryFn: () => indexer.findProofs(lookup!), retry: 0 }).data ?? [];
+  const data = useMemo(() => {
+    const known = new Set(loaded.proofs.map((proof) => `${proof.chainId}:${proof.number}`));
+    return looked.length === 0 ? loaded : { ...loaded, proofs: [...looked.filter((proof) => !known.has(`${proof.chainId}:${proof.number}`)), ...loaded.proofs] };
+  }, [loaded, looked]);
   const groups = text.trim() === "" ? [] : searchExplore(text, data);
   const names = chainNamer(data.pair);
   const set = (value: string): void => {

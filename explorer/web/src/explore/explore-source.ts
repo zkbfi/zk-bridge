@@ -25,6 +25,12 @@ export type ProofRow = {
   readonly poster: Address;
 };
 
+/** An update with the updates before and after it on the same chain (null at the ends). */
+export type ProofNeighbours = { readonly proof: ProofRow; readonly previous: ProofRow | null; readonly next: ProofRow | null };
+
+/** What `findProofs` looks for: the slot an update proves, or the transaction that posted it. */
+export type ProofFilter = { readonly slot?: bigint; readonly transactionHash?: Hex; readonly chainId?: number };
+
 /** One side's deposit gate. */
 export type GateRow = {
   readonly chainId: number;
@@ -123,7 +129,12 @@ export const parseBeaconClocks = (body: unknown): readonly BeaconClock[] =>
 
 /** What Explore reads from the indexer. */
 export interface ExploreSource {
+  /** The latest light-client updates (up to 200), newest first: for the dashboards and the search suggestions. */
   proofs(): Promise<readonly ProofRow[]>;
+  /** One update by its number on its chain (from 1, oldest first) with its neighbours, from the paged list; null when the indexer has none. */
+  proofByNumber(chainId: number, number: number): Promise<ProofNeighbours | null>;
+  /** The updates of one slot, or the update posted by one transaction, wherever they are in the history. */
+  findProofs(filter: ProofFilter): Promise<readonly ProofRow[]>;
   gates(): Promise<readonly GateRow[]>;
   lightClientCosts(): Promise<readonly LightClientCost[]>;
   history(limit: number): Promise<readonly HistoryRow[]>;
@@ -162,25 +173,27 @@ const hex = (value: unknown, what: string): Hex => {
 const address = (value: unknown, what: string): Address => getAddress(hex(value, what));
 const intOrNull = (value: unknown, what: string): number | null => (value === null || value === undefined ? null : int(value, what));
 
-/** Parses `/api/head-updates`; numbers the proofs per chain, oldest first. */
+const parseProofRow = (item: unknown): Omit<ProofRow, "number"> => {
+  const row = record(item, "head update");
+  return {
+    chainId: int(row.chainId, "chainId"),
+    slot: big(row.slot, "slot"),
+    headerRoot: hex(row.headerRoot, "headerRoot"),
+    executionBlockHash: hex(row.executionBlockHash, "executionBlockHash"),
+    executionBlockNumber: big(row.executionBlockNumber, "executionBlockNumber"),
+    transactionHash: hex(row.transactionHash, "transactionHash"),
+    blockNumber: big(row.blockNumber, "blockNumber"),
+    timestamp: int(row.timestamp, "timestamp"),
+    gasUsed: big(row.gasUsed, "gasUsed"),
+    effectiveGasPrice: big(row.effectiveGasPrice, "effectiveGasPrice"),
+    costWei: big(row.costWei, "costWei"),
+    poster: address(row.poster, "poster"),
+  };
+};
+
+/** Parses `/api/head-updates`; numbers the proofs per chain, oldest first (by position in the answer, so only for the latest ones). */
 export const parseProofs = (body: unknown): readonly ProofRow[] => {
-  const rows = array(record(body, "head updates").items, "head updates").map((item) => {
-    const row = record(item, "head update");
-    return {
-      chainId: int(row.chainId, "chainId"),
-      slot: big(row.slot, "slot"),
-      headerRoot: hex(row.headerRoot, "headerRoot"),
-      executionBlockHash: hex(row.executionBlockHash, "executionBlockHash"),
-      executionBlockNumber: big(row.executionBlockNumber, "executionBlockNumber"),
-      transactionHash: hex(row.transactionHash, "transactionHash"),
-      blockNumber: big(row.blockNumber, "blockNumber"),
-      timestamp: int(row.timestamp, "timestamp"),
-      gasUsed: big(row.gasUsed, "gasUsed"),
-      effectiveGasPrice: big(row.effectiveGasPrice, "effectiveGasPrice"),
-      costWei: big(row.costWei, "costWei"),
-      poster: address(row.poster, "poster"),
-    };
-  });
+  const rows = array(record(body, "head updates").items, "head updates").map(parseProofRow);
   const oldestFirst = [...rows].sort((a, b) => a.timestamp - b.timestamp);
   const counters = new Map<number, number>();
   return oldestFirst
@@ -191,6 +204,10 @@ export const parseProofs = (body: unknown): readonly ProofRow[] => {
     })
     .reverse();
 };
+
+/** Parses `/api/browse/proofs`: each item carries its true `number` on its chain, whatever page it is on. */
+export const parseBrowsedProofs = (body: unknown): readonly ProofRow[] =>
+  array(record(body, "proof list").items, "proof list").map((item) => ({ ...parseProofRow(item), number: int(record(item, "proof").number, "number") }));
 
 /** Parses `/api/gate`. */
 export const parseGates = (body: unknown): readonly GateRow[] =>
@@ -253,6 +270,22 @@ export const createIndexerExploreSource = (baseUrl: () => string | null, request
   return {
     browse: createBrowseClient(baseUrl, request),
     proofs: async () => parseProofs(await get("/api/head-updates?limit=200")),
+    proofByNumber: async (chainId, number) => {
+      if (!Number.isInteger(number) || number < 1) return null;
+      // Oldest first, numbered from 1: the window of three starts one before the update, so it holds the neighbours too.
+      const offset = Math.max(0, number - 2);
+      const rows = parseBrowsedProofs(await get(`/api/browse/proofs?chainId=${chainId}&sort=oldest&offset=${offset}&limit=3`));
+      const proof = rows.find((row) => row.number === number);
+      if (proof === undefined) return null;
+      return { proof, previous: rows.find((row) => row.number === number - 1) ?? null, next: rows.find((row) => row.number === number + 1) ?? null };
+    },
+    findProofs: async (filter) => {
+      const params = new URLSearchParams({ limit: "50", sort: "newest" });
+      if (filter.slot !== undefined) params.set("slot", filter.slot.toString());
+      if (filter.transactionHash !== undefined) params.set("transactionHash", filter.transactionHash);
+      if (filter.chainId !== undefined) params.set("chainId", String(filter.chainId));
+      return parseBrowsedProofs(await get(`/api/browse/proofs?${params}`));
+    },
     gates: async () => parseGates(await get("/api/gate")),
     lightClientCosts: async () => parseLightClientCosts(await get("/api/light-client-costs")),
     history: async (limit) => parseHistory(await get(`/api/history?limit=${limit}`)),

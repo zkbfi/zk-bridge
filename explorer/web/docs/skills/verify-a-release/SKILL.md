@@ -106,7 +106,7 @@ Rules the check follows (they match `explorer/landing/src/manifest.ts`):
 - **A download's hash differs.** Delete it and download again from the address on the landing page. If it still differs, do not run it.
 - **`archiveSha256` cannot be checked from a browser.** It is the hash of the release's archive (`archives/<name>.car`) in the maintainers' release directory, checked by `node explorer/release/src/cli.ts verify <release-directory> --public-keys <file>` (signature, canonical form, each archive's hash and root CID, each download, `SHA256SUMS`). The release directory is not served publicly, so the public check is the signature, the CID and the download hashes.
 
-<!-- TODO: the repository address to take the release keys from is not named here because no public repository URL was found in the files I was allowed to read; add it. A key list at a stable public address (for example public-keys.json next to version.json) would be better: https://next.zkb.fi/public-keys.json answered 404 on 2026-11-06. -->
+<!-- TODO: the repository address to take the release keys from is not named here because no public repository URL was found in the files I was allowed to read; add it. The key list is served at https://next.zkb.fi/public-keys.json (stable: https://zkb.fi/public-keys.json), next to version.json; it answered 404 until the release that added it. -->
 <!-- TODO: confirm with the owner that the release download address (the downloadBaseUrl of landing.config.json) is public and permanent. -->
 
 ## References

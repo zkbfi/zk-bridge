@@ -59,6 +59,10 @@ export type BrowseProofsQuery = Window & {
   /** The chain the light client is on. */
   readonly chainId: number | null;
   readonly poster: Address | null;
+  /** The beacon slot the update proves. */
+  readonly slot: bigint | null;
+  /** The transaction that posted the update, lower case. */
+  readonly transactionHash: string | null;
   readonly from: bigint | null;
   readonly to: bigint | null;
   readonly sort: ProofSort;
@@ -161,7 +165,7 @@ export const parseBrowseMessagesQuery = (params: URLSearchParams): Parsed<Browse
   };
 };
 
-/** Parses the query of `GET /api/browse/proofs`: `chainId`, `poster`, `from`, `to`, `sort` (newest, oldest, slot-high, slot-low), `limit`, `offset`, `asOf`. */
+/** Parses the query of `GET /api/browse/proofs`: `chainId`, `poster`, `slot`, `transactionHash`, `from`, `to`, `sort` (newest, oldest, slot-high, slot-low), `limit`, `offset`, `asOf`. */
 export const parseBrowseProofsQuery = (params: URLSearchParams): Parsed<BrowseProofsQuery> => {
   const window = windowOf(params);
   if ("bad" in window) return bad(window.bad, params.get(window.bad));
@@ -169,13 +173,17 @@ export const parseBrowseProofsQuery = (params: URLSearchParams): Parsed<BrowsePr
   if (chainId === "bad") return bad("chainId", params.get("chainId"));
   const poster = addressParam(params, "poster");
   if (poster === "bad") return bad("poster", params.get("poster"));
+  const slotText = params.get("slot");
+  if (slotText !== null && !/^\d{1,19}$/.test(slotText)) return bad("slot", slotText);
+  const hashText = params.get("transactionHash");
+  if (hashText !== null && !/^0x[0-9a-fA-F]{64}$/.test(hashText)) return bad("transactionHash", hashText);
   const sort = choice(params, "sort", PROOF_SORTS);
   if (sort === "bad") return bad("sort", params.get("sort"));
   const times = (["from", "to", "asOf"] as const).map((name) => seconds(params, name));
   const badTime = (["from", "to", "asOf"] as const).find((_, index) => times[index] === "bad");
   if (badTime !== undefined) return bad(badTime, params.get(badTime));
   const [from, to, asOf] = times as (bigint | null)[];
-  return { ok: true, query: { ...window, chainId, poster, from: from ?? null, to: to ?? null, sort: sort ?? "newest", asOf: asOf ?? null } };
+  return { ok: true, query: { ...window, chainId, poster, slot: slotText === null ? null : BigInt(slotText), transactionHash: hashText === null ? null : hashText.toLowerCase(), from: from ?? null, to: to ?? null, sort: sort ?? "newest", asOf: asOf ?? null } };
 };
 
 /** Parses the query of `GET /api/browse/tokens`: `chainId`, `kind` (native or copy), `sort` (symbol or transfers), `limit`, `offset`. */

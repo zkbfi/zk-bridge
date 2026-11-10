@@ -189,7 +189,7 @@ The browse lists answer `{ items, total, limit, offset, asOf }`. `total` counts 
 | `sort` | `newest` (default), `oldest` (with `status=inflight` this is the longest wait first), `amount-high`, `amount-low` (base units, so use them with `token`; transfers without an amount sort last). |
 | `limit`, `offset`, `asOf` | The page and the snapshot. |
 
-`GET /api/browse/proofs`: light client updates, items as in `/api/head-updates` plus `number`, the update's position on its chain from 1, oldest first (the number the Explore proof page uses). Parameters: `chainId` (the chain the light client is on), `poster`, `from`, `to`, `sort` (`newest`, `oldest`, `slot-high`, `slot-low`), `limit`, `offset`, `asOf`.
+`GET /api/browse/proofs`: light client updates, items as in `/api/head-updates` plus `number`, the update's position on its chain from 1, oldest first (the number the Explore proof page uses). Parameters: `chainId` (the chain the light client is on), `poster`, `slot` (the beacon slot), `transactionHash` (the posting transaction), `from`, `to`, `sort` (`newest`, `oldest`, `slot-high`, `slot-low`), `limit`, `offset`, `asOf`.
 
 `GET /api/browse/tokens`: items as in `/api/tokens` plus `transfers`, the transfers that name the token as source or destination (a transfer not yet delivered has no destination token, so a copy that was never delivered to counts none). Parameters: `chainId`, `kind` (`native` or `copy`), `sort` (`symbol` default, `transfers`), `limit`, `offset`.
 

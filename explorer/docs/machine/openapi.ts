@@ -117,7 +117,7 @@ export const buildIndexerSpec = (): OpenApiDocument => {
         get: get(
           "Browse light client updates",
           "A page of light client updates, each with its number on its chain, and the total that match.",
-          [chainId, query("poster", "Who posted the update.", ADDRESS), query("from", "Earliest time, Unix seconds.", { type: "string", pattern: "^\\d+$" }), query("to", "Latest time, Unix seconds.", { type: "string", pattern: "^\\d+$" }), query("sort", "Order.", { type: "string", enum: ["newest", "oldest", "slot-high", "slot-low"], default: "newest" }), limit(200, 50), offset, asOf],
+          [chainId, query("poster", "Who posted the update.", ADDRESS), query("slot", "Only the updates of this beacon slot.", { type: "string", pattern: "^\\d{1,19}$" }), query("transactionHash", "Only the update posted by this transaction.", { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" }), query("from", "Earliest time, Unix seconds.", { type: "string", pattern: "^\\d+$" }), query("to", "Latest time, Unix seconds.", { type: "string", pattern: "^\\d+$" }), query("sort", "Order.", { type: "string", enum: ["newest", "oldest", "slot-high", "slot-low"], default: "newest" }), limit(200, 50), offset, asOf],
           json(open("items, total, limit, offset and asOf."), "A page of updates."),
           badRequest,
         ),

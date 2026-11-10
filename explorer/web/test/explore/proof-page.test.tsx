@@ -100,3 +100,30 @@ describe("a cost in the native coin carries the ticker of the chain it was paid 
     expect(stepCostText(cost(chainId), pair)).toBe(`${shortAmountText(60409100000000n, 18)} ${symbol} · —`);
   });
 });
+
+describe("the proof page reads any update from the indexer, not only the latest", () => {
+  it("opens an old update by its number and links its neighbours", async () => {
+    const base = createFixtureExploreSource();
+    const [recorded] = await base.proofs();
+    const row = (number: number) => ({ ...recorded!, number, slot: 9_000n + BigInt(number) });
+    const proofByNumber = vi.fn(async (chainId: number, number: number) => ({ proof: row(number), previous: row(number - 1), next: row(number + 1) }));
+    window.history.replaceState(null, "", "#/explore/proof/11155111/777");
+    renderWithWallet(<Shell />, { wallet: connectedWallet(), services: { pair: SEPOLIA_PAIR, explore: { ...base, proofs: async () => [], proofByNumber } } });
+    await screen.findByText("Gas used", { selector: ".zb-k" });
+    expect(proofByNumber).toHaveBeenCalledWith(11155111, 777);
+    expect(hrefs(screen.getByText("Previous", { selector: ".zb-k" }).parentElement as HTMLElement)).toContain("#/explore/proof/11155111/776");
+    expect(hrefs(screen.getByText("Next", { selector: ".zb-k" }).parentElement as HTMLElement)).toContain("#/explore/proof/11155111/778");
+  });
+
+  it("says so when the indexer has no such update", async () => {
+    window.history.replaceState(null, "", "#/explore/proof/11155111/99999");
+    renderWithWallet(<Shell />, { wallet: connectedWallet(), services: { pair: SEPOLIA_PAIR, explore: { ...createFixtureExploreSource(), proofByNumber: async () => null } } });
+    expect(await screen.findByText("The indexer has no such proof.")).toBeInTheDocument();
+  });
+
+  it("says so when the indexer cannot be read", async () => {
+    window.history.replaceState(null, "", "#/explore/proof/11155111/5");
+    renderWithWallet(<Shell />, { wallet: connectedWallet(), services: { pair: SEPOLIA_PAIR, explore: { ...createFixtureExploreSource(), proofByNumber: async () => Promise.reject(new Error("down")) } } });
+    expect(await screen.findByText("The indexer could not be read.", undefined, { timeout: 5000 })).toBeInTheDocument();
+  });
+});

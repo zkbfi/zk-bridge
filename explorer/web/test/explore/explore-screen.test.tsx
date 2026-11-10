@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createFixtureExploreSource } from "../../src/explore/explore-fixture";
 import { Shell } from "../../src/app/Shell";
 import { connectedWallet, renderWithWallet } from "../app/support";
 import { buildTestServices } from "../render";
@@ -75,6 +76,17 @@ describe("Explore's top", () => {
     expect(marks.length).toBeGreaterThan(0);
     expect(marks[0]).toHaveTextContent("0x4663c8c2");
     expect(window.location.hash).toBe("#/explore?q=0x4663c8c2");
+  });
+
+  it("finds an old update by its whole transaction hash in the indexer's history, not only among the latest ones", async () => {
+    const base = createFixtureExploreSource();
+    const [recorded] = await base.proofs();
+    const hash = `0x${"cd".repeat(32)}` as const;
+    const findProofs = vi.fn(async () => [{ ...recorded!, number: 4_321, transactionHash: hash }]);
+    renderWithWallet(<Shell />, { wallet: connectedWallet(), services: { explore: { ...base, proofs: async () => [], findProofs } } });
+    await userEvent.type(await screen.findByRole("combobox", { name: "Search Explore" }), hash.toUpperCase().replace("0X", "0x"));
+    expect(await screen.findByRole("link", { name: /Proof #4321/ })).toBeInTheDocument();
+    expect(findProofs).toHaveBeenCalledWith({ transactionHash: hash });
   });
 
   it("browses one kind: the proofs, routed as chain icons, with a one-word status and the chevron last", async () => {

@@ -78,9 +78,9 @@ describe("parseBrowseMessagesQuery", () => {
 
 describe("parseBrowseProofsQuery", () => {
   it("uses the defaults, and parses every filter", () => {
-    expect(parseBrowseProofsQuery(q(""))).toEqual({ ok: true, query: { limit: 50, offset: 0, chainId: null, poster: null, from: null, to: null, sort: "newest", asOf: null } });
-    const result = parseBrowseProofsQuery(q(`chainId=943&poster=${account}&from=1&to=2&asOf=3&sort=slot-low&limit=5&offset=10`));
-    expect(result).toEqual({ ok: true, query: { limit: 5, offset: 10, chainId: 943, poster: lower, from: 1n, to: 2n, sort: "slot-low", asOf: 3n } });
+    expect(parseBrowseProofsQuery(q(""))).toEqual({ ok: true, query: { limit: 50, offset: 0, chainId: null, poster: null, slot: null, transactionHash: null, from: null, to: null, sort: "newest", asOf: null } });
+    const result = parseBrowseProofsQuery(q(`chainId=943&poster=${account}&slot=77&transactionHash=${id.toUpperCase().replace("0X", "0x")}&from=1&to=2&asOf=3&sort=slot-low&limit=5&offset=10`));
+    expect(result).toEqual({ ok: true, query: { limit: 5, offset: 10, chainId: 943, poster: lower, slot: 77n, transactionHash: id, from: 1n, to: 2n, sort: "slot-low", asOf: 3n } });
   });
 
   it("names the value it refuses", () => {
@@ -93,6 +93,8 @@ describe("parseBrowseProofsQuery", () => {
     expect(problems("poster=1")).toBe("invalid poster: 1");
     expect(problems("sort=x")).toBe("invalid sort: x");
     expect(problems("from=x")).toBe("invalid from: x");
+    expect(problems("slot=-1")).toBe("invalid slot: -1");
+    expect(problems("transactionHash=0x12")).toBe("invalid transactionHash: 0x12");
   });
 });
 

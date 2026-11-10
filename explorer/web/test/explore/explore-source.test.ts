@@ -31,6 +31,44 @@ describe("the Explore source over the indexer (recorded answers)", () => {
     ]);
   });
 
+  it("finds an update by its number through the paged list, with its neighbours, however old it is", async () => {
+    const urls: string[] = [];
+    const base = RECORDED_HEAD_UPDATES.items[0]!;
+    const rows = [1_000, 1_001, 1_002].map((number) => ({ ...base, number, slot: 5_000 + number }));
+    const found = createIndexerExploreSource(() => "https://i.test", async (url) => {
+      urls.push(url);
+      return { items: rows, total: 3_000, limit: 3, offset: 1_000, asOf: 1 };
+    });
+    const result = await found.proofByNumber(11155111, 1_001);
+    expect(urls).toEqual(["https://i.test/api/browse/proofs?chainId=11155111&sort=oldest&offset=999&limit=3"]);
+    expect([result?.previous?.number, result?.proof.number, result?.next?.number]).toEqual([1_000, 1_001, 1_002]);
+    expect(await found.proofByNumber(11155111, 5_000)).toBeNull();
+    expect(await found.proofByNumber(11155111, 0)).toBeNull();
+    urls.length = 0;
+    expect((await found.proofByNumber(11155111, 1_000))?.previous).toBeNull();
+    expect(urls[0]).toContain("offset=998");
+  });
+
+  it("starts the window at the first update for number 1 and 2", async () => {
+    const urls: string[] = [];
+    const empty = createIndexerExploreSource(() => "https://i.test", async (url) => (urls.push(url), { items: [], total: 0, limit: 3, offset: 0, asOf: 1 }));
+    await empty.proofByNumber(943, 1);
+    await empty.proofByNumber(943, 2);
+    expect(urls.map((url) => new URL(url).searchParams.get("offset"))).toEqual(["0", "0"]);
+  });
+
+  it("looks an update up by its slot or its posting transaction in the whole history", async () => {
+    const urls: string[] = [];
+    const found = createIndexerExploreSource(() => "https://i.test/", async (url) => (urls.push(url), { items: [{ ...RECORDED_HEAD_UPDATES.items[0]!, number: 42 }], total: 1, limit: 50, offset: 0, asOf: 1 }));
+    const hash = `0x${"ab".repeat(32)}` as const;
+    expect((await found.findProofs({ slot: 11194368n }))[0]?.number).toBe(42);
+    await found.findProofs({ transactionHash: hash, chainId: 943 });
+    expect(urls).toEqual([
+      "https://i.test/api/browse/proofs?limit=50&sort=newest&slot=11194368",
+      `https://i.test/api/browse/proofs?limit=50&sort=newest&transactionHash=${hash}&chainId=943`,
+    ]);
+  });
+
   it("reads the gates, the light-client costs, the history and the counts", async () => {
     expect(await source.gates()).toEqual([
       { chainId: 11155111, gate: getAddress("0x1782a38a37ce9fb9f53b0585b23b833847007e20"), enforcing: true, sealed: false, depositsOpen: false, confirmations: 0, lastConfirmedTimestamp: null },

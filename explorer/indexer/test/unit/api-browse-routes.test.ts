@@ -135,6 +135,19 @@ describe("GET /api/browse/proofs", () => {
     expect(list?.offset).toBe(4);
   });
 
+  it("finds an update by its slot and by its posting transaction", async () => {
+    respondWith((call: QueryCall) => (call.fields === undefined ? [headRow(1, 100n, 2_000n)] : [{ count: 1 }]));
+    const hash = `0x${"AB".repeat(32)}`;
+    expect((await get(`/api/browse/proofs?slot=100&transactionHash=${hash}`)).status).toBe(200);
+    const list = calls.find((call) => call.table === headUpdates && call.fields === undefined);
+    expect(list?.whereValues).toEqual([100n, hash.toLowerCase()]);
+  });
+
+  it("refuses a slot or a transaction hash it cannot read", async () => {
+    expect(await get("/api/browse/proofs?slot=x")).toEqual({ status: 400, body: { error: "invalid slot: x" } });
+    expect(await get("/api/browse/proofs?transactionHash=0x12")).toEqual({ status: 400, body: { error: "invalid transactionHash: 0x12" } });
+  });
+
   it.each(["newest", "oldest", "slot-high", "slot-low"])("sorts %s", async (sort) => {
     expect((await get(`/api/browse/proofs?sort=${sort}`)).status).toBe(200);
   });
