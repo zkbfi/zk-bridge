@@ -95,7 +95,7 @@ const PAGE_SIZE = 100;
  * Skip reasons that the next sweep can settle at once: they compare numbers that change with each block, or (anchor not
  * stored) wait for a light client update that may land any moment.
  */
-const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit", "unpriced-tip-below-maximum", "no-price-for-fee-token", "anchor-not-stored"]);
+const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit", "unpriced-tip-below-maximum", "unpriced-tip-at-maximum", "no-price-for-fee-token", "anchor-not-stored"]);
 
 /**
  * Skip reasons that leave a message uncovered after layout calls were paid for it: the rows that were sent did not
@@ -126,6 +126,11 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
    */
   const unpaidCandidates = new Set<string>();
   const lastSkipReason = new Map<string, string>();
+  /**
+   * The unpriced tips at the automatic maximum that the main pass of this sweep handed to the capped pass, with the tip
+   * for the log. Each sweep starts it empty and judges them again (no shortcut): a price may appear meanwhile.
+   */
+  const unpricedTips = new Map<string, { readonly token: Address; readonly tipTokens: bigint }>();
   const base = { pair: dependencies.pairName, direction: dependencies.direction };
   /** The proof that waits to be posted: with the next batch, or alone at the end of a sweep. */
   let pendingUpdate: ProofMessage | null = null;
@@ -346,6 +351,13 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     summary: SweepCounts,
     options: { readonly spentOnPrerequisites: boolean; readonly candidates?: FeedItem[] },
   ): Promise<void> {
+    // An unpriced tip at the automatic maximum counts as paying, and the capped pass delivers it in this sweep while the
+    // daily unpaid cap has room: a worthless token can be tipped at 1% by anyone, so the cap bounds what that costs.
+    if (options.candidates !== undefined && outcome.status === "skipped" && outcome.reason === "unpriced-tip-at-maximum") {
+      options.candidates.push(item);
+      unpricedTips.set(item.messageId, { token: outcome.feeToken as Address, tipTokens: outcome.feeTokens as bigint });
+      return;
+    }
     // A candidate is settled by the unpaid pass at the end of the sweep, which delivers it or says why not.
     if (options.candidates !== undefined && outcome.status === "skipped" && UNPAID_REASONS.has(outcome.reason) && unpaidWaitSeconds(item) !== null) {
       options.candidates.push(item);
@@ -422,22 +434,40 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
   }
 
   /**
-   * The delayed unpaid rule. It runs after the paid items of the sweep went out. Each candidate is a covered item that
-   * waited long enough and that the normal rules left out: no offer, an offer below the cost, or a tip in a token with no
-   * price under the automatic maximum. The item is prepared again with the fee check lifted (`deliverAnyTip`). An item with an offer goes to the delivery router, which pays what the offer gives
-   * (the bridge alone would leave the tokens at the router); an item with none goes to the bridge. The cap of the daily
-   * spend is read before each item, from the receipts, so one delivery may pass the cap and no second follows.
+   * Logs a delivery of an unpriced tip at the automatic maximum and charges its receipt cost, with its layout calls, to
+   * the rolling cap of unpaid spend, as {@link recordUnpaid} does: nobody can tell what such a tip is worth.
+   */
+  async function recordUnpriced(outcome: Extract<DeliveryOutcome, { status: "delivered" }>, tip: { readonly token: Address; readonly tipTokens: bigint }): Promise<void> {
+    const costWei = outcome.gasCostWei + outcome.prerequisiteCostWei;
+    const now = dependencies.now();
+    await dependencies.state.update((current) => withUnpaidSpend(current, { id: outcome.transactionHash, atMilliseconds: now, wei: costWei.toString() }, now));
+    // The field is `tipToken`, not `token`: the log redactor blanks any JSON field named `token` as a secret.
+    logger.info("delivered_unpriced", { messageId: outcome.messageId, tipToken: tip.token, tipTokens: tip.tipTokens, gasWei: outcome.gasCostWei, costWei, chain: dependencies.destinationChainId });
+  }
+
+  /**
+   * The capped pass. It runs after the paid items of the sweep went out. Each candidate is either an unpriced tip at the
+   * automatic maximum (it counts as paying, owner: "yes, deliver straight away", so it goes in the sweep that found it),
+   * or a covered item that waited long enough and that the normal rules left out (the delayed unpaid rule): no offer, an
+   * offer below the cost, or a tip in a token with no price under the automatic maximum. The item is prepared again with
+   * the fee check lifted (`deliverAnyTip`). An item with an offer goes to the delivery router, which pays what the offer
+   * gives (the bridge alone would leave the tokens at the router); an item with none goes to the bridge. The cap of the
+   * daily spend is read before each item, from the receipts, so one delivery may pass the cap and no second follows; a
+   * refused item is logged once while it stays refused.
    */
   async function deliverUnpaid(candidates: readonly FeedItem[], ledger: PrerequisiteLedger, summary: SweepCounts): Promise<void> {
     const { settings } = dependencies.delivery;
     const unpaidDelivery: DeliveryDependencies = { ...dependencies.delivery, settings: { ...settings, deliverWithoutOffer: true, deliverAnyTip: true } };
     for (const item of candidates.slice(0, dependencies.maximumDeliveriesPerSweep)) {
-      const waitedSeconds = unpaidWaitSeconds(item) as number;
+      const unpriced = unpricedTips.get(item.messageId);
+      const waitedSeconds = unpaidWaitSeconds(item);
       const capWei = settings.maximumUnpaidSpendPerDayWei ?? null;
       const spentWei = unpaidSpentWei(await dependencies.state.load(), dependencies.now());
       if (capWei === null || spentWei >= capWei) {
         const detail = capWei === null ? `no daily cap is set for chain ${dependencies.destinationChainId}` : `${spentWei} of ${capWei} wei spent on unpaid deliveries in the last 24 hours`;
-        logger.warn("unpaid_delivery_refused", { messageId: item.messageId, reason: "daily-cap", detail, chain: dependencies.destinationChainId });
+        if (lastSkipReason.get(item.messageId) !== "unpaid-spend-cap") {
+          logger.warn("unpaid_delivery_refused", { messageId: item.messageId, reason: "daily-cap", detail, chain: dependencies.destinationChainId, ...(unpriced === undefined ? {} : { unpriced: true }) });
+        }
         await settleOutcome(item, skip(item.messageId as Hex, "unpaid-spend-cap", { detail }), summary, { spentOnPrerequisites: false });
         continue;
       }
@@ -462,7 +492,7 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
         const pending: Pending = { item, ready: preparation.ready, spentOnPrerequisites };
         [outcome] = await deliverBatch([pending], ledger, summary, await offerUpdate(), { delivery: unpaidDelivery });
       }
-      if (outcome?.status === "delivered") await recordUnpaid(outcome, waitedSeconds);
+      if (outcome?.status === "delivered") await (unpriced === undefined ? recordUnpaid(outcome, waitedSeconds as number) : recordUnpriced(outcome, unpriced));
       else if (spentOnPrerequisites) await recordUnpaidLoss(item.messageId, layoutWei);
     }
   }
@@ -474,6 +504,7 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
    * A prepared item counts as one attempt of the sweep, whether or not its batch later drops it.
    */
   async function sweepOnce(): Promise<SweepSummary> {
+    unpricedTips.clear();
     const state = await dependencies.state.load();
     const finished = new Set(Object.keys(state.finished));
     const listed = await listCovered(finished);

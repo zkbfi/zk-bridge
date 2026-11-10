@@ -1,5 +1,5 @@
 import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, keccak256, type Address, type ContractFunctionArgs, type Hex } from "viem";
-import { DEFAULT_CAP_WAD, PERCENT_WAD, bridgedSymbolOf, decodeMediatorMessage, deliveryRouterAbi, feeValueOf, messageBridgeAbi, tipPays, tipVerdict, tokenFactoryAbi, type PayoutKind, type ProofDirection, type TipVerdict, type TokenValuation } from "@zk-bridge/shared";
+import { DEFAULT_CAP_WAD, PERCENT_WAD, bridgedSymbolOf, decodeMediatorMessage, deliveryRouterAbi, feeValueOf, messageBridgeAbi, tipVerdict, tokenFactoryAbi, type PayoutKind, type ProofDirection, type TipVerdict, type TokenValuation } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
@@ -18,7 +18,8 @@ export interface DeliverySettings {
    */
   readonly maximumLossPercent: number;
   /**
-   * Deliver whatever the tip, priced or not: the delayed unpaid rule sets it for the items that waited long enough.
+   * Deliver whatever the tip, priced or not: the runner's capped pass sets it, for the items that waited long enough
+   * (the delayed unpaid rule) and for an unpriced tip at the automatic maximum while the daily unpaid cap has room.
    * Absent: false.
    */
   readonly deliverAnyTip?: boolean;
@@ -96,6 +97,12 @@ export type SkipReason =
   | "no-price-for-fee-token"
   | "loss-at-or-above-limit"
   | "unpriced-tip-below-maximum"
+  /**
+   * An unpriced tip of at least the automatic maximum (`unpriced-at-max`): it counts as paying, but nobody can tell what
+   * it is worth, so the runner hands it to its capped pass, which delivers it in the same sweep while the daily unpaid
+   * cap (`maximumUnpaidSpendPerDayWei`) has room. The cap bounds what worthless tokens can make the runner spend.
+   */
+  | "unpriced-tip-at-maximum"
   | "message-gas-above-batch-maximum"
   | "batch-gas-above-maximum"
   | "source-log-not-found"
@@ -141,6 +148,9 @@ export type DeliveryOutcome =
       readonly costWei?: bigint;
       /** The wei that layout calls cost before the skip. Present only when the runner lost wei. */
       readonly prerequisiteCostWei?: bigint;
+      /** The tip in base units of its token, and the token, for an unpriced tip (`unpriced-tip-at-maximum`). */
+      readonly feeTokens?: bigint;
+      readonly feeToken?: Address;
     }
   | {
       readonly status: "failed";
@@ -203,9 +213,12 @@ export async function withDestinationToken(dependencies: DeliveryDependencies, i
   return { ...item, transfer: { ...transfer, destinationToken } };
 }
 
-/** What {@link quoteFee} finds: the tip in tokens, how it is paid, the token's decimals and its valuation. */
+/**
+ * What {@link quoteFee} finds: the tip in tokens, how it is paid, the token's decimals and its valuation. `decimals` is
+ * null when the token does not answer them: then nothing about the tip can be trusted, and it never counts as paying.
+ */
 export type FeeQuoteResult =
-  | { readonly ok: true; readonly feeTokens: bigint; readonly payout: PayoutKind; readonly decimals: number; readonly valuation: TokenValuation }
+  | { readonly ok: true; readonly feeTokens: bigint; readonly payout: PayoutKind; readonly decimals: number | null; readonly valuation: TokenValuation; readonly token: Address }
   | { readonly ok: false; readonly reason: "no-price-for-fee-token" };
 
 /** The valuation of a token whose decimals cannot be read: no price can be derived. */
@@ -214,8 +227,9 @@ const UNVALUED: TokenValuation = { state: { kind: "unreachable" }, usdE18: null,
 /**
  * The fee that the router would pay to its reward address for this gas, in tokens, with the token's valuation from the
  * one price source. `payout` tells how the router pays it. When the offer carries a user call, the router counts the
- * `callGas` of the director too (see {@link feeGasUnitsOf}). A token whose decimals cannot be read is not valued (its tip
- * is judged by the automatic maximum, which needs no price).
+ * `callGas` of the director too (see {@link feeGasUnitsOf}). A token whose decimals cannot be read is not valued, and
+ * {@link judgeOffer} never counts its tip as paying (`unpriced-below-max`): a contract that does not answer `decimals()`
+ * is no token the runner should spend gas on straight away.
  */
 export async function quoteFee(dependencies: DeliveryDependencies, item: FeedItem, offer: Extract<FeeOffer, { kind: "offer" }>, gasUnits: bigint): Promise<FeeQuoteResult> {
   const token = item.transfer?.destinationToken;
@@ -233,11 +247,11 @@ export async function quoteFee(dependencies: DeliveryDependencies, item: FeedIte
   // token. Before the first delivery the copy has no code and cannot answer, so those decimals stand in for it.
   const transfer = item.transfer as NonNullable<FeedItem["transfer"]>;
   const decimals = (await tokenDecimals(dependencies, token.address as Address)) ?? (transfer.sourceIsNative === true ? transfer.sourceToken.decimals : null);
-  if (decimals === null) return { ok: true, feeTokens, payout, decimals: 0, valuation: UNVALUED };
+  if (decimals === null) return { ok: true, feeTokens, payout, decimals: null, valuation: UNVALUED, token: token.address as Address };
   // A copy that zkb.fi minted takes the price of its home token on the source chain.
   const origin = transfer.sourceIsNative === true ? { chainId: item.direction.sourceChainId, address: transfer.sourceToken.address as Address } : null;
   const valuation = await dependencies.pricing({ address: token.address as Address, decimals, origin });
-  return { ok: true, feeTokens, payout, decimals, valuation };
+  return { ok: true, feeTokens, payout, decimals, valuation, token: token.address as Address };
 }
 
 /**
@@ -657,10 +671,13 @@ export interface JudgeOfferInput {
 
 /**
  * Prices the offer at the fee gas and judges it with the one tip verdict of zkb.fi (`tipVerdict`), against the cost of
- * the cost gas in wei. A priced tip pays when the loss stays under `maximumLossPercent` of the cost; an unpriced tip (no
- * market, or no price can be read) pays when it is at least the frontend's automatic maximum, 1% of the amount, and is
- * then delivered straight away. Otherwise the item is left out (`loss-at-or-above-limit`, `unpriced-tip-below-maximum`),
- * and the delayed unpaid rule may still deliver it; that rule sets `deliverAnyTip`.
+ * the cost gas in wei. A priced tip pays when the loss stays under `maximumLossPercent` of the cost. An unpriced tip (no
+ * market, or no price can be read) counts as paying when it is at least the frontend's automatic maximum, 1% of the
+ * amount (owner: "yes, deliver straight away"); anyone can mint a worthless token and tip 1% of it, so such an item
+ * leaves the normal rules as `unpriced-tip-at-maximum`, and the runner's capped pass delivers it in the same sweep while
+ * the daily unpaid cap has room. A token whose decimals cannot be read never counts as paying (`unpriced-below-max`).
+ * Otherwise the item is left out (`loss-at-or-above-limit`, `unpriced-tip-below-maximum`), and the delayed unpaid rule
+ * may still deliver it. The capped pass sets `deliverAnyTip`.
  */
 export async function judgeOffer(dependencies: DeliveryDependencies, input: JudgeOfferInput): Promise<Judgement> {
   const { item, offer, feeGasUnits, costGasUnits, quote, messageId } = input;
@@ -669,17 +686,25 @@ export async function judgeOffer(dependencies: DeliveryDependencies, input: Judg
   if (!priced.ok) return { kind: "skip", outcome: skip(messageId, priced.reason) };
   const costWei = costGasUnits * (quote.baseFee + quote.priorityFee);
   const price = { state: priced.valuation.state, perWholeToken: priced.valuation.weiPerToken };
-  const verdict = tipVerdict({ amount: offer.value, fee: priced.feeTokens, decimals: priced.decimals, price, cost: costWei, rule: { kind: "loss", maximumLossPercent: settings.maximumLossPercent } });
-  const feeWei = feeValueOf(priced.feeTokens, priced.decimals, price);
-  if (tipPays(verdict) || settings.deliverAnyTip === true) return { kind: "pay", feeWei, verdict };
-  if (verdict === "unpriced-below-max") {
+  const decimals = priced.decimals;
+  const verdict: TipVerdict =
+    decimals === null ? "unpriced-below-max" : tipVerdict({ amount: offer.value, fee: priced.feeTokens, decimals, price, cost: costWei, rule: { kind: "loss", maximumLossPercent: settings.maximumLossPercent } });
+  const feeWei = decimals === null ? null : feeValueOf(priced.feeTokens, decimals, price);
+  if (settings.deliverAnyTip === true || verdict === "pays") return { kind: "pay", feeWei, verdict };
+  if (verdict === "unpriced-at-max") {
     return {
       kind: "skip",
-      outcome: skip(messageId, "unpriced-tip-below-maximum", {
+      outcome: skip(messageId, "unpriced-tip-at-maximum", {
         costWei,
-        detail: `the token has no price (${priced.valuation.state.kind}), and the tip of ${priced.feeTokens} is under the automatic maximum of ${DEFAULT_CAP_WAD / PERCENT_WAD}% of ${offer.value}, tip paid as ${priced.payout}`,
+        feeTokens: priced.feeTokens,
+        feeToken: priced.token,
+        detail: `the token has no price (${priced.valuation.state.kind}), and the tip of ${priced.feeTokens} is at least the automatic maximum of ${DEFAULT_CAP_WAD / PERCENT_WAD}% of ${offer.value}: delivered under the daily unpaid cap`,
       }),
     };
+  }
+  if (verdict === "unpriced-below-max") {
+    const why = decimals === null ? "the token does not answer decimals()" : `the token has no price (${priced.valuation.state.kind}), and the tip of ${priced.feeTokens} is under the automatic maximum of ${DEFAULT_CAP_WAD / PERCENT_WAD}% of ${offer.value}`;
+    return { kind: "skip", outcome: skip(messageId, "unpriced-tip-below-maximum", { costWei, detail: `${why}, tip paid as ${priced.payout}` }) };
   }
   return {
     kind: "skip",

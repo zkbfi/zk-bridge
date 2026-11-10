@@ -154,7 +154,7 @@ describe("the preparation of an item: guards at the edge of external data", () =
     expect(await outcomeOf(prepare)).toEqual({ status: "skipped", messageId: word(1), reason: "no-price-for-fee-token" });
   });
 
-  it("cannot price a tip in a token that does not answer its decimals, such as a copy that is not deployed yet: the automatic maximum judges it", async () => {
+  it("never counts a tip in a token that does not answer its decimals as paying, not even at the automatic maximum", async () => {
     const w = setup({ item: feedItem({ id: 1 }) });
     const data = { [w.item.messageId]: feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n, callGas: 0n }, value: 1000n, token: address(0x66) }) };
     const pricing = testPricing({ [address(0x66).toLowerCase()]: 10n ** 18n }, WRAPPED_NATIVE);
@@ -164,9 +164,28 @@ describe("the preparation of an item: guards at the edge of external data", () =
     w.chain.feeTokens = 9n;
     expect(await outcomeOf(() => prepareItem(w.dependencies, w.item, w.ledger))).toMatchObject({ status: "skipped", messageId: word(1), reason: "unpriced-tip-below-maximum" });
     expect(pricing.asked).toEqual([]);
-    // 10 of 1000 is the automatic maximum: it pays, and the item goes on.
+    // 10 of 1000 would be the automatic maximum, but a contract that does not answer decimals() is not trusted: it does
+    // not pay (`unpriced-below-max`), and only the hourly unpaid rule, under its daily cap, may deliver it.
     w.chain.feeTokens = 10n;
-    expect((await prepareItem(w.dependencies, w.item, w.ledger)).kind).toBe("ready");
+    expect(await outcomeOf(() => prepareItem(w.dependencies, w.item, w.ledger))).toMatchObject({
+      status: "skipped",
+      reason: "unpriced-tip-below-maximum",
+      detail: "the token does not answer decimals(), tip paid as token",
+    });
+    expect(w.prover.evidenceRuns).toBe(0);
+    // The unpaid rule lifts the fee check: the item goes on, at no value in wei.
+    const lifted = { ...w.dependencies, settings: { ...w.dependencies.settings, deliverAnyTip: true } };
+    expect((await prepareItem(lifted, w.item, w.ledger)).kind).toBe("ready");
+  });
+
+  it("hands an unpriced tip at the automatic maximum to the capped pass, with the tip and its token", async () => {
+    const w = setup({ item: feedItem({ id: 1 }) });
+    const data = { [w.item.messageId]: feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n, callGas: 0n }, value: 1000n, token: address(0x66) }) };
+    w.dependencies = { ...w.dependencies, indexer: fakeIndexer([w.item], data), prover: feedProver(w.prover, [w.item], data) };
+    w.chain.feeTokens = 10n;
+    expect(await outcomeOf(() => prepareItem(w.dependencies, w.item, w.ledger))).toMatchObject({ status: "skipped", reason: "unpriced-tip-at-maximum", feeTokens: 10n, feeToken: address(0x66) });
+    // Decided before the evidence: the hand-over costs no proving time.
+    expect(w.prover.evidenceRuns).toBe(0);
   });
 
   it("cannot price the fee of an item that the indexer lists without a transfer, and asks the chain nothing", async () => {

@@ -223,6 +223,17 @@ Built in the dapp (commit `2c721e8e`, `explorer/core/src/fee-rules.ts`). And: an
 should "deliver straight away". The runner does not do this today: an unpriced token is skipped until
 `deliverUnpaidAfterSeconds`. Size: S to M, test-first, in the runner.
 
+**Note (2026-11-10, security review): the unpaid cap also bounds unpriced 1% tips.** Anyone can mint a worthless token,
+bridge it with a 1% tip in that token, and have the runner pay real gas to deliver it straight away; repeated, that
+drains the runner wallet. The runner now delivers such a tip straight away (owner's rule kept) only while the
+destination's `maximumUnpaidSpendPerDayWei` has room, charges its gas and layout calls to that cap (log
+`delivered_unpriced`), and skips it with `unpaid-spend-cap` when the cap is full. A token that does not answer
+`decimals()` never counts as paying. On the backend such a message still proves its batch at finality, inside the $5 a
+day GPU budget per direction (`gpuBudgetUsdPerDirectionPerDay`; no liveness bypass) and one job per finality. So on
+mainnet the unpaid caps are shared by the hourly unpaid rule and by every unpriced 1% tip: **decision input for D8**,
+size them for both (a cap that one attacker fills also holds back honest unpriced tips and hourly deliveries for the
+rest of the day; a chain with no cap delivers neither).
+
 **C4. Gas on PulseChain.** The tip floor (C2), the base fee in PLS, and `requiredDeliveryGas` with the split's extra
 13,400 gas per token delivery (`docs/redeploy-2026-11-gas.md`, "What the split costs a delivery"). Ethereum-bound
 deliveries cost about 536,000 gas each **(guess at mainnet prices: $3 a delivery at 2 gwei)**, so the 1% maximum covers

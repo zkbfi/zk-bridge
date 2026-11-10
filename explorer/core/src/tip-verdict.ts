@@ -8,6 +8,11 @@
  *   a tip of at least the frontend's automatic maximum ({@link DEFAULT_CAP_WAD}, 1% of the amount) counts as paying,
  *   and the runner delivers it straight away ("yes, deliver straight away"): `unpriced-at-max`. A smaller tip, or none,
  *   is `unpriced-below-max`: it does not pay, and the runner's hourly unpaid rule applies to it.
+ *   Anyone can mint a worthless token and tip 1% of it, so `unpriced-at-max` costs real gas for nothing (security
+ *   review, 2026-11-10). The runner therefore delivers it straight away only while the destination's daily unpaid cap
+ *   (`maximumUnpaidSpendPerDayWei`) has room, and charges its gas to that cap; the backend proves its batch at
+ *   finality inside the GPU budget of the direction. A token whose decimals cannot be read is `unpriced-below-max`
+ *   in the runner whatever its tip.
  *
  * The profit rules, one per place that judges (each keeps its own semantics; {@link ProfitRule}):
  *
