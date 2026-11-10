@@ -401,8 +401,6 @@ export type GateConfirmation =
   /** The gate is sealed for good: no send passes, with or without evidence. */
   | { readonly kind: "sealed"; readonly epoch: bigint }
   | WaitForGateHeader
-  /** The route is paused before a fork (`decideForkCutover`): nothing is sent, the gate is not asked. */
-  | { readonly kind: "paused"; readonly verdict: Extract<ForkCutoverVerdict, { readonly kind: "paused" }> }
   /** Send `call` first, from the same sender, in a block before `validUntil`; then send. */
   | {
       readonly kind: "confirm";
@@ -485,8 +483,14 @@ export async function ensureGateConfirmed(input: {
   return { kind: "confirm", call, gas, epoch: evidence.epoch, forkVersion: evidence.forkVersion, shape: evidence.shape, validUntil: evidence.validUntil, evidence };
 }
 
-/** The question a sender asks before a send on a chain with a gate: {@link ensureGateConfirmed} for that chain and account. */
-export type GateCheck = (input: { readonly chainId: number; readonly gate: Address; readonly account: Address }) => Promise<GateConfirmation>;
+/** The route is paused before a fork (`decideForkCutover`): nothing is sent, and the gate is not asked. */
+export type GatePaused = { readonly kind: "paused"; readonly verdict: Extract<ForkCutoverVerdict, { readonly kind: "paused" }> };
+
+/** What {@link GateCheck} answers: what {@link ensureGateConfirmed} answers, or that the route is paused before a fork. */
+export type GateCheckAnswer = GateConfirmation | GatePaused;
+
+/** The question a sender asks before a send on a chain with a gate: {@link ensureGateConfirmed} for that chain and account, after the fork cutover. */
+export type GateCheck = (input: { readonly chainId: number; readonly gate: Address; readonly account: Address }) => Promise<GateCheckAnswer>;
 
 /**
  * The gate check of a program that sends (the web page, the terminal): {@link ensureGateConfirmed} on the flow client of the

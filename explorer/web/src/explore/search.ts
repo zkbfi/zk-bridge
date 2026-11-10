@@ -115,7 +115,7 @@ export const searchExplore = (text: string, data: SearchData): readonly SearchGr
     for (const chain of chains) {
       for (const [key, name] of Object.entries(CONTRACT_NAMES) as [keyof ChainConfig["contracts"], string][]) {
         const address = chain.contracts[key];
-        if (prefix(address)) contracts.push({ title: name, sub: short(address!), href: formatRoute({ name: "explore", page: { kind: "contract", chainId: chain.chainId, id: address as Address } }), match: value, chains: [chain.chainId] });
+        if (prefix(address ?? null)) contracts.push({ title: name, sub: short(address!), href: formatRoute({ name: "explore", page: { kind: "contract", chainId: chain.chainId, id: address as Address } }), match: value, chains: [chain.chainId] });
       }
     }
     add("Contracts", contracts);

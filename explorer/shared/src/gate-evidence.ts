@@ -19,6 +19,8 @@ export {
   buildGateEvidence,
   describeRevert,
   type GateConfirmation,
+  type GatePaused,
+  type GateCheckAnswer,
   ensureGateConfirmed,
   GATE_SAFETY_SECONDS,
   GATE_BLOCK_SECONDS,

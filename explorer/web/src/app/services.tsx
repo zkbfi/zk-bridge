@@ -20,6 +20,7 @@ import { createFallbackIndexerClient, type IndexerClient } from "../data/indexer
 import { NO_ENDPOINTS, realPanelTransport, type PanelEndpoints, type PanelTransport } from "../views/proof-panel-model";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import { createProber, fixtureProber, type Prober } from "./service-probe";
+import { createForkPort, fixtureForkPort, type ForkPort } from "../fork/fork-port";
 
 /** Everything that a component reads from outside React. */
 export type Services = {
@@ -43,6 +44,8 @@ export type Services = {
   readonly readLightClientHead: (chainId: number) => Promise<bigint>;
   /** The live check of an outside service, shared by Explore's Services rows and Settings. The sample page answers without a network. */
   readonly probe: Prober;
+  /** What the fork surfaces read: the cutover facts, the gate and registry state, the seal offer. */
+  readonly forks: ForkPort;
   /** The clock in unix seconds. The fixture page pins it so that the sample data stays the same. */
   readonly now: () => number;
 };
@@ -109,6 +112,7 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
         throw new Error("The sample page reads no chain.");
       },
       probe: fixtureProber,
+      forks: fixtureForkPort,
       now: () => FIXTURE_NOW,
     };
   }
@@ -142,6 +146,7 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
     transport: realPanelTransport,
     readLightClientHead: (chainId) => readHeadSlot(connection, pair, chainId),
     probe: createProber(),
+    forks: createForkPort({ pair, connection }),
     now: () => Math.floor(Date.now() / 1000),
   };
 };

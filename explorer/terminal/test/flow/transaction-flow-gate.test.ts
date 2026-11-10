@@ -3,7 +3,7 @@
  * needs it, with the same window, waits, sealed refusal, rollover redo and revert texts as the web page.
  */
 import { describe, expect, test } from 'bun:test'
-import { beaconForkGateAbi, GateEvidenceError, GATE_BLOCK_SECONDS, type GateCheck, type GateConfirmation } from '@zk-bridge/shared'
+import { beaconForkGateAbi, GateEvidenceError, GATE_BLOCK_SECONDS, type GateCheck, type GateCheckAnswer, type GateConfirmation } from '@zk-bridge/shared'
 import { encodeErrorResult, type Hash, type Hex, type TransactionReceipt } from 'viem'
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
 import { createTransactionFlow, type FlowChainClient, type FlowState, type TransactionFlow } from '../../src/flow/transaction-flow'
@@ -69,7 +69,7 @@ function fakeClient(script: ClientScript = {}) {
 }
 
 /** A gate check that answers from a queue (the last answer repeats) and records its questions. */
-function scriptedGate(...answers: (GateConfirmation | Error)[]) {
+function scriptedGate(...answers: (GateCheckAnswer | Error)[]) {
   const asked: Parameters<GateCheck>[0][] = []
   const check: GateCheck = async (input) => {
     asked.push(input)

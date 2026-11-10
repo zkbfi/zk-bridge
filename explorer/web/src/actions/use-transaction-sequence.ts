@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Address } from "viem";
 import { createGateCheck, NO_BEACON_ENDPOINT_TEXT, type GateChainClient } from "@zk-bridge/shared";
 import { beaconUrlsFor } from "@terminal/config/default-beacon";
+import { forkCutoverCheckFor } from "@terminal/app/fork-cutover";
 import { useServices } from "../app/services";
 import { createTransactionSequence, type SequenceState, type TransactionSequence } from "../tx/transaction-sequence";
 import type { WebStep } from "../tx/bridge-steps";
@@ -22,7 +23,7 @@ export type UseTransactionSequence = {
  */
 export const useTransactionSequence = (steps: readonly WebStep[]): UseTransactionSequence => {
   const wallet = useWallet();
-  const { chainAccess, connection } = useServices();
+  const { chainAccess, connection, pair } = useServices();
   const walletReference = useRef(wallet);
   walletReference.current = wallet;
   const [sequence] = useState<TransactionSequence>(() => {
@@ -34,6 +35,8 @@ export const useTransactionSequence = (steps: readonly WebStep[]): UseTransactio
       connection === null
         ? undefined
         : createGateCheck({
+            // Before the gate: a send is refused when the route is paused before a fork of the source chain (known-issues 1.5).
+            cutover: forkCutoverCheckFor({ pair, connection, chainAccess })!,
             // The flow client of a live page is a viem public client; its type names only what the flow needs.
             clientFor: (chainId) => chainAccess.flowClient(chainId) as unknown as GateChainClient,
             beaconUrlsFor: (chainId) => beaconUrlsFor(connection.resolved(), chainId),

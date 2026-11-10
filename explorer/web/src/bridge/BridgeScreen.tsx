@@ -35,6 +35,8 @@ import { dollarsSpanWords, dollarsText as dollarsOf } from "./number";
 import { TokenIcon } from "./TokenIcon";
 import { TokenPicker } from "./TokenPicker";
 import { routerWarningOf } from "../tx/tip-copy";
+import { ForkCutoverLine, forkPauseOf } from "../fork/ForkCutoverLine";
+import { useForkCutover } from "../fork/use-fork";
 
 /** Names every field a link filled beyond the route, the token and the amount. */
 const LinkedWarning = ({ fields }: { readonly fields: readonly string[] }) => (
@@ -131,6 +133,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const form: BridgeQuery = route.form ?? {};
   const { source, destination } = chainsFor(pair, route.dir);
   const side = sourceSide(route.dir);
+  // The next fork of the source chain, from its beacon node, against the light client that follows it (known-issues 1.5).
+  const forkCutover = useForkCutover(source.chainId, 5_000);
   const token = tokenFor(form.token, tokens, side);
   const baseOptions = useMemo(() => optionsOf(form.tip), [form.tip]);
   const { storedCap, storedHardCap, hardCapPercent, setHardCapPercent, saveCap: storeCap, saveHard } = useFeeCaps();
@@ -373,6 +377,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     destinationProblemShown: typedReceiver !== "",
     symbol: token?.symbol ?? "",
     paused: gate === "stop" || gate === "sealed" ? { route: `${source.name} → ${destination.name}` } : null,
+    forkPause: forkPauseOf(forkCutover, source.name),
     tipBelowBreakEven: unpricedVerdict ? tipVerdict === "unpriced-below-max" : warnings.lowFee,
     unpricedTip: unpricedVerdict ? { maximumText: AUTOMATIC_MAXIMUM_TEXT } : null,
     lowFee: feeUsd === null || costUsd === null ? null : { feeText: dollarsText(feeUsd), costText: dollarsText(costUsd) },
@@ -886,6 +891,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             {verdict.label}
           </button>
           {verdict.detail === null ? null : <p className="zb-verdict">{verdict.detail}</p>}
+          <ForkCutoverLine view={forkCutover} />
           {hardOver && raisePercent !== null ? (
             <button type="button" className="zb-pill zb-pill-outline zb-raise" onClick={raiseHardCap}>
               Raise cap to {raisePercent}%

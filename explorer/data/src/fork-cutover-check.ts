@@ -130,7 +130,7 @@ export type SealOffer =
   /** The gate is sealed already. */
   | { readonly kind: "sealed" }
   /** `seal(evidence)` simulated without a revert: it can be sent now. `via` names the evidence. */
-  | { readonly kind: "ready"; readonly call: { readonly to: Address; readonly data: Hex }; readonly gas: bigint; readonly via: "registry" | "beacon" }
+  | { readonly kind: "ready"; readonly call: { readonly to: Address; readonly data: Hex }; readonly evidence: Hex; readonly gas: bigint; readonly via: "registry" | "beacon" }
   /** No call would succeed now. `reason` says what was tried. */
   | { readonly kind: "unavailable"; readonly reason: string };
 
@@ -166,7 +166,7 @@ export async function offerSeal(input: {
   if (state.forkRegistry !== null) {
     const data = sealData("0x");
     const gas = await simulate(data);
-    if (gas !== null) return { kind: "ready", call: { to: gate, data }, gas, via: "registry" };
+    if (gas !== null) return { kind: "ready", call: { to: gate, data }, evidence: "0x", gas, via: "registry" };
     tried.push("the registry shows no shape outside the allowed set");
   }
   if (input.beacon === undefined) return { kind: "unavailable", reason: tried.length === 0 ? "no beacon endpoint is set to look for a state of a disallowed shape" : tried.join("; ") };
@@ -184,7 +184,7 @@ export async function offerSeal(input: {
       }
       const data = sealData(encoded);
       const gas = await simulate(data, block.number);
-      if (gas !== null) return { kind: "ready", call: { to: gate, data }, gas, via: "beacon" };
+      if (gas !== null) return { kind: "ready", call: { to: gate, data }, evidence: encoded, gas, via: "beacon" };
     }
     tried.push("the beacon state has no disallowed shape");
   } catch (error) {
