@@ -145,7 +145,7 @@ Size: M together. Needs a node that keeps old states (2.1) and serves `eth_getRa
 **A8. Audit documents are stale.** `docs/audit/README.md` section 2 names branch `wip/layout-genesis-root`, "no remote",
 "no deployment"; `known-issues.md` 2.4 says nothing is deployed; tier line counts predate the split libraries and the
 gas rule. Refresh before sending. No `LICENSE` file exists (`known-issues.md` 2.11).
-- **D4.** The licence (files say MIT; never confirmed).
+- **D4.** The licence. **Decided 2026-11-10, owner: "do unlicensed for the license".** `LICENSE` reads "Copyright (c) 2026 zkb.fi. All rights reserved."; the SDK packages say UNLICENSED. Open: 59 Solidity files under `src/` still carry `SPDX-License-Identifier: MIT`; changing them alters the compiled metadata, so it is done with the next contract change (mainnet deploy), not against deployed testnet code.
 - Size: S.
 
 ### B. Proving and light clients
