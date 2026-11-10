@@ -8,6 +8,9 @@ import type { SignTransactionOptions, Signer, SignerKind } from './signer'
 /** The text is not a private key. The message never includes the text. */
 export class InvalidPrivateKeyError extends Error {
   override readonly name = 'InvalidPrivateKeyError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 /** The order of the secp256k1 group. A private key must be below it. */

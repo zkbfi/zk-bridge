@@ -62,6 +62,9 @@ export interface AddressSource {
 /** A signature came back that does not belong to the transaction or to the signer. */
 export class SignatureMismatchError extends Error {
   override readonly name = 'SignatureMismatchError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 /**

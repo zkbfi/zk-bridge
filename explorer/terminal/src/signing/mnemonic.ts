@@ -18,6 +18,9 @@ export const INDEX_PLACEHOLDER = '{index}'
 /** The mnemonic or the path is not valid. The message never includes the mnemonic. */
 export class MnemonicError extends Error {
   override readonly name = 'MnemonicError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 const PATH_PATTERN = /^m(\/\d+'?)+$/

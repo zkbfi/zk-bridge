@@ -23,6 +23,9 @@ export interface FormatUnitsOptions {
 /** A decimal string was not valid for the requested number of decimals. */
 export class AmountParseError extends Error {
   override readonly name = 'AmountParseError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 /**

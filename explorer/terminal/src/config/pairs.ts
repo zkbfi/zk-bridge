@@ -35,6 +35,9 @@ interface ChainDefinition {
 /** The deployment file or the pair name is not valid. */
 export class PairConfigError extends Error {
   override readonly name = 'PairConfigError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 /** The name of the environment variable that holds the RPC URL of a chain. Same as `explorer/shared`. */

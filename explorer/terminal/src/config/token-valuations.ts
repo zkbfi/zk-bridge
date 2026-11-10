@@ -11,6 +11,9 @@ export const TOKEN_VALUATIONS_VARIABLE = 'EXPLORER_TOKEN_VALUATIONS_WEI'
 /** The setting is not a JSON object of token addresses and wei amounts. */
 export class TokenValuationsError extends Error {
   override readonly name = 'TokenValuationsError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 /**

@@ -35,6 +35,9 @@ export type JsonGetter = (url: string) => Promise<unknown>
 /** The answer of the indexer was not what this client expects. */
 export class IndexerResponseError extends Error {
   override readonly name = 'IndexerResponseError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 /** Input of {@link createIndexerDataSource}. */
