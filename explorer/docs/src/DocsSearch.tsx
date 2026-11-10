@@ -23,11 +23,10 @@ const FOCUSABLE = 'input, button, a[href], [tabindex]:not([tabindex="-1"])';
  */
 const keepTabInside = (event: KeyboardEvent<HTMLElement>): void => {
   if (event.key !== "Tab") return;
-  const dialog = event.currentTarget.closest('[role="dialog"]');
-  const controls = dialog === null ? [] : [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)];
-  const first = controls[0];
-  const last = controls[controls.length - 1];
-  if (first === undefined || last === undefined) return;
+  // The handler sits on the content of the sheet, so the dialog is always above it, and it always holds the field and the close button.
+  const controls = [...(event.currentTarget.closest('[role="dialog"]') as Element).querySelectorAll<HTMLElement>(FOCUSABLE)];
+  const first = controls[0] as HTMLElement;
+  const last = controls[controls.length - 1] as HTMLElement;
   if (event.shiftKey && document.activeElement === first) {
     event.preventDefault();
     last.focus();

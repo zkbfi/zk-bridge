@@ -22,7 +22,8 @@ export type DocsSiteProps = {
 const SITE_NAME = "zkb.fi docs";
 
 /** The search shortcut as this keyboard writes it: ⌘K on Apple devices, Ctrl K elsewhere (as in the app's header). */
-const SHORTCUT = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘K" : "Ctrl K";
+export const shortcutOf = (platform: string, userAgent: string): string => (/Mac|iPhone|iPad/.test(platform || userAgent) ? "⌘K" : "Ctrl K");
+const SHORTCUT = shortcutOf(navigator.platform, navigator.userAgent);
 
 const THEMES: readonly (readonly [ThemeChoice, string])[] = [
   ["system", "System"],
@@ -56,10 +57,10 @@ const DocsHeader = ({ name, onSearch }: { readonly name: string; readonly onSear
 );
 
 /** A group heading in Explore's style, as a level-two heading under the page title. */
-const Group = ({ id, title, count }: { readonly id: string; readonly title: string; readonly count?: string }) => (
+const Group = ({ id, title, count }: { readonly id: string; readonly title: string; readonly count: string }) => (
   <h2 id={id} className="zb-xgrp">
     <span>{title}</span>
-    {count === undefined ? null : <span className="zb-xgrp-r">{count}</span>}
+    <span className="zb-xgrp-r">{count}</span>
   </h2>
 );
 

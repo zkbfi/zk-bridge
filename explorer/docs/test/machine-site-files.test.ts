@@ -7,6 +7,7 @@ import { build } from "vite";
 import { describe, expect, it } from "vitest";
 import { checkAddresses } from "../machine/address-check";
 import { machineDocsPlugin } from "../machine/plugin";
+import { deployment, pageText, sourcesOf } from "./machine-tree";
 import { buildMachineFiles, readMachineContent, type MachineSources } from "../machine/site-files";
 
 const fixture = (path: string): string => fileURLToPath(new URL(`./fixtures/machine/${path}`, import.meta.url));
@@ -132,5 +133,119 @@ describe("checkAddresses", () => {
   it("reports an unknown address with its file and line, and ignores 32 byte hashes", () => {
     const text = `ok\nwrong 0x2222222222222222222222222222222222222222 here\nhash 0x${"ab".repeat(32)}`;
     expect(checkAddresses([{ path: "a.md", text }], known, examples)).toEqual(["a.md:2: 0x2222222222222222222222222222222222222222 is not in contracts.json and is not a listed example address"]);
+  });
+});
+
+describe("readMachineContent on made sources", () => {
+  const deployments = { "deployments/demo.json": deployment() };
+  const skill = (name: string, extra = ""): string =>
+    `---\ntitle: S\nsummary: "A skill."\naudience: [user]\nchains: all\nverified_release: 0.1.0\nkind: skill\nname: ${name}\ndescription: "Does a thing."\n${extra}---\n\n# S\n`;
+
+  it("reads sources without a help folder or a skills folder as empty lists", () => {
+    const content = readMachineContent(sourcesOf({ ...deployments }));
+    expect(content.pages).toEqual([]);
+    expect(content.skills).toEqual([]);
+  });
+
+  it("refuses a help file that is not named like 01-name.md", () => {
+    expect(() => readMachineContent(sourcesOf({ ...deployments, "pages/intro.md": pageText() }))).toThrow('The help file "intro.md" needs a name like 01-getting-started.md.');
+  });
+
+  it("refuses a skill that sits in the pages folder", () => {
+    expect(() => readMachineContent(sourcesOf({ ...deployments, "pages/01-a.md": skill("a-b") }))).toThrow("01-a.md: a skill belongs in the skills folder");
+  });
+
+  it("refuses two pages with the same address, and a page that takes the skills folder's address", () => {
+    expect(() => readMachineContent(sourcesOf({ ...deployments, "pages/01-a.md": pageText(), "pages/02-a.md": pageText() }))).toThrow(/Two files make the address "docs\/a\.md"/);
+    expect(() => readMachineContent(sourcesOf({ ...deployments, "pages/01-skills.md": pageText() }))).toThrow(/Two files make the address "docs\/skills\.md"/);
+  });
+
+  it("refuses a page in a skills folder, a skill without a name, and two skills of one name", () => {
+    expect(() => readMachineContent(sourcesOf({ ...deployments, "skills/a-b.md": pageText() }))).toThrow("skills/a-b.md: a skill needs kind: skill and a name");
+    expect(() => readMachineContent(sourcesOf({ ...deployments, "skills/a-b/SKILL.md": skill("a-b"), "skills/a-b.md": skill("a-b") }))).toThrow('Two files make the skill "a-b".');
+  });
+
+  it("skips a folder in the skills folder that holds no SKILL.md, and files that are not Markdown", () => {
+    const content = readMachineContent(sourcesOf({ ...deployments, "skills/empty/readme.txt": "x", "skills/notes.txt": "x", "skills/a-b/SKILL.md": skill("a-b") }));
+    expect(content.skills.map((entry) => entry.name)).toEqual(["a-b"]);
+  });
+
+  it("puts a page whose first audience is not listed under no heading twice and a later audience under its own", () => {
+    const text = pageText().replace("audience: [user]", "audience: [operator, user]");
+    const files = buildMachineFiles(sourcesOf({ ...deployments, "pages/01-a.md": text }));
+    const llms = files.get("llms.txt") as string;
+    expect(llms).toContain("## Running and operating");
+    expect(llms).not.toContain("## Using the bridge");
+    expect(llms.match(/docs\/a\.md/g)).toHaveLength(1);
+  });
+
+  it("terminates a page text that lacks a final newline", () => {
+    const files = buildMachineFiles(sourcesOf({ ...deployments, "pages/01-a.md": pageText().trimEnd() }));
+    expect(files.get("docs/a.md")?.endsWith("Body.\n")).toBe(true);
+  });
+});
+
+describe("the dev server middleware", () => {
+  type Handler = (request: { url?: string }, response: FakeResponse, next: () => void) => void;
+  type FakeResponse = { statusCode: number; headers: Record<string, string>; body: string | null; setHeader: (name: string, value: string) => void; end: (text: string) => void };
+
+  const middlewareOf = (made: MachineSources): Handler => {
+    let handler: Handler | undefined;
+    const plugin = machineDocsPlugin({ repositoryRoot: "/unused", sources: made });
+    (plugin.configureServer as (server: unknown) => void)({ middlewares: { use: (entry: Handler) => (handler = entry) } });
+    return handler as Handler;
+  };
+  const call = (handler: Handler, url: string | undefined): { response: FakeResponse; passed: boolean } => {
+    const response: FakeResponse = { statusCode: 200, headers: {}, body: null, setHeader: (name, value) => (response.headers[name] = value), end: (text) => (response.body = text) };
+    let passed = false;
+    handler(url === undefined ? {} : { url }, response, () => (passed = true));
+    return { response, passed };
+  };
+
+  it("serves the machine files with their content type, with a query and an encoded path", () => {
+    const handler = middlewareOf(sources);
+    const md = call(handler, "/docs/first.md?x=1");
+    expect(md.response.headers["content-type"]).toBe("text/markdown; charset=utf-8");
+    expect(md.response.body).toContain("# First page");
+    expect(call(handler, "/llms.txt").response.headers["content-type"]).toBe("text/plain; charset=utf-8");
+    expect(call(handler, "/llms-full.txt").response.body).toContain("Source: docs/first.md");
+    const json = call(handler, "/data/chains.json");
+    expect(json.response.headers["content-type"]).toBe("application/json; charset=utf-8");
+    expect(JSON.parse(json.response.body as string).schema).toBe(1);
+    expect(call(handler, "/docs/skills/example-skill/SKILL.md").response.body).toContain("name: example-skill");
+    expect(call(handler, "/docs/f%69rst.md").response.body).toContain("# First page");
+  });
+
+  it("passes on every other path, a missing file and a request without a url", () => {
+    const handler = middlewareOf(sources);
+    for (const url of ["/", "/index.html", "/docs/nope.md", "/data/nope.json", undefined]) {
+      const { passed, response } = call(handler, url);
+      expect(passed, String(url)).toBe(true);
+      expect(response.body).toBeNull();
+    }
+  });
+
+  it("answers 500 with the message when the sources cannot be read", () => {
+    const broken = middlewareOf({ ...sources, pagesFolder: fixture("bad-pages") });
+    const { response, passed } = call(broken, "/llms.txt");
+    expect(passed).toBe(false);
+    expect(response.statusCode).toBe(500);
+    expect(response.body).toMatch(/01-bad\.md: the file has no front matter/);
+  });
+});
+
+describe("the plugin hooks", () => {
+  it("resolves only its own module, loads only its own module, and defaults to the sources of the repository", () => {
+    const plugin = machineDocsPlugin({ repositoryRoot: fileURLToPath(new URL("../../..", import.meta.url)) });
+    const resolveId = plugin.resolveId as (id: string) => string | null;
+    expect(resolveId("virtual:docs-facts")).toBe("\0virtual:docs-facts");
+    expect(resolveId("other")).toBeNull();
+    const watched: string[] = [];
+    const load = plugin.load as (this: { addWatchFile: (file: string) => void }, id: string) => string | null;
+    const context = { addWatchFile: (file: string) => watched.push(file) };
+    expect(load.call(context, "other")).toBeNull();
+    expect(load.call(context, "\0virtual:docs-facts")).toContain('"943"');
+    expect(watched.length).toBeGreaterThan(0);
+    expect(watched.every((file) => file.endsWith(".json"))).toBe(true);
   });
 });

@@ -100,6 +100,20 @@ describe("sections and descriptions", () => {
   });
 });
 
+describe("unresolved links", () => {
+  it("reports a link to a help page that does not exist and a link to a heading that does not exist, with the page they are on", () => {
+    const input = {
+      userPages: { "01-a.md": "# A\n\nSee [gone](02-gone.md) and [part](02-b.md#missing) and [fine](02-b.md#part) and [self](#nowhere) and [web](https://example.org).", "02-b.md": "# B\n\n## Part\n\ntext" },
+      operatorPages: {},
+    };
+    expect(findUnresolvedLinks(input)).toEqual([
+      { from: "help/01-a.md", href: "02-gone.md" },
+      { from: "help/01-a.md", href: "02-b.md#missing" },
+      { from: "help/01-a.md", href: "#nowhere" },
+    ]);
+  });
+});
+
 describe("joinPath and routeOf", () => {
   it("joins onto the folder of the page and removes dot segments", () => {
     expect(joinPath("audit/notes.md", "../tools.md")).toBe("tools.md");

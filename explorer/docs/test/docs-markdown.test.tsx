@@ -33,6 +33,33 @@ describe("DocsMarkdown", () => {
     expect(screen.getByRole("region", { name: "Table" })).toHaveAttribute("tabindex", "0");
   });
 
+  it("draws ordered and unordered lists with inline code, bold, italic and links inside the items", () => {
+    const { container } = show("- one `code`\n- **bold** and *italic*\n\n1. first\n2. [link](#/docs/safety)");
+    const [bullets, steps] = [container.querySelector("ul.zd-list"), container.querySelector("ol.zd-list")];
+    expect(bullets?.querySelectorAll("li")).toHaveLength(2);
+    expect(bullets?.querySelector("code.zd-code")?.textContent).toBe("code");
+    expect(bullets?.querySelector("strong")?.textContent).toBe("bold");
+    expect(bullets?.querySelector("em")?.textContent).toBe("italic");
+    expect(steps?.querySelectorAll("li")).toHaveLength(2);
+    expect(steps?.querySelector("a")).toHaveAttribute("href", "#/docs/safety");
+  });
+
+  it("keeps text around a collapsed number in a table cell, and formats numbers inside bold and italic", () => {
+    const { container } = show("| A | B |\n|---|---|\n| costs 0.0001234 now | **0.00005** and *0.0007* |");
+    const cells = container.querySelectorAll("td");
+    expect(cells[0]?.textContent).toContain("costs ");
+    expect(cells[0]?.textContent).toContain(" now");
+    expect(cells[0]?.querySelectorAll("sub")).toHaveLength(1);
+    expect(cells[1]?.querySelectorAll("strong sub, em sub")).toHaveLength(2);
+    expect(cells[1]?.textContent).toContain(" and ");
+  });
+
+  it("draws a table that has a header and no rows", () => {
+    const { container } = show("| A | B |\n|---|---|\n");
+    expect(container.querySelectorAll("th")).toHaveLength(2);
+    expect(container.querySelectorAll("td")).toHaveLength(0);
+  });
+
   it("an https link leaves without the referrer; a route stays a hash link; code blocks can take focus to scroll", () => {
     show("[out](https://example.org) and [in](#/docs/safety)\n\n```\ncode\n```");
     expect(screen.getByRole("link", { name: "out" })).toHaveAttribute("rel", "noopener noreferrer");
@@ -64,6 +91,11 @@ describe("searchDocs", () => {
     ]);
     expect(searchDocs("tip delivery", pages).flatMap((group) => group.results.map((result) => result.title))).toEqual(["The tip for delivery"]);
     expect(searchDocs("nothing like this", pages)).toEqual([]);
+  });
+
+  it("ranks a title that holds the word inside another word below one where it starts a word, and keeps the page order on a tie", () => {
+    const made = collectPages({ userPages: { "01-a.md": "# Cheese\n\nx", "02-b.md": "# Ees notes\n\nx", "03-c.md": "# Ees again\n\nx" }, operatorPages: {} });
+    expect(searchDocs("ees", made)[0]?.results.map((result) => result.title)).toEqual(["Ees notes", "Ees again", "Cheese"]);
   });
 
   it("offers the themes", () => {

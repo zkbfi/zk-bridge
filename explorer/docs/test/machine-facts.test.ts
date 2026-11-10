@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { writeTree, deployment } from "./machine-tree";
 import { allContractAddresses, buildChainsFile, buildContractsFile, loadFacts, resolvePlaceholders } from "../machine/facts";
 
 const fixture = (path: string): string => fileURLToPath(new URL(`./fixtures/machine/${path}`, import.meta.url));
@@ -54,5 +55,26 @@ describe("placeholders", () => {
 
   it("leaves text without placeholders alone", () => {
     expect(resolvePlaceholders("a { b } {c}", facts, "p.md")).toBe("a { b } {c}");
+  });
+});
+
+describe("contracts.json from a broken deployment", () => {
+  it("refuses an address that is missing or not 20 bytes, naming the file and chain", () => {
+    const folder = writeTree({ "bad.json": deployment({ bridge: "0x12" }) });
+    expect(() => buildContractsFile(folder)).toThrow("bad.json, chain 943: bridge must be a 20 byte hex address");
+    const missing = writeTree({ "bad.json": deployment({ gate: undefined }) });
+    expect(() => buildContractsFile(missing)).toThrow(/gate must be a 20 byte hex address/);
+  });
+
+  it("refuses a chain that two deployments hold", () => {
+    const folder = writeTree({ "a.json": deployment(), "b.json": deployment() });
+    expect(() => buildContractsFile(folder)).toThrow("chain 943 appears in two deployments");
+  });
+
+  it("skips a section without a numeric chain id, names an unknown chain by its id and defaults the start block", () => {
+    const folder = writeTree({ "a.json": JSON.stringify({ note: { chain_id: "x" }, ...JSON.parse(deployment({}, 31337)) }) });
+    const file = buildContractsFile(folder);
+    expect(Object.keys(file.chains)).toEqual(["31337"]);
+    expect(file.chains["31337"]).toMatchObject({ name: "chain 31337", startBlock: 0, deliveryRouter: null, forkRegistry: null, testTokens: {} });
   });
 });
