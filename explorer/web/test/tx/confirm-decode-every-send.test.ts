@@ -14,7 +14,7 @@ import type { ChainConfig, PairConfig } from "@terminal/model/types";
 import { buildConfirmView } from "../../src/tx/confirm-model";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS } from "../../src/tx/bridge-draft";
 import { planBridgeSteps, type BridgeFormValues, type WebStep } from "../../src/tx/bridge-steps";
-import { planGateConfirm } from "../../src/tx/gate-check";
+import { planGateConfirm } from "@terminal/tx/gate-step";
 import { NO_ROUTER_NOTICE, WRAP_NO_FEE_NOTICE } from "../../src/tx/tip-copy";
 import { buildDeliveryReport, buildFixtureContext } from "../helpers";
 

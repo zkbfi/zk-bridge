@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { DEFAULT_BEACON_CHAIN_IDS, GENESIS_VALIDATORS_ROOTS, defaultBeaconUrl, defaultBeaconUrls } from '../../src/config/default-beacon'
+import { DEFAULT_BEACON_CHAIN_IDS, GENESIS_VALIDATORS_ROOTS, beaconUrlsFor, defaultBeaconUrl, defaultBeaconUrls } from '../../src/config/default-beacon'
 
 describe('defaultBeaconUrls', () => {
   test('puts the public keyless node first and the valve.city demo beacon route next, while valve.city refuses its demo key for beacon', () => {
@@ -17,5 +17,21 @@ describe('defaultBeaconUrls', () => {
 
   test('every chain with a default has a known genesis validators root', () => {
     for (const chainId of DEFAULT_BEACON_CHAIN_IDS) expect(GENESIS_VALIDATORS_ROOTS[chainId]).toMatch(/^0x[0-9a-f]{64}$/)
+  })
+})
+
+describe('beaconUrlsFor: the beacon APIs a chain is read from', () => {
+  test("are the chain's whole default list when the setting in force is the default", () => {
+    expect(beaconUrlsFor({ beaconUrls: { 943: { value: defaultBeaconUrls(943)[0] as string, source: 'default' } } }, 943)).toEqual(defaultBeaconUrls(943))
+  })
+
+  test('are the one URL the user or the build chose, alone', () => {
+    expect(beaconUrlsFor({ beaconUrls: { 943: { value: 'https://mine.example.org', source: 'user' } } }, 943)).toEqual(['https://mine.example.org'])
+    expect(beaconUrlsFor({ beaconUrls: { 943: { value: 'https://build.example.org', source: 'environment' } } }, 943)).toEqual(['https://build.example.org'])
+  })
+
+  test('fall back to the default list when the connection has no beacon setting, and are empty for a chain with none', () => {
+    expect(beaconUrlsFor({}, 11155111)).toEqual(defaultBeaconUrls(11155111))
+    expect(beaconUrlsFor({ beaconUrls: { 5: null } }, 5)).toEqual([])
   })
 })

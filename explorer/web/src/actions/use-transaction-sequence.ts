@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Address } from "viem";
-import type { GateChainClient } from "@zk-bridge/shared";
-import { beaconUrlsFor } from "../app/beacon-endpoints";
+import { createGateCheck, NO_BEACON_ENDPOINT_TEXT, type GateChainClient } from "@zk-bridge/shared";
+import { beaconUrlsFor } from "@terminal/config/default-beacon";
 import { useServices } from "../app/services";
-import { createGateCheck } from "../tx/gate-check";
 import { createTransactionSequence, type SequenceState, type TransactionSequence } from "../tx/transaction-sequence";
 import type { WebStep } from "../tx/bridge-steps";
 import { useWallet } from "../wallet/wallet-port";
@@ -38,6 +37,7 @@ export const useTransactionSequence = (steps: readonly WebStep[]): UseTransactio
             // The flow client of a live page is a viem public client; its type names only what the flow needs.
             clientFor: (chainId) => chainAccess.flowClient(chainId) as unknown as GateChainClient,
             beaconUrlsFor: (chainId) => beaconUrlsFor(connection.resolved(), chainId),
+            noneText: `${NO_BEACON_ENDPOINT_TEXT} (Settings, Beacon endpoints)`,
           });
     return createTransactionSequence({
       account: account as Address,
