@@ -27,8 +27,18 @@ import {BeaconLayoutLib, ERA_SLOTS, ERA_DEPTH, HISTORICAL_LIST_DEPTH} from "./Be
 /// `2**depth + index`. Its position is one fixed number, which later forks keep. `block_roots` sits at 352 and
 /// `historical_summaries` at 2950. The position rules take those two numbers next to the depth rule, and no other
 /// number of a deeper tree: the rule for an older fork is not looser. The body of a Gloas block holds a bid and no payload,
-/// so no layout position of the block hash exists for a Gloas slot. A message source at or after `gloasForkSlot` is a beacon
-/// block B after the execution block X, and the fixed index 2856 (the bid `parent_block_hash` of B) must equal the hash of X.
+/// so no layout position of the block hash exists for a Gloas block. A message source whose state has the progressive
+/// shape is a beacon block B after the execution block X, and the fixed index 2856 (the bid `parent_block_hash` of B)
+/// must equal the hash of X.
+///
+/// The fork rule comes from proof, not from a date. The contract holds no fork slot. Each message carries a `ForkProof` of
+/// the state of its source header, and each block hash layout evidence carries one of the state of its header. The proof
+/// is judged by `ForkShape.judge`, the rule that `BeaconForkGate` applies to deposits, with the genesis validators root of
+/// the light client. The proven shape picks the rule: the progressive shape takes the bid rule, a plain depth takes the
+/// validated payload layout. A shape outside `ForkShape.allowedShapes` has no accepted proof, so a block of a fork on
+/// which the gate seals is never proven. The `block_roots` and `historical_summaries` position rules read the same list.
+/// So the gate and this contract follow one list, and a fork takes effect here with its first block, at whatever slot it
+/// activates.
 ///
 /// Ancestry has two paths, chosen from the two slots. A block at most 8192 slots below the anchor is proven through
 /// `state.block_roots`. An older block is proven through `state.historical_summaries`, which holds the root of every
@@ -41,41 +51,24 @@ import {BeaconLayoutLib, ERA_SLOTS, ERA_DEPTH, HISTORICAL_LIST_DEPTH} from "./Be
 /// This is the immutability trade-off of hole H-19.
 ///
 /// The layout tables live in the storage of the contract on top, so that it keeps control of its storage layout. This
-/// contract reaches them through three hooks.
+/// contract reaches them through one hook, `_layoutTables`. The three tables share one row type, `SlotRange`.
 ///
 /// Split for the gas cap. The execution layer checks of a delivery (receipt, transaction, log) are in the external
 /// library `ReceiptProofLib`, the account and storage proofs of the opening in `OpeningProofLib`, and the anchor, the
-/// ancestry, the block hash branch and the layout rules in `BeaconLayoutLib`, so that the creation of the contract on top and of each library stays under the per-transaction
-/// gas cap of EIP-7825 (16,777,216). Both are linked: no owner, no storage of their own, their addresses fixed in the
+/// ancestry, the fork proof, the block hash branch and the layout rules in `BeaconLayoutLib`, so that the creation of the
+/// contract on top and of each library stays under the per-transaction gas cap of EIP-7825 (16,777,216). Both are linked: no owner, no storage of their own, their addresses fixed in the
 /// bytecode. The layout library runs in the storage of the contract on top, with the tables passed as `storage`
 /// arguments. The errors and the events stay declared here, and the libraries use them, so nothing changes outside.
 abstract contract BeaconProofVerifier {
-    /// @notice One validated range of a layout table, as the range rule reads it.
-    /// @param gindex The validated generalized index.
-    /// @param firstSlot The lowest slot of the range.
-    /// @param lastSlot The highest slot of the range.
+    /// @notice One row of a layout table: a validated position and the slots at which it was validated. The three tables
+    /// share this one type (`LayoutTables`), so the range rule and the lookups are one code for all three.
+    /// @param gindex The validated generalized index: of `BeaconState.block_roots` (table `states`), of
+    /// `BeaconBlockBody.execution_payload.block_hash` (table `bodies`), or of `BeaconState.historical_summaries` (table
+    /// `historicals`).
+    /// @param firstSlot The lowest slot at which the position was validated: a state slot, or a header slot for `bodies`.
+    /// @param lastSlot The highest slot at which the position was validated.
     struct SlotRange {
         uint256 gindex;
-        uint64 firstSlot;
-        uint64 lastSlot;
-    }
-
-    /// @notice A validated `block_roots` position and the state slots at which it was validated.
-    /// @param blockRootsGindex The generalized index of `BeaconState.block_roots`.
-    /// @param firstSlot The lowest state slot at which the position was validated.
-    /// @param lastSlot The highest state slot at which the position was validated.
-    struct StateLayout {
-        uint256 blockRootsGindex;
-        uint64 firstSlot;
-        uint64 lastSlot;
-    }
-
-    /// @notice A validated block hash position and the header slots at which it was validated.
-    /// @param blockHashGindex The generalized index of `BeaconBlockBody.execution_payload.block_hash`.
-    /// @param firstSlot The lowest header slot at which the position was validated.
-    /// @param lastSlot The highest header slot at which the position was validated.
-    struct BodyLayout {
-        uint256 blockHashGindex;
         uint64 firstSlot;
         uint64 lastSlot;
     }
@@ -94,22 +87,41 @@ abstract contract BeaconProofVerifier {
         bytes32[] branchB;
     }
 
-    /// @notice A validated `historical_summaries` position and the state slots at which it was validated.
-    /// @param historicalSummariesGindex The generalized index of `BeaconState.historical_summaries`.
-    /// @param firstSlot The lowest state slot at which the position was validated.
-    /// @param lastSlot The highest state slot at which the position was validated.
-    struct HistoricalLayout {
-        uint256 historicalSummariesGindex;
-        uint64 firstSlot;
-        uint64 lastSlot;
+    /// @notice The three layout tables of the contract on top, in one storage variable, so that one storage argument
+    /// reaches all three in `BeaconLayoutLib`. Three dynamic arrays take three consecutive slots, the same slots as three
+    /// array variables declared in this order.
+    /// @param states The validated `block_roots` positions, by state slot.
+    /// @param bodies The validated block hash positions, by header slot.
+    /// @param historicals The validated `historical_summaries` positions, by state slot.
+    struct LayoutTables {
+        SlotRange[] states;
+        SlotRange[] bodies;
+        SlotRange[] historicals;
+    }
+
+    /// @notice A proof of the fork of one beacon state: `fork.current_version` and `genesis_validators_root` under the same
+    /// state root. `ForkShape.judge` reads it and returns the shape of the state tree. The version is not judged by name.
+    /// @param version The claimed `fork.current_version` of the state.
+    /// @param versionBranch The branch of the version leaf, deepest first: `Fork.previous_version`, the node over
+    /// `Fork.epoch`, then the state levels. 7 entries for plain depth 5 and for the progressive state, 8 for depth 6, 9 for
+    /// depth 7.
+    /// @param genesisValidatorsRootBranch The branch of `genesis_validators_root` (state field 1), deepest first: as many
+    /// entries as the plain depth, or 5 for the progressive state. Its leaf is `lightClient.genesisValidatorsRoot()`.
+    struct ForkProof {
+        bytes4 version;
+        bytes32[] versionBranch;
+        bytes32[] genesisValidatorsRootBranch;
     }
 
     /// @notice Evidence for a block hash position: a stored header whose body holds its stored execution block hash.
     /// @param header A stored header.
     /// @param branch The branch from the stored execution block hash to the body root of the header.
+    /// @param fork The fork proof of the state of `header`. It must prove a plain shape: the body of a header whose state is
+    /// progressive (Gloas on) holds no payload.
     struct BlockHashEvidence {
         BeaconBlockHeader header;
         bytes32[] branch;
+        ForkProof fork;
     }
 
     /// @notice Evidence for a `historical_summaries` position: a stored header in a completed era, proven at the claimed
@@ -137,9 +149,6 @@ abstract contract BeaconProofVerifier {
         uint64 storedSlot;
         bytes[] storageProof;
     }
-
-    /// @notice The value of `gloasForkSlot` for a route whose remote chain has no Gloas fork.
-    uint64 public constant NO_GLOAS_FORK = type(uint64).max;
 
     /// @notice The length of `state.block_roots`. A deposit block at most this far below its anchor uses the recent path.
     uint64 public constant SLOTS_PER_HISTORICAL_ROOT = ERA_SLOTS;
@@ -191,10 +200,14 @@ abstract contract BeaconProofVerifier {
     /// @notice A `historical_summaries` evidence slot is not more than 8192 slots below its anchor.
     error EvidenceSlotNotHistorical(uint64 earlierSlot, uint64 anchorSlot);
 
-    /// @notice `addBlockHashLayout` was asked about a slot at or after the Gloas fork. The stored hash of such a slot is
-    /// `latest_block_hash`, not the payload of the block of that slot, and the body holds only a bid. A message source
-    /// at or after the fork takes no layout: it reads the fixed bid index.
-    error GloasSlotRefused(uint64 slot, uint64 gloasForkSlot);
+    /// @notice `addBlockHashLayout` was given a header whose state the fork proof shows to be progressive (Gloas on). The
+    /// stored hash of such a slot is `latest_block_hash`, not the payload of the block of that slot, and the body holds
+    /// only a bid. A message source of that shape takes no layout: it reads the fixed bid index.
+    error GloasSlotRefused(uint64 slot);
+
+    /// @notice The fork proof proves no allowed shape under the state root. `verdict` is the `ForkShape.Verdict`: 1 no
+    /// valid version branch, 2 no valid genesis validators root branch, 3 a version branch length of no allowed shape.
+    error ForkShapeProofInvalid(uint8 verdict);
 
     /// @notice The slot lies inside the validated range of another position, so a layout cannot be validated there.
     error LayoutRangeConflict(uint64 slot);
@@ -271,37 +284,30 @@ abstract contract BeaconProofVerifier {
     uint64 public immutable capellaEra;
     /// @notice The light client on the other chain. It tracks the beacon chain of this chain and feeds the remote contract.
     address public immutable remoteLightClient;
-    /// @notice The first slot of the Gloas fork on the remote chain, or `NO_GLOAS_FORK` when the route has none.
-    /// @dev From this slot on, `lightClient.executionBlockHashes(slot)` holds `state.latest_block_hash` of the finalized
-    /// state: the newest payload that a block confirmed BEFORE the slot, not the payload of the slot. The body of a Gloas
-    /// block holds a bid and no payload. So `addBlockHashLayout` never reads a stored hash at or after this slot as the
-    /// payload of the beacon block of that slot, and refuses it. A message source at or after this slot reads the bid
-    /// `parent_block_hash` of a LATER block (`BeaconLayoutLib.GLOAS_BID_PARENT_BLOCK_HASH_GINDEX`). A Gloas head is used through the
-    /// opening proof, which checks an execution header RLP against the stored hash.
-    uint64 public immutable gloasForkSlot;
+
+    // Gloas. From the Gloas fork of the remote chain on, `lightClient.executionBlockHashes(slot)` holds
+    // `state.latest_block_hash` of the finalized state: the newest payload that a block confirmed BEFORE the slot, not the
+    // payload of the slot, and the body of a Gloas block holds a bid and no payload. So `addBlockHashLayout` refuses a
+    // header whose state is proven progressive, and a message source of that shape reads the bid `parent_block_hash` of a
+    // LATER block (`BeaconLayoutLib.GLOAS_BID_PARENT_BLOCK_HASH_GINDEX`). A Gloas head is used through the opening proof,
+    // which checks an execution header RLP against the stored hash. No slot of the fork is configured: the fork proof of
+    // each header decides (see the notes of the contract).
 
     /// @param lightClient_ The light client of the remote chain.
     /// @param capellaEra_ `floor(capellaForkSlot / 8192)` of the remote chain. The deploy script checks it.
     /// @param remoteLightClient_ The light client on the other chain. `openDeposits` reads its storage.
-    /// @param gloasForkSlot_ The first slot of Gloas on the remote chain, or `NO_GLOAS_FORK`. The deploy script checks it.
     /// @dev The constructor only stores. The contract on top checks the values, in the order of its own arguments.
-    constructor(address lightClient_, uint64 capellaEra_, address remoteLightClient_, uint64 gloasForkSlot_) {
+    constructor(address lightClient_, uint64 capellaEra_, address remoteLightClient_) {
         lightClient = IBeaconLightClient(lightClient_);
         capellaEra = capellaEra_;
         remoteLightClient = remoteLightClient_;
-        gloasForkSlot = gloasForkSlot_;
     }
 
-    // ------------------------------------------------------------------ storage hooks
+    // ------------------------------------------------------------------ storage hook
 
-    /// @dev The validated `block_roots` positions. The contract on top declares the array.
-    function _stateLayoutTable() internal view virtual returns (StateLayout[] storage);
-
-    /// @dev The validated block hash positions. The contract on top declares the array.
-    function _bodyLayoutTable() internal view virtual returns (BodyLayout[] storage);
-
-    /// @dev The validated `historical_summaries` positions. The contract on top declares the array.
-    function _historicalLayoutTable() internal view virtual returns (HistoricalLayout[] storage);
+    /// @dev The three layout tables. The contract on top declares one `LayoutTables` variable, so it keeps control of its
+    /// storage layout.
+    function _layoutTables() internal view virtual returns (LayoutTables storage);
 
     // ------------------------------------------------------------------ opening proof
 
@@ -336,33 +342,39 @@ abstract contract BeaconProofVerifier {
         BeaconBlockHeader calldata sourceHeader,
         bytes32[] calldata branch
     ) internal view {
-        BeaconLayoutLib.requireAncestry(
-            _stateLayoutTable(), _historicalLayoutTable(), lightClient, capellaEra, anchorHeader, sourceHeader, branch
-        );
+        BeaconLayoutLib.requireAncestry(_layoutTables(), lightClient, capellaEra, anchorHeader, sourceHeader, branch);
     }
 
-    /// @dev Check 4. The execution block hash must sit in the body of the source header. Before the Gloas fork it is at the
-    /// validated payload block hash position. At or after `gloasForkSlot` it is the bid `parent_block_hash` at the fixed
-    /// index 2856 (see `BeaconLayoutLib.GLOAS_BID_PARENT_BLOCK_HASH_GINDEX`). The rule runs in `BeaconLayoutLib.requireBlockHash`.
+    /// @dev Check 4. The fork proof of the source state picks the rule, then the execution block hash must sit in the body
+    /// of the source header. A plain shape (before Gloas) takes the validated payload block hash position. The progressive
+    /// shape (Gloas on) takes the bid `parent_block_hash` at the fixed index 2856 (see
+    /// `BeaconLayoutLib.GLOAS_BID_PARENT_BLOCK_HASH_GINDEX`). The rule runs in `BeaconLayoutLib.requireBlockHash`.
+    /// @param blockHash The execution block hash to prove.
+    /// @param sourceHeader The beacon block that carries the proven execution block. Check 3 proved it.
+    /// @param branch The branch from `blockHash` to the body root of `sourceHeader`.
+    /// @param sourceFork The fork proof of the state of `sourceHeader`.
     function _requireBlockHashBranch(
         bytes32 blockHash,
         BeaconBlockHeader calldata sourceHeader,
-        bytes32[] calldata branch
+        bytes32[] calldata branch,
+        ForkProof calldata sourceFork
     ) internal view {
-        BeaconLayoutLib.requireBlockHash(_bodyLayoutTable(), gloasForkSlot, blockHash, sourceHeader, branch);
+        BeaconLayoutLib.requireBlockHash(_layoutTables().bodies, lightClient, blockHash, sourceHeader, branch, sourceFork);
     }
 
     /// @notice Adds a `block_roots` position, or widens its validated range, given evidence from stored data.
-    /// @dev Open to anyone. The position must be the `block_roots` field itself: `2**d + 5` with `d` in 5 to 7, or 352
-    /// (Gloas). Any other position reverts with `LayoutPositionInvalid`, even when the evidence would match (for example the position
-    /// of `eth1_data_votes`, whose entries a proposer writes). The position is accepted only when, under the stored later state root, the leaf at
+    /// @dev Open to anyone. The position must be the `block_roots` field itself: `2**d + 5` with `d` a plain shape of
+    /// `ForkShape.allowedShapes` (5 to 7), or 352 while the progressive shape is allowed (Gloas). Any other position
+    /// reverts with `LayoutPositionInvalid`, even when the evidence would match (for example the position of
+    /// `eth1_data_votes`, whose entries a proposer writes). The position is accepted only when, under the stored later
+    /// state root, the leaf at
     /// `blockRootsGindex * 8192 + slot % 8192` equals the light client's stored header root, for two different
     /// stored earlier slots. A wrong position cannot match. The position is then usable for the later header's slot.
     /// The rules run in `BeaconLayoutLib.addBlockRootsLayout`.
     /// @param blockRootsGindex The candidate generalized index of `BeaconState.block_roots`.
     /// @param evidence Two stored earlier headers under one stored later state.
     function addBlockRootsLayout(uint256 blockRootsGindex, BlockRootsEvidence calldata evidence) external {
-        BeaconLayoutLib.addBlockRootsLayout(_stateLayoutTable(), lightClient, blockRootsGindex, evidence);
+        BeaconLayoutLib.addBlockRootsLayout(_layoutTables().states, lightClient, blockRootsGindex, evidence);
     }
 
     /// @notice Adds a block hash position, or widens its validated range, given evidence from stored data.
@@ -370,12 +382,14 @@ abstract contract BeaconProofVerifier {
     /// `dp` in 4 to 5, which is 412, 668, 812 or 1324. Any other position reverts with `LayoutPositionInvalid`, even when
     /// the evidence would match (for example `graffiti` at 18, or `eth1_data.block_hash` at 70, which a proposer can
     /// fill with a copy of the block hash). The position is accepted only when, under the body root of a stored header, the leaf at
-    /// `blockHashGindex` equals the light client's stored execution block hash of that header. A slot at or after
-    /// `gloasForkSlot` is refused. The rules run in `BeaconLayoutLib.addBlockHashLayout`.
+    /// `blockHashGindex` equals the light client's stored execution block hash of that header. The fork proof of the state
+    /// of the header must prove a plain shape. A header whose state is progressive (Gloas on) is refused with
+    /// `GloasSlotRefused`: in a Gloas body, 668 and 1324 lie under `graffiti`, where a proposer could place the stored hash.
+    /// The rules run in `BeaconLayoutLib.addBlockHashLayout`.
     /// @param blockHashGindex The candidate generalized index of `BeaconBlockBody.execution_payload.block_hash`.
-    /// @param evidence A stored header and the branch to its body root.
+    /// @param evidence A stored header, the branch to its body root, and the fork proof of its state.
     function addBlockHashLayout(uint256 blockHashGindex, BlockHashEvidence calldata evidence) external {
-        BeaconLayoutLib.addBlockHashLayout(_bodyLayoutTable(), lightClient, gloasForkSlot, blockHashGindex, evidence);
+        BeaconLayoutLib.addBlockHashLayout(_layoutTables().bodies, lightClient, blockHashGindex, evidence);
     }
 
     /// @notice Adds a `historical_summaries` position, or widens its validated range, given evidence from stored data.
@@ -392,22 +406,22 @@ abstract contract BeaconProofVerifier {
         HistoricalSummariesEvidence calldata evidence
     ) external {
         BeaconLayoutLib.addHistoricalSummariesLayout(
-            _historicalLayoutTable(), lightClient, capellaEra, historicalSummariesGindex, evidence
+            _layoutTables().historicals, lightClient, capellaEra, historicalSummariesGindex, evidence
         );
     }
 
     /// @notice The validated `block_roots` positions and their slot ranges.
-    function stateLayouts() external view returns (StateLayout[] memory) {
-        return _stateLayoutTable();
+    function stateLayouts() external view returns (SlotRange[] memory) {
+        return _layoutTables().states;
     }
 
     /// @notice The validated `historical_summaries` positions and their slot ranges.
-    function historicalLayouts() external view returns (HistoricalLayout[] memory) {
-        return _historicalLayoutTable();
+    function historicalLayouts() external view returns (SlotRange[] memory) {
+        return _layoutTables().historicals;
     }
 
     /// @notice The validated block hash positions and their slot ranges.
-    function bodyLayouts() external view returns (BodyLayout[] memory) {
-        return _bodyLayoutTable();
+    function bodyLayouts() external view returns (SlotRange[] memory) {
+        return _layoutTables().bodies;
     }
 }

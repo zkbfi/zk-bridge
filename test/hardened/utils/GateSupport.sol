@@ -316,7 +316,7 @@ abstract contract GateSupport is WithdrawalScenes {
                 address(lightClientForA),
                 CHAIN_B,
                 makeAddr("remote bridge"),
-                MessageBridge.BridgeTerms(0, address(lightClientForB), type(uint64).max),
+                MessageBridge.BridgeTerms(0, address(lightClientForB)),
                 DEFAULT_CAPELLA_ERA,
                 gate
             )

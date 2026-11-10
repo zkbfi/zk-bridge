@@ -31,7 +31,7 @@ contract LightClientFixturesTest is Test {
     uint256 internal constant BODY_LAYOUTS_SLOT = 5;
     uint256 internal constant HISTORICAL_LAYOUTS_SLOT = 6;
     /// @dev The number of fixture files the Rust reference writes. A change in the set must be a deliberate change here.
-    uint256 internal constant EXPECTED_FIXTURE_COUNT = 100;
+    uint256 internal constant EXPECTED_FIXTURE_COUNT = 105;
     /// @dev The bridge never calls its deposit gate during `executeMessage`, so any non-zero address stands in for it.
     address internal constant UNUSED_GATE = address(0x6a7e);
     uint64 internal constant SLOTS_PER_EPOCH = 32;
@@ -54,7 +54,7 @@ contract LightClientFixturesTest is Test {
     /// with the fixture calldata succeeds exactly when Rust says accept. An accepted message calls the target once with
     /// the logged data, shows it the logged identifier, sender, source chain and transaction hash, and is marked as
     /// delivered with a successful call. A rejected fixture fails with the Solidity error that names the same failed
-    /// check as the Rust reason, and the target is not called. The set has exactly 100 files, and both the capella and the
+    /// check as the Rust reason, and the target is not called. The set has exactly 105 files, and both the capella and the
     /// electra layout have at least four accepted historical-path fixtures. Matters: two independent implementations of
     /// the check (the build contract requires them to agree on accept and reject). The accept fixtures are the control of
     /// the reject fixtures: the same set-up delivers an honest proof.
@@ -87,23 +87,23 @@ contract LightClientFixturesTest is Test {
     /// wrong slot would write into another variable, and every fixture would then fail or pass for the wrong reason.
     function test_R2_04_layoutSlotsAreThoseOfTheBridge() public {
         vm.chainId(1);
-        BeaconLightClient client = _client(100, keccak256("header"));
-        MessageBridge bridge = _newBridge(client, 1, 369, address(0xa1), 0, type(uint64).max);
+        BeaconLightClient client = _client(100, keccak256("header"), keccak256("genesis"));
+        MessageBridge bridge = _newBridge(client, 1, 369, address(0xa1), 0);
         _writeLayout(address(bridge), STATE_LAYOUTS_SLOT, 0, 11, 64, 95);
         _writeLayout(address(bridge), BODY_LAYOUTS_SLOT, 0, 22, 64, 95);
         _writeLayout(address(bridge), HISTORICAL_LAYOUTS_SLOT, 0, 33, 64, 95);
         vm.store(address(bridge), bytes32(STATE_LAYOUTS_SLOT), bytes32(uint256(1)));
         vm.store(address(bridge), bytes32(BODY_LAYOUTS_SLOT), bytes32(uint256(1)));
         vm.store(address(bridge), bytes32(HISTORICAL_LAYOUTS_SLOT), bytes32(uint256(1)));
-        BeaconProofVerifier.StateLayout[] memory states = bridge.stateLayouts();
-        BeaconProofVerifier.BodyLayout[] memory bodies = bridge.bodyLayouts();
-        BeaconProofVerifier.HistoricalLayout[] memory histories = bridge.historicalLayouts();
+        BeaconProofVerifier.SlotRange[] memory states = bridge.stateLayouts();
+        BeaconProofVerifier.SlotRange[] memory bodies = bridge.bodyLayouts();
+        BeaconProofVerifier.SlotRange[] memory histories = bridge.historicalLayouts();
         assertEq(states.length, 1, "one state layout");
         assertEq(bodies.length, 1, "one body layout");
         assertEq(histories.length, 1, "one historical layout");
-        assertEq(states[0].blockRootsGindex, 11, "state gindex");
-        assertEq(bodies[0].blockHashGindex, 22, "body gindex");
-        assertEq(histories[0].historicalSummariesGindex, 33, "historical gindex");
+        assertEq(states[0].gindex, 11, "state gindex");
+        assertEq(bodies[0].gindex, 22, "body gindex");
+        assertEq(histories[0].gindex, 33, "historical gindex");
         assertEq(states[0].firstSlot, 64, "first slot");
         assertEq(states[0].lastSlot, 95, "last slot");
     }
@@ -220,6 +220,9 @@ contract LightClientFixturesTest is Test {
         if (reason == keccak256("WrongDestinationChain")) matches = selector == MessageBridge.WrongDestinationChain.selector;
         if (reason == keccak256("UnknownDataType")) matches = selector == MessageBridge.UnknownDataType.selector;
         if (reason == keccak256("UnsupportedFork")) matches = selector == BeaconProofVerifier.LayoutNotValidated.selector;
+        if (reason == keccak256("InvalidForkShapeProof")) {
+            matches = selector == BeaconProofVerifier.ForkShapeProofInvalid.selector;
+        }
         assertTrue(matches, string.concat("Solidity error differs from the Rust reason ", rustReason, " in ", path));
     }
 
@@ -271,8 +274,7 @@ contract LightClientFixturesTest is Test {
             localChain,
             uint64(vm.parseUint(vm.parseJsonString(json, ".remoteChainId"))),
             vm.parseJsonAddress(json, ".remoteBridge"),
-            uint64(vm.parseUint(vm.parseJsonString(json, ".capellaEra"))),
-            uint64(vm.parseUint(vm.parseJsonString(json, ".gloasForkSlot")))
+            uint64(vm.parseUint(vm.parseJsonString(json, ".capellaEra")))
         );
         _seedLayouts(bridge, json);
     }
@@ -282,31 +284,33 @@ contract LightClientFixturesTest is Test {
         uint64 localChain,
         uint64 remoteChain,
         address remoteBridge,
-        uint64 capellaEra,
-        uint64 gloasForkSlot
+        uint64 capellaEra
     ) internal returns (MessageBridge) {
         return new MessageBridge(
             address(client),
             remoteChain,
             remoteBridge,
-            MessageBridge.BridgeTerms(0, makeAddr("remote light client"), gloasForkSlot),
+            MessageBridge.BridgeTerms(0, makeAddr("remote light client")),
             capellaEra,
             UNUSED_GATE
         );
     }
 
+    /// @dev The light client holds the genesis validators root of the source chain of the fixture, which the fork proof of
+    /// each source state proves (`MessageProof.sourceFork`).
     function _clientFor(string memory json) internal returns (BeaconLightClient) {
         uint64 anchorSlot = uint64(vm.parseUint(vm.parseJsonString(json, ".anchorSlot")));
         bytes32 storedRoot = vm.parseBytes32(vm.parseJsonString(json, ".storedAnchorHeaderRoot"));
-        if (storedRoot == bytes32(0)) return _client(anchorSlot - 1, keccak256("some other header"));
-        return _client(anchorSlot, storedRoot);
+        bytes32 genesisRoot = vm.parseBytes32(vm.parseJsonString(json, ".genesisValidatorsRoot"));
+        if (storedRoot == bytes32(0)) return _client(anchorSlot - 1, keccak256("some other header"), genesisRoot);
+        return _client(anchorSlot, storedRoot, genesisRoot);
     }
 
-    function _client(uint64 slot, bytes32 headerRoot) internal returns (BeaconLightClient) {
+    function _client(uint64 slot, bytes32 headerRoot, bytes32 genesisRoot) internal returns (BeaconLightClient) {
         return new BeaconLightClient(
             address(0xdead),
             keccak256("light client program"),
-            keccak256("genesis"),
+            genesisRoot,
             8192,
             1,
             1,

@@ -25,6 +25,8 @@ contract GloasPositionsTest is MessageScenes {
         target = _historicalWorld(FIRST_STORED_SLOT, CAPELLA_ERA);
         params = _historicalParams(ANCHOR, CAPELLA_ERA, GLOAS_SUMMARIES, EVIDENCE, _slots(ANCHOR - 8192, ANCHOR - 8193));
         params.blockRootsGindex = GLOAS_BLOCK_ROOTS;
+        // The anchor is progressive and gives no body row; a pre-fork head above the sources does.
+        params.upperBodySlot = ANCHOR - 1_000;
         scene = _historicalScene(params);
     }
 
@@ -46,8 +48,8 @@ contract GloasPositionsTest is MessageScenes {
         _addBodyRows(target, scene);
         _addRecentRow(target, params, scene);
         _addHistoricalRow(target, params, scene);
-        assertEq(target.stateLayouts()[0].blockRootsGindex, GLOAS_BLOCK_ROOTS);
-        assertEq(target.historicalLayouts()[0].historicalSummariesGindex, GLOAS_SUMMARIES);
+        assertEq(target.stateLayouts()[0].gindex, GLOAS_BLOCK_ROOTS);
+        assertEq(target.historicalLayouts()[0].gindex, GLOAS_SUMMARIES);
 
         MessageFixtures.Named memory recentMessage = MessageFixtures.deliver();
         MessageFixtures.Named memory historicalMessage = MessageFixtures.order_a();

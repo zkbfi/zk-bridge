@@ -306,6 +306,8 @@ fn real_message_proof() -> (lc_core::abi::MessageProof, B256, alloy_primitives::
         sourceHeader: (&source).into(),
         ancestryBranch: branch("ancestry_branch"),
         blockHashBranch: branch("block_hash_branch"),
+        // The state of B is the real state of `gloas_head_state.ssz` (its root is the `state_root` of B).
+        sourceFork: lc_core::ancestry::fork_proof_of_state(&real_state()),
         executionHeaderRlp: Bytes::from(real_header_rlp()),
         receiptProof: nodes("receipt_proof"),
         receiptIndex: index,
@@ -317,13 +319,49 @@ fn real_message_proof() -> (lc_core::abi::MessageProof, B256, alloy_primitives::
     (proof, anchor.hash_tree_root(), emitter)
 }
 
+/// Claim: the fork proof that the prover builds from the REAL state of B (`fork_proof_of_state`) proves the progressive
+/// shape under the real `state_root` of B with the real Sepolia genesis validators root; its version branch is the one of
+/// `gloas_fork_version.json` (derived from the same state) and its genesis validators root branch has 5 entries (index
+/// 40). The same proof checked against Ethereum's root, or against the root of the anchor state, fails. Why it matters:
+/// this is the proof that a message of a Gloas chain carries, built from a real state, so the rule does not rest on
+/// synthetic trees alone.
+#[test]
+fn the_real_source_state_proves_the_progressive_shape() {
+    use lc_core::ancestry::{fork_proof_of_state, source_shape};
+    use lc_core::chain::ETHEREUM_MAINNET;
+    use lc_core::layout::SHAPE_PROGRESSIVE;
+    let state = real_state();
+    let proof = fork_proof_of_state(&state);
+    let served = load_response("sepolia/gloas_fork_version.json");
+    let served_branch: Vec<B256> = served["branch"].as_array().unwrap().iter().map(lc_core::json::hex_b256).collect();
+    assert_eq!(proof.versionBranch, served_branch, "the version branch of the fixture");
+    assert_eq!(proof.version.as_slice(), &[0x90, 0x00, 0x00, 0x76], "Sepolia's Gloas version");
+    assert_eq!(proof.genesisValidatorsRootBranch.len(), 5);
+    let source_root = lc_core::json::hex_b256(&served["state_root"]);
+    assert_eq!(state.root(), source_root);
+    assert_eq!(source_shape(&proof, &source_root, &SEPOLIA.genesis_validators_root), Ok(SHAPE_PROGRESSIVE));
+    assert_eq!(
+        source_shape(&proof, &source_root, &ETHEREUM_MAINNET.genesis_validators_root),
+        Err(Error::InvalidForkShapeProof)
+    );
+    let fixture = load_response("sepolia/gloas_message_source.json");
+    let anchor_state_root = lc_core::json::hex_b256(&fixture["anchor_header"]["state_root"]);
+    assert_eq!(
+        source_shape(&proof, &anchor_state_root, &SEPOLIA.genesis_validators_root),
+        Err(Error::InvalidForkShapeProof)
+    );
+}
+
 /// Claim: a REAL Gloas message source verifies up to the log. The source block B is the real beacon block whose bid names
-/// the real execution block X as `parent_block_hash` (node-served branch of 11 entries at index 2856), the anchor is a real
-/// later header whose real state holds B in `block_roots` (index 352), the RLP is the real 23 item header, and the
-/// receipt and transaction proofs are real (the tries rebuilt from the node answers have the roots of the header). The
-/// beacon path returns the hash of X. The log is not a bridge message, so `verify_message` ends at the log check with
-/// `LogTopicMismatch`, which shows that every earlier check passed on real data.
-/// Controls: a flipped branch entry, the RLP of the parent block, and a flipped ancestry entry each fail with their own error.
+/// the real execution block X as `parent_block_hash` (node-served branch of 11 entries at index 2856), its real state
+/// proves the progressive shape (`fork_proof_of_state`), the anchor is a real later header whose real state holds B in
+/// `block_roots` (index 352), the RLP is the real 23 item header, and the receipt and transaction proofs are real (the
+/// tries rebuilt from the node answers have the roots of the header). The beacon path returns the hash of X. The log is
+/// not a bridge message, so `verify_message` ends at the log check with `LogTopicMismatch`, which shows that every
+/// earlier check passed on real data. (A source of a fork that the schedule does not know yet is the fixture
+/// `electra_accept_unscheduled_gloas_source`.)
+/// Controls: a flipped branch entry, the RLP of the parent block, a flipped ancestry entry, and a flipped entry of the
+/// fork proof each fail with their own error.
 #[test]
 fn a_real_gloas_message_source_verifies_up_to_the_log() {
     use lc_core::ancestry::verify_beacon_path;
@@ -332,6 +370,9 @@ fn a_real_gloas_message_source_verifies_up_to_the_log() {
     let x_hash = keccak256(real_header_rlp());
     assert_eq!(proof.blockHashBranch.len(), 11);
     assert_eq!(verify_beacon_path(&SEPOLIA, &proof, &anchor_root), Ok(x_hash));
+    let mut flipped_fork = proof.clone();
+    flipped_fork.sourceFork.genesisValidatorsRootBranch[2].0[0] ^= 1;
+    assert_eq!(verify_beacon_path(&SEPOLIA, &flipped_fork, &anchor_root), Err(Error::InvalidForkShapeProof));
 
     let context = MessageContext {
         remote_bridge: emitter,

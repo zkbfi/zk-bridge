@@ -60,12 +60,12 @@ contract LayoutRangeRuleTest is MessageScenes {
         target.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, second.historicalEvidence);
         target.addHistoricalSummariesLayout(DENEB_SUMMARIES, third.historicalEvidence);
 
-        BeaconProofVerifier.HistoricalLayout[] memory rows = target.historicalLayouts();
+        BeaconProofVerifier.SlotRange[] memory rows = target.historicalLayouts();
         assertEq(rows.length, 3, "the third call starts a new range");
-        assertEq(rows[0].historicalSummariesGindex, DENEB_SUMMARIES);
+        assertEq(rows[0].gindex, DENEB_SUMMARIES);
         assertEq(rows[0].lastSlot, FIRST_ANCHOR, "the first range stops at its own anchor");
-        assertEq(rows[1].historicalSummariesGindex, ELECTRA_SUMMARIES);
-        assertEq(rows[2].historicalSummariesGindex, DENEB_SUMMARIES);
+        assertEq(rows[1].gindex, ELECTRA_SUMMARIES);
+        assertEq(rows[2].gindex, DENEB_SUMMARIES);
         assertEq(rows[2].firstSlot, THIRD_ANCHOR);
 
         _addBodyRows(target, middle);
@@ -97,9 +97,9 @@ contract LayoutRangeRuleTest is MessageScenes {
         target.addHistoricalSummariesLayout(ELECTRA_SUMMARIES, above.historicalEvidence);
         target.addHistoricalSummariesLayout(DENEB_SUMMARIES, third.historicalEvidence);
 
-        BeaconProofVerifier.HistoricalLayout[] memory rows = target.historicalLayouts();
+        BeaconProofVerifier.SlotRange[] memory rows = target.historicalLayouts();
         assertEq(rows.length, 2);
-        assertEq(rows[0].historicalSummariesGindex, DENEB_SUMMARIES);
+        assertEq(rows[0].gindex, DENEB_SUMMARIES);
         assertEq(rows[0].firstSlot, FIRST_ANCHOR);
         assertEq(rows[0].lastSlot, THIRD_ANCHOR);
     }
@@ -165,10 +165,10 @@ contract LayoutRangeRuleTest is MessageScenes {
     }
 
     function _assertNoOverlap() internal view {
-        BeaconProofVerifier.HistoricalLayout[] memory rows = target.historicalLayouts();
+        BeaconProofVerifier.SlotRange[] memory rows = target.historicalLayouts();
         for (uint256 i = 0; i < rows.length; i++) {
             for (uint256 j = i + 1; j < rows.length; j++) {
-                if (rows[i].historicalSummariesGindex == rows[j].historicalSummariesGindex) continue;
+                if (rows[i].gindex == rows[j].gindex) continue;
                 bool overlaps = rows[i].firstSlot <= rows[j].lastSlot && rows[j].firstSlot <= rows[i].lastSlot;
                 assertFalse(overlaps, "ranges of different positions overlap");
             }
@@ -176,13 +176,13 @@ contract LayoutRangeRuleTest is MessageScenes {
     }
 
     function _assertEachValidatedAnchorHasOneOwner(bool[8] memory validated) internal view {
-        BeaconProofVerifier.HistoricalLayout[] memory rows = target.historicalLayouts();
+        BeaconProofVerifier.SlotRange[] memory rows = target.historicalLayouts();
         for (uint256 scene = 0; scene < FUZZ_SCENE_COUNT; scene++) {
             if (!validated[scene]) continue;
             uint64 anchor = FUZZ_FIRST_ANCHOR + uint64(scene) * FUZZ_ANCHOR_STEP;
             for (uint256 i = 0; i < rows.length; i++) {
                 if (rows[i].firstSlot > anchor || anchor > rows[i].lastSlot) continue;
-                assertEq(rows[i].historicalSummariesGindex, fuzzPositions[scene], "a validated anchor has a foreign cover");
+                assertEq(rows[i].gindex, fuzzPositions[scene], "a validated anchor has a foreign cover");
             }
         }
     }

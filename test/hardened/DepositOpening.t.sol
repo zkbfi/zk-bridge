@@ -132,7 +132,7 @@ contract DepositOpeningTest is MessageScenes {
             address(lightClientForA),
             CHAIN_B,
             DESTINATION_BRIDGE,
-            MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max),
+            MessageBridge.BridgeTerms(0, address(lightClientForA)),
             DEFAULT_CAPELLA_ERA,
             address(gateA)
         );

@@ -153,7 +153,7 @@ contract DeepLayoutPositionsTest is MessageScenes {
         vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         target.addBlockHashLayout(DEEP_BODY_FIVE_PAYLOAD_FOUR, deneb);
 
-        BeaconProofVerifier.BlockHashEvidence memory padded = BeaconProofVerifier.BlockHashEvidence(capella.header, _padTo(capella.branch, 9));
+        BeaconProofVerifier.BlockHashEvidence memory padded = BeaconProofVerifier.BlockHashEvidence(capella.header, _padTo(capella.branch, 9), capella.fork);
         vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         target.addBlockHashLayout(DEEP_BODY_FIVE_PAYLOAD_FOUR, padded);
 
@@ -177,11 +177,11 @@ contract DeepLayoutPositionsTest is MessageScenes {
 
         vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         target.addBlockHashLayout(
-            DEEP_BODY_FIVE_PAYLOAD_FIVE, BeaconProofVerifier.BlockHashEvidence(capella.header, _padTo(capella.branch, 10))
+            DEEP_BODY_FIVE_PAYLOAD_FIVE, BeaconProofVerifier.BlockHashEvidence(capella.header, _padTo(capella.branch, 10), capella.fork)
         );
         vm.expectRevert(BeaconProofVerifier.LayoutEvidenceInvalid.selector);
         target.addBlockHashLayout(
-            DEEP_BODY_FIVE_PAYLOAD_FIVE, BeaconProofVerifier.BlockHashEvidence(deneb.header, _padTo(deneb.branch, 10))
+            DEEP_BODY_FIVE_PAYLOAD_FIVE, BeaconProofVerifier.BlockHashEvidence(deneb.header, _padTo(deneb.branch, 10), deneb.fork)
         );
 
         target.addBlockHashLayout(412, capella);
@@ -206,9 +206,9 @@ contract DeepLayoutPositionsTest is MessageScenes {
         _addHistoricalRow(target, params, scene);
 
         assertEq(target.stateLayouts().length, 1);
-        assertEq(target.stateLayouts()[0].blockRootsGindex, DEEP_BLOCK_ROOTS);
+        assertEq(target.stateLayouts()[0].gindex, DEEP_BLOCK_ROOTS);
         assertEq(target.historicalLayouts().length, 1);
-        assertEq(target.historicalLayouts()[0].historicalSummariesGindex, DEEP_SUMMARIES);
+        assertEq(target.historicalLayouts()[0].gindex, DEEP_SUMMARIES);
 
         MessageFixtures.Named memory recentMessage = MessageFixtures.deliver();
         MessageFixtures.Named memory historicalMessage = MessageFixtures.order_a();
@@ -232,7 +232,7 @@ contract DeepLayoutPositionsTest is MessageScenes {
         Scene memory scene = _scene(named, params);
 
         assertEq(bridge.bodyLayouts().length, 1);
-        assertEq(bridge.bodyLayouts()[0].blockHashGindex, position);
+        assertEq(bridge.bodyLayouts()[0].gindex, position);
         assertEq(scene.proof.blockHashBranch.length, SSZ.depthOf(position));
         bridge.executeMessage(scene.proof);
         assertTrue(bridge.messageCallStatus(named.messageId), "the message executes");

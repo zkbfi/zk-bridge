@@ -5,7 +5,7 @@ use crate::receipts::{
     build_indexed_trie, encode_execution_header, execution_header_from_json, header_hash, receipts_from_json,
 };
 use alloy_primitives::{Bytes, B256, U256};
-use lc_core::abi::MessageProof;
+use lc_core::abi::{ForkProof, MessageProof};
 use lc_core::types::{LightClientStore, LightClientUpdate};
 
 /// The branches of the real attested state that a beacon node does not serve. The derive tool reads them from the state.
@@ -79,10 +79,23 @@ pub fn rebuild_block(block_fixture: &str, receipts_fixture: &str) -> RealBlock {
     RealBlock { header_rlp, block_hash, receipts, receipts_json, proofs: trie.proofs, rebuilt_root: trie.root }
 }
 
+/// The fork proof that the real PulseChain message proofs carry: an empty one. The fixtures hold no state of their source
+/// blocks (only the attested state of the update, at another slot), so no real fork proof exists for them, and
+/// `verify_message` stops at the fork proof (`InvalidForkShapeProof`), the stage after the ancestry. The tests check the
+/// later beacon stages by their parts (`pulsechain_real.rs`, `beacon_path_by_parts`).
+pub fn missing_fork_proof() -> ForkProof {
+    ForkProof {
+        version: alloy_primitives::FixedBytes::ZERO,
+        versionBranch: Vec::new(),
+        genesisValidatorsRootBranch: Vec::new(),
+    }
+}
+
 /// A real beacon path entry: the message proof for one receipt log of a real PulseChain block.
-/// The fixtures hold the transaction hashes of the block and not the transactions, so the transaction proof is empty and
-/// `verify_message` stops at the transaction stage. The log is not a message event (no bridge exists on PulseChain).
-/// The tests walk the stages before and after the transaction stage one by one.
+/// The fixtures hold the transaction hashes of the block and not the transactions, so the transaction proof is empty, and
+/// they hold no state of the source block, so the fork proof is empty too ([`missing_fork_proof`]): `verify_message` stops
+/// at the fork proof. The log is not a message event (no bridge exists on PulseChain). The tests walk the other stages one
+/// by one.
 pub fn real_message_proof(entry_name: &str, transaction_index: u64, log_index: u64) -> (MessageProof, B256, RealBlock) {
     let paths = load_response("pulsechain/beacon_paths.json");
     let anchor = beacon_header(&paths["anchor_header"]);
@@ -106,6 +119,7 @@ pub fn real_message_proof(entry_name: &str, transaction_index: u64, log_index: u
         sourceHeader: (&beacon_header(&entry["deposit_header"])).into(),
         ancestryBranch: branch(&entry["ancestry_branch"]),
         blockHashBranch: branch(&entry["block_hash_branch"]),
+        sourceFork: missing_fork_proof(),
         executionHeaderRlp: block.header_rlp.clone(),
         receiptProof: block.proofs[transaction_index as usize].clone(),
         receiptIndex: U256::from(transaction_index),
@@ -158,7 +172,7 @@ impl RealHistoricalPaths {
 }
 
 /// The message proof for the middle block of the historical fixture, with its real execution block and receipts.
-/// The transaction proof is empty, as in [`real_message_proof`].
+/// The transaction proof and the fork proof are empty, as in [`real_message_proof`].
 pub fn real_historical_message_proof(transaction_index: u64, log_index: u64) -> (MessageProof, B256, RealBlock) {
     let paths = real_historical_paths();
     let entry = paths.entry("era_middle_block");
@@ -173,6 +187,7 @@ pub fn real_historical_message_proof(transaction_index: u64, log_index: u64) -> 
         sourceHeader: (&beacon_header(&entry["deposit_header"])).into(),
         ancestryBranch: branch(&entry["ancestry_branch"]),
         blockHashBranch: branch(&entry["block_hash_branch"]),
+        sourceFork: missing_fork_proof(),
         executionHeaderRlp: block.header_rlp.clone(),
         receiptProof: block.proofs[transaction_index as usize].clone(),
         receiptIndex: U256::from(transaction_index),
