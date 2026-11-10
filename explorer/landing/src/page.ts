@@ -106,13 +106,13 @@ function gatewayLinks(cid: string, gateways: readonly string[], withDocs: boolea
 
 function releaseSection(release: ReleaseEntry, gateways: readonly string[]): string {
   return [
-    `<section>`,
-    `<h2>${escapeHtml(release.name)} ${escapeHtml(release.version)}</h2>`,
+    `<div class="release">`,
+    `<h3>${escapeHtml(release.name)} ${escapeHtml(release.version)}</h3>`,
     `<p>Commit <code>${escapeHtml(release.commit)}</code>, published ${escapeHtml(release.publishedAt)}.</p>`,
     `<p>Content address: <code>${escapeHtml(release.cid)}</code></p>`,
     `<p>Archive SHA-256: <code>${escapeHtml(release.archiveSha256)}</code></p>`,
     gatewayLinks(release.cid, gateways, release.name === "dapp"),
-    `</section>`,
+    `</div>`,
   ].join("");
 }
 
@@ -135,22 +135,53 @@ function snapshotBlock(snapshot: SnapshotConfig | null, dapp: ReleaseEntry | und
     `<picture><source media="(prefers-color-scheme: dark)" srcset="${escapeHtml(snapshot.dark)}">`,
     `<img src="${escapeHtml(snapshot.light)}" width="${snapshot.width}" height="${snapshot.height}" alt="${escapeHtml(alt)}" loading="lazy"></picture>`,
   ].join("");
-  const caption = `<figcaption>The app of this release, as it looks after the loader${dapp === undefined ? "" : ` (${escapeHtml(dapp.version)})`}.</figcaption>`;
+  const caption = `<figcaption>The app${dapp === undefined ? "" : ` ${escapeHtml(dapp.version)}`}, as it looks after the loader.</figcaption>`;
   const shown = link === undefined ? picture : `<a href="${escapeHtml(link.address)}" rel="noopener">${picture}</a>`;
-  return `<section class="snapshot" id="snapshot"><h2>The app</h2><figure>${shown}${caption}</figure></section>`;
+  return `<figure class="snapshot" id="snapshot">${shown}${caption}</figure>`;
+}
+
+/** What zkb.fi is, in plain words. Shown above the links. */
+const INTRO = [
+  `<p>zkb.fi is a bridge for moving tokens between chains. This page links to its app and to the terminal programs.</p>`,
+  `<p>No one holds your tokens: the contracts have no owner. The app runs from the InterPlanetary File System, not from this server. Each link below comes from a signed release list that your browser checks before it shows anything.</p>`,
+].join("");
+
+/** The docs and the text files for LLMs. The docs are part of the app; the text files are served next to this page. */
+function docsSection(dapp: ReleaseEntry | undefined, gateways: readonly string[]): string {
+  const link = dapp === undefined ? undefined : gatewayLinkList(dapp.cid, gateways)[0];
+  const items = [
+    link === undefined ? "" : `<li><a href="${escapeHtml(docsAddress(link.address))}" rel="noopener">Docs and guides</a>, inside the app</li>`,
+    `<li><a href="./llms.txt">llms.txt</a>: an index of the docs for language models</li>`,
+    `<li><a href="./llms-full.txt">llms-full.txt</a>: the same with every page in full</li>`,
+  ];
+  return `<section class="docs" id="docs"><h2>Docs</h2><ul>${items.join("")}</ul></section>`;
+}
+
+/** The signed release list, with how to check it. Last on the page. */
+function verificationSection(sequenceNote: string | null): string {
+  const note = sequenceNote === null ? "" : `<p>${escapeHtml(sequenceNote)}</p>`;
+  return [
+    `<section class="verification" id="verification"><h2>The signed release list</h2>`,
+    `<p>The signature on this release list is valid. Your browser checked it against the release keys built into this page.</p>`,
+    note,
+    `<p><a href="./version.json">version.json</a> and its signature <a href="./version.json.sig">version.json.sig</a></p>`,
+    `</section>`,
+  ].join("");
 }
 
 function verifiedBody(state: Extract<LandingState, { kind: "verified" }>): string {
   // The docs are inside the dapp (Docs link above). A list signed before that may still name a docs site: it is read, not shown.
   const sites = state.manifest.releases.filter((release) => release.name === "dapp");
-  const note = state.sequenceNote === null ? "" : `<p>${escapeHtml(state.sequenceNote)}</p>`;
   const downloads = renderDownloads(state.manifest.downloads, downloadBase(state), state.platform ?? null, state.choices);
   return [
-    `<p>The signature on this release list is valid.</p>`,
-    note,
-    downloads,
+    INTRO,
+    `<section class="app-links" id="app-links"><h2>Open the app</h2>`,
     snapshotBlock(state.snapshot ?? null, sites[0], state.gateways),
     sites.map((release) => releaseSection(release, state.gateways)).join(""),
+    `</section>`,
+    docsSection(sites[0], state.gateways),
+    downloads,
+    verificationSection(state.sequenceNote),
   ].join("");
 }
 

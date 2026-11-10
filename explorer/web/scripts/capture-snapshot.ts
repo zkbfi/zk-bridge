@@ -5,7 +5,8 @@
  * Usage: node scripts/capture-snapshot.ts <built-dapp-directory> <output-directory>
  *
  * The dapp must be built with VITE_EXPLORER_DATA=fixture (sample data, no network, no wallet). The output is
- * snapshot-light.webp, snapshot-dark.webp (each under 200 kB) and snapshot.json ({"width","height"}).
+ * snapshot-light.webp, snapshot-dark.webp (each under 200 kB) and snapshot.json ({"width","height"}),
+ * and snapshot-og.jpg (1200x630, under 150 kB) for link previews.
  * It drives the installed Google Chrome like the end-to-end tests (SNAPSHOT_CHROME names another browser program;
  * without either, Playwright's own Chromium).
  */
@@ -19,6 +20,8 @@ import type { Browser } from "@playwright/test";
 const WIDTH = 1280;
 const HEIGHT = 800;
 const MAXIMUM_BYTES = 200 * 1024;
+/** The link-preview image: 1200x630 cut from the light screenshot, as a JPEG under this size. */
+const PREVIEW_BYTES = 150 * 1024;
 const TYPES: Record<string, string> = {
   ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png",
   ".json": "application/json", ".woff2": "font/woff2", ".webp": "image/webp", ".txt": "text/plain", ".ico": "image/x-icon",
@@ -44,11 +47,11 @@ function serve(root: string): Promise<{ server: Server; port: number }> {
 }
 
 /** Re-encodes a PNG as WebP in the browser, lowering the quality until the file is small enough. */
-async function toWebp(browser: Browser, png: Buffer): Promise<Buffer> {
+async function toWebp(browser: Browser, png: Buffer, type = "image/webp", limit = MAXIMUM_BYTES): Promise<Buffer> {
   const page = await browser.newPage();
   try {
     const dataUrl = await page.evaluate(
-      async ({ source, limit }) => {
+      async ({ source, limit, mime }) => {
         const image = new Image();
         image.src = source;
         await image.decode();
@@ -58,12 +61,12 @@ async function toWebp(browser: Browser, png: Buffer): Promise<Buffer> {
         canvas.getContext("2d")!.drawImage(image, 0, 0);
         let last = "";
         for (const quality of [0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3]) {
-          last = canvas.toDataURL("image/webp", quality);
+          last = canvas.toDataURL(mime, quality);
           if ((last.length * 3) / 4 <= limit) break;
         }
         return last;
       },
-      { source: `data:image/png;base64,${png.toString("base64")}`, limit: MAXIMUM_BYTES },
+      { source: `data:image/png;base64,${png.toString("base64")}`, limit, mime: type },
     );
     return Buffer.from(dataUrl.split(",")[1] ?? "", "base64");
   } finally {
@@ -104,6 +107,12 @@ try {
     const webp = await toWebp(browser, png);
     if (webp.length === 0 || webp.length > MAXIMUM_BYTES) throw new Error(`the ${scheme} snapshot is ${webp.length} bytes, over the ${MAXIMUM_BYTES} limit`);
     await writeFile(join(output, `snapshot-${scheme}.webp`), webp);
+    if (scheme === "light") {
+      const preview = await toWebp(browser, await page.screenshot({ type: "png", clip: { x: 40, y: 0, width: 1200, height: 630 } }), "image/jpeg", PREVIEW_BYTES);
+      if (preview.length === 0 || preview.length > PREVIEW_BYTES) throw new Error(`the preview image is ${preview.length} bytes, over the ${PREVIEW_BYTES} limit`);
+      await writeFile(join(output, "snapshot-og.jpg"), preview);
+      console.log(`snapshot-og.jpg ${preview.length} bytes`);
+    }
     console.log(`snapshot-${scheme}.webp ${webp.length} bytes`);
     await context.close();
   }

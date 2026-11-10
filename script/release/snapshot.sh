@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Takes the screenshots of the app that the landing page shows: the bridge screen after the loader, light and dark,
-# at desktop width (snapshot-light.webp, snapshot-dark.webp, snapshot.json) in <output-directory>.
+# at desktop width (snapshot-light.webp, snapshot-dark.webp, snapshot.json), plus snapshot-og.jpg (1200x630, for link previews) in <output-directory>.
 #
 # The screenshots come from a build of this commit's dapp on the sample data (VITE_EXPLORER_DATA=fixture), so they
 # need no network, indexer or wallet. The dapp that is published is built separately by release.sh.
@@ -21,7 +21,7 @@ mkdir -p "$output"
 
 skip() {
   echo "no snapshot: $1; the landing page is built without one" >&2
-  rm -f "$output"/snapshot-light.webp "$output"/snapshot-dark.webp "$output"/snapshot.json
+  rm -f "$output"/snapshot-light.webp "$output"/snapshot-dark.webp "$output"/snapshot.json "$output"/snapshot-og.jpg
   exit 0
 }
 
@@ -33,7 +33,7 @@ trap 'rm -rf "$work"' EXIT
   || { tail -n 5 "$work/build.log" >&2; skip "the sample build of the dapp failed"; }
 (cd "$repository_root/explorer/web" && node scripts/capture-snapshot.ts "$work/dapp" "$output") </dev/null \
   || skip "the headless capture failed"
-for file in snapshot-light.webp snapshot-dark.webp snapshot.json; do
+for file in snapshot-light.webp snapshot-dark.webp snapshot.json snapshot-og.jpg; do
   [ -s "$output/$file" ] || skip "$file was not written"
 done
 echo "snapshot ok: $output"

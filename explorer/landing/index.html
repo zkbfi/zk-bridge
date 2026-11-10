@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{title}}</title>
+    {{meta}}
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
     <link rel="icon" href="./favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="icon" href="./favicon-16.png" sizes="16x16" type="image/png" />
@@ -27,6 +28,7 @@
       .dl-chevron { width: 0.45rem; height: 0.45rem; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-0.12rem) rotate(45deg); }
       .dl-trigger[aria-expanded="true"] .dl-chevron { transform: translateY(0.1rem) rotate(225deg); }
       .dl-surface { position: absolute; z-index: 10; top: calc(100% + 0.4rem); left: 0; min-width: 17rem; margin: 0; padding: 0.25rem; list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: 0; box-shadow: var(--shadow); }
+      .dl-program:has(.dl-surface:not([hidden])) { padding-bottom: 13rem; }
       .dl-surface[hidden] { display: none; }
       .dl-surface li { margin: 0; }
       .dl-item { display: flex; width: 100%; gap: 0.5rem; align-items: center; text-align: left; font: inherit; color: inherit; background: none; border: 0; border-radius: 0; padding: 0.5rem 0.75rem; cursor: pointer; }
@@ -40,9 +42,9 @@
       .dl-details dd { margin: 0; }
       .dl-copy { font: inherit; font-size: 0.85rem; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0.1rem 0.7rem; cursor: pointer; }
       .dl-note, .dl-choose { color: var(--muted); }
-      .snapshot figure { margin: 0; }
-      .snapshot img { display: block; width: 100%; height: auto; border: 1px solid var(--line); box-shadow: var(--shadow); }
-      .snapshot figcaption { margin-top: 0.5rem; color: var(--muted); font-size: 0.9rem; }
+      figure.snapshot { margin: 0 0 1rem; }
+      figure.snapshot img { display: block; width: 100%; height: auto; border: 1px solid var(--line); box-shadow: var(--shadow); }
+      figure.snapshot figcaption { margin-top: 0.5rem; color: var(--muted); font-size: 0.9rem; }
     </style>
   </head>
   <body>

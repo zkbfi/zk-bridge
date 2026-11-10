@@ -187,7 +187,7 @@ test("a list signed before the docs moved into the dapp still reads, and lists t
   const parsed = parseManifest(new TextDecoder().decode(canonicalManifestBytes(legacyManifest)));
   assert.deepEqual(parsed.releases.map((release) => release.name), ["dapp", "docs"]);
   const html = renderLanding(verified(parsed));
-  assert.ok(html.includes("<h2>dapp 1.0.0</h2>"));
+  assert.ok(html.includes("<h3>dapp 1.0.0</h3>"));
   assert.ok(!html.includes("<h2>docs"));
   assert.ok(!html.includes(legacyManifest.releases[1]!.cid));
 });

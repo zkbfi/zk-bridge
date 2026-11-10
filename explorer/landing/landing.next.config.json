@@ -1,5 +1,6 @@
 {
   "title": "zkb.fi next",
+  "siteUrl": "https://next.zkb.fi/",
   "manifestUrl": "./version.json",
   "signatureUrl": "./version.json.sig",
   "downloadBaseUrl": "https://github.com/zkbfi/releases/releases/download/v{version}",
