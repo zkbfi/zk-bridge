@@ -94,7 +94,9 @@ line 228); a send in an epoch nobody confirmed reverts with `ForkNotConfirmed` (
 in `dfbc44e7`). A send that carries its own evidence removes the race and the second transaction. It changes layer 1
 (a send method that passes evidence), layer 2 (the mediator's relay entry points pass it through) and layer 3 (the
 router's source entry points). This reverses the user decision of 2026-10-24 ("A send carries no gate evidence").
-- **D1.** Build sends with gate evidence before mainnet, or launch with confirm-then-send?
+- **D1.** Build sends with gate evidence before mainnet, or launch with confirm-then-send? **Decided 2026-11-10, owner:
+  "go ahead with your choice for d1": sends carry their own gate evidence.** Built in the same layer 1 and 2 freeze as
+  A6 (A1), test-first.
 - Size: M for the contracts and tests, M for `@zkb/data`, the dapp, the terminal and the traffic bot.
 
 **A3. Caps for a limited launch.** The contracts cannot be capped after deployment. Two on-chain options exist in the
@@ -123,15 +125,29 @@ million gas, far under the cap; the test's 1,600 per byte already covers the rep
 every creation on mainnet the week of the deployment (`docs/redeploy-2026-11-gas.md` did the same for Sepolia).
 `known-issues.md` 2.10 is stale (pre-split figures) and should be closed with the measurement. Size: S.
 
-**A6. Ethereum fork schedule against immutable program keys.** `light-client/crates/lc-core/src/chain.rs`
-(`ETHEREUM_FORKS`) lists Gloas on Ethereum mainnet at `FAR_FUTURE_EPOCH`. The program key fixes the schedule, and the
-light client cannot change its key. When Ethereum schedules Gloas, the route needs a new program and new light clients
-(`known-issues.md` 1.5, 1.6; the gate seals on an unsupported shape). Deploying shortly before a scheduled fork wastes
-the deployment.
-- **D3.** Deploy only once Ethereum's next fork epoch is either set in the program or known to be far enough away? What
-  is "far enough" (guess: three months)?
-- Size: S to check; L if the program must be rebuilt for a scheduled Gloas (new keys, new GPU image, re-audit of the
-  guest diff).
+**A6. Forks we cannot predict.** Owner, 2026-11-10: "i thought we already had upgrade code available. you are saying
+that we do not? lets assume that we cannot know what the structure will be updated to nor when". There is no upgrade
+code, by the decision of 2026-10-22 (`known-issues.md` 1.4: no admin, no upgrade, no pause). What exists is fork
+tolerance: the light-client program takes the fork version and the state layout from the evidence
+(`light-client/crates/lc-core/src/update.rs`, `verify_light_client_update_with_fork_version`; `docs/hardened-build-contract.md`,
+"Change: the layout comes from the evidence"), so a fork that keeps an accepted layout (plain depth 5 or 6, or the Gloas
+progressive form) needs no new program. Earlier text here said the program key fixes the fork schedule; that was wrong.
+Two parts still read a date or a fixed list, and both must change before the audit:
+1. `BeaconProofVerifier.gloasForkSlot` is immutable (`src/hardened/BeaconProofVerifier.sol`). A mainnet deployment today
+   gets `NO_GLOAS_FORK`, because Ethereum has no Gloas epoch. When Gloas activates, the gate on Ethereum still admits
+   deposits (Gloas is an allowed shape in `src/hardened/ForkShape.sol`), but the verifier on PulseChain reads those blocks
+   with the pre-Gloas rule and refuses them: the deposits lock. Fix: choose the Gloas rule from the evidence (the proven
+   shape of the source state), not from a slot. The off-chain twin is `trie_roots` in
+   `light-client/crates/lc-core/src/message.rs`, which reads `fork_at_slot`.
+2. The gate's allowed shapes and the shapes the message verifier can prove are two lists. Fix: one list, so any fork the
+   verifier cannot follow seals deposits instead of admitting them. A test compares them.
+Residual, accepted under 1.4 unless the owner asks for an upgrade path: after a fork of unknown shape on chain X, sends
+from X stop (the gate seals), messages from X can no longer be proven, and copies held on X of tokens native to the
+other chain cannot go home; their originals stay locked. Messages into X keep working. Sends in the last two or three
+epochs before the fork strand (1.6). A new route serves new transfers.
+- **D3.** Replaced by the owner's assumption above: no deploy date counts as safe, so the deployment waits for nothing.
+  The two fixes go into the layer 1 and 2 freeze with D1.
+- Size: M for the two fixes and their tests.
 
 **A7. Real-data gaps the audit will ask about** (`docs/audit/known-issues.md`, section 2):
 - 2.1 the real Ethereum mainnet genesis validators root branch fixture is missing;
@@ -382,7 +398,7 @@ Measure each billed item in the first week of Phase 4 before reporting a monthly
 | A contract bug after deployment (no admin, no pause) | Audit (S1); limited launch with caps (D2); the route can be replaced, users move; accepted risk 1.4 |
 | A forged header drains a mediator (committee or SP1 soundness) | Accepted (1.3, 1.8); a flow limiter (D2 (b)) bounds it; SP1 version policy (`docs/sp1-version-policy.md`) |
 | A PulseChain light client strands because nodes pruned the states | Handoff archive from period one, exported to IPFS (B2); deadline check on the status page; alerts (E4) |
-| Ethereum schedules Gloas soon after the deployment | Check before deploying (D3); the gate seals and the route is replaced (1.5, 1.6) |
+| A fork of unknown shape on either chain | The gate seals sends from that chain; copies held there of the other chain's tokens stay stuck (A6, 1.4); a new route serves new transfers |
 | RunPod has no GPU, or the image does not start (v7, MIG slices) | Pin a working image from the audited commit; local and CPU proving as slow fallbacks (B3); messages wait, nothing is lost |
 | Ethereum gas spikes make updates and deliveries expensive | Runner loss limit and spend caps (C2); keep-alive age (D5); a delivery that is not sent stays deliverable by anyone |
 | A thin or manipulated PulseX pool misprices a tip | $10k minimum depth; prices decide only whether to deliver, never an amount; spend caps (C3) |
@@ -395,9 +411,9 @@ Measure each billed item in the first week of Phase 4 before reporting a monthly
 
 | Id | Question | Blocks |
 |---|---|---|
-| D1 | Sends carry their own gate evidence (layers 1 to 3 change) before mainnet, or confirm-then-send? | audit scope |
+| D1 | Sends carry their own gate evidence (layers 1 to 3 change) before mainnet, or confirm-then-send? Decided: evidence. | audit scope |
 | D2 | Limited-launch caps: frontend and runner only, an immutable flow limiter, or a first route with a send cutoff? | audit scope |
-| D3 | Deploy only when Ethereum's next fork is far enough away; how far? | deploy date |
+| D3 | Replaced: forks are unpredictable; Gloas chosen by evidence, one shape list for gate and verifier (A6) | audit scope |
 | D4 | The licence | audit docs |
 | D5 | Keep-alive age on mainnet, per light client | Ethereum gas spend |
 | D6 | Separate RunPod endpoint and key for mainnet? | B3 |
@@ -417,7 +433,7 @@ Measure each billed item in the first week of Phase 4 before reporting a monthly
 Contracts
 - [ ] D1, D2 decided; changes built test-first; mutation checks run
 - [ ] `CreationGasCap.t.sol` passes on the final code; mainnet `eth_estimateGas` of every creation the week of the deploy
-- [ ] Ethereum fork schedule checked against the program (D3)
+- [ ] Gloas rule chosen by evidence, not `gloasForkSlot`; gate shapes and verifier shapes from one list (A6)
 - [ ] Fixtures for `known-issues.md` 2.1, 2.2, 2.7, 2.8
 - [ ] Audit docs refreshed; LICENSE added
 - [ ] Commit tagged and frozen; audit done; fixes reviewed; testnet redeployed from the audited commit
