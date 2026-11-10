@@ -29,12 +29,12 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 - **Link.** [`README.md`](../../README.md); [`docs/sp1-version-policy.md`](../sp1-version-policy.md) "When an advisory hits a deployed route".
 
 ### 1.5 The interface cutover before a fork is advice only (HB-02, window 2)
-- **What.** The fork schedule is not on chain. The interface stops offering a route one hour (at least three epochs) before an unsupported fork activates. A direct contract call in that window still succeeds.
+- **What.** The fork schedule is not on chain. The interface stops offering a route one hour (at least three epochs) before an unsupported fork activates. A direct contract call in that window still succeeds. A fork of an allowed shape (plain depth 5 to 7, or the progressive form of Gloas) needs no cutover since 2026-11-10: the gate admits it, and the bridge on the other chain proves its messages from the fork proof of each source state, with no fork slot in either contract (1.22).
 - **Why accepted.** No contract can see a fork before it activates. This is the one place where safety relies on the interface.
 - **Link.** [`docs/red-team-revision-2.md`](../red-team-revision-2.md) HB-02; [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Interface cutover (HB-02 window 2)".
 
 ### 1.6 Sends just before an unsupported fork are stranded
-- **What.** A message needs a stored finalized anchor after it. Finality trails the head by about two epochs, so a message in roughly the last two or three epochs before an unsupported fork can never be delivered: about 13 to 19 minutes on Ethereum, 11 to 16 minutes on PulseChain.
+- **What.** A message needs a stored finalized anchor after it. Finality trails the head by about two epochs, so a message in roughly the last two or three epochs before an unsupported fork can never be delivered: about 13 to 19 minutes on Ethereum, 11 to 16 minutes on PulseChain. Before a fork of an allowed shape nothing strands: the light client keeps storing heads, and an anchor after the fork proves a source from before it, because the source carries the fork proof of its own state (1.22).
 - **Why accepted.** The cure is refusing those sends (only the interface can, see 1.5) or refunds (1.1, rejected).
 - **Link.** [`docs/red-team-revision-2.md`](../red-team-revision-2.md) HB-02, "Two windows lose funds".
 
@@ -112,6 +112,11 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 - **What.** Our build of the vendored verifier has code hash `0xe5878a94...e84b`. Succinct's deployed verifier for the same circuit has `0xcceb864c...04dd`. The cause was not found.
 - **Why accepted.** The deploy script pins whichever code hash the operator chooses. Deploying the vendored source needs no trust in a deployer account.
 - **Link.** [`docs/sp1-version-policy.md`](../sp1-version-policy.md) "Code hash for `verifierCodeHash`".
+
+### 1.22 The fork rule of a message comes from the proof of its source state
+- **What.** Since 2026-11-10 the bridge holds no Gloas fork slot. Each `MessageProof` carries `sourceFork`, the proof of `fork.current_version` and `genesis_validators_root` under the state root of its source header, judged by `ForkShape.judge`, the rule of the gate (`src/hardened/BeaconLayoutLib.sol`, `requireBlockHash`). The progressive shape takes the bid rule, a plain shape the body layout, any other shape reverts `ForkShapeProofInvalid`. Block hash layout evidence carries the proof of its header's state, and a progressive state is refused (`GloasSlotRefused`). The gate and the verifier read one list, `ForkShape.allowedShapes` (`test/hardened/ForkRuleFromProof.t.sol`). Three residuals remain. (a) The prover must read the full post-state of each source block to build the proof (about 3.6 MB on Sepolia, far more on Ethereum mainnet). A node that pruned that state cannot serve it, so a message left unproven for long needs a node that keeps old states, or a fork proof saved while the state was fresh (it is about 12 hashes). (b) The rule judges the state shape. A fork that keeps an allowed state shape but moves `execution_payload.block_hash` beyond the accepted body positions (body or payload deeper than 32 fields), or a later progressive fork that drops the bid field, passes the gate, and its messages cannot be proven (they fail closed): a new route is the answer (1.4, H-19). (c) About 20,000 gas more per delivery.
+- **Why accepted.** Owner, 2026-11-10: "lets assume that we cannot know what the structure will be updated to nor when"; "telling PulseChain" must be a proof, never a trusted call (`docs/superpowers/specs/2026-11-10-mainnet-readiness.md`, A6). A fork slot fixed at deployment locked deposits after an unscheduled Gloas, and a slot of "never" let a proposer validate a body row under `graffiti` at a Gloas slot. The per-message proof needs no change to a guest program.
+- **Link.** [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Layer 2: message bridge", paragraph "Change (2026-11-10)"; `light-client/crates/lc-core/src/ancestry.rs` `source_shape`.
 
 ## 2. Open items
 
@@ -199,7 +204,7 @@ These were found in the third-party proposal (`spec/`). The column "Hardened des
 | H-16 | No source chain check | Fixed: `WrongSourceChain` in the bridge and in the mediator | [red-team.md](../red-team.md) |
 | H-17 | Deploy script cannot deploy | Not applicable: new deploy script with tests | [red-team.md](../red-team.md) |
 | H-18, H-20, H-22, H-23 | Front end, build and setup notes of the proposal | Not applicable to the rebuild | [red-team.md](../red-team.md) |
-| H-19 | Immutable contracts against hard forks | Addressed: layout from evidence, fork gate, registry, new routes; residuals in 1.5, 1.6, 1.9, 1.10 | [red-team.md](../red-team.md) |
+| H-19 | Immutable contracts against hard forks | Addressed: layout from evidence, fork gate, registry, fork rule of each message from proof (2026-11-10), new routes; residuals in 1.5, 1.6, 1.9, 1.10, 1.22 | [red-team.md](../red-team.md) |
 | H-21 | Setup notes install an npm package that does not exist | Contained: never installed; the rebuild uses the Rust crate `sp1-sdk` only | [red-team.md](../red-team.md) "Containment" |
 
 ### 3.2 Revision 2 of the proposal (R2-01 to R2-15)

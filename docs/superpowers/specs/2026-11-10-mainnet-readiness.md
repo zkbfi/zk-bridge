@@ -157,6 +157,16 @@ help a lot in this regard, prevent bridges when we are near a fork for example".
 - **Part 2 (contracts, layer 1 and 2 freeze).** "Telling PulseChain" is a proof, never a trusted call: the verifier takes
   the Gloas rule from proven fork data (the `ForkRegistry` observation, or the source state's own proven shape) instead
   of the immutable `gloasForkSlot`; the gate's allowed shapes and the verifier's provable shapes come from one list.
+  Status 2026-11-10: built on branch `feat/fork-rule-from-proof`, not merged, not deployed. The source state's own
+  proof was chosen: the registry records the first OBSERVED slot (later than the activation, so blocks in between
+  would be misjudged), and the exact `fork.epoch` would need a change to the observation program (new program key).
+  `MessageProof.sourceFork` carries `fork.current_version` and `genesis_validators_root` under the source state root,
+  judged by `ForkShape.judge`; `gloasForkSlot` and the config key `gloasForkEpoch` are gone; block hash layout evidence
+  proves a plain state; the position rules read `ForkShape.allowedShapes` (`test/hardened/ForkRuleFromProof.t.sol`).
+  The program keys are expected to stay: the guests do not reach the changed `lc-core` code. Not yet confirmed by a
+  Docker build: `light-client/program-keys.source-hash` no longer matches the sources, so `scripts/program-keys.sh`
+  rebuilds both guests and compares them with `program-keys.json`. Run it before the merge. Cost: about 20,000 gas per
+  delivery, and the prover reads the post-state of each source block (`known-issues.md` 1.22).
 - **D3.** Replaced by the owner's assumption above: no deploy date counts as safe, so the deployment waits for nothing.
   The two fixes go into the layer 1 and 2 freeze with D1.
 - Size: M for the two fixes and their tests.
