@@ -15,6 +15,7 @@ import { useMessage } from "../app/queries";
 import { useServices } from "../app/services";
 import { amountText, arrivesAsSymbol } from "../bridge/bridge-model";
 import { Chevron, CopyIcon, ExternalLink } from "../bridge/icons";
+import { CopyValue, useCopy } from "../ui/CopyValue";
 import { iconSubjectOf } from "../bridge/image-source";
 import { Num } from "../bridge/Num";
 import { TokenIcon } from "../bridge/TokenIcon";
@@ -92,20 +93,16 @@ const AppValue = ({ app }: { readonly app: MessageApp }) => (
   </>
 );
 
-/** The message ID, copied with one tap. */
+/** The message ID, copied with one tap: the ID itself and the icon beside it do the same. */
 const CopyId = ({ id }: { readonly id: Hex }) => {
-  const [copied, setCopied] = useState(false);
+  const { message, copy } = useCopy(id, () => null);
   return (
-    <button
-      type="button"
-      className="zb-xcopy"
-      aria-label={copied ? "Message ID copied" : "Copy the message ID"}
-      onClick={() => {
-        void navigator.clipboard?.writeText(id).then(() => setCopied(true), () => setCopied(false));
-      }}
-    >
-      <CopyIcon />
-    </button>
+    <>
+      <button type="button" className="zb-xcopy" aria-label={message === "Copied" ? "Message ID copied" : "Copy the message ID"} onClick={copy}>
+        <CopyIcon />
+      </button>
+      <span className="zb-copystatus" role="status" aria-live="polite">{message}</span>
+    </>
   );
 };
 
@@ -356,7 +353,7 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
         }
         sub={
           <>
-            <span className="zb-mono zb-break">{shortHex(detail.id)}</span> · message ID <CopyId id={detail.id} />
+            <CopyValue value={detail.id} label="Copy message ID" className="zb-break">{shortHex(detail.id)}</CopyValue> · message ID <CopyId id={detail.id} />
           </>
         }
         tags={

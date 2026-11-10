@@ -4,6 +4,7 @@ import type { ReleaseEntry, ReleaseManifest } from "./manifest.ts";
 import { rememberSequence } from "./sequence-memory.ts";
 import { defaultSelection, groupDownloads, renderDownloads, renderProgram } from "./downloads.ts";
 import type { MenuChoices } from "./downloads.ts";
+import { copyable, wireCopy } from "./copy.ts";
 import { detectPlatform } from "./platform.ts";
 import type { Detection } from "./platform.ts";
 
@@ -108,9 +109,9 @@ function releaseSection(release: ReleaseEntry, gateways: readonly string[]): str
   return [
     `<div class="release">`,
     `<h3>${escapeHtml(release.name)} ${escapeHtml(release.version)}</h3>`,
-    `<p>Commit <code>${escapeHtml(release.commit)}</code>, published ${escapeHtml(release.publishedAt)}.</p>`,
-    `<p>Content address: <code>${escapeHtml(release.cid)}</code></p>`,
-    `<p>Archive SHA-256: <code>${escapeHtml(release.archiveSha256)}</code></p>`,
+    `<p>Commit ${copyable(release.commit, "Copy commit hash")}, published ${escapeHtml(release.publishedAt)}.</p>`,
+    `<p>Content address: ${copyable(release.cid, "Copy content address")}</p>`,
+    `<p>Archive SHA-256: ${copyable(release.archiveSha256, "Copy SHA-256")}</p>`,
     gatewayLinks(release.cid, gateways, release.name === "dapp"),
     `</div>`,
   ].join("");
@@ -273,7 +274,7 @@ function focusIn(root: ParentNode, selector: string): void {
   root.querySelector<HTMLElement>(selector)?.focus();
 }
 
-/** Wires the download menus: click, keyboard, copy. The menus are drawn again from `choices` after each change. */
+/** Wires the download menus: click and keyboard. The menus are drawn again from `choices` after each change. */
 function wireDownloads(target: HTMLElement, state: Extract<LandingState, { kind: "verified" }>): void {
   const choices: MenuChoices = {};
   const baseUrl = downloadBase(state);
@@ -308,17 +309,6 @@ function wireDownloads(target: HTMLElement, state: Extract<LandingState, { kind:
     const element = event.target instanceof Element ? event.target : null;
     const trigger = element?.closest<HTMLElement>(".dl-trigger");
     const item = element?.closest<HTMLElement>(".dl-item");
-    const copy = element?.closest<HTMLElement>(".dl-copy");
-    if (copy !== null && copy !== undefined) {
-      void navigator.clipboard?.writeText(copy.dataset.copy ?? "").then(
-        () => {
-          copy.textContent = "Copied";
-          setTimeout(() => (copy.textContent = "Copy"), 1500);
-        },
-        () => (copy.textContent = "Select and copy"),
-      );
-      return;
-    }
     if (trigger !== null && trigger !== undefined) {
       const name = trigger.dataset.program ?? "";
       const group = programs.find((candidate) => candidate.name === name);
@@ -381,4 +371,5 @@ export async function startLanding(config: LandingConfig): Promise<void> {
   const shown = { ...state, platform };
   target.innerHTML = renderLanding(shown, config.notice);
   wireDownloads(target, shown);
+  wireCopy(target);
 }

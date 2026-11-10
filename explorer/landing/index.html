@@ -36,11 +36,13 @@
       .dl-check { display: inline-block; width: 1rem; color: var(--accent); }
       .dl-item span { white-space: nowrap; }
       .dl-yours { margin-left: 0.25rem; font-size: 0.8rem; color: var(--muted); }
-      .dl-trigger:focus-visible, .dl-item:focus-visible, .dl-button:focus-visible, .dl-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      .dl-trigger:focus-visible, .dl-item:focus-visible, .dl-button:focus-visible, .copyable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       .dl-details { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 1rem 0 0; }
       .dl-details dt { color: var(--muted); }
       .dl-details dd { margin: 0; }
-      .dl-copy { font: inherit; font-size: 0.85rem; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0.1rem 0.7rem; cursor: pointer; }
+      .copyable { cursor: pointer; border-radius: 3px; }
+      .copyable:hover { background: var(--hover); text-decoration: underline dotted; text-underline-offset: 0.2em; }
+      .copy-status { margin-left: 0.5rem; font-size: 0.85rem; color: var(--accent); }
       .dl-note, .dl-choose { color: var(--muted); }
       figure.snapshot { margin: 0 0 1rem; }
       figure.snapshot img { display: block; width: 100%; height: auto; border: 1px solid var(--line); box-shadow: var(--shadow); }

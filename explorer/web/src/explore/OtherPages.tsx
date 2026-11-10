@@ -4,6 +4,7 @@
  * hover.
  */
 import { useQuery } from "@tanstack/react-query";
+import { CopyValue } from "../ui/CopyValue";
 import type { ReactNode } from "react";
 import type { Address } from "viem";
 import type { ChainConfig, PairConfig, TokenInfo } from "@terminal/model/types";
@@ -105,7 +106,7 @@ export const ProofPage = ({ chainId, number }: { readonly chainId: number; reado
           <span className="zb-mono">{shortHex(holder.contracts.lightClient)}</span>
         </Row>
         <Row k="Transaction" internal={explore({ kind: "tx", chainId, id: proof.transactionHash })} outside={explorerLinksOf(chainId, "tx", proof.transactionHash)} what="transaction">
-          <span className="zb-mono">{shortHex(proof.transactionHash)}</span>
+          <CopyValue value={proof.transactionHash} label="Copy transaction hash">{shortHex(proof.transactionHash)}</CopyValue>
         </Row>
         <Row k="Block" internal={explore({ kind: "block", chainId, id: proof.blockNumber.toString() })} outside={explorerLinksOf(chainId, "block", proof.blockNumber.toString())} what="block">
           {proof.blockNumber.toLocaleString("en-US")}
@@ -122,7 +123,7 @@ export const ProofPage = ({ chainId, number }: { readonly chainId: number; reado
         <XGroup title="The proof" />
         <KV k="Execution block" href={explore({ kind: "block", chainId: tracked.chainId, id: proof.executionBlockNumber.toString() })}>{proof.executionBlockNumber.toLocaleString("en-US")}</KV>
         <KV k="Sync committee">period {(proof.slot / SLOTS_PER_PERIOD).toLocaleString("en-US")} · <Missing why="The indexer does not record which of the 512 seats signed" /> signed</KV>
-        <KV k="Header root"><span className="zb-mono">{shortHex(proof.headerRoot)}</span></KV>
+        <KV k="Header root"><CopyValue value={proof.headerRoot} label="Copy header root">{shortHex(proof.headerRoot)}</CopyValue></KV>
         {verifier === undefined ? <KV k="Verifier"><Missing why="Read from the light client on the chain" /></KV> : <KV k="Verifier" href={explore({ kind: "contract", chainId, id: verifier })}><span className="zb-mono">{shortHex(verifier)}</span></KV>}
         <KV k="Proving time"><Missing why="The prover does not publish its timings" /></KV>
         <KV k="Proof generation">${PROOF_COST} (assumed)</KV>
@@ -183,7 +184,7 @@ export const BlockPage = ({ chainId, number }: { readonly chainId: number; reado
     <>
       <XBand label={chain.name} big={`Block ${number.toLocaleString("en-US")}`} sub={<External url={explorerUrl(chainId, "block", number.toString())} label="On the chain's explorer" />} />
       <div className="zb-col zb-xpage">
-        <KV k="Hash">{data === undefined ? <Missing why={block.isError ? "The chain has no such block yet" : "Read from the chain"} /> : <span className="zb-mono">{shortHex(data.hash ?? "")}</span>}</KV>
+        <KV k="Hash">{data === undefined ? <Missing why={block.isError ? "The chain has no such block yet" : "Read from the chain"} /> : <CopyValue value={data.hash ?? ""} label="Copy block hash">{shortHex(data.hash ?? "")}</CopyValue>}</KV>
         <KV k="Time">{data === undefined ? <Missing why="Read from the chain" /> : new Date(Number(data.timestamp) * 1000).toLocaleString("en-GB")}</KV>
         <KV k="Transactions">{data?.transactions === undefined ? <Missing why="Read from the chain" /> : data.transactions.length}</KV>
         <KV k="Gas used">{data === undefined ? <Missing why="Read from the chain" /> : data.gasUsed.toLocaleString("en-US")}</KV>
@@ -283,7 +284,7 @@ export const ReleasePage = ({ cid }: { readonly cid: string }) => {
   const counts = useQuery({ queryKey: ["explore", "counts"], queryFn: () => source.counts() }).data;
   return (
     <>
-      <XBand label="Release" big={shortHex(cid)} sub={<><span className="zb-mono zb-break">{cid}</span><External url={`https://ipfs.io/ipfs/${cid}`} label="On an IPFS gateway" /></>} />
+      <XBand label="Release" big={shortHex(cid)} sub={<><CopyValue value={cid} label="Copy content address" className="zb-break" /><External url={`https://ipfs.io/ipfs/${cid}`} label="On an IPFS gateway" /></>} />
       <div className="zb-col zb-xpage">
         <KV k="Signed">{counts === undefined ? <Missing why="Read from the indexer" /> : counts.releases === 0 ? <Missing why="The indexer has no release events" /> : "see release events"}</KV>
         <KV k="Version"><Missing why="The indexer has no release events" /></KV>

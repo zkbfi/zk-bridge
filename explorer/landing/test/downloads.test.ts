@@ -30,7 +30,7 @@ test("the detected platform is the primary download, with its file, size and SHA
   assert.ok(html.includes("Download for Linux · x64"));
   assert.ok(html.includes("54.3 MB"));
   assert.ok(html.includes("d".repeat(64)));
-  assert.ok(html.includes('data-copy="' + "d".repeat(64) + '"'));
+  assert.ok(html.includes(`data-copy="${"d".repeat(64)}"`) && !html.includes("dl-copy"));
   assert.ok(html.includes("Compare the SHA-256"));
   assert.ok(html.includes('aria-expanded="false"') && html.includes(" hidden>"));
   assert.ok(!html.includes("e".repeat(64)), "only the chosen file's checksum is shown");
