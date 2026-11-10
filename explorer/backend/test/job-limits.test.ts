@@ -159,6 +159,21 @@ describe("the daily GPU budget per direction", () => {
   });
 });
 
+describe("the GPU budget and an unpriced tip at the automatic maximum (review, 2026-11-10)", () => {
+  it("refuses the finality proof of a message that pays only by its unpriced 1% tip once the budget is spent: no liveness bypass", async () => {
+    // A worthless token can carry a 1% tip, and such a tip counts as paying (owner: "yes, deliver straight away"), so
+    // its batch proves at finality. The watcher asks as for any waiting message (see watch-watcher.test.ts), and the
+    // indexer reports a waiting message: the $5 a day of the direction bounds what such messages cost.
+    const run = build({}, fakeProofNeed({ needed: true, why: "waiting-message" }));
+    provedJob(run.storage, "a", run.clock.now() - HOUR, 8000);
+    const request = { ...base, caller: "watch", reason: "finality" as const, messageId: `0x${"aa".repeat(32)}` as `0x${string}`, target: { startSlot: 1, newSlot: 2 } };
+    expect(await run.service.submit(request)).toMatchObject({ refused: "rate-limited", why: "gpu-budget" });
+    expect(run.named("gpu_budget_bypassed")).toEqual([]);
+    expect(run.named("gpu_budget_spent")).toHaveLength(1);
+    expect(run.named("job_started")).toEqual([]);
+  });
+});
+
 describe("the requests module and the job limits", () => {
   const snapshot = (amountUsd: number, billedSeconds: number, at: number): BillingSnapshot => ({ spend: { days: [{ start: new Date(at).toISOString().slice(0, 10), amountUsd, billedSeconds }], hours: [], readAt: at }, balance: null });
 

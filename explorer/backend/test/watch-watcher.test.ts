@@ -973,6 +973,20 @@ describe("the direction watcher, with a minimum interval since the last proof (2
     expect(run.submitted).toHaveLength(1);
   });
 
+  it("proves an unpriced 1% tip at its finality as a plain message request, never as a liveness proof, so the GPU budget holds it", async () => {
+    // Owner, 2026-11-09: "yes, deliver straight away". A worthless token can carry such a tip, so the request must stay
+    // under the direction's GPU budget: no plannedHandoff and no urgent reason, which are the only ways past it.
+    const atMaximum: Economics = { kind: "known", feesUsd: new Map(), deliveryUsd: null, unpriced: 0, atMaximum: new Set([id("a")]), why: "testnet tokens have no price", block: null };
+    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT, economics: atMaximum, lastProofAt: LAST });
+    run.watcher.observe(observation(HEAD + 128));
+    await run.watcher.settled();
+    expect(run.named("proof_due")).toMatchObject([{ why: "message", trigger: "profit", batch: 1 }]);
+    expect(run.submitted).toHaveLength(1);
+    expect(run.submitted[0]).toMatchObject({ reason: "finality", messageId: id("a") });
+    expect(run.submitted[0]).not.toHaveProperty("plannedHandoff");
+    expect(run.submitted[0]).not.toHaveProperty("urgent");
+  });
+
   it("proves at once when the batch pays, even inside the interval", async () => {
     const run = setup({ messages: [listed(HEAD + 100, "a"), listed(HEAD + 110, "b")], batchRule: WAIT, economics: priced({ [id("a")]: USD }), lastProofAt: LAST });
     run.watcher.observe(observation(HEAD + 128));

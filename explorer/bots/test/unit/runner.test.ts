@@ -424,8 +424,8 @@ describe("delivery decisions", () => {
     below.chain.feeTokens = 9n;
     await below.runner.sweep();
     expect(below.outcomes.records[0]).toMatchObject({ reason: "unpriced-tip-below-maximum", costWei: expect.any(BigInt) });
-    // 10 of 1000 is the automatic maximum: it pays straight away, at no known value in wei.
-    const atMaximum = world({ items: [six], data });
+    // 10 of 1000 is the automatic maximum: it pays straight away, at no known value in wei, under the daily unpaid cap.
+    const atMaximum = world({ items: [six], data, maximumUnpaidSpendPerDayWei: 10n ** 18n });
     atMaximum.chain.feeTokens = 10n;
     expect((await atMaximum.runner.sweep()).delivered).toBe(1);
     expect(atMaximum.outcomes.records[0]).toMatchObject({ status: "delivered", feeExpectedWei: null });
@@ -1591,3 +1591,101 @@ describe("an item that only the unpaid rule delivers", () => {
   });
 });
 
+
+/**
+ * Security review, 2026-11-10: anyone can mint a worthless token and bridge it with a 1% tip in it. Owner, 2026-11-09:
+ * "yes, deliver straight away", so such a tip still counts as paying and goes in the sweep that finds it, but only while
+ * the destination's daily unpaid cap (`maximumUnpaidSpendPerDayWei`) has room, and its gas is charged to that cap.
+ */
+describe("an unpriced tip at the automatic maximum", () => {
+  const COST = 3_000_000n;
+  const NOW_SECONDS = 10_000;
+  const WORTHLESS = OTHER_TOKEN;
+  /** An item covered a minute ago: the hourly unpaid rule does not apply to it yet. */
+  const fresh = (id: number, token: `0x${string}` = WORTHLESS): FeedItem => ({ ...feedItem({ id, token, decimals: 18 }), covered: { timestamp: NOW_SECONDS - 60 } });
+  const tipFor = (id: number, token: `0x${string}` = WORTHLESS) => ({ [word(id)]: feeOfferData({ director: fixedFee(10n), value: 1000n, token }) });
+  const capped = (options: WorldOptions) => world({ startTime: NOW_SECONDS * 1000, deliverUnpaidAfterSeconds: 3600, maximumUnpaidSpendPerDayWei: 10n ** 18n, ...options });
+  const sends = (w: ReturnType<typeof world>) => w.chain.log.filter((entry) => entry.kind === "send");
+  const named = (w: ReturnType<typeof world>, name: string) => w.events().filter((event) => event.msg === name || event.event === name);
+
+  it("is delivered straight away while the cap has room, charged to the cap, and logged as delivered_unpriced", async () => {
+    const w = capped({ items: [fresh(1)], data: tipFor(1) });
+    w.chain.feeTokens = 10n; // 1% of 1000
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 1, skipped: 0 });
+    expect(sends(w).map((entry) => entry.request.to)).toEqual([MULTICALL]);
+    expect(w.state.current.unpaidSpend).toEqual([expect.objectContaining({ wei: String(COST) })]);
+    expect(named(w, "delivered_unpriced")).toMatchObject([{ messageId: word(1), tipToken: WORTHLESS, tipTokens: "10", gasWei: String(COST), costWei: String(COST), chain: 369 }]);
+    expect(named(w, "delivered_unpaid")).toEqual([]);
+    expect(w.outcomes.records).toMatchObject([{ status: "delivered", feeExpectedWei: null }]);
+  });
+
+  it("charges the layout calls of the delivery to the cap too", async () => {
+    const w = capped({ items: [fresh(1)], data: tipFor(1) });
+    w.chain.feeTokens = 10n;
+    const layoutCall = { function: "addBlockHashLayout", reason: "no row", to: BRIDGE, data: "0xdeadbeef" as Hex };
+    let builds = 0;
+    w.prover.evidence = async () => evidenceFor({ prerequisites: (builds += 1) === 1 ? [layoutCall] : [] });
+    expect((await w.runner.sweep()).delivered).toBe(1);
+    expect(w.state.current.unpaidSpend).toEqual([expect.objectContaining({ wei: String(2n * COST) })]);
+    expect(named(w, "delivered_unpriced")).toMatchObject([{ gasWei: String(COST), costWei: String(2n * COST) }]);
+  });
+
+  it("is skipped with unpaid-spend-cap while the cap is full, logged once, and delivered once the cap has room again", async () => {
+    const w = capped({ items: [fresh(1)], data: tipFor(1), maximumUnpaidSpendPerDayWei: 1_000n });
+    w.chain.feeTokens = 10n;
+    w.state.current = { ...w.state.current, unpaidSpend: [{ id: "0x1", atMilliseconds: NOW_SECONDS * 1000 - 60_000, wei: "1000" }] };
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
+    // The refused item waits five minutes, as every capped item does, and is refused again without a new log line.
+    w.advance(5 * 60 * 1000);
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
+    expect(sends(w)).toEqual([]);
+    expect(w.outcomes.records).toMatchObject([{ status: "skipped", messageId: word(1), reason: "unpaid-spend-cap" }]);
+    expect(named(w, "unpaid_delivery_refused")).toMatchObject([{ messageId: word(1), reason: "daily-cap", unpriced: true }]);
+    expect((w.prover as { evidenceRuns: number }).evidenceRuns).toBe(0);
+    // A day later the old spend left the window.
+    w.advance(24 * 3600 * 1000);
+    expect((await w.runner.sweep()).delivered).toBe(1);
+    expect(named(w, "delivered_unpriced")).toHaveLength(1);
+  });
+
+  it("is skipped on a chain with no cap", async () => {
+    const w = capped({ items: [fresh(1)], data: tipFor(1), maximumUnpaidSpendPerDayWei: null });
+    w.chain.feeTokens = 10n;
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
+    expect(w.outcomes.records[0]).toMatchObject({ reason: "unpaid-spend-cap", detail: "no daily cap is set for chain 369" });
+    expect(sends(w)).toEqual([]);
+  });
+
+  it("drains no more than the cap: the delivery that fills it is the last one", async () => {
+    const w = capped({ items: [fresh(1), fresh(2), fresh(3)], data: { ...tipFor(1), ...tipFor(2), ...tipFor(3) }, maximumUnpaidSpendPerDayWei: COST });
+    w.chain.feeTokens = 10n;
+    w.chain.messageIdOfPosition = () => word(3);
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 1, skipped: 2 });
+    expect(sends(w)).toHaveLength(1);
+    expect(w.outcomes.records.filter((record) => record.reason === "unpaid-spend-cap").map((record) => record.messageId).sort()).toEqual([word(1), word(2)]);
+  });
+
+  it("leaves a priced tip that pays to the normal rules: delivered, nothing charged to the cap", async () => {
+    const w = capped({ items: [fresh(1, WRAPPED_NATIVE)], data: tipFor(1, WRAPPED_NATIVE), maximumUnpaidSpendPerDayWei: 1n });
+    w.state.current = { ...w.state.current, unpaidSpend: [{ id: "0x1", atMilliseconds: NOW_SECONDS * 1000 - 60_000, wei: "1" }] };
+    w.chain.feeTokens = COST * 2n;
+    expect((await w.runner.sweep()).delivered).toBe(1);
+    expect(w.state.current.unpaidSpend).toHaveLength(1);
+    expect(named(w, "delivered_unpriced")).toEqual([]);
+  });
+
+  it("does not count a tip in a token that does not answer decimals() as paying: the hourly rule may deliver it later, under the cap", async () => {
+    const w = capped({ items: [fresh(1)], data: tipFor(1) });
+    w.chain.feeTokens = 10n;
+    w.chain.tokenDecimals = null;
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
+    expect(w.outcomes.records[0]).toMatchObject({ reason: "unpriced-tip-below-maximum" });
+    expect(sends(w)).toEqual([]);
+    // An hour later the unpaid rule delivers it, charged to the same cap and logged as unpaid.
+    w.advance(3600 * 1000);
+    expect((await w.runner.sweep()).delivered).toBe(1);
+    expect(named(w, "delivered_unpaid")).toHaveLength(1);
+    expect(named(w, "delivered_unpriced")).toEqual([]);
+    expect(w.state.current.unpaidSpend).toHaveLength(1);
+  });
+});

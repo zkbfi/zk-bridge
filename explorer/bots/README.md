@@ -58,7 +58,7 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `runner.acceptOracleProof` | Take proofs in the oracle form (message version 2, a 65 byte proof). For local testing only: set it only when the destination light client uses the oracle stand-in as its verifier. Never on a live deployment. Default off. |
 | `runner.deliverWithoutOffer` | Deliver items with no fee offer, for the gas cost alone. Default off. |
 | `runner.deliverUnpaidAfterSeconds` | A whole number of seconds, or `null` to turn the rule off. Default 3600. A covered item that has waited this long since a stored head covered it (the `covered.timestamp` of the indexer feed) is delivered even when it has no fee offer, its offer is below the cost, or its tip is in a token with no price and under the automatic maximum (1% of the amount). An item with an offer goes through the delivery router, which pays the runner what the offer gives (the router is the only path that pays the tip, and a direct call to the bridge would leave the tokens at the router); an item with no offer goes to the bridge, as with `deliverWithoutOffer`. The loss limit does not apply. Items that pay go out first in a sweep, and the unpaid ones follow. `deliverWithoutOffer` stays the immediate rule for items with no offer. Each delivery logs `delivered_unpaid` with `messageId`, `waitedSeconds`, `gasUsed`, `costWei` and `chain`. |
-| `runner.maximumUnpaidSpendPerDayWei` | The most wei that unpaid deliveries may cost in a rolling 24 hours, by the chain id of the destination, as text. The cost is the gas of the receipts (gross, before any tip the router paid) plus the layout calls of the item. The runner keeps the spend in its state file, so a restart does not reset it. The runner reads the spend before each unpaid item, so the delivery that crosses the cap is the last one; after it the item is left out with the reason `unpaid-spend-cap` and a `unpaid_delivery_refused` warning. Defaults: `11155111` 50000000000000000 (0.05 ETH), `943` 1000000000000000000000000 (one million PLS). A chain with no entry and no default sends no unpaid delivery. A chain id in this map wins over the default. |
+| `runner.maximumUnpaidSpendPerDayWei` | The most wei that unpaid deliveries may cost in a rolling 24 hours, by the chain id of the destination, as text. The cost is the gas of the receipts (gross, before any tip the router paid) plus the layout calls of the item. The cap also covers the deliveries of unpriced tips at the automatic maximum (see "Why the unpaid cap covers unpriced 1% tips"). The runner keeps the spend in its state file, so a restart does not reset it. The runner reads the spend before each unpaid item, so the delivery that crosses the cap is the last one; after it the item is left out with the reason `unpaid-spend-cap` and a `unpaid_delivery_refused` warning. Defaults: `11155111` 50000000000000000 (0.05 ETH), `943` 1000000000000000000000000 (one million PLS). A chain with no entry and no default sends no unpaid delivery. A chain id in this map wins over the default. |
 | `runner.deliveryRouter` | Default: `delivery_router` of the deployment file. This is the operator's allowlist, not a rule of the protocol: no contract of the bridge or the mediator names a router, and anyone may deploy one. The runner delivers to this router and to no other. At start the runner reads `DeliveryRouter.rewardAddress()` from it and logs the value. The runner uses that address only for its accounting and its display. The router decides where each tip goes, so the configuration names no reward address. When the read fails, the runner stops with an error that names the router and the chain. |
 | `runner.multicall3` | The Multicall3 contract that batches the deliveries. Default `0xcA11bde05977b3631167028862bE2a173976CA11`, the canonical address. At start the runner refuses to run when the address holds no code. |
 | `runner.maximumBatchSize` | The most items in one batch transaction. Default 5. |
@@ -125,9 +125,11 @@ For each direction:
    - Compute the fee with `DeliveryRouter.feeInfo(token, value, gasUsed, director)` at the current fee quote. Value it in wei
      of the destination's coin from the one price source (see "Prices and the tip verdict"), and judge it with the one tip
      verdict. A token with no price (no market, a testnet token, or PulseChain unreachable with no price from the last
-     10 minutes) is judged by the automatic maximum: a tip of at least 1% of the amount pays and is delivered straight
-     away; a smaller one skips with `unpriced-tip-below-maximum`, and the unpaid rule may deliver it later. An item
-     without a destination token skips with `no-price-for-fee-token`.
+     10 minutes) is judged by the automatic maximum: a tip of at least 1% of the amount pays and is delivered in the same
+     sweep, after the priced items, while the daily unpaid cap (`maximumUnpaidSpendPerDayWei`) has room; a smaller one
+     skips with `unpriced-tip-below-maximum`, and the unpaid rule may deliver it later. A token that does not answer
+     `decimals()` is never paying (`unpriced-tip-below-maximum`). An item without a destination token skips with
+     `no-price-for-fee-token`.
    - A message has no gas limit of its own: the bridge forwards all the gas it gets, and a delivery that runs out of gas
      reverts and leaves the message undelivered, so anyone can try it again. Until the delivery can be estimated, the assumed
      gas of the item is `deliveryGasFallback`.
@@ -242,8 +244,19 @@ the prices coming from?").
 - **The verdict.** A priced tip `pays` when the runner's loss stays under `maximumLossPercent` of its gas cost, else it
   is `below-cost` (`loss-at-or-above-limit`). An unpriced tip is `unpriced-at-max` when it is at least the frontend's
   automatic maximum, 1% of the amount (`DEFAULT_CAP_WAD` of `@zkb/core`, the one constant): it counts as paying and the
-  runner delivers it straight away (owner: "yes, deliver straight away"). Below that it is `unpriced-below-max`
-  (`unpriced-tip-below-maximum`): not paying, so `deliverUnpaidAfterSeconds` applies.
+  runner delivers it straight away (owner: "yes, deliver straight away"), under the daily unpaid cap (see "Why the unpaid
+  cap covers unpriced 1% tips"). Below that it is `unpriced-below-max` (`unpriced-tip-below-maximum`): not paying, so
+  `deliverUnpaidAfterSeconds` applies. A token whose `decimals()` cannot be read is `unpriced-below-max` whatever its tip.
+- **Why the unpaid cap covers unpriced 1% tips.** Anyone can mint a token with no market and bridge it with a 1% tip in
+  that token. Without a bound the runner would pay real gas for each such delivery, and a script repeating it would
+  drain the runner's wallet. So the main pass hands an `unpriced-at-max` item to the capped pass of the same sweep
+  (internal reason `unpriced-tip-at-maximum`, not written to the outcome file), which delivers it while
+  `maximumUnpaidSpendPerDayWei` of the destination has room and charges the receipt's gas and the item's layout calls to
+  that cap, exactly as an unpaid delivery. Each such delivery logs `delivered_unpriced` with `messageId`, `tipToken`,
+  `tipTokens`, `gasWei`, `costWei` and `chain` (`tipToken`, because the log redactor blanks any field named `token`).
+  When the cap is full the item is skipped with `unpaid-spend-cap`, logged once while it stays refused; a chain with no
+  cap delivers none. The hourly unpaid rule and unpriced 1% tips share one cap, so size it for both. The backend still
+  proves such a message's batch at finality, inside its GPU budget per direction (no liveness bypass).
 - **Which profit rule applies where.** The runner judges its own spend: `runner.maximumLossPercent`, the tip against the
   gas it pays (with its share of a light client update). The backend judges when a proof is worth starting early:
   `watch.profitMargin`, the fees the fee address takes against the proof plus the delivery gas of each message. The
@@ -417,8 +430,8 @@ Every attempt is a log line: `traffic_sent` (direction, symbol, kind, `tokenAddr
 `deployMessage`, `deploysCopy`, `callbackGas`, gas), `traffic_approved`, `traffic_skipped` with a reason, or `traffic_failed` (an error, for example
 an endpoint that does not answer; the next poll tries again). At start `traffic_tokens` lists each test token with the
 address of its copy on the other chain. The test tokens have no market, so the runner judges their tips by the automatic
-maximum: a tip of `tipPercent` 1 or more is delivered straight away, a smaller one (the default 0.1) after
-`deliverUnpaidAfterSeconds`.
+maximum: a tip of `tipPercent` 1 or more is delivered straight away while the daily unpaid cap has room, a smaller one
+(the default 0.1) after `deliverUnpaidAfterSeconds`.
 
 | Reason | Meaning |
 |---|---|

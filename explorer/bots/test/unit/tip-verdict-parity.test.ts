@@ -3,7 +3,8 @@
  * through its own path, the fee quote of the router, the price source over its PulseChain client and `judgeOffer`, and
  * reaches the verdict the dapp and the backend reach. Its twins: backend/test/tip-verdict-parity.test.ts and
  * web/test/bridge/tip-verdict-parity.test.ts. Owner, 2026-11-09: a token with no market price pays at a tip of at least
- * the frontend's automatic maximum (1% of the amount): "yes, deliver straight away".
+ * the frontend's automatic maximum (1% of the amount): "yes, deliver straight away". The runner hands such a tip to its
+ * capped pass (`unpriced-tip-at-maximum`), which delivers it in the same sweep while the daily unpaid cap has room.
  */
 import { describe, expect, it } from "vitest";
 import type { Address, Hex } from "viem";
@@ -16,11 +17,11 @@ import { fakeChain, feedItem, memoryLogger } from "../support/builders.ts";
 /** The verdict a judgement stands for. */
 const verdictOf = (judgement: Judgement): string => {
   if (judgement.kind === "pay") return judgement.verdict;
-  return ({ "loss-at-or-above-limit": "below-cost", "unpriced-tip-below-maximum": "unpriced-below-max" } as Record<string, string>)[judgement.outcome.reason] ?? judgement.outcome.reason;
+  return ({ "loss-at-or-above-limit": "below-cost", "unpriced-tip-below-maximum": "unpriced-below-max", "unpriced-tip-at-maximum": "unpriced-at-max" } as Record<string, string>)[judgement.outcome.reason] ?? judgement.outcome.reason;
 };
 
 /** Judges a case the way the runner does: the router's fee for the director, the token priced through the runner's pricing. */
-async function judge(entry: TipCase): Promise<{ readonly judgement: Judgement; readonly asked: number }> {
+async function judge(entry: TipCase, deliverAnyTip = false): Promise<{ readonly judgement: Judgement; readonly asked: number }> {
   const chains = chainsOf(entry);
   const token = tokenOf(entry);
   const director = directorOf(entry);
@@ -45,7 +46,7 @@ async function judge(entry: TipCase): Promise<{ readonly judgement: Judgement; r
     chain,
     deliveryRouter: "0x0000000000000000000000000000000000000077",
     wrappedNative: chains.wrappedNative,
-    settings: { maximumLossPercent: tipVectors.rules.runnerMaximumLossPercent },
+    settings: { maximumLossPercent: tipVectors.rules.runnerMaximumLossPercent, deliverAnyTip },
     pricing: createTokenPricing({ destinationChainId: chains.destinationChainId, wrappedNative: chains.wrappedNative, pulsechain, now: () => 0 }),
     logger: memoryLogger().logger,
   } as unknown as DeliveryDependencies;
@@ -65,8 +66,9 @@ describe("the tip verdict of the shared fixture, as the runner judges it", () =>
     it(entry.name, async () => {
       const { judgement } = await judge(entry);
       expect(verdictOf(judgement)).toBe(entry.expected);
-      // Paying verdicts are delivered now; the others are left to the hourly unpaid rule.
-      expect(judgement.kind).toBe(entry.expected === "pays" || entry.expected === "unpriced-at-max" ? "pay" : "skip");
+      // A priced tip that pays is delivered now; an unpriced one at the maximum goes to the capped pass of the same sweep;
+      // the others are left to the hourly unpaid rule.
+      expect(judgement.kind).toBe(entry.expected === "pays" ? "pay" : "skip");
     });
   }
 
@@ -75,7 +77,9 @@ describe("the tip verdict of the shared fixture, as the runner judges it", () =>
     const paid = (await judge(priced)).judgement;
     // 10 tokens at 33,333,333,333 PLS a token.
     expect(paid).toMatchObject({ kind: "pay", feeWei: 10n * BigInt(tipVectors.prices.tokenAWeiPerToken) });
-    expect((await judge(thin)).judgement).toMatchObject({ kind: "pay", feeWei: null, verdict: "unpriced-at-max" });
+    expect((await judge(thin)).judgement).toMatchObject({ kind: "skip", outcome: { reason: "unpriced-tip-at-maximum", feeTokens: expect.any(BigInt), feeToken: tokenOf(thin).address } });
+    // The capped pass lifts the fee check: the tip still has no value in wei.
+    expect((await judge(thin, true)).judgement).toMatchObject({ kind: "pay", feeWei: null, verdict: "unpriced-at-max" });
   });
 
   it("reads no pool for a testnet token", async () => {

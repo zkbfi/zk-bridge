@@ -342,4 +342,27 @@ describe("red team: tip accounting", () => {
     // feeValueOf itself trusts the decimals that it is given.
     expect(feeValueOf(1n, 0, { state: { kind: "known" }, perWholeToken: 10n ** 18n })).toBe(10n ** 18n);
   });
+
+  it("ATTACK worthless token with a 1% tip: the normal rules never deliver it, only the capped pass under the daily unpaid cap (BLOCKED, review 2026-11-10)", async () => {
+    // Anyone can mint a token with no market and tip 1% of it. The tip counts as paying (owner: "yes, deliver straight
+    // away"), but nobody can tell its worth, so the item leaves the normal rules before the evidence is built.
+    const worthless = address(0x66);
+    const item = feedItem({ id: 1, token: worthless });
+    const data = { [item.messageId]: feeOfferData({ director: { ...DIRECTOR, limit: 10n }, value: 1000n, token: worthless }) };
+    const deps = dependencies({ indexer: fakeIndexer([item], data), prover: fakeProver() });
+    deps.chain.feeTokens = 10n;
+    const preparation = await prepareItem(deps, item, ledger());
+    expect(preparation).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "unpriced-tip-at-maximum", feeTokens: 10n, feeToken: worthless } });
+    expect(deps.chain.log.filter((entry) => entry.kind === "send")).toHaveLength(0);
+  });
+
+  it("ATTACK token that does not answer decimals() with a 1% tip never counts as paying (BLOCKED, review 2026-11-10)", async () => {
+    const odd = address(0x67);
+    const item = feedItem({ id: 1, token: odd });
+    const data = { [item.messageId]: feeOfferData({ director: { ...DIRECTOR, limit: 10n ** 6n }, value: 1000n, token: odd }) };
+    const deps = dependencies({ indexer: fakeIndexer([item], data), prover: fakeProver() });
+    deps.chain.feeTokens = 10n ** 6n;
+    deps.chain.tokenDecimals = null;
+    expect(await prepareItem(deps, item, ledger())).toMatchObject({ kind: "outcome", outcome: { reason: "unpriced-tip-below-maximum" } });
+  });
 });
