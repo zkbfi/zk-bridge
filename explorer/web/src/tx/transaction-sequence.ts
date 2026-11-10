@@ -12,11 +12,15 @@
  * estimate still reverts with `ForkNotConfirmed` (the epoch rolled over), it asks once more.
  */
 import type { Address, Hash, Hex } from "viem";
-import { gateConfirmWindow, type GateConfirmation } from "@zk-bridge/shared";
+import { isForkNotConfirmed, revertText, type GateCheck, type GateConfirmation } from "@zk-bridge/shared";
+import { decideGateStep, gateErrorText, GATE_WAIT_LIMIT, passesGate, withKnownGas, type GateDecision, type GateWait } from "@terminal/tx/gate-step";
 import { prepareTransaction, type PrepareClient, type PreparedTransaction } from "@terminal/tx/prepare";
 import type { WebStep } from "./bridge-steps";
-import { gateErrorText, passesGate, planGateConfirm, type GateCheck } from "./gate-check";
-import { isForkNotConfirmed, revertText } from "./revert-text";
+
+export { GATE_WAIT_LIMIT, type GateWait };
+
+/** What the page tells when no beacon endpoint answered the gate check. */
+const BEACON_HINT = "Check Settings, Beacon endpoints, then try again.";
 
 /** The chain access of one chain. */
 export interface SequenceChainClient extends PrepareClient {
@@ -55,18 +59,6 @@ export type SequenceOutcome = {
   readonly transactionHash: Hash;
   /** Set for the confirmation of an epoch on the gate. A reverted one does not stop the sequence: a retry checks the gate again. */
   readonly gateConfirm?: true;
-};
-
-/** What the page shows while the gate check waits. */
-export type GateWait = {
-  readonly chainName: string;
-  readonly epoch: bigint;
-  readonly seconds: number;
-  /**
-   * Set when the check waits because too little of the epoch is left for a confirmation to land in it (not for a missing
-   * header): the seconds that remained in `epoch`.
-   */
-  readonly epochSecondsLeft?: number;
 };
 
 /** The whole state. The sequence replaces the object on every change. */
@@ -110,26 +102,16 @@ export const IDLE_SEQUENCE: SequenceState = {
   gateWait: null,
 };
 
-/** How many times in a row the gate check waits for a beacon header before it gives up: 10 waits of a slot, 2 minutes on Sepolia. */
-export const GATE_WAIT_LIMIT = 10;
-
 /** Whether the state allows a retry: an error, and no reverted transaction other than a gate confirmation. */
 export const canRetry = (state: SequenceState): boolean =>
   state.phase === "error" && !state.outcomes.some((outcome) => outcome.status === "reverted" && outcome.gateConfirm !== true);
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
-/** A client that answers the estimate with a gas that is known already (the gate confirmation's simulation). */
-const withKnownGas = (client: PrepareClient, gas: bigint): PrepareClient => ({
-  estimateGas: async () => gas,
-  getTransactionCount: (parameters) => client.getTransactionCount(parameters),
-  estimateFeesPerGas: () => client.estimateFeesPerGas(),
-});
-
-const confirmStepOf = (step: WebStep, answer: Extract<GateConfirmation, { kind: "confirm" }>): WebStep => ({
-  plan: planGateConfirm(step.plan.chain, answer),
+const confirmStepOf = (decision: Extract<GateDecision, { kind: "confirm" }>): WebStep => ({
+  plan: decision.plan,
   disclosure: { feesApplyTo: "this-transaction", deliveryCall: null, destinationNativeSymbol: null, destinationChainId: null, amountToken: null, delivery: null },
-  gateConfirm: { epoch: answer.epoch, gas: answer.gas, validUntil: answer.validUntil },
+  gateConfirm: decision.mark,
 });
 
 /** How far a preparation went: whether the gate was asked again after a `ForkNotConfirmed`, and how many waits in a row. */
@@ -165,44 +147,26 @@ export const createTransactionSequence = (dependencies: SequenceDependencies): T
     try {
       answer = await checkGate({ chainId: chain.chainId, gate: chain.contracts.gate as Address, account: dependencies.account });
     } catch (error) {
-      if (mine === generation) publish({ phase: "error", error: gateErrorText(error, chain.name) });
+      if (mine === generation) publish({ phase: "error", error: gateErrorText(error, chain.name, BEACON_HINT) });
       return false;
     }
     if (mine !== generation) return false;
-    switch (answer.kind) {
-      case "not-needed":
+    const decision = decideGateStep(answer, { chain, nowMilliseconds: now(), waits: attempt.waits });
+    switch (decision.kind) {
+      case "send":
         return true;
-      case "sealed":
-        publish({ phase: "error", error: `The ${chain.name} deposit gate is sealed: it admits no send in epoch ${answer.epoch} or later. Nothing was sent.` });
+      case "refuse":
+        publish({ phase: "error", error: decision.message });
         return false;
-      case "wait": {
-        if (attempt.waits >= GATE_WAIT_LIMIT) {
-          publish({ phase: "error", error: `The beacon header of epoch ${answer.epoch} is not on ${chain.name} after ${GATE_WAIT_LIMIT} checks ${answer.retryAfterSeconds} seconds apart. Nothing was sent.` });
-          return false;
-        }
-        publish({ phase: "waiting", gateWait: { chainName: chain.name, epoch: answer.epoch, seconds: answer.retryAfterSeconds } });
-        await sleep(answer.retryAfterSeconds * 1000);
+      case "wait":
+        publish({ phase: "waiting", gateWait: decision.wait });
+        await sleep(decision.wait.seconds * 1000);
         if (mine === generation) await prepareCurrent({ ...attempt, waits: attempt.waits + 1 });
         return false;
-      }
-      case "confirm": {
-        // The confirmation and the send must land in one epoch. With less than the safety window left, a confirmation
-        // that the wallet signs and the chain mines would end up in the next epoch and confirm nothing for the send.
-        const window = gateConfirmWindow(answer.validUntil, now());
-        if (window.late) {
-          if (attempt.waits >= GATE_WAIT_LIMIT) {
-            publish({ phase: "error", error: `The ${chain.name} deposit gate still ends epoch ${answer.epoch} in ${window.secondsLeft} seconds after ${GATE_WAIT_LIMIT} checks. Nothing was sent.` });
-            return false;
-          }
-          publish({ phase: "waiting", gateWait: { chainName: chain.name, epoch: answer.epoch, seconds: window.waitSeconds, epochSecondsLeft: window.secondsLeft } });
-          await sleep(window.waitSeconds * 1000);
-          if (mine === generation) await prepareCurrent({ ...attempt, waits: attempt.waits + 1 });
-          return false;
-        }
-        publish({ steps: [...state.steps.slice(0, state.stepIndex), confirmStepOf(step, answer), ...state.steps.slice(state.stepIndex)] });
+      case "confirm":
+        publish({ steps: [...state.steps.slice(0, state.stepIndex), confirmStepOf(decision), ...state.steps.slice(state.stepIndex)] });
         await prepareCurrent(attempt);
         return false;
-      }
     }
   };
 

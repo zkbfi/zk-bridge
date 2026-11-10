@@ -214,6 +214,37 @@ export function createBeaconProofSource(input: { readonly url: string; readonly 
   };
 }
 
+/** The message of {@link fallbackBeaconSource} when it has no endpoint. */
+export const NO_BEACON_ENDPOINT_TEXT = "no beacon endpoint is set for this chain";
+
+/**
+ * A beacon source over several endpoints, tried in order. A request that one endpoint fails goes to the next. When every
+ * endpoint fails, the error says how many were tried and the last reason. Messages hold no URL.
+ *
+ * @param sources The endpoints' sources, in order.
+ * @param options.noneText The message when `sources` is empty, so a program can name where its endpoints are set.
+ * Default: {@link NO_BEACON_ENDPOINT_TEXT}.
+ */
+export function fallbackBeaconSource(sources: readonly BeaconProofSource[], options: { readonly noneText?: string } = {}): BeaconProofSource {
+  const first = async <T>(ask: (source: BeaconProofSource) => Promise<T>): Promise<T> => {
+    if (sources.length === 0) throw new GateEvidenceError("beacon-request-failed", options.noneText ?? NO_BEACON_ENDPOINT_TEXT);
+    let last: unknown = null;
+    for (const source of sources) {
+      try {
+        return await ask(source);
+      } catch (error) {
+        last = error;
+      }
+    }
+    const reason = last instanceof Error ? last.message : String(last);
+    throw new GateEvidenceError("beacon-request-failed", `no beacon endpoint answered (${sources.length} tried; last: ${reason})`);
+  };
+  return {
+    header: (blockRoot) => first((source) => source.header(blockRoot)),
+    stateProof: (stateId, descriptor) => first((source) => source.stateProof(stateId, descriptor)),
+  };
+}
+
 // ------------------------------------------------------------------ the evidence
 
 /** The shapes in the order the builder asks for them: the progressive state first (Gloas), then the plain depths. */
@@ -432,4 +463,31 @@ export async function ensureGateConfirmed(input: {
     throw new GateEvidenceError("simulation-reverted", `confirm would revert (simulated at block ${status.evidenceBlock.number}): ${describeRevert(error)}`);
   }
   return { kind: "confirm", call, gas, epoch: evidence.epoch, forkVersion: evidence.forkVersion, shape: evidence.shape, validUntil: evidence.validUntil, evidence };
+}
+
+/** The question a sender asks before a send on a chain with a gate: {@link ensureGateConfirmed} for that chain and account. */
+export type GateCheck = (input: { readonly chainId: number; readonly gate: Address; readonly account: Address }) => Promise<GateConfirmation>;
+
+/**
+ * The gate check of a program that sends (the web page, the terminal): {@link ensureGateConfirmed} on the flow client of the
+ * chain (so the confirmation's simulation and the send hit one node), over the beacon endpoints in force at each check,
+ * tried in order with {@link fallbackBeaconSource}. It sends nothing.
+ *
+ * @param input.clientFor The flow client of a chain. It must read contracts, read blocks, call and estimate gas.
+ * @param input.beaconUrlsFor The beacon endpoints of a chain in force now, in order. Read at each check, so a change of
+ * the settings counts at once.
+ * @param input.noneText The message when a chain has no beacon endpoint. Default: {@link NO_BEACON_ENDPOINT_TEXT}.
+ * @param input.fetch The `fetch` to use. Default: the global one.
+ */
+export function createGateCheck(input: {
+  readonly clientFor: (chainId: number) => GateChainClient;
+  readonly beaconUrlsFor: (chainId: number) => readonly string[];
+  readonly noneText?: string;
+  readonly fetch?: typeof fetch;
+}): GateCheck {
+  return ({ chainId, gate, account }) => {
+    const sources = input.beaconUrlsFor(chainId).map((url) => createBeaconProofSource({ url, ...(input.fetch === undefined ? {} : { fetch: input.fetch }) }));
+    const beacon = fallbackBeaconSource(sources, input.noneText === undefined ? {} : { noneText: input.noneText });
+    return ensureGateConfirmed({ client: input.clientFor(chainId), gate, beacon, account });
+  };
 }

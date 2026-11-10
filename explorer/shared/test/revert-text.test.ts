@@ -1,7 +1,7 @@
 import { encodeAbiParameters, encodeErrorResult, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
-import { beaconForkGateAbi, bridgedTokenAbi, messageBridgeAbi } from "@zk-bridge/shared";
-import { BRIDGE_ERROR_ABI, decodeRevert, isForkNotConfirmed, revertDataOf, revertText } from "../../src/tx/revert-text";
+import { beaconForkGateAbi, bridgedTokenAbi, messageBridgeAbi } from "../src/index.js";
+import { BRIDGE_ERROR_ABI, decodeRevert, isForkNotConfirmed, revertDataOf, revertText } from "../src/revert-text.js";
 
 const SEPOLIA = { chainName: "Sepolia" };
 

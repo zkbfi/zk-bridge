@@ -1,3 +1,4 @@
+import type { ResolvedConnection } from '@zk-bridge/shared'
 /**
  * The beacon APIs a chain uses when nothing else names one (not the user or the build). Owner (2026-10-31): "valve.city
  * should be your default", but valve.city refuses its public demo key on the beacon route ("The beacon surface requires
@@ -43,4 +44,20 @@ export const GENESIS_VALIDATORS_ROOTS: Readonly<Record<number, `0x${string}`>> =
   369: '0x3357ba0018a2582aeabe4ae847aa17d50a3a99aaeb66293c01f80a83aecd0c90',
   11155111: '0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078',
   943: '0xd81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64',
+}
+
+/**
+ * The beacon APIs to read a chain from, in order (the setting of the chain in force, one URL per chain). Like the RPC
+ * transport: while the setting in force is the chain's default, the whole default list stands behind it (the public node,
+ * then valve.city), so one provider's outage or quota does not stop a read; a URL the user or the build chose is used
+ * alone. The web page and the terminal both read it.
+ *
+ * @param resolved The settings in force.
+ * @param chainId The chain.
+ */
+export function beaconUrlsFor(resolved: Pick<ResolvedConnection, 'beaconUrls'>, chainId: number): readonly string[] {
+  const defaults = defaultBeaconUrls(chainId)
+  const setting = resolved.beaconUrls?.[chainId] ?? null
+  if (setting === null) return defaults
+  return setting.source === 'default' && setting.value === defaults[0] ? defaults : [setting.value]
 }

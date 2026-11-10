@@ -4,7 +4,7 @@
  * data that a viem error carries along its causes. A revert with no data, or data that no known error matches, keeps
  * the node's own message.
  */
-import { beaconForkGateAbi, bridgedTokenAbi, deliveryRouterAbi, messageBridgeAbi, tokenMediatorAbi } from "@zk-bridge/shared";
+import { beaconForkGateAbi, bridgedTokenAbi, deliveryRouterAbi, messageBridgeAbi, tokenMediatorAbi } from "./abis/index.js";
 import { decodeErrorResult, toFunctionSelector, type Abi, type Hex } from "viem";
 
 type AbiError = Extract<Abi[number], { type: "error" }>;

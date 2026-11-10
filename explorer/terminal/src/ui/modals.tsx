@@ -3,9 +3,11 @@
  */
 import { useTerminalDimensions } from '@opentui/react'
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { terminalGateCheck } from '../app/gate-check'
 import { useServices } from '../app/services'
 import { useSession } from '../app/session'
 import { createTransactionFlow, type FlowStep, type FlowState } from '../flow/transaction-flow'
+import type { GateWait } from '../tx/gate-step'
 import type { FeedItem } from '../model/types'
 import { FormView, useForm } from './form-view'
 import { useKeyLayer } from './key-router'
@@ -68,13 +70,17 @@ function useScroll(total: number, rows: number) {
 
 /** The review of a sequence of transactions: shows each in full and sends only after an explicit yes. */
 export function ReviewModal(props: { readonly title: string; readonly steps: readonly FlowStep[]; readonly onClose: () => void }) {
-  const { chainAccess } = useServices()
+  const { chainAccess, connection } = useServices()
   const session = useSession()
   const terminal = useTerminalDimensions()
   const { signer } = session
   const flow = useMemo(
-    () => (signer === null ? null : createTransactionFlow({ signer, clientFor: (chainId) => chainAccess.flowClient(chainId) })),
-    [signer, chainAccess],
+    () => {
+      if (signer === null) return null
+      const checkGate = terminalGateCheck({ connection, chainAccess })
+      return createTransactionFlow({ signer, clientFor: (chainId) => chainAccess.flowClient(chainId), ...(checkGate === undefined ? {} : { checkGate }) })
+    },
+    [signer, chainAccess, connection],
   )
   const state = useSyncExternalStore(
     (listener) => flow?.subscribe(listener) ?? (() => undefined),
@@ -83,7 +89,7 @@ export function ReviewModal(props: { readonly title: string; readonly steps: rea
   const [calldata, setCalldata] = useState<'summary' | 'full'>('summary')
   const box = modalBox(terminal, { width: 100, height: 30 })
   const rows = box.height - 5
-  const lines = linesOf(state, props.steps, { calldata, wrapWidth: box.width - 4 })
+  const lines = linesOf(state, state.steps.length > 0 ? state.steps : props.steps, { calldata, wrapWidth: box.width - 4 })
   const scroll = useScroll(lines.length, rows)
 
   useEffect(() => {
@@ -136,6 +142,7 @@ const NO_SIGNER_STATE: FlowState = {
   devicePrompt: null,
   outcomes: [],
   error: 'No signer is connected.',
+  gateWait: null,
 }
 
 function linesOf(state: FlowState, steps: readonly FlowStep[], options: { calldata: 'summary' | 'full'; wrapWidth: number }): readonly Line[] {
@@ -146,7 +153,8 @@ function linesOf(state: FlowState, steps: readonly FlowStep[], options: { callda
     muted(outcome.transactionHash === null ? '' : `  ${outcome.transactionHash}`),
   ])
   const heading: readonly Line[] = history.length === 0 ? [] : [...history, []]
-  if (state.phase === 'preparing') return [...heading, [muted('Preparing the transaction: estimating gas and reading the nonce…')]]
+  if (state.phase === 'preparing') return [...heading, [muted('Preparing the transaction: checking the deposit gate, estimating gas and reading the nonce…')]]
+  if (state.phase === 'waiting' && state.gateWait !== null) return [...heading, ...gateWaitLines(state.gateWait)]
   if (state.phase === 'review' && state.prepared !== null) {
     return [...heading, ...reviewLines(state.prepared, { position, ...options })]
   }
@@ -160,11 +168,20 @@ function linesOf(state: FlowState, steps: readonly FlowStep[], options: { callda
   return heading
 }
 
+/** What the review shows while the gate check waits. Nothing is signed or sent meanwhile. */
+export function gateWaitLines(wait: GateWait): readonly Line[] {
+  const why =
+    wait.epochSecondsLeft === undefined
+      ? `The beacon header of epoch ${wait.epoch} is not on ${wait.chainName} yet. The ${wait.chainName} deposit gate is checked again in ${wait.seconds} seconds.`
+      : `Epoch ${wait.epoch} ends in ${Math.max(wait.epochSecondsLeft, 0)} seconds: too soon for a confirmation to be mined in it. The ${wait.chainName} deposit gate is checked again in ${wait.seconds} seconds, in the next epoch.`
+  return [[strong('Waiting for the deposit gate', theme.accent)], [plain(why)], [muted('Nothing is signed or sent until the review.')]]
+}
+
 function footerOf(state: FlowState): Line {
   if (state.phase === 'review') return [strong('y', theme.good), plain(' sign and send   '), strong('n', theme.bad), plain(' cancel   d calldata   s skip step   arrows scroll')]
   if (state.phase === 'error') return [plain('r retry   s skip step   Esc close')]
   if (state.phase === 'finished' || state.phase === 'cancelled') return [plain('Esc close')]
-  if (state.phase === 'preparing') return [plain('Esc cancel')]
+  if (state.phase === 'preparing' || state.phase === 'waiting') return [plain('Esc cancel')]
   return [muted('Please wait…')]
 }
 

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { beaconForkGateAbi, GateEvidenceError, type GateConfirmation } from "@zk-bridge/shared";
 import { FIXTURE_ACCOUNT, FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS } from "../../src/tx/bridge-draft";
-import type { GateCheck } from "../../src/tx/gate-check";
+import type { GateCheck } from "@zk-bridge/shared";
 import { canRetry, createTransactionSequence, GATE_WAIT_LIMIT, type SequenceChainClient, type SequenceState } from "../../src/tx/transaction-sequence";
 import { buildFixtureContext } from "../helpers";
 
