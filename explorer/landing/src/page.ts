@@ -1,7 +1,14 @@
 /** The landing page: pure rendering from data, plus the browser start-up that fetches and checks the manifest. */
 import { parseManifest, verifyManifestSignature } from "./manifest.ts";
-import type { DownloadEntry, ReleaseEntry, ReleaseManifest } from "./manifest.ts";
+import type { ReleaseEntry, ReleaseManifest } from "./manifest.ts";
 import { rememberSequence } from "./sequence-memory.ts";
+import { defaultSelection, groupDownloads, renderDownloads, renderProgram } from "./downloads.ts";
+import type { MenuChoices } from "./downloads.ts";
+import { detectPlatform } from "./platform.ts";
+import type { Detection } from "./platform.ts";
+
+/** The screenshots of the released app that ship with the page. Both are written at build time, only when they exist. */
+export type SnapshotConfig = { light: string; dark: string; width: number; height: number };
 
 /** Settings baked into the page at build time. */
 export type LandingConfig = {
@@ -13,6 +20,8 @@ export type LandingConfig = {
   publicKeys: JsonWebKey[];
   /** A line shown above everything else, such as which network a test release runs on. Optional. */
   notice?: string;
+  /** The screenshots of the app after its loader, set by the build when the release made them. */
+  snapshot?: SnapshotConfig;
 };
 
 /** What the page shows. */
@@ -26,6 +35,12 @@ export type LandingState =
       gateways: readonly string[];
       downloadBaseUrl: string;
       sequenceNote: string | null;
+      /** The visitor's platform, once detected. */
+      platform?: Detection | null;
+      /** The screenshots to show, or none. */
+      snapshot?: SnapshotConfig | null;
+      /** What the visitor picked in the download menus. */
+      choices?: MenuChoices;
     };
 
 const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
@@ -101,15 +116,6 @@ function releaseSection(release: ReleaseEntry, gateways: readonly string[]): str
   ].join("");
 }
 
-function downloadItem(download: DownloadEntry, baseUrl: string): string {
-  const address = `${baseUrl}/${encodeURIComponent(download.file)}`;
-  return [
-    `<li><a href="${escapeHtml(address)}" rel="noopener">${escapeHtml(download.name)}</a>`,
-    ` for ${escapeHtml(download.platform)} (${escapeHtml(download.file)})`,
-    `<br>SHA-256: <code>${escapeHtml(download.sha256)}</code></li>`,
-  ].join("");
-}
-
 /**
  * The download address of a verified release. `{version}` in the setting becomes the version of the signed dapp
  * release, so one setting serves every release (for example a release page per version). It stays as written when
@@ -120,18 +126,31 @@ function downloadBase(state: Extract<LandingState, { kind: "verified" }>): strin
   return dapp === undefined ? state.downloadBaseUrl : state.downloadBaseUrl.replaceAll("{version}", encodeURIComponent(dapp.version));
 }
 
+/** The screenshot of the app, light or dark by the visitor's setting, linking to the app. Nothing when there is no image. */
+function snapshotBlock(snapshot: SnapshotConfig | null, dapp: ReleaseEntry | undefined, gateways: readonly string[]): string {
+  if (snapshot === null) return "";
+  const link = dapp === undefined ? undefined : gatewayLinkList(dapp.cid, gateways)[0];
+  const alt = "The bridge screen of the app, as it looks once the loader has finished.";
+  const picture = [
+    `<picture><source media="(prefers-color-scheme: dark)" srcset="${escapeHtml(snapshot.dark)}">`,
+    `<img src="${escapeHtml(snapshot.light)}" width="${snapshot.width}" height="${snapshot.height}" alt="${escapeHtml(alt)}" loading="lazy"></picture>`,
+  ].join("");
+  const caption = `<figcaption>The app of this release, as it looks after the loader${dapp === undefined ? "" : ` (${escapeHtml(dapp.version)})`}.</figcaption>`;
+  const shown = link === undefined ? picture : `<a href="${escapeHtml(link.address)}" rel="noopener">${picture}</a>`;
+  return `<section class="snapshot" id="snapshot"><h2>The app</h2><figure>${shown}${caption}</figure></section>`;
+}
+
 function verifiedBody(state: Extract<LandingState, { kind: "verified" }>): string {
   // The docs are inside the dapp (Docs link above). A list signed before that may still name a docs site: it is read, not shown.
   const sites = state.manifest.releases.filter((release) => release.name === "dapp");
   const note = state.sequenceNote === null ? "" : `<p>${escapeHtml(state.sequenceNote)}</p>`;
-  const downloads = state.manifest.downloads.map((entry) => downloadItem(entry, downloadBase(state))).join("");
+  const downloads = renderDownloads(state.manifest.downloads, downloadBase(state), state.platform ?? null, state.choices);
   return [
     `<p>The signature on this release list is valid.</p>`,
     note,
+    downloads,
+    snapshotBlock(state.snapshot ?? null, sites[0], state.gateways),
     sites.map((release) => releaseSection(release, state.gateways)).join(""),
-    `<h2>Downloads</h2>`,
-    `<p>Compare the SHA-256 of a download with the value shown here before you run it.</p>`,
-    `<ul>${downloads}</ul>`,
   ].join("");
 }
 
@@ -203,6 +222,7 @@ export async function loadLandingState(
       gateways: config.gateways,
       downloadBaseUrl: config.downloadBaseUrl,
       sequenceNote: describeSequence(check),
+      snapshot: config.snapshot ?? null,
     };
   } catch (error) {
     return failed(error instanceof Error ? error.message : "The release list could not be checked.");
@@ -217,10 +237,117 @@ function safeStorage(): Storage | null {
   }
 }
 
-/** Browser entry point: shows progress, then the checked result. */
+/** Moves focus to an element, when it exists. */
+function focusIn(root: ParentNode, selector: string): void {
+  root.querySelector<HTMLElement>(selector)?.focus();
+}
+
+/** Wires the download menus: click, keyboard, copy. The menus are drawn again from `choices` after each change. */
+function wireDownloads(target: HTMLElement, state: Extract<LandingState, { kind: "verified" }>): void {
+  const choices: MenuChoices = {};
+  const baseUrl = downloadBase(state);
+  const programs = groupDownloads(state.manifest.downloads).programs;
+  const draw = (name: string): HTMLElement | null => {
+    const group = programs.find((candidate) => candidate.name === name);
+    const current = Array.from(target.querySelectorAll<HTMLElement>(".dl-program[data-program]")).find((node) => node.dataset.program === name);
+    if (group === undefined || current === undefined) return null;
+    const html = renderProgram(group, baseUrl, state.platform ?? null, choices[name]);
+    current.outerHTML = html;
+    return Array.from(target.querySelectorAll<HTMLElement>(".dl-program[data-program]")).find((node) => node.dataset.program === name) ?? null;
+  };
+  const stateOf = (name: string) => {
+    const group = programs.find((candidate) => candidate.name === name);
+    const existing = choices[name];
+    if (existing !== undefined) return existing;
+    const fresh = { selected: group === undefined ? null : defaultSelection(group, state.platform ?? null), open: false };
+    choices[name] = fresh;
+    return fresh;
+  };
+  const setMenu = (name: string, open: boolean, focus: string | null): void => {
+    stateOf(name).open = open;
+    const node = draw(name);
+    if (node !== null && focus !== null) focusIn(node, focus);
+  };
+  const closeAll = (): void => {
+    for (const [name, choice] of Object.entries(choices)) if (choice.open) setMenu(name, false, null);
+  };
+  const items = (menu: Element): HTMLElement[] => Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]'));
+
+  target.addEventListener("click", (event) => {
+    const element = event.target instanceof Element ? event.target : null;
+    const trigger = element?.closest<HTMLElement>(".dl-trigger");
+    const item = element?.closest<HTMLElement>(".dl-item");
+    const copy = element?.closest<HTMLElement>(".dl-copy");
+    if (copy !== null && copy !== undefined) {
+      void navigator.clipboard?.writeText(copy.dataset.copy ?? "").then(
+        () => {
+          copy.textContent = "Copied";
+          setTimeout(() => (copy.textContent = "Copy"), 1500);
+        },
+        () => (copy.textContent = "Select and copy"),
+      );
+      return;
+    }
+    if (trigger !== null && trigger !== undefined) {
+      const name = trigger.dataset.program ?? "";
+      const group = programs.find((candidate) => candidate.name === name);
+      const open = trigger.getAttribute("aria-expanded") !== "true";
+      if (group !== undefined && !(name in choices)) stateOf(name);
+      setMenu(name, open, open ? '.dl-item[aria-checked="true"], .dl-item' : ".dl-trigger");
+      return;
+    }
+    if (item !== null && item !== undefined) {
+      const name = item.dataset.program ?? "";
+      const choice = stateOf(name);
+      choice.selected = item.dataset.platform ?? null;
+      choice.open = false;
+      const node = draw(name);
+      if (node !== null) focusIn(node, ".dl-trigger");
+      return;
+    }
+    closeAll();
+  });
+
+  target.addEventListener("keydown", (event) => {
+    const element = event.target instanceof Element ? event.target : null;
+    const menu = element?.closest(".dl-surface");
+    const trigger = element?.closest<HTMLElement>(".dl-trigger");
+    if (trigger !== null && trigger !== undefined && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      setMenu(trigger.dataset.program ?? "", true, '.dl-item[aria-checked="true"], .dl-item');
+      return;
+    }
+    if (menu === null || menu === undefined) return;
+    const list = items(menu);
+    const index = list.findIndex((node) => node === element);
+    const move = (to: number): void => {
+      event.preventDefault();
+      list[(to + list.length) % list.length]?.focus();
+    };
+    if (event.key === "ArrowDown") move(index + 1);
+    else if (event.key === "ArrowUp") move(index - 1);
+    else if (event.key === "Home") move(0);
+    else if (event.key === "End") move(list.length - 1);
+    else if (event.key === "Escape") {
+      event.preventDefault();
+      const name = menu.closest<HTMLElement>(".dl-program")?.dataset.program ?? "";
+      setMenu(name, false, ".dl-trigger");
+    } else if (event.key === "Tab") closeAll();
+  });
+}
+
+/** Browser entry point: shows progress, then the checked result, then picks the download for the visitor's platform. */
 export async function startLanding(config: LandingConfig): Promise<void> {
   const target = document.getElementById("app");
   if (target === null) return;
   target.innerHTML = renderLanding({ kind: "loading", title: config.title }, config.notice);
-  target.innerHTML = renderLanding(await loadLandingState(config, safeStorage()), config.notice);
+  const state = await loadLandingState(config, safeStorage());
+  if (state.kind !== "verified") {
+    target.innerHTML = renderLanding(state, config.notice);
+    return;
+  }
+  const platform = await detectPlatform(navigator).catch((): Detection => ({ key: null, assumed: false }));
+  const shown = { ...state, platform };
+  target.innerHTML = renderLanding(shown, config.notice);
+  wireDownloads(target, shown);
 }

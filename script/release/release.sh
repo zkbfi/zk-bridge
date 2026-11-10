@@ -8,7 +8,7 @@
 #
 # Steps:
 #   1. builds the dapp (explorer/web, which holds the docs: they load lazily at #/docs) and the landing page
-#      (explorer/landing). There is no separate docs archive: docs.zkb.fi serves the dapp.
+#      (explorer/landing), with a screenshot of the app for the landing page (script/release/snapshot.sh; optional). There is no separate docs archive: docs.zkb.fi serves the dapp.
 #   2. packs each site into archives/<name>.car (UnixFS, CID version 1: the same files give the same CID)
 #   3. builds the terminal programs into downloads/ (script/build-terminal.sh)
 #   4. builds both guest programs (light-client.elf, fork-observation.elf) and the prover for this machine
@@ -79,7 +79,9 @@ mkdir -p "$release/archives" "$release/downloads"
 
 echo "== sites"
 (cd "$repository_root/explorer" && VITE_ZKB_VERSION="$version" pnpm --filter @zk-bridge/web build) </dev/null
-(cd "$repository_root/explorer/landing" && LANDING_CONFIG="$landing_config" node scripts/build.ts) </dev/null
+# The landing page shows a screenshot of the app after its loader. snapshot.sh never fails: without one the page has none.
+"$repository_root/script/release/snapshot.sh" "$log_work/snapshot" </dev/null
+(cd "$repository_root/explorer/landing" && LANDING_CONFIG="$landing_config" LANDING_SNAPSHOT_DIR="$log_work/snapshot" node scripts/build.ts) </dev/null
 "${cli[@]}" pack "$repository_root/explorer/web/dist" "$release/archives/dapp.car" </dev/null
 "${cli[@]}" pack "$repository_root/explorer/landing/dist" "$release/archives/landing.car" </dev/null
 
