@@ -11,7 +11,7 @@ coverageSkipTestFiles = true
 # The threshold keys are `lines` and `functions`. Bun ignores unknown keys such as `line` without a warning.
 coverageThreshold = { lines = 1.0, functions = 1.0 }
 coverageReporter = ["text"]
-# explorer/shared has its own coverage-enforced suite, so terminal does not count it.
+# explorer/shared, core, data and react have their own coverage-enforced suites, so terminal does not count them.
 # src/main.tsx is the thin entry: it starts the renderer with the services that src/app/bootstrap.ts builds (tested).
 # Test helpers under test/ are not product code.
-coveragePathIgnorePatterns = ["../shared/**", "src/main.tsx", "test/**"]
+coveragePathIgnorePatterns = ["../shared/**", "../core/**", "../data/**", "../react/**", "src/main.tsx", "test/**"]
