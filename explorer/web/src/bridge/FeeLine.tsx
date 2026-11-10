@@ -46,6 +46,8 @@ export type FeeLineProps = {
   readonly summary: string;
   /** The whole arrangement and the fee, for the first segment's label and tooltip. */
   readonly summaryFull: string;
+  /** The fact about a missing or old price ("1% maximum: SepETH has no market price"), a second sentence of the pill's tooltip and a line in the delivery menu. */
+  readonly priceNote?: string | null;
   /** One line on the gas level chosen now: what it lets the deliverer spend and what it is expected to cost. */
   readonly gasHelp: string;
   readonly gasLevel: 0 | FeeGasLevel;
@@ -134,7 +136,7 @@ export const HelpButton = ({ label, text }: { readonly label: string; readonly t
  *
  * @param props The summary, the gas level, the time and steps, and the menu.
  */
-export const FeeLine = ({ summary, summaryFull, gasHelp, gasLevel, onGasLevel, time, steps, timeline, menu, lead }: FeeLineProps) => {
+export const FeeLine = ({ summary, summaryFull, priceNote, gasHelp, gasLevel, onGasLevel, time, steps, timeline, menu, lead }: FeeLineProps) => {
   // `open` is the segment the user chose (aria-expanded); `shown` is the content in the drawer, which lags a swap by the
   // close time; `expanded` drives the drawer's height (grid rows 0fr → 1fr) and the deck line.
   const [open, setOpen] = useState<Open>(null);
@@ -217,7 +219,7 @@ export const FeeLine = ({ summary, summaryFull, gasHelp, gasLevel, onGasLevel, t
         <GasCan title="Gas" level={gasLevel} />
       </button>
     );
-  const tooltip = hover === "tip" && open === null ? <Tip id={ids.tip} text={`${summaryFull}. Tap for the delivery settings.`} /> : hover === "gas" ? <Tip id={ids.gas} text={gasHelp} /> : hover === "time" && open === null ? <Tip id={ids.time} text="How long until it arrives. Tap for every step." /> : null;
+  const tooltip = hover === "tip" && open === null ? <Tip id={ids.tip} text={`${summaryFull}.${priceNote ? ` ${priceNote}.` : ""} Tap for the delivery settings.`} /> : hover === "gas" ? <Tip id={ids.gas} text={gasHelp} /> : hover === "time" && open === null ? <Tip id={ids.time} text="How long until it arrives. Tap for every step." /> : null;
 
   return (
     <div ref={root}>
@@ -253,7 +255,10 @@ export const FeeLine = ({ summary, summaryFull, gasHelp, gasLevel, onGasLevel, t
                 ))}
               </ol>
             ) : (
-              menu
+              <>
+                {priceNote ? <p className="zb-drawer-price">{priceNote}</p> : null}
+                {menu}
+              </>
             )}
           </div>
         </div>

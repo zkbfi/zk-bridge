@@ -1,6 +1,7 @@
 /**
- * The one line under the amount that says why a price is missing or old, and what the fee is then. The fee itself is
- * set by `useDefaultFee` (the automatic maximum when no price can be derived); this only words it.
+ * The short fact about a missing or old price, for the fee pill's tooltip and the delivery menu (never a standing line
+ * under the amount). The fee itself is set by `useDefaultFee` (the automatic maximum when no price can be derived); this
+ * only words it.
  */
 import { priceProblemOf, type PriceStates } from "@zkb/react";
 
@@ -29,8 +30,8 @@ export const priceNotice = ({ states, keys, nameOf, unpriced, maximumText }: Pri
   const problem = priceProblemOf(states, keys);
   if (problem === null) return null;
   const { state } = problem;
-  if (state.kind === "stale") return `Prices can't be reached right now. Using the last price, ${ageText(state.ageSeconds)} old, until it is 10 minutes old.`;
+  if (state.kind === "stale") return `Price from ${ageText(state.ageSeconds)} ago`;
   if (!unpriced) return null;
-  if (state.kind === "no-market") return `No market price for ${nameOf(problem.key)}: the fee is the ${maximumText} maximum.`;
-  return `Prices can't be reached right now, so the fee is the ${maximumText} maximum. They are read again every 30 seconds.`;
+  if (state.kind === "no-market") return `${maximumText} maximum: ${nameOf(problem.key)} has no market price`;
+  return `${maximumText} maximum: prices unreachable, read again every 30 s`;
 };

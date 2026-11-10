@@ -10,9 +10,9 @@ const notice = (state: PriceState | undefined, unpriced = true) =>
 
 describe("the price line", () => {
   it("says what happens in each state", () => {
-    expect(notice({ kind: "no-market" })).toBe("No market price for tUSD: the fee is the 1% maximum.");
-    expect(notice({ kind: "unreachable" })).toBe("Prices can't be reached right now, so the fee is the 1% maximum. They are read again every 30 seconds.");
-    expect(notice({ kind: "stale", ageSeconds: 45 })).toBe("Prices can't be reached right now. Using the last price, 45 s old, until it is 10 minutes old.");
+    expect(notice({ kind: "no-market" })).toBe("1% maximum: tUSD has no market price");
+    expect(notice({ kind: "unreachable" })).toBe("1% maximum: prices unreachable, read again every 30 s");
+    expect(notice({ kind: "stale", ageSeconds: 45 })).toBe("Price from 45 s ago");
   });
   it("is silent when prices are known or not read yet, and when the fee does not fall back", () => {
     expect(notice({ kind: "known" })).toBeNull();
@@ -21,7 +21,7 @@ describe("the price line", () => {
   });
   it("names the coin when the coin is the one missing", () => {
     const states = new Map<string, PriceState>([["native:943", { kind: "no-market" }]]);
-    expect(priceNotice({ states, keys: ["second:0xT", "native:943"], nameOf: names, unpriced: true, maximumText: "2%" })).toBe("No market price for tPLS: the fee is the 2% maximum.");
+    expect(priceNotice({ states, keys: ["second:0xT", "native:943"], nameOf: names, unpriced: true, maximumText: "2%" })).toBe("2% maximum: tPLS has no market price");
   });
   it("words an age in seconds or whole minutes", () => {
     expect([ageText(0), ageText(59), ageText(60), ageText(125), ageText(600)]).toEqual(["0 s", "59 s", "1 min", "2 min", "10 min"]);

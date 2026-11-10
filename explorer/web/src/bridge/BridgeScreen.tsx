@@ -774,6 +774,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             <FeeLine
               lead={flipButton}
               summary={summary.short}
+              priceNote={pricesNote}
               summaryFull={`${summary.full}${tipUnits === null ? "" : `. Fee ${amountText(tipUnits, token.decimals)} ${token.symbol}${usd(tipUnits) === "—" ? "" : ` (about ${usd(tipUnits)})`}: the delivery gas at your gas level, the proof and a tip, ${automatic ? "set automatically" : "set by you"}`}`}
               gasHelp={gasHelp}
               gasLevel={gasLevel}
@@ -821,7 +822,6 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             <span title={PRICE_NOTE}>{usd(received)}</span>
             {token === null ? null : <span className="zb-right">arrives as {arrivesAsSymbol(token)} on {destination.name}</span>}
           </div>
-          {pricesNote === null ? null : <p className="zb-price-note" role="status">{pricesNote}</p>}
         </div>
       </section>
 

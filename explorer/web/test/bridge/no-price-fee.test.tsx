@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
@@ -27,6 +28,16 @@ const open = (amount: string, extra = "") => {
   window.history.replaceState(null, "", `#/bridge/${FIXTURE_PAIR.id}?${USDC_QUERY}&bridge.amount=${amount}${extra}`);
   renderWithWallet(<Shell />, { wallet: disconnectedWallet() });
 };
+/** Hovers the fee pill and returns its tooltip's text. */
+const pillTooltip = async (): Promise<string> => {
+  await userEvent.hover(screen.getByRole("button", { name: /^Delivery settings/ }));
+  return (await screen.findByRole("tooltip")).textContent ?? "";
+};
+/** Nothing stands under the amount: the fact lives in the pill's tooltip and the delivery menu. */
+const noStandingNote = (): void => {
+  expect(document.querySelector(".zb-price-note")).toBeNull();
+  expect(document.querySelector(".zb-amount-out")!.closest("section, form, div")!.parentElement!.querySelector("p[role=status]")).toBeNull();
+};
 /** Answers every key with one state, whatever the screen asks about. */
 class EveryKey extends Map<string, PriceState> {
   constructor(private readonly state: PriceState) {
@@ -55,7 +66,9 @@ describe("when the price cannot be derived", () => {
     everyPriceIs({ kind: "no-market" });
     open("1000");
     await waitFor(() => expect(output()).toHaveTextContent(/^990$/));
-    expect(await screen.findByText(/^No market price for \w+: the fee is the 1% maximum\.$/)).toBeInTheDocument();
+    expect(await pillTooltip()).toMatch(/1% maximum: \w+ has no market price\. Tap for the delivery settings\.$/);
+    noStandingNote();
+    expect(screen.queryByText(/^1% maximum: \w+ has no market price$/)).toBeNull();
   });
 
   it("no market with the automatic cap at 2%: the maximum in force is that cap", async () => {
@@ -68,15 +81,17 @@ describe("when the price cannot be derived", () => {
     everyPriceIs({ kind: "unreachable" });
     open("1000");
     await waitFor(() => expect(output()).toHaveTextContent(/^990$/));
-    expect(await screen.findByText(/^Prices can't be reached right now, so the fee is the 1% maximum\. They are read again every 30 seconds\.$/)).toBeInTheDocument();
-    expect(screen.queryByText(/No market price/)).toBeNull();
+    expect(await pillTooltip()).toContain("1% maximum: prices unreachable, read again every 30 s.");
+    expect(screen.queryByText(/has no market price/)).toBeNull();
+    noStandingNote();
   });
 
   it("stale: the last price is used (the fee is not the maximum) and the line gives its age", async () => {
     everyPriceIs({ kind: "stale", ageSeconds: 125 });
     answer.data = sample();
     open("1000");
-    expect(await screen.findByText(/^Prices can't be reached right now\. Using the last price, 2 min old, until it is 10 minutes old\.$/)).toBeInTheDocument();
+    expect(await pillTooltip()).toContain("Price from 2 min ago.");
+    noStandingNote();
     await waitFor(() => expect(output().textContent).not.toBe("0"));
     expect(output()).not.toHaveTextContent(/^990$/);
   });
@@ -92,7 +107,7 @@ describe("the native coin carries a tip like a token (owner: \"why would there b
     everyPriceIs({ kind: "no-market" });
     openNative("1000");
     await waitFor(() => expect(output()).toHaveTextContent(/^990$/));
-    expect(await screen.findByText(/^No market price for \w+: the fee is the 1% maximum\.$/)).toBeInTheDocument();
+    expect(await pillTooltip()).toMatch(/1% maximum: \w+ has no market price\./);
     expect(screen.getByRole("button", { name: /^Delivery settings/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Gas level/ })).toBeInTheDocument();
     expect(screen.queryByText(/no tip/i)).toBeNull();
@@ -128,7 +143,8 @@ describe("the native coin carries a tip like a token (owner: \"why would there b
     answer.data = sample();
     answer.states = new Map(Object.entries({ [`native:${FIXTURE_PAIR.second.chainId}`]: { kind: "no-market" } as PriceState }));
     openNative("1");
-    expect(await screen.findByText(new RegExp(`No market price for ${FIXTURE_PAIR.second.nativeSymbol}`))).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Delivery settings/ })).toBeInTheDocument());
+    expect(await pillTooltip()).toContain(`${FIXTURE_PAIR.second.nativeSymbol} has no market price`);
   });
 
   it("No tip is the user's choice: the pill reads No tip, nothing stands under the amount, and You receive is the amount", async () => {
