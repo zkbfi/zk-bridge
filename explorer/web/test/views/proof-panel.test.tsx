@@ -87,7 +87,7 @@ const evidenceOf = (changes: Record<string, unknown> = {}): Record<string, unkno
       function: "addBlockHashLayout",
       reason: "no validated block hash row covers the source slot",
       to: bridge,
-      data: encodeFunctionData({ abi: messageBridgeAbi, functionName: "addBlockHashLayout", args: [(2n ** 4n + 9n) * 2n ** 4n + 12n, { header: header(14099840n), branch: [word("7"), word("8")] }] }),
+      data: encodeFunctionData({ abi: messageBridgeAbi, functionName: "addBlockHashLayout", args: [(2n ** 4n + 9n) * 2n ** 4n + 12n, { header: header(14099840n), branch: [word("7"), word("8")], fork: { version: "0x07000000", versionBranch: [word("9")], genesisValidatorsRootBranch: [word("a")] } }] }),
     },
   ],
   createdAt: "2026-10-24T09:31:00Z",

@@ -44,6 +44,7 @@ export function executeCall(logIndex: bigint): Hex {
         sourceHeader: header(14_099_000n),
         ancestryBranch: [word('4'), word('5')],
         blockHashBranch: [word('6')],
+        sourceFork: { version: '0x07000000', versionBranch: [word('9')], genesisValidatorsRootBranch: [word('a')] },
         executionHeaderRlp: '0xf90211',
         receiptProof: ['0x01', '0x02'],
         receiptIndex: 3n,
@@ -60,7 +61,7 @@ export function prerequisiteCall(): Hex {
   return encodeFunctionData({
     abi: messageBridgeAbi,
     functionName: 'addBlockHashLayout',
-    args: [(2n ** 4n + 9n) * 2n ** 4n + 12n, { header: header(14_099_840n), branch: [word('7'), word('8')] }],
+    args: [(2n ** 4n + 9n) * 2n ** 4n + 12n, { header: header(14_099_840n), branch: [word('7'), word('8')], fork: { version: '0x07000000', versionBranch: [word('9')], genesisValidatorsRootBranch: [word('a')] } }],
   })
 }
 

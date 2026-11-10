@@ -20,9 +20,10 @@ export const tokenMediatorAbi = parseAbi([
 /** The shared structures of the message bridge. */
 const messageBridgeStructures = [
   'struct BeaconBlockHeader { uint64 slot; uint64 proposerIndex; bytes32 parentRoot; bytes32 stateRoot; bytes32 bodyRoot; }',
-  'struct MessageProof { BeaconBlockHeader anchorHeader; BeaconBlockHeader sourceHeader; bytes32[] ancestryBranch; bytes32[] blockHashBranch; bytes executionHeaderRlp; bytes[] receiptProof; uint256 receiptIndex; bytes[] transactionProof; uint256 transactionIndex; uint256 logIndex; }',
+  'struct ForkProof { bytes4 version; bytes32[] versionBranch; bytes32[] genesisValidatorsRootBranch; }',
+  'struct MessageProof { BeaconBlockHeader anchorHeader; BeaconBlockHeader sourceHeader; bytes32[] ancestryBranch; bytes32[] blockHashBranch; ForkProof sourceFork; bytes executionHeaderRlp; bytes[] receiptProof; uint256 receiptIndex; bytes[] transactionProof; uint256 transactionIndex; uint256 logIndex; }',
   'struct BlockRootsEvidence { BeaconBlockHeader laterHeader; uint64 earlierSlotA; uint64 earlierSlotB; bytes32[] branchA; bytes32[] branchB; }',
-  'struct BlockHashEvidence { BeaconBlockHeader header; bytes32[] branch; }',
+  'struct BlockHashEvidence { BeaconBlockHeader header; bytes32[] branch; ForkProof fork; }',
   'struct HistoricalSummariesEvidence { BeaconBlockHeader anchorHeader; uint64 earlierSlot; bytes32[] branch; }',
 ] as const
 
