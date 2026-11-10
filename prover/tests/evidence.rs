@@ -613,13 +613,29 @@ fn missing_block_hash_rows_become_layout_calls_that_fit_their_headers() {
         let calldata = hex::decode(&prerequisite.call.data).unwrap();
         let call = MessageBridgeContract::addBlockHashLayoutCall::abi_decode(&calldata)
             .expect("a layout call");
-        let BlockHashEvidence { header, branch } = call.evidence;
+        let BlockHashEvidence {
+            header,
+            branch,
+            fork,
+        } = call.evidence;
         assert!(lc_core::ssz::is_valid_exact_branch(
             &block_hash_at_slot(header.slot),
             &branch,
             u64::try_from(call.blockHashGindex).unwrap(),
             &header.bodyRoot,
         ));
+        // The bridge takes the row only with a fork proof of a plain state under the state root of the header.
+        let fork = lc_core::abi::ForkProof {
+            version: fork.version,
+            versionBranch: fork.versionBranch,
+            genesisValidatorsRootBranch: fork.genesisValidatorsRootBranch,
+        };
+        let shape = lc_core::ancestry::source_shape(
+            &fork,
+            &header.stateRoot,
+            &ChainKind::Pulsechain.spec().genesis_validators_root,
+        );
+        assert!(matches!(shape, Ok(5..=7)), "a plain shape: {shape:?}");
         header_slots.push(header.slot);
     }
     assert_eq!(header_slots, vec![world.checkpoint.slot, world.anchor_slot]);

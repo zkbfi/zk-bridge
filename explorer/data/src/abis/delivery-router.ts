@@ -264,6 +264,28 @@ export const deliveryRouterAbi = [
             "internalType": "bytes32[]"
           },
           {
+            "name": "sourceFork",
+            "type": "tuple",
+            "internalType": "struct BeaconProofVerifier.ForkProof",
+            "components": [
+              {
+                "name": "version",
+                "type": "bytes4",
+                "internalType": "bytes4"
+              },
+              {
+                "name": "versionBranch",
+                "type": "bytes32[]",
+                "internalType": "bytes32[]"
+              },
+              {
+                "name": "genesisValidatorsRootBranch",
+                "type": "bytes32[]",
+                "internalType": "bytes32[]"
+              }
+            ]
+          },
+          {
             "name": "executionHeaderRlp",
             "type": "bytes",
             "internalType": "bytes"

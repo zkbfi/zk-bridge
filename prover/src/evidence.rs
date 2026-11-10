@@ -30,15 +30,14 @@ use crate::handoff::utc_time_text;
 use crate::light_client::{
     ancestry_path, assemble_message_proof, build_execution_evidence,
     build_execution_evidence_from_raw_header, decode_message_log, message_calldata,
-    to_layout_header, verify_message_natively, AncestryPath, BeaconHeader, BridgeContext,
-    SourceMessage, USER_REQUEST_TOPIC,
+    to_layout_fork_proof, to_layout_header, verify_message_natively, AncestryPath, BeaconHeader,
+    BridgeContext, SourceMessage, USER_REQUEST_TOPIC,
 };
 use crate::logging::redact_urls;
 use crate::rpc::parse_quantity;
 use crate::stored::{read_stored_header, read_stored_slots, read_stored_state};
 use alloy_primitives::{hex, Address, B256, U256};
 use alloy_sol_types::SolCall;
-use lc_core::chain::ForkName;
 use lc_core::message::VerifiedMessage;
 use serde::{Deserialize, Serialize};
 
@@ -238,7 +237,6 @@ pub fn build_evidence(request: &EvidenceRequest<'_>) -> Result<MessageEvidence> 
         timestamp,
     };
     let path = request.beacon.message_path(&source_block, &anchor)?;
-    require_gloas_fork_slot(request, path.source_header.slot)?;
     let proof = assemble_message_proof(&path, &execution, log.transaction_index, request.log_index);
     let context = BridgeContext {
         remote_bridge: request.source_bridge,
@@ -314,25 +312,6 @@ fn source_raw_header(request: &EvidenceRequest<'_>, block_hash: B256) -> Result<
             )))
         },
     )
-}
-
-/// A source header at or after the Gloas fork is proven through the bid, and the bridge applies that rule only from its
-/// immutable `gloasForkSlot` on. A bridge with a later fork slot would take the layout path and refuse the proof.
-fn require_gloas_fork_slot(request: &EvidenceRequest<'_>, source_slot: u64) -> Result<()> {
-    if request.beacon.chain_kind().spec().fork_at_slot(source_slot) < ForkName::Gloas {
-        return Ok(());
-    }
-    let fork_slot = request.destination.view(
-        request.destination_bridge,
-        MessageBridgeContract::gloasForkSlotCall {},
-    )?;
-    if fork_slot <= source_slot {
-        return Ok(());
-    }
-    Err(Error::Config(format!(
-        "route {}: the source block is in slot {source_slot}, a Gloas slot, but the destination bridge has gloasForkSlot {fork_slot}; it would take the layout path and refuse the proof",
-        request.route
-    )))
 }
 
 /// Reads the four relations between the destination bridge and the rest from the bridge itself, and compares them with
@@ -552,8 +531,8 @@ fn layout_prerequisites(
     let bridge = request.destination_bridge;
     let mut calls = Vec::new();
     // From the Gloas fork on the block hash comes from the bid at a fixed index: no body layout row exists or is needed.
-    let gloas_source =
-        request.beacon.chain_kind().spec().fork_at_slot(source_slot) >= ForkName::Gloas;
+    // The fork comes from the schedule of the node, as in `message_path`.
+    let gloas_source = request.beacon.is_gloas_slot(source_slot)?;
     match ancestry_path(anchor.slot, source_slot)? {
         AncestryPath::Recent => {
             let rows = request
@@ -679,6 +658,7 @@ fn hash_prerequisites(
                 evidence: BlockHashEvidence {
                     header: to_layout_header(&evidence.header),
                     branch: evidence.branch,
+                    fork: to_layout_fork_proof(&evidence.fork),
                 },
             };
             prerequisite(
@@ -767,50 +747,6 @@ mod tests {
                 body: Vec::new(),
             })
         }
-    }
-
-    /// Claim: the evidence builder checks `gloasForkSlot` of the destination bridge for a Gloas source block, and only then.
-    /// A Fulu slot needs no call (the node would panic on an unexpected method only for the wrong method), a Gloas slot at or
-    /// after the bridge fork slot passes, and a bridge with a later fork slot gives a configuration error that names both
-    /// slots. Why it matters: such a bridge would take the layout path and refuse the proof on chain.
-    #[test]
-    fn a_gloas_source_needs_a_bridge_that_knows_the_fork() {
-        let gloas_slot = 353_024 * 32;
-        let check = |fork_slot_of_bridge: u64, source_slot: u64| {
-            let destination =
-                ChainClient::connect("destination", 943, Box::new(WordNode(fork_slot_of_bridge)))
-                    .unwrap();
-            let source = ChainClient::connect("source", 943, Box::new(WordNode(0))).unwrap();
-            let beacon = HttpBeaconSource::new(ChainKind::Sepolia, Box::new(NoBeaconData));
-            let request = EvidenceRequest {
-                route: "test",
-                source: &source,
-                destination: &destination,
-                beacon: &beacon,
-                source_bridge: Address::ZERO,
-                destination_bridge: Address::repeat_byte(2),
-                light_client: Address::ZERO,
-                source_header_sources: &[],
-                transaction: B256::ZERO,
-                log_index: 0,
-                anchor_slot: None,
-                stored_heads_start_block: 0,
-                log_block_range: 1,
-                now_unix_seconds: 0,
-            };
-            require_gloas_fork_slot(&request, source_slot)
-        };
-        assert!(
-            check(u64::MAX, gloas_slot - 1).is_ok(),
-            "a Fulu slot needs no fork slot"
-        );
-        assert!(check(gloas_slot, gloas_slot + 10).is_ok());
-        assert!(check(gloas_slot + 10, gloas_slot + 10).is_ok());
-        let error = check(gloas_slot + 11, gloas_slot + 10).unwrap_err();
-        assert!(
-            matches!(&error, Error::Config(text) if text.contains("gloasForkSlot")),
-            "{error}"
-        );
     }
 
     /// A header node: it answers `debug_getRawHeader` with a fixed answer, or with the error of a node without the method.
@@ -927,6 +863,7 @@ mod tests {
                 body_root: B256::ZERO,
             },
             branch: Vec::new(),
+            fork: lc_testkit::pulsechain::missing_fork_proof(),
         }
     }
 

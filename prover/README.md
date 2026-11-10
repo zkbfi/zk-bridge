@@ -49,7 +49,7 @@ Each name selects the fork table and the genesis validators root of `lc-core`. A
 
 **Fork observation.** The observation input carries `current_version_branch` and `genesis_validators_root_branch`, and the output has 256 bytes (eight words, the last one is the `uint8 shape`: 5, 6, 7 or 255 for the progressive form). `contracts::ForkRegistryContract` holds the registry bindings, and `contracts::observe_calldata` builds the call.
 
-**Sepolia runs the Gloas fork.** A Gloas finalized header proves `state.latest_block_hash` from its state, and the program reads the block number from the RLP of that execution block. So for each Gloas finalized header the producer downloads the state (3.6 MB), hashes it in full with the Gloas layout, compares the root with the header, asks the source execution node for `debug_getRawHeader` of `latest_block_hash` (the hash is checked), and attaches both. A route needs `source.rpc_url`; `prove --beacon-url` needs `--source-rpc-url`. Without it the producer stops with an error that names the setting. `evidence` builds the proof of a message in a Gloas block through the bid `parent_block_hash` of the first later canonical block that names it (scan of up to 64 slots), reads the header RLP with `debug_getRawHeader` (from `source.rpc_url`, then from each `source.header_rpc_urls` entry in order; every header is checked against the block hash, and when none gives it the error names each source and no URL), and requires the destination bridge to report `gloasForkSlot` at or below that block. Chain 943 stays at Capella and works.
+**Sepolia runs the Gloas fork.** A Gloas finalized header proves `state.latest_block_hash` from its state, and the program reads the block number from the RLP of that execution block. So for each Gloas finalized header the producer downloads the state (3.6 MB), hashes it in full with the Gloas layout, compares the root with the header, asks the source execution node for `debug_getRawHeader` of `latest_block_hash` (the hash is checked), and attaches both. A route needs `source.rpc_url`; `prove --beacon-url` needs `--source-rpc-url`. Without it the producer stops with an error that names the setting. `evidence` builds the proof of a message in a Gloas block through the bid `parent_block_hash` of the first later canonical block that names it (scan of up to 64 slots), reads the header RLP with `debug_getRawHeader` (from `source.rpc_url`, then from each `source.header_rpc_urls` entry in order; every header is checked against the block hash, and when none gives it the error names each source and no URL). Every message proof carries the fork proof of the post-state of its source block (`MessageProof.sourceFork`, since 2026-11-10), so `evidence` downloads that state too, and every `addBlockHashLayout` prerequisite carries the fork proof of the state of its header; the bridge takes the Gloas rule from that proof and holds no fork slot. Whether a block is a Gloas block comes from the fork schedule that the beacon node serves, not from the schedule compiled into the prover. Chain 943 stays at Capella and works.
 
 ### Beacon URLs
 
@@ -193,7 +193,7 @@ The result is one JSON object. Long values are shortened here.
   "anchor": { "slot": 10862679, "root": "0xc7a5…" },
   "deliveryStatus": "notDelivered",
   "alreadyDelivered": false,
-  "execute": { "to": "0xb2b2…", "data": "0xa5442804…" },
+  "execute": { "to": "0xb2b2…", "data": "0x63f08d5e…" },
   "prerequisites": [
     {
       "function": "addBlockHashLayout",

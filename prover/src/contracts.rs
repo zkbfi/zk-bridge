@@ -41,13 +41,22 @@ sol! {
         bytes32[] branchB;
     }
 
-    /// Evidence for a block hash position.
+    /// The fork proof of one beacon state (`BeaconProofVerifier.ForkProof`).
+    struct ForkProof {
+        bytes4 version;
+        bytes32[] versionBranch;
+        bytes32[] genesisValidatorsRootBranch;
+    }
+
+    /// Evidence for a block hash position: a stored header, the branch to its body root, and the fork proof of its state.
     struct BlockHashEvidence {
         LayoutHeader header;
         bytes32[] branch;
+        ForkProof fork;
     }
 
-    /// A validated `block_roots` position.
+    /// A validated `block_roots` position. The bridge returns each of its three tables as `SlotRange[]`
+    /// (`gindex`, `firstSlot`, `lastSlot`); the encoding is the same tuple, so these three named copies decode them.
     struct StateLayoutRow {
         uint256 blockRootsGindex;
         uint64 firstSlot;
@@ -82,6 +91,7 @@ sol! {
         LayoutHeader sourceHeader;
         bytes32[] ancestryBranch;
         bytes32[] blockHashBranch;
+        ForkProof sourceFork;
         bytes executionHeaderRlp;
         bytes[] receiptProof;
         uint256 receiptIndex;
@@ -110,7 +120,6 @@ sol! {
         function localChainId() external view returns (uint64);
         function lightClient() external view returns (address);
         function remoteLightClient() external view returns (address);
-        function gloasForkSlot() external view returns (uint64);
         function messageCallStatus(bytes32 messageId) external view returns (bool);
         function failedMessageDataHash(bytes32 messageId) external view returns (bytes32);
         function stateLayouts() external view returns (StateLayoutRow[] memory);
@@ -284,7 +293,9 @@ mod tests {
             ),
             (
                 MessageBridgeContract::addBlockHashLayoutCall::SELECTOR,
-                format!("addBlockHashLayout(uint256,({header},bytes32[]))"),
+                format!(
+                    "addBlockHashLayout(uint256,({header},bytes32[],(bytes4,bytes32[],bytes32[])))"
+                ),
             ),
             (
                 MessageBridgeContract::addHistoricalSummariesLayoutCall::SELECTOR,
@@ -306,7 +317,7 @@ mod tests {
         assert_eq!(
             &MessageBridgeContract::executeMessageCall::SELECTOR[..],
             &keccak256(format!(
-                "executeMessage(({header},{header},bytes32[],bytes32[],bytes,bytes[],uint256,bytes[],uint256,uint256))"
+                "executeMessage(({header},{header},bytes32[],bytes32[],(bytes4,bytes32[],bytes32[]),bytes,bytes[],uint256,bytes[],uint256,uint256))"
             ))[..4]
         );
         assert_eq!(

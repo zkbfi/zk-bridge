@@ -128,7 +128,7 @@ describe("readProvenMessage on built proofs", () => {
     return encodeFunctionData({
       abi: messageBridgeAbi,
       functionName: "executeMessage",
-      args: [{ anchorHeader: zeroHeader, sourceHeader: zeroHeader, ancestryBranch: [], blockHashBranch: [], executionHeaderRlp: header, receiptProof: receipts.proof, receiptIndex: index, transactionProof: transactions.proof, transactionIndex: options.transactionIndex ?? index, logIndex: options.logIndex ?? 0n }],
+      args: [{ anchorHeader: zeroHeader, sourceHeader: zeroHeader, ancestryBranch: [], blockHashBranch: [], sourceFork: { version: "0x00000000", versionBranch: [], genesisValidatorsRootBranch: [] }, executionHeaderRlp: header, receiptProof: receipts.proof, receiptIndex: index, transactionProof: transactions.proof, transactionIndex: options.transactionIndex ?? index, logIndex: options.logIndex ?? 0n }],
     });
   };
   const receiptWith = (log: RlpList | Hex, status: Hex = "0x01"): Hex => toRlp([status, "0x5208", "0x", [log]] as never);

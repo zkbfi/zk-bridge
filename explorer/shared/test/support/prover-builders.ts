@@ -90,6 +90,8 @@ export function emptyExecuteMessage(anchorSlot = 0n): Hex {
     if (component.type === "tuple") return Object.fromEntries((component.components ?? []).map((inner) => [(inner as { name: string }).name, zeroOf(inner as never)]));
     if (component.type.endsWith("[]")) return [];
     if (component.type === "bytes32") return word(0);
+    // `bytes4`: the version of the fork proof of the source state (`MessageProof.sourceFork`).
+    if (component.type === "bytes4") return "0x00000000";
     if (component.type === "bytes") return "0x";
     if (component.type === "address") return address(0);
     if (component.type === "bool") return false;
