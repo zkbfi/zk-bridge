@@ -65,6 +65,15 @@ describe("the delivery control (owner, quote 98)", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("Deliver for 0.39%, max $0.39. Tap for the delivery settings.");
   });
 
+  it("adds the price fact as a second sentence of the tooltip and a line in the delivery menu, never a standing note", async () => {
+    const { container } = render(<FeeLine {...props({ priceNote: "1% maximum: SepETH has no market price" })} />);
+    expect(container.querySelector(".zb-drawer-price")).toBeNull();
+    await userEvent.hover(summary());
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Deliver for 0.39%, max $0.39. 1% maximum: SepETH has no market price. Tap for the delivery settings.");
+    await userEvent.click(summary());
+    expect(container.querySelector(".zb-drawer-price")).toHaveTextContent("1% maximum: SepETH has no market price");
+  });
+
   it("says who sets a value, with the way back", async () => {
     const onClick = vi.fn();
     render(<FeeLine {...props({ menu: menuOf([{ ...tipSlider, status: { text: "Set by you · the automatic fee is off", action: { label: "Back to automatic", onClick } } }]) })} />);
