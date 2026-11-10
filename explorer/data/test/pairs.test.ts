@@ -25,6 +25,14 @@ describe("loadPair", () => {
     expect(pair.sides[0].contracts.mediator).toBe(`0x${"ab".repeat(20)}`);
     expect(pair.sides[1].contracts.bridge).toBe(`0x${"2".repeat(40)}`);
     expect(pair.sides[1].startBlock).toBe(7);
+    expect("lightClientStartBlock" in pair.sides[1]).toBe(false);
+  });
+
+  it("reads light_client_start_block of a section when it is there, and refuses one that is not a whole block", () => {
+    const kept = { ...deployment, chain_b: { ...deployment.chain_b, light_client_start_block: 3 } };
+    expect(loadPair({ environment: {}, deployment: kept }).sides[1].lightClientStartBlock).toBe(3);
+    const wrong = { ...deployment, chain_b: { ...deployment.chain_b, light_client_start_block: -1 } };
+    expect(() => loadPair({ environment: {}, deployment: wrong })).toThrow();
   });
 
   it("matches sections even when the file lists them in the other order", () => {

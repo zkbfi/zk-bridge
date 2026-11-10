@@ -397,6 +397,9 @@ rpc_url = "https://one.valve.city/rpc/$VALVE_KEY/evm/11155111"
 light_client = "<light client on Sepolia>"
 bridge = "<bridge on Sepolia>"
 start_block = <first block on Sepolia>
+# After a redeploy of the bridge that kept the light client: the block before the light client was created. The scan for
+# stored heads starts here; without it a message sent just after the redeploy can get no block hash row.
+# light_client_start_block = <block before the light client on Sepolia>
 EOF
 ```
 

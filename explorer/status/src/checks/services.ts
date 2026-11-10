@@ -57,6 +57,21 @@ export const backendLocalCheck = (base: string): Spec => ({
   },
 });
 
+/** The grind engine: the backend tests the WASM proof-of-work engine at start-up and shows the result on `/health`. */
+export const grindEngineCheck = (base: string): Spec => ({
+  id: "grind-engine",
+  name: "Proof-of-work engine",
+  section: "services",
+  async run(deps) {
+    const answer = await get(deps, `${base}/health`);
+    if (answer.status !== 200) return { state: "down", detail: `answered ${answer.status} on /health` };
+    const engine = record(record(json(answer))?.grindEngine);
+    if (engine === null) return { state: "degraded", detail: "the backend reports no start-up test of the engine (the webhook module is off, or the backend is older)" };
+    if (engine.state === "ok") return { state: "ok", detail: `the start-up test passed in ${seconds(Number(engine.durationMilliseconds ?? 0))}` };
+    return { state: "down", detail: `the start-up test failed: ${String(engine.reason ?? "unknown")}${typeof engine.detail === "string" ? ` (${engine.detail})` : ""}; no proof of work is started` };
+  },
+});
+
 type Release = { readonly sequence: number; readonly version: string | null; readonly dappCid: string | null };
 
 /** Reads `version.json` of a site. Throws a message that says why not. */

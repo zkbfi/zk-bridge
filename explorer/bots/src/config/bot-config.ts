@@ -239,6 +239,13 @@ export const runnerSchema = z
     maximumUnrecoveredPrerequisiteLossWei: weiSchema,
     /** Seconds in which the runner does not try an item again after it paid layout calls for it and did not deliver. */
     prerequisiteLossRefusalSeconds: positiveSeconds.default(1800),
+    /**
+     * The tries of one message that may pay for layout calls and still leave it uncovered. At this count the runner sends
+     * no more layout calls for the message and records it as skipped with the reason `prerequisites-stuck`; the state
+     * file keeps the count and the calls that were sent, so a restart neither resets it nor sends the same call again.
+     * Default 3.
+     */
+    maximumUnsatisfiedPrerequisiteAttempts: z.number().int().positive().default(3),
     /** Seconds to wait for a receipt. */
     receiptTimeoutSeconds: positiveSeconds.default(300),
     /**

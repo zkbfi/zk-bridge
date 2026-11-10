@@ -1,4 +1,5 @@
 import type { Pair, PairSide } from "@zk-bridge/shared";
+import type { PreflightResult } from "@zk-bridge/shared/msgboard";
 import type { ProveOutcome, ProverBinary, ProofPackage } from "@zk-bridge/shared/prover";
 import { parseBackendConfig, type BackendConfig, type BackendSecrets, type ModuleName } from "../src/config.ts";
 import { createLogger } from "../src/logger.ts";
@@ -143,6 +144,7 @@ export function makeBackend(
     modules?: ModuleTable;
     storage?: Storage;
     proofNeed?: ReturnType<typeof fakeProofNeed>;
+    grindEngine?: PreflightResult;
   } = {},
 ) {
   const prover = options.prover ?? controllableProver();
@@ -159,6 +161,7 @@ export function makeBackend(
     readProofNeed: proofNeed.read,
     now: clock.now,
     logger: log.logger,
+    ...(options.grindEngine === undefined ? {} : { grindEngine: options.grindEngine }),
   };
   const app = createApp({ context, modules: options.modules ?? MODULES, enabled: options.enabled ?? ["requests"] });
   return { app, context, prover, clock, storage, log, proofNeed };

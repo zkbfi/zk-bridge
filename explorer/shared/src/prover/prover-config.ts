@@ -164,6 +164,15 @@ function headerLines(headerRpcUrls: readonly string[], side: "source" | "destina
   return [`header_rpc_urls = [${headerRpcUrls.map((url) => quoted(url, `${side} header rpc endpoint`)).join(", ")}]`];
 }
 
+/**
+ * `light_client_start_block` of the destination: where the prover starts its scan for the heads that the light client
+ * stored. After a bridge redeploy that kept the light client this is before `start_block`, and a scan from `start_block`
+ * misses the stored heads that the block hash row of an early message needs.
+ */
+function lightClientStartLines(block: number | undefined): readonly string[] {
+  return block === undefined ? [] : [`light_client_start_block = ${block}`];
+}
+
 /** `proof_cache_dir` of the destination: the proof cache that the `opening-proof` command reads first. */
 function proofCacheLines(directory: string | undefined): readonly string[] {
   return directory === undefined ? [] : [`proof_cache_dir = ${quoted(directory, "proof cache directory")}`];
@@ -220,6 +229,7 @@ export function renderProverConfig(
     `light_client = ${quoted(destination.contracts.lightClient, "destination light client")}`,
     `bridge = ${quoted(destination.contracts.bridge, "destination bridge")}`,
     `start_block = ${destination.startBlock}`,
+    ...lightClientStartLines(destination.lightClientStartBlock),
     ...headerLines(destination.headerRpcUrls ?? [], "destination"),
     ...proofCacheLines(options.proofCacheDirectory),
     "",

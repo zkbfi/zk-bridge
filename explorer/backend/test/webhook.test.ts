@@ -718,7 +718,7 @@ describe("the real outside world", () => {
   });
 
   it("builds a board publisher without opening a connection", () => {
-    expect(REAL_SOURCE.makeBoard("http://board.invalid", memoryLogger().logger).post).toBeTypeOf("function");
+    expect(REAL_SOURCE.makeBoard("http://board.invalid", memoryLogger().logger, undefined).post).toBeTypeOf("function");
     expect(REAL_SOURCE.environment).toBe(process.env);
   });
 

@@ -88,11 +88,17 @@ function buildChain(side: ChainSide, definition: ChainDefinition, deployment: un
   }
 }
 
-/** The `start_block` of a deployment section, as a one-field object, only when it is a non-negative whole number. */
-function startBlockOf(section: Record<string, unknown>): { readonly startBlock?: number } {
-  const value = section.start_block
+/**
+ * The `start_block` and `light_client_start_block` of a deployment section, each only when it is a non-negative whole
+ * number.
+ */
+function startBlockOf(section: Record<string, unknown>): { readonly startBlock?: number; readonly lightClientStartBlock?: number } {
+  return { ...blockField(section.start_block, 'startBlock'), ...blockField(section.light_client_start_block, 'lightClientStartBlock') }
+}
+
+function blockField<K extends string>(value: unknown, key: K): { readonly [P in K]?: number } {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) return {}
-  return { startBlock: value }
+  return { [key]: value } as { readonly [P in K]?: number }
 }
 
 /** The `rpc_url` of a deployment section, as a one-field object, only when it is a non-empty http or https URL. */

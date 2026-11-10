@@ -26,26 +26,37 @@ export function startNonceFor(index) {
 }
 
 /**
- * Builds the `stamper` that `MsgBoardClient` takes, over the range of one thread.
+ * Builds the `stamper` that `MsgBoardClient` takes, over the ranges of one thread. The thread searches its first range
+ * and, when that holds no valid nonce, the next one that is its own: the ranges of the threads take turns, so thread i
+ * of n threads searches range i, i + n, i + 2n and so on. It stops when the next range would lie past the 32 bits of the
+ * engine, or when the deadline has passed, and then throws. The SDK answers a throw with its own search from nonce 0,
+ * which every thread would repeat, so a thread keeps to the engine for as long as it has a range left.
  *
  * @param {(request: object) => Uint8Array | null | undefined} engine The `stamp` of the engine.
  * @param {number} index The number of the thread, from 0.
+ * @param {number} [threads] How many threads grind the message.
+ * @param {{ deadline?: number, now?: () => number }} [limits] The time (milliseconds since 1970) after which no new range starts.
  * @returns {(input: { category: string, data: string, workMultiplier: bigint, workDivisor: bigint, blockHash: string }) => { nonce: bigint, hash: string }}
  */
-export function createRangeStamper(engine, index) {
+export function createRangeStamper(engine, index, threads = 1, { deadline = Infinity, now = Date.now } = {}) {
   return (input) => {
-    const answer = engine({
+    const request = {
       category: hexBytes(input.category),
       data: hexBytes(input.data),
       workMultiplier: Number(input.workMultiplier),
       workDivisor: Number(input.workDivisor),
       blockHash: hexBytes(input.blockHash),
       version: 1,
-      startNonce: startNonceFor(index),
       maxIters: NONCES_PER_THREAD,
-    });
-    if (answer === null || answer === undefined) throw new Error(`no nonce in the range of thread ${index}`);
-    return { nonce: BigInt(`0x${toHex(answer.subarray(0, 8))}`), hash: `0x${toHex(answer.subarray(8, 40))}` };
+    };
+    for (let range = index; range < MAXIMUM_THREADS; range += threads) {
+      if (now() >= deadline) throw new Error(`the time ran out before thread ${index} found a nonce`);
+      const answer = engine({ ...request, startNonce: startNonceFor(range) });
+      if (answer !== null && answer !== undefined) {
+        return { nonce: BigInt(`0x${toHex(answer.subarray(0, 8))}`), hash: `0x${toHex(answer.subarray(8, 40))}` };
+      }
+    }
+    throw new Error(`no nonce in the ranges of thread ${index}`);
   };
 }
 
@@ -70,17 +81,26 @@ export async function loadWasmEngine() {
   return engine.stamp;
 }
 
+/** Writes one JSON line to the error output of the process, the way the bots do. */
+export function writeWarning(event, fields) {
+  process.stderr.write(`${JSON.stringify({ level: "warn", event, ...fields })}\n`);
+}
+
 /**
- * The stamper of one thread, over the WASM engine. When the engine does not load it is `undefined`, and the client of the
- * SDK goes on with its own search, which is slower but finds the same work.
+ * The stamper of one thread, over the WASM engine. When the engine does not load it logs `grind_engine_unavailable` with
+ * the reason and is `undefined`, and the client of the SDK goes on with its own search, which is slower but finds the
+ * same work. That search starts at nonce 0 on every thread, so the parent grinds on one thread when the engine does not
+ * load (see `grindOnThreads`).
  *
  * @param {number} index The number of the thread, from 0.
- * @param {() => Promise<(request: object) => Uint8Array | null | undefined>} [load] Loads the engine.
+ * @param {number} [threads] How many threads grind the message.
+ * @param {{ load?: () => Promise<(request: object) => Uint8Array | null | undefined>, warn?: (event: string, fields: object) => void, deadline?: number }} [options]
  */
-export async function stamperForThread(index, load = loadWasmEngine) {
+export async function stamperForThread(index, threads = 1, { load = loadWasmEngine, warn = writeWarning, deadline } = {}) {
   try {
-    return createRangeStamper(await load(), index);
-  } catch {
+    return createRangeStamper(await load(), index, threads, { deadline });
+  } catch (error) {
+    warn("grind_engine_unavailable", { thread: index, reason: error instanceof Error ? error.message : String(error) });
     return undefined;
   }
 }

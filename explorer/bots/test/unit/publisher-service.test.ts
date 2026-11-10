@@ -254,6 +254,30 @@ describe("startPublisher runs one step for each direction", () => {
     expect(node.messages).toHaveLength(1);
   });
 
+  it("tests the grind engine before it makes a proof, logs it, and starts nothing when the engine fails", async () => {
+    const created = await world({ config: publisherConfig, setup: readySetup("http://127.0.0.1:1"), environment: environmentFor("http://127.0.0.1:1") });
+    const { executor, specs } = recordingExecutor({ code: 0, stdout: `${proofPackageJson()}\n` });
+    await expect(start(created, { executor, preflight: async () => ({ ok: false, reason: "load-failed", detail: "no wasm" }) })).rejects.toThrow(
+      "The proof-of-work engine failed its start-up test (load-failed: no wasm), so the publisher does not start.",
+    );
+    expect(specs).toHaveLength(0);
+    expect(created.events().find((event) => event.event === "grind_preflight_failed")).toMatchObject({ reason: "load-failed", detail: "no wasm" });
+  });
+
+  it("logs that the grind engine passed its test and grinds; a grind or a board that the caller gives is not tested", async () => {
+    const node = await board();
+    const created = await world({ config: publisherConfig, setup: readySetup(node.url), environment: environmentFor(node.url) });
+    const { executor } = recordingExecutor({ code: 0, stdout: `${proofPackageJson()}\n` });
+    const preflight = vi.fn(async () => ({ ok: true as const, durationMilliseconds: 8 }));
+    await start(created, { executor, preflight, publicClient: () => lightClientClient });
+    expect(preflight).toHaveBeenCalledOnce();
+    expect(created.events().find((event) => event.event === "grind_preflight_passed")).toMatchObject({ durationMilliseconds: 8 });
+    expect(node.messages).toHaveLength(1);
+    const other = vi.fn(async () => ({ ok: true as const, durationMilliseconds: 8 }));
+    await start(created, { executor, preflight: other, grind: vi.fn(grindInWorker), publicClient: () => lightClientClient });
+    expect(other).not.toHaveBeenCalled();
+  });
+
   it("uses the board it is given and opens none of its own", async () => {
     const created = await world({ config: publisherConfig, setup: readySetup("http://127.0.0.1:1"), environment: environmentFor("http://127.0.0.1:1") });
     const { executor } = recordingExecutor({ code: 0, stdout: `${proofPackageJson()}\n` });
