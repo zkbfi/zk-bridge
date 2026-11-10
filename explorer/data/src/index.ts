@@ -574,7 +574,28 @@ export {
   gateConfirmWindow,
   SIMULATION_RETRY_MILLISECONDS,
   type EvidenceBlock,
+  readEvidenceHeader,
 } from "./gate-evidence.js";
+
+// The fork cutover: the beacon fork schedule, the destination light client's head, the fork state of a gate, the seal offer
+export { FORK_SOURCE_TIMEOUT_MILLISECONDS, fetchSourceForks } from "./fork-cutover-source.js";
+export {
+  readLightClientHead,
+  type CutoverRoute,
+  type ForkCutoverCheck,
+  type CutoverFacts,
+  type CutoverReaders,
+  readCutoverFacts,
+  createForkCutoverCheck,
+  type ForkGateState,
+  type ForkObservation,
+  readForkGateState,
+  readForkObservation,
+  SEAL_DEPTHS,
+  SIMULATION_ACCOUNT,
+  type SealOffer,
+  offerSeal,
+} from "./fork-cutover-check.js";
 
 // Chain metadata: native coin tickers and block explorers
 export { type ExplorerInfo, type ChainMetadata, CHAIN_METADATA, chainNameOf, nativeSymbolOfChain, explorerLinks } from "./chain-metadata.js";

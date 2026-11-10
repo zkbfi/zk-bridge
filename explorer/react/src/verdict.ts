@@ -53,6 +53,11 @@ export type VerdictInput = {
    * the cap, the fee (or its worst case), what the cap allows and the smallest cap that admits the fee, as text; or null.
    */
   readonly hardCap?: { readonly capText: string; readonly feeText: string; readonly capAmountText: string; readonly raiseText: string; readonly worstCase: boolean } | null;
+  /**
+   * Sends from the source chain are paused before a fork (`decideForkCutover` of `@zkb/core`): the pill's words and the
+   * line under it, with the numbers; or null. A block, like a closed gate.
+   */
+  readonly forkPause?: { readonly label: string; readonly detail: string } | null;
   /** zkb.fi has never bridged this token (owner: custom tokens). */
   readonly firstBridge?: boolean;
   /** The token is an Omnibridge copy (bridging it wraps it twice). */
@@ -60,7 +65,7 @@ export type VerdictInput = {
 };
 
 /**
- * The pill's verdict, in priority order: no wallet, paused, nothing typed, over balance, a destination that can't be used, a blocked draft, a fee above
+ * The pill's verdict, in priority order: no wallet, paused, paused before a fork, nothing typed, over balance, a destination that can't be used, a blocked draft, a fee above
  * the hard cap (a block, never a warning to override); then one warning at most: a small transfer, a low fee, "High cap %", an Omnibridge copy, a first bridge; then an incomplete
  * draft, go.
  *
@@ -69,6 +74,7 @@ export type VerdictInput = {
 export const verdictOf = (input: VerdictInput): Verdict => {
   if (!input.connected) return { kind: "connect", label: "Connect wallet", detail: null };
   if (input.paused !== null) return { kind: "blocked", label: `${input.paused.route} is paused`, detail: "The gate on the destination is closed. Nothing can be sent until it opens." };
+  if (input.forkPause != null) return { kind: "blocked", label: input.forkPause.label, detail: input.forkPause.detail };
   if (!input.amountEntered) return { kind: "blocked", label: "Enter an amount", detail: null };
   if (input.overBalance) return { kind: "blocked", label: `Not enough ${input.symbol}`, detail: null };
   if (input.destinationProblem != null) return { kind: "blocked", label: "Check the destination", detail: input.destinationProblemShown === true ? null : input.destinationProblem };

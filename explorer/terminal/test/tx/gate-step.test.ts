@@ -58,6 +58,18 @@ describe('decideGateStep', () => {
     expect(decide({ kind: 'sealed', epoch: 9n })).toEqual({ kind: 'refuse', message: 'The Ethereum deposit gate is sealed: it admits no send in epoch 9 or later. Nothing was sent.' })
   })
 
+  test('refuses a send paused before a fork, with the numbers of the pause', () => {
+    const fork = { version: '0x90000075', name: 'Fulu', epoch: 500, slot: 16_000, time: 1_800_000 }
+    const paused: GateConfirmation = { kind: 'paused', verdict: { kind: 'paused', destinationChainId: 369, fork, pausedSince: 1_796_400, lightClientHead: 15_000n, leadSeconds: 3600 } }
+    expect(decide(paused, 0, 1_800_600_000)).toEqual({
+      kind: 'refuse',
+      message:
+        'Sends from Ethereum are paused since 19:00 UTC: the Fulu fork (epoch 500) started 10m 00s ago. They resume once PulseChain\'s light client\'s finalized head is past slot 16000; it is slot 15000 now. Nothing was sent.',
+    })
+    const unnamed: GateConfirmation = { kind: 'paused', verdict: { kind: 'paused', destinationChainId: 424242, fork, pausedSince: 1_796_400, lightClientHead: null, leadSeconds: 3600 } }
+    expect((decide(unnamed, 0, 1_800_600_000) as { message: string }).message).toContain("chain 424242's light client")
+  })
+
   test('waits a slot for the header, and gives up after the limit', () => {
     const wait: GateConfirmation = { kind: 'wait', epoch: 7n, headerEpoch: 6n, retryAfterSeconds: 12 }
     expect(decide(wait, GATE_WAIT_LIMIT - 1)).toEqual({ kind: 'wait', wait: { chainName: 'Ethereum', epoch: 7n, seconds: 12 } })

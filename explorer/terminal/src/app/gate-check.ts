@@ -7,6 +7,8 @@ import { createGateCheck, type GateChainClient, type GateCheck } from '@zk-bridg
 import type { ChainAccess } from '../chain/chain-access'
 import { beaconUrlsFor } from '../config/default-beacon'
 import type { ConnectionRuntime } from '../data/connection-runtime'
+import type { PairConfig } from '../model/types'
+import { forkCutoverCheckFor } from './fork-cutover'
 
 /** What the terminal tells when a chain has no beacon endpoint at all. */
 export const TERMINAL_NO_BEACON_TEXT = 'no beacon endpoint is known for this chain (the deployment names none, and the chain has no default)'
@@ -14,18 +16,22 @@ export const TERMINAL_NO_BEACON_TEXT = 'no beacon endpoint is known for this cha
 /**
  * The gate check of the dashboard, or undefined with fixture data (no connection), which reaches no chain.
  *
+ * @param input.pair The pair, when the check also refuses sends before a fork (the fork cutover). Absent: the gate only.
  * @param input.connection The live connections, or null in fixture mode.
  * @param input.chainAccess The chain access whose flow clients the sends use.
  * @param input.fetch The `fetch` to use. Default: the global one.
  */
 export function terminalGateCheck(input: {
+  readonly pair?: PairConfig
   readonly connection: Pick<ConnectionRuntime, 'resolved'> | null
   readonly chainAccess: Pick<ChainAccess, 'flowClient'>
   readonly fetch?: typeof fetch
 }): GateCheck | undefined {
   const { connection, chainAccess } = input
   if (connection === null) return undefined
+  const cutover = input.pair === undefined ? undefined : forkCutoverCheckFor({ pair: input.pair, connection, chainAccess, ...(input.fetch === undefined ? {} : { fetch: input.fetch }) })
   return createGateCheck({
+    ...(cutover === undefined ? {} : { cutover }),
     // The flow client of a live dashboard is a viem public client; its type names only what the flow needs.
     clientFor: (chainId) => chainAccess.flowClient(chainId) as unknown as GateChainClient,
     beaconUrlsFor: (chainId) => beaconUrlsFor(connection.resolved(), chainId),

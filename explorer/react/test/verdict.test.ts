@@ -74,6 +74,12 @@ describe("the Bridge pill's verdict", () => {
     expect(verdictOf({ ...base, draft: { status: "incomplete", reason: "Waiting" }, smallTransfer: { costText: "$1", capText: "1%", capAmountText: "$0.1" } })).toMatchObject({ kind: "blocked", label: "Bridge", detail: "Waiting" });
   });
 
+  it("blocks a send that is paused before a fork, with the words and numbers it is given", () => {
+    const forkPause = { label: "Sepolia sends are paused", detail: "Paused since 14:02 UTC." };
+    expect(verdictOf({ ...base, forkPause })).toEqual({ kind: "blocked", label: "Sepolia sends are paused", detail: "Paused since 14:02 UTC." });
+    expect(verdictOf({ ...base, forkPause: null }).label).not.toBe("Sepolia sends are paused");
+  });
+
   it("blocks a paused route", () => {
     expect(verdictOf({ ...base, paused: { route: "PulseChain → Ethereum" } })).toMatchObject({ kind: "blocked", label: "PulseChain → Ethereum is paused" });
   });

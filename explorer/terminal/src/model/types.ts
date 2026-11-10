@@ -79,6 +79,8 @@ export interface ChainConfig {
     readonly wrappedNative: Address | null
     readonly gate: Address | null
     readonly deliveryRouter: Address | null
+    /** The `ForkRegistry` of this chain (PulseChain only), when the deployment names one. */
+    readonly forkRegistry?: Address
   }
 }
 

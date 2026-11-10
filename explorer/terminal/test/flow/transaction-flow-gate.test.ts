@@ -251,6 +251,19 @@ describe('refusals and errors', () => {
     expect(log).toEqual([])
   })
 
+  test('a send paused before a fork stops with the numbers of the pause, and nothing is signed or sent', async () => {
+    const fork = { version: '0x90000075', name: 'Fulu', epoch: 500, slot: 16_000, time: Math.floor(Date.now() / 1000) + 600 }
+    const gate = scriptedGate({ kind: 'paused', verdict: { kind: 'paused', destinationChainId: 369, fork, pausedSince: fork.time - 3000, lightClientHead: 15_000n, leadSeconds: 3600 } })
+    const { flow, sent, log } = setup({ gate: gate.check })
+    flow.start([{ plan: relayPlan, skippable: false }])
+    const state = await until(flow, (current) => current.phase === 'error')
+    expect(state.error).toContain('Sends from Ethereum are paused')
+    expect(state.error).toContain('the Fulu fork (epoch 500) starts in')
+    expect(state.error).toEndWith('Nothing was sent.')
+    expect(sent).toHaveLength(0)
+    expect(log).toEqual([])
+  })
+
   test('a check that fails says so, with the retry key when no beacon endpoint answered', async () => {
     const beacon = scriptedGate(new GateEvidenceError('beacon-request-failed', 'no beacon endpoint answered (2 tried; last: the beacon node answered 503 for a proof)'))
     const first = setup({ gate: beacon.check })

@@ -32,6 +32,7 @@ import {
   normalizeAddress,
   PROGRESSIVE_SHAPE,
   type BeaconBlockHeader,
+  type ForkCutoverVerdict,
   type ForkEvidence,
 } from "@zkb/core";
 import { beaconForkGateAbi } from "./abis/index.js";
@@ -284,6 +285,32 @@ export interface WaitForGateHeader {
 }
 
 /**
+ * The beacon header that the evidence block of a gate status proves: the root that the beacon roots contract holds for the
+ * block's time, checked against the block's own parent beacon block root, and the header of that root from the beacon node
+ * (checked to hash to it).
+ *
+ * @throws GateEvidenceError when the chain has no EIP-4788, the roots disagree, or the node sends another header.
+ */
+export async function readEvidenceHeader(input: { readonly client: GateChainClient; readonly beacon: BeaconProofSource; readonly status: GateStatus }): Promise<{
+  readonly block: EvidenceBlock;
+  readonly beaconRoot: Hex;
+  readonly header: BeaconBlockHeader;
+}> {
+  const { status } = input;
+  const block = status.evidenceBlock;
+  if (block.parentBeaconBlockRoot === null) throw new GateEvidenceError("no-parent-beacon-root", `block ${block.number} names no parent beacon block root: the chain has no EIP-4788`);
+  // What the gate will read: the beacon roots contract, keyed by the time of the block.
+  const answer = await input.client.call({ to: status.beaconRoots, data: padHex(numberToHex(block.timestamp), { size: 32 }), blockNumber: block.number });
+  const beaconRoot = answer.data ?? "0x";
+  if (beaconRoot.toLowerCase() !== block.parentBeaconBlockRoot.toLowerCase()) {
+    throw new GateEvidenceError("beacon-root-mismatch", `the beacon roots contract holds ${beaconRoot} for the time ${block.timestamp}, the block names ${block.parentBeaconBlockRoot}`);
+  }
+  const header = await input.beacon.header(beaconRoot);
+  if (beaconHeaderRoot(header) !== beaconRoot.toLowerCase()) throw new GateEvidenceError("header-root-mismatch", `the beacon node sent a header that does not hash to ${beaconRoot}`);
+  return { block, beaconRoot, header };
+}
+
+/**
  * Builds the evidence that confirms the epoch of the next block.
  *
  * @param input.client A client of the chain of the gate.
@@ -299,16 +326,7 @@ export async function buildGateEvidence(input: {
   readonly status?: GateStatus;
 }): Promise<ReadyGateEvidence | WaitForGateHeader> {
   const status = input.status ?? (await readGateStatus(input));
-  const block = status.evidenceBlock;
-  if (block.parentBeaconBlockRoot === null) throw new GateEvidenceError("no-parent-beacon-root", `block ${block.number} names no parent beacon block root: the chain has no EIP-4788`);
-  // What the gate will read: the beacon roots contract, keyed by the time of the block.
-  const answer = await input.client.call({ to: status.beaconRoots, data: padHex(numberToHex(block.timestamp), { size: 32 }), blockNumber: block.number });
-  const beaconRoot = answer.data ?? "0x";
-  if (beaconRoot.toLowerCase() !== block.parentBeaconBlockRoot.toLowerCase()) {
-    throw new GateEvidenceError("beacon-root-mismatch", `the beacon roots contract holds ${beaconRoot} for the time ${block.timestamp}, the block names ${block.parentBeaconBlockRoot}`);
-  }
-  const header = await input.beacon.header(beaconRoot);
-  if (beaconHeaderRoot(header) !== beaconRoot.toLowerCase()) throw new GateEvidenceError("header-root-mismatch", `the beacon node sent a header that does not hash to ${beaconRoot}`);
+  const { block, beaconRoot, header } = await readEvidenceHeader({ client: input.client, beacon: input.beacon, status });
   const headerEpoch = header.slot / status.slotsPerEpoch;
   if (headerEpoch < status.epoch) return { kind: "wait", epoch: status.epoch, headerEpoch, retryAfterSeconds: Number(status.secondsPerSlot) };
   if (headerEpoch > status.epoch) throw new GateEvidenceError("header-ahead", `the header of slot ${header.slot} is in epoch ${headerEpoch}, after the epoch ${status.epoch} of the next block`);
@@ -383,6 +401,8 @@ export type GateConfirmation =
   /** The gate is sealed for good: no send passes, with or without evidence. */
   | { readonly kind: "sealed"; readonly epoch: bigint }
   | WaitForGateHeader
+  /** The route is paused before a fork (`decideForkCutover`): nothing is sent, the gate is not asked. */
+  | { readonly kind: "paused"; readonly verdict: Extract<ForkCutoverVerdict, { readonly kind: "paused" }> }
   /** Send `call` first, from the same sender, in a block before `validUntil`; then send. */
   | {
       readonly kind: "confirm";
@@ -484,8 +504,17 @@ export function createGateCheck(input: {
   readonly beaconUrlsFor: (chainId: number) => readonly string[];
   readonly noneText?: string;
   readonly fetch?: typeof fetch;
+  /**
+   * The fork cutover check (`createForkCutoverCheck`). When it says a send from the chain is paused before a fork, the gate
+   * check answers `paused` and does not read the gate. Absent: no cutover.
+   */
+  readonly cutover?: (chainId: number) => Promise<ForkCutoverVerdict>;
 }): GateCheck {
-  return ({ chainId, gate, account }) => {
+  return async ({ chainId, gate, account }) => {
+    if (input.cutover !== undefined) {
+      const verdict = await input.cutover(chainId);
+      if (verdict.kind === "paused") return { kind: "paused", verdict };
+    }
     const sources = input.beaconUrlsFor(chainId).map((url) => createBeaconProofSource({ url, ...(input.fetch === undefined ? {} : { fetch: input.fetch }) }));
     const beacon = fallbackBeaconSource(sources, input.noneText === undefined ? {} : { noneText: input.noneText });
     return ensureGateConfirmed({ client: input.clientFor(chainId), gate, beacon, account });

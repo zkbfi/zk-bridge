@@ -346,3 +346,26 @@ export {
   remainingWait,
   waitDurationText,
 } from "./wait-estimates.js";
+
+// The interface cutover before a fork: whether sends from a chain are allowed, and the words for it
+export {
+  CUTOVER_LEAD_SECONDS,
+  CUTOVER_LEAD_EPOCHS,
+  FORK_NAMES,
+  type ForkCutoverClock,
+  type ForkScheduleEntry,
+  type ForkMoment,
+  parseForkSchedule,
+  parseBeaconGenesisTime,
+  parseBeaconSpec,
+  cutoverLeadSeconds,
+  forkMomentOf,
+  type SourceForks,
+  type ForkCutoverInput,
+  type ForkCutoverVerdict,
+  isSendAllowed,
+  decideForkCutover,
+  utcText,
+  type ForkCutoverText,
+  forkCutoverText,
+} from "./fork-cutover.js";

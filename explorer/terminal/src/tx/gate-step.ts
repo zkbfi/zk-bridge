@@ -7,7 +7,7 @@
  *
  * Pure: nothing here reads a chain, signs or sends, and nothing imports the terminal library.
  */
-import { gateConfirmWindow, GateEvidenceError, type GateConfirmation } from '@zk-bridge/shared'
+import { chainNameOf, forkCutoverText, gateConfirmWindow, GateEvidenceError, type GateConfirmation } from '@zk-bridge/shared'
 import { getAddress, type Hex } from 'viem'
 import type { ChainConfig } from '../model/types'
 import type { PrepareClient } from './prepare'
@@ -79,6 +79,11 @@ export function decideGateStep(answer: GateConfirmation, input: { readonly chain
       return { kind: 'send' }
     case 'sealed':
       return { kind: 'refuse', message: `The ${chain.name} deposit gate is sealed: it admits no send in epoch ${answer.epoch} or later. Nothing was sent.` }
+    case 'paused': {
+      const destination = chainNameOf(answer.verdict.destinationChainId) ?? `chain ${answer.verdict.destinationChainId}`
+      const text = forkCutoverText(answer.verdict, { source: chain.name, destination }, Math.floor(input.nowMilliseconds / 1000))
+      return { kind: 'refuse', message: `${text.headline} Nothing was sent.` }
+    }
     case 'wait':
       if (waits >= GATE_WAIT_LIMIT) {
         return {

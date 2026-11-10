@@ -84,8 +84,15 @@ function buildChain(side: ChainSide, definition: ChainDefinition, deployment: un
       wrappedNative: optionalAddress(section, 'wrapped_native'),
       gate: optionalAddress(section, 'gate'),
       deliveryRouter: optionalAddress(section, 'delivery_router'),
+      ...forkRegistryOf(section),
     },
   }
+}
+
+/** The `fork_registry` of a deployment section (PulseChain only), when it names one. */
+function forkRegistryOf(section: Record<string, unknown>): { readonly forkRegistry?: Address } {
+  const registry = optionalAddress(section, 'fork_registry')
+  return registry === null ? {} : { forkRegistry: registry }
 }
 
 /**
