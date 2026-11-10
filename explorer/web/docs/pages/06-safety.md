@@ -61,7 +61,9 @@ A fork can break a route. The bridge does not hide this.
 - The gate stops new sends into a route that cannot follow the fork.
 - Sends made shortly before a fork can stay locked, and the bridge has no way to refund them. Avoid sending large amounts around a known fork.
 - After a breaking fork, the operators deploy a new route beside the old one. The old route pays what it can still prove.
-- The app shows a paused route as paused and will not send into it. A direct contract call in that window can still strand funds.
+- The app reads the fork schedule of the source chain from its beacon node. From one hour (and at least three epochs) before the next scheduled fork, the Bridge button is disabled and says when the pause started and what ends it. Sends resume once the light client on the other chain has a finalized head past the first slot of the fork. Before the pause, the page counts down to it, such as "Sends pause in 1h 59m".
+- When the beacon node of the source chain cannot be reached, the page says so under the button and still offers the send. A send just before a fork would be stranded; check the beacon endpoint in Settings.
+- A direct contract call in the paused window is not refused by any contract and can still strand funds.
 
 ## The deposit lock
 

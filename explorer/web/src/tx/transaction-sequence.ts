@@ -12,7 +12,7 @@
  * estimate still reverts with `ForkNotConfirmed` (the epoch rolled over), it asks once more.
  */
 import type { Address, Hash, Hex } from "viem";
-import { isForkNotConfirmed, revertText, type GateCheck, type GateConfirmation } from "@zk-bridge/shared";
+import { isForkNotConfirmed, revertText, type GateCheck, type GateCheckAnswer } from "@zk-bridge/shared";
 import { decideGateStep, gateErrorText, GATE_WAIT_LIMIT, passesGate, withKnownGas, type GateDecision, type GateWait } from "@terminal/tx/gate-step";
 import { prepareTransaction, type PrepareClient, type PreparedTransaction } from "@terminal/tx/prepare";
 import type { WebStep } from "./bridge-steps";
@@ -143,7 +143,7 @@ export const createTransactionSequence = (dependencies: SequenceDependencies): T
    */
   const settleGate = async (step: WebStep, mine: number, attempt: Attempt, checkGate: GateCheck): Promise<boolean> => {
     const chain = step.plan.chain;
-    let answer: GateConfirmation;
+    let answer: GateCheckAnswer;
     try {
       answer = await checkGate({ chainId: chain.chainId, gate: chain.contracts.gate as Address, account: dependencies.account });
     } catch (error) {

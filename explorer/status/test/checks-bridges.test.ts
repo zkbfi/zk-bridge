@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { bridgeCheck, gateCheck } from "../src/checks/bridges.ts";
+import { bridgeCheck, forkCutoverCheck, gateCheck } from "../src/checks/bridges.ts";
 import type { ChainClient } from "../src/deps.ts";
-import { makeDeps } from "./support.ts";
+import { fakeFetch, makeDeps, pair } from "./support.ts";
 
 describe("bridgeCheck", () => {
   const client = (open: boolean | Error): ChainClient => ({ readContract: async () => { if (open instanceof Error) throw open; return open; } }) as unknown as ChainClient;
@@ -77,5 +77,81 @@ describe("gateCheck", () => {
     expect(await gateCheck(sealed, 943).run(sealed)).toEqual({ state: "down", detail: "sealed after a fork, it refuses every send and the seal never clears" });
     const detecting = makeDeps({ client: () => gate({ sealed: true, mode: 1, enforcing: false }) });
     expect((await gateCheck(detecting, 943).run(detecting)).state).toBe("down");
+  });
+});
+
+describe("forkCutoverCheck", () => {
+  const NOW_SECONDS = 1_800_000_000;
+  /** Sepolia's schedule: one fork at epoch E (genesis time chosen so the fork is `away` seconds from now). */
+  const beacon = (away: number) => ({
+    "https://beacon-a.example.org/key-a/eth/v1/config/fork_schedule": { body: { data: [{ current_version: "0x90000069", epoch: "0" }, { current_version: "0x90000070", epoch: "100" }] } },
+    "https://beacon-a.example.org/key-a/eth/v1/beacon/genesis": { body: { data: { genesis_time: String(NOW_SECONDS + away - 100 * 384) } } },
+    "https://beacon-a.example.org/key-a/eth/v1/config/spec": { body: { data: { SECONDS_PER_SLOT: "12", SLOTS_PER_EPOCH: "32" } } },
+  });
+  /** A client that answers the light client head, the gate and the registry. */
+  const client = (reads: Record<string, unknown> = {}): ChainClient =>
+    ({
+      readContract: async ({ functionName }: { functionName: string }) => {
+        const answers: Record<string, unknown> = { head: 3000n, mode: 0, enforcing: true, isSealed: false, forkRegistry: "0x" + "0".repeat(40), latestObserved: ["0x90000070", 6, 3100n], ...reads };
+        return answers[functionName];
+      },
+    }) as unknown as ChainClient;
+  const deps = (away: number, reads: Record<string, unknown> = {}, routes: Record<string, { status?: number }> = {}) => {
+    const clock = { now: NOW_SECONDS * 1000 };
+    return makeDeps({ clock, fetch: fakeFetch({ ...beacon(away), ...routes }, clock), client: () => client(reads) });
+  };
+
+  it("is ok while no pause is near, with the next fork and its countdown", async () => {
+    const run = deps(3 * 3600);
+    const check = forkCutoverCheck(run, "first-to-second");
+    expect(check.id).toBe("fork-cutover-first-to-second");
+    expect(check.name).toBe("Sepolia sends before a fork");
+    const outcome = await check.run(run);
+    expect(outcome.state).toBe("ok");
+    expect(outcome.detail).toContain("Sends from Sepolia pause at");
+    expect(outcome.detail).toContain("1 h before the Altair fork (epoch 100)");
+    expect(outcome.detail).toContain("(Sends pause in 1h 59m) gate not sealed, mode enforcing");
+  });
+
+  it("is degraded, with the numbers of the pause, while sends are paused", async () => {
+    const run = deps(600);
+    const outcome = await forkCutoverCheck(run, "first-to-second").run(run);
+    expect(outcome.state).toBe("degraded");
+    expect(outcome.detail).toContain("Sends from Sepolia are paused since");
+    expect(outcome.detail).toContain("finalized head is past slot 3200; it is slot 3000 now.");
+  });
+
+  it("says that no fork is scheduled, reads the registry of the deployment, and names a registry that observed nothing", async () => {
+    const clock = { now: NOW_SECONDS * 1000 };
+    const none = makeDeps({
+      clock,
+      fetch: fakeFetch({ ...beacon(0), "https://beacon-a.example.org/key-a/eth/v1/config/fork_schedule": { body: { data: [{ current_version: "0x90000069", epoch: "0" }] } } }, clock),
+      client: () => client({ latestObserved: ["0x00000000", 0, 0n] }),
+      pair: { ...pair, sides: [{ ...pair.sides[0], contracts: { ...pair.sides[0].contracts, forkRegistry: "0x" + "7".repeat(40) as `0x${string}` } }, pair.sides[1]] as const },
+    });
+    const outcome = await forkCutoverCheck(none, "first-to-second").run(none);
+    expect(outcome).toEqual({ state: "ok", detail: "no fork is scheduled on Sepolia gate not sealed, mode enforcing; registry has observed nothing" });
+  });
+
+  it("reads the registry that the gate names, and the other direction", async () => {
+    const run = deps(8 * 86_400, { forkRegistry: "0x" + "8".repeat(40), mode: 2 });
+    const outcome = await forkCutoverCheck(run, "second-to-first").run(run);
+    // The beacon of PulseChain testnet is not served by this fake: unreachable, so the state is degraded.
+    expect(outcome.state).toBe("degraded");
+    expect(outcome.detail).toContain("PulseChain testnet's beacon node did not answer");
+    expect(outcome.detail).toContain("registry version 0x90000070, shape 6, slot 3100");
+  });
+
+  it("says when the gate is sealed", async () => {
+    const run = deps(8 * 86_400, { isSealed: true });
+    expect((await forkCutoverCheck(run, "first-to-second").run(run)).detail).toContain("gate sealed, mode enforcing");
+  });
+
+  it("is degraded when the source chain has no beacon endpoint", async () => {
+    const clock = { now: NOW_SECONDS * 1000 };
+    const run = makeDeps({ clock, client: () => client(), pair: { ...pair, sides: [{ ...pair.sides[0], beaconUrl: null }, pair.sides[1]] as const } });
+    const outcome = await forkCutoverCheck(run, "first-to-second").run(run);
+    expect(outcome.state).toBe("degraded");
+    expect(outcome.detail).toContain("Sepolia's beacon node did not answer");
   });
 });

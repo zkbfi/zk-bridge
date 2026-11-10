@@ -121,7 +121,9 @@ describe('the review modal and the deposit gate', () => {
       expect(frame).toContain('Waiting for the deposit gate')
       expect(frame).toContain('The beacon header of epoch 100 is not on Ethereum yet.')
       expect(frame).toContain('Esc cancel')
-      expect(asked).toEqual([`https://beacon.example/eth/v1/beacon/headers/${root}`])
+      // The fork cutover reads the schedule of the source chain from the same endpoint, then the gate asks for the header.
+      expect(asked).toContain('https://beacon.example/eth/v1/config/fork_schedule')
+      expect(asked.filter((url) => url.includes('/headers/'))).toEqual([`https://beacon.example/eth/v1/beacon/headers/${root}`])
       await act(async () => {
         setup.mockInput.pressEscape()
         await new Promise((resolve) => setTimeout(resolve, 400))

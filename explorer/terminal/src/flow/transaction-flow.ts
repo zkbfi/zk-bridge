@@ -14,7 +14,7 @@
  * `decideGateStep` of `../tx/gate-step`.
  */
 import type { Address } from 'viem'
-import { isForkNotConfirmed, revertText, type GateCheck, type GateConfirmation } from '@zk-bridge/shared'
+import { isForkNotConfirmed, revertText, type GateCheck, type GateCheckAnswer } from '@zk-bridge/shared'
 import { assertSignedTransactionMatches, type Signer } from '../signing/signer'
 import { decideGateStep, gateErrorText, passesGate, withKnownGas, type GateConfirmMark, type GateWait } from '../tx/gate-step'
 import {
@@ -136,7 +136,7 @@ export function createTransactionFlow(dependencies: TransactionFlowDependencies)
    */
   async function settleGate(step: FlowStep, mine: number, attempt: Attempt, checkGate: GateCheck): Promise<boolean> {
     const chain = step.plan.chain
-    let answer: GateConfirmation
+    let answer: GateCheckAnswer
     try {
       answer = await checkGate({ chainId: chain.chainId, gate: chain.contracts.gate as Address, account: dependencies.signer.address })
     } catch (error) {

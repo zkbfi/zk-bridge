@@ -7,7 +7,7 @@
  *
  * Pure: nothing here reads a chain, signs or sends, and nothing imports the terminal library.
  */
-import { gateConfirmWindow, GateEvidenceError, type GateConfirmation } from '@zk-bridge/shared'
+import { chainNameOf, forkCutoverText, gateConfirmWindow, GateEvidenceError, type GateCheckAnswer, type GateConfirmation, type SealOffer } from '@zk-bridge/shared'
 import { getAddress, type Hex } from 'viem'
 import type { ChainConfig } from '../model/types'
 import type { PrepareClient } from './prepare'
@@ -72,13 +72,18 @@ export type GateDecision =
  * @param input.nowMilliseconds The clock now.
  * @param input.waits How many waits in a row came before this answer. At {@link GATE_WAIT_LIMIT} a wait becomes a refusal.
  */
-export function decideGateStep(answer: GateConfirmation, input: { readonly chain: ChainConfig; readonly nowMilliseconds: number; readonly waits: number }): GateDecision {
+export function decideGateStep(answer: GateCheckAnswer, input: { readonly chain: ChainConfig; readonly nowMilliseconds: number; readonly waits: number }): GateDecision {
   const { chain, waits } = input
   switch (answer.kind) {
     case 'not-needed':
       return { kind: 'send' }
     case 'sealed':
       return { kind: 'refuse', message: `The ${chain.name} deposit gate is sealed: it admits no send in epoch ${answer.epoch} or later. Nothing was sent.` }
+    case 'paused': {
+      const destination = chainNameOf(answer.verdict.destinationChainId) ?? `chain ${answer.verdict.destinationChainId}`
+      const text = forkCutoverText(answer.verdict, { source: chain.name, destination }, Math.floor(input.nowMilliseconds / 1000))
+      return { kind: 'refuse', message: `${text.headline} Nothing was sent.` }
+    }
     case 'wait':
       if (waits >= GATE_WAIT_LIMIT) {
         return {
@@ -132,6 +137,33 @@ export function planGateConfirm(chain: ChainConfig, confirmation: Extract<GateCo
       `The ${chain.name} deposit gate admits sends in epoch ${confirmation.epoch} once one transaction confirms it. This transaction confirms it. Your send follows as the next step.`,
       `The evidence proves fork version ${confirmation.forkVersion} with the beacon header of slot ${confirmation.evidence.header.slot}. The gate checks it against the beacon root on chain.`,
       `It must be mined before ${utcTime(confirmation.validUntil)} UTC, the end of epoch ${confirmation.epoch}. It sends no ${chain.nativeSymbol}.`,
+    ],
+  }
+}
+
+/**
+ * The planned transaction of a seal, for the review: `seal(evidence)` on the gate, no value. Anyone may send it. It closes the gate
+ * for good: no send passes it afterwards, and withdrawals are not affected.
+ *
+ * @param chain The chain of the gate.
+ * @param offer A seal offer that simulated without a revert.
+ */
+export function planGateSeal(chain: ChainConfig, offer: Extract<SealOffer, { readonly kind: 'ready' }>): PlannedTransaction {
+  return {
+    title: `Seal the ${chain.name} deposit gate`,
+    chain,
+    to: getAddress(offer.call.to),
+    contractLabel: `${chain.name} deposit gate (BeaconForkGate)`,
+    functionSignature: 'seal(bytes)',
+    functionName: 'seal',
+    data: offer.call.data,
+    value: 0n,
+    arguments: [{ name: 'evidence', type: 'bytes', value: offer.evidence }],
+    notes: [
+      offer.via === 'registry'
+        ? `The fork registry shows a state shape that the gate does not allow, so empty evidence seals the gate. The simulation used ${offer.gas} gas.`
+        : `The evidence is a beacon state of a shape that the gate does not allow, checked against the beacon root on chain. The simulation used ${offer.gas} gas.`,
+      `A sealed ${chain.name} gate admits no send, for good. Withdrawals are not affected. It sends no ${chain.nativeSymbol}.`,
     ],
   }
 }

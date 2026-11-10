@@ -17,6 +17,7 @@ export const CONTRACT_NAMES: Readonly<Record<ContractKey, string>> = {
   wrappedNative: "Wrapped native",
   gate: "Gate",
   deliveryRouter: "DeliveryRouter",
+  forkRegistry: "ForkRegistry",
 };
 
 /**

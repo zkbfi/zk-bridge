@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { GateChainClient } from '@zk-bridge/shared'
 import { terminalGateCheck, TERMINAL_NO_BEACON_TEXT } from '../../src/app/gate-check'
 import type { ChainAccess } from '../../src/chain/chain-access'
+import { FIXTURE_PAIR } from '../../src/data/fixtures'
 
 const GATE = '0x1782a38a37ce9fb9f53b0585b23b833847007e20'
 const ACCOUNT = '0x8D43a3DF4951652d04bA29098D292136Af004Bdd'
@@ -49,5 +50,22 @@ describe('terminalGateCheck', () => {
     const check = terminalGateCheck({ connection: { resolved: () => ({}) } as never, chainAccess: { flowClient: () => enforcingClient() as never } })!
     // Chain 5 has no default beacon API.
     await expect(check({ chainId: 5, gate: GATE, account: ACCOUNT })).rejects.toMatchObject({ code: 'beacon-request-failed', message: TERMINAL_NO_BEACON_TEXT })
+  })
+})
+
+describe('terminalGateCheck with a pair', () => {
+  test('answers paused, and reads no gate, when the route is paused before a fork', async () => {
+    const fetch = (async (url: string) => {
+      const body = url.includes('fork_schedule')
+        ? { data: [{ current_version: '0x90000070', epoch: '50' }] }
+        : url.includes('genesis')
+          ? { data: { genesis_time: '1000000' } }
+          : { data: { SECONDS_PER_SLOT: '12', SLOTS_PER_EPOCH: '32' } }
+      return new Response(JSON.stringify(body), { status: 200 })
+    }) as unknown as typeof globalThis.fetch
+    const flow = { ...enforcingClient(), readContract: async () => 1000n } as never
+    const check = terminalGateCheck({ pair: FIXTURE_PAIR, connection: { resolved: () => ({}) } as never, chainAccess: { flowClient: () => flow }, fetch })!
+    // The system clock is long after the fork and the light client head (slot 1000) is before it: paused.
+    expect(await check({ chainId: FIXTURE_PAIR.first.chainId, gate: GATE, account: ACCOUNT })).toMatchObject({ kind: 'paused' })
   })
 })

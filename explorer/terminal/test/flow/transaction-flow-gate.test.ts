@@ -3,7 +3,7 @@
  * needs it, with the same window, waits, sealed refusal, rollover redo and revert texts as the web page.
  */
 import { describe, expect, test } from 'bun:test'
-import { beaconForkGateAbi, GateEvidenceError, GATE_BLOCK_SECONDS, type GateCheck, type GateConfirmation } from '@zk-bridge/shared'
+import { beaconForkGateAbi, GateEvidenceError, GATE_BLOCK_SECONDS, type GateCheck, type GateCheckAnswer, type GateConfirmation } from '@zk-bridge/shared'
 import { encodeErrorResult, type Hash, type Hex, type TransactionReceipt } from 'viem'
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
 import { createTransactionFlow, type FlowChainClient, type FlowState, type TransactionFlow } from '../../src/flow/transaction-flow'
@@ -69,7 +69,7 @@ function fakeClient(script: ClientScript = {}) {
 }
 
 /** A gate check that answers from a queue (the last answer repeats) and records its questions. */
-function scriptedGate(...answers: (GateConfirmation | Error)[]) {
+function scriptedGate(...answers: (GateCheckAnswer | Error)[]) {
   const asked: Parameters<GateCheck>[0][] = []
   const check: GateCheck = async (input) => {
     asked.push(input)
@@ -247,6 +247,19 @@ describe('refusals and errors', () => {
     flow.start([{ plan: relayPlan, skippable: false }])
     const state = await until(flow, (current) => current.phase === 'error')
     expect(state.error).toBe('The Ethereum deposit gate is sealed: it admits no send in epoch 9 or later. Nothing was sent.')
+    expect(sent).toHaveLength(0)
+    expect(log).toEqual([])
+  })
+
+  test('a send paused before a fork stops with the numbers of the pause, and nothing is signed or sent', async () => {
+    const fork = { version: '0x90000075', name: 'Fulu', epoch: 500, slot: 16_000, time: Math.floor(Date.now() / 1000) + 600 }
+    const gate = scriptedGate({ kind: 'paused', verdict: { kind: 'paused', destinationChainId: 369, fork, pausedSince: fork.time - 3000, lightClientHead: 15_000n, leadSeconds: 3600 } })
+    const { flow, sent, log } = setup({ gate: gate.check })
+    flow.start([{ plan: relayPlan, skippable: false }])
+    const state = await until(flow, (current) => current.phase === 'error')
+    expect(state.error).toContain('Sends from Ethereum are paused')
+    expect(state.error).toContain('the Fulu fork (epoch 500) starts in')
+    expect(state.error).toEndWith('Nothing was sent.')
     expect(sent).toHaveLength(0)
     expect(log).toEqual([])
   })

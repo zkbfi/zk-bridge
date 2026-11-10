@@ -245,3 +245,12 @@ a.zb-kv.zb-xkv { color: inherit; text-decoration: none; }
 .zb-xrow-text > span:has(> .zb-fee-line) { flex-wrap: wrap; row-gap: 2px; }
 .zb-fee-line { flex-basis: 100%; min-width: 0; overflow-wrap: anywhere; color: var(--zb-muted); font-size: var(--zb-step--1); }
 .zb-xsummary { margin: 2px 0 6px; color: var(--zb-muted); overflow-wrap: anywhere; }
+
+/* The Forks section: one square panel per route and per chain, like the light client cards. */
+.zb-xfork { display: block; background: var(--zb-to); padding: 14px 16px; margin: 0 -16px 2px; }
+.zb-xfork-h { margin: 0 0 6px; font-size: var(--zb-step-0); }
+.zb-xrow-static { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.zb-xrow-static .zb-xstatus { margin-left: auto; }
+.zb-xstatus[data-status="paused"] { border-color: var(--zb-accent); color: var(--zb-accent-text); }
+.zb-xfork .zb-xactions { margin-top: 8px; }
+.zb-xfork .zb-xactions .zb-small { margin-top: 6px; }
