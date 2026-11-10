@@ -9,12 +9,40 @@
     <link rel="icon" href="./favicon-16.png" sizes="16x16" type="image/png" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
     <style>
-      body { font: 16px/1.5 system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+      :root { color-scheme: light dark; --bg: #ffffff; --fg: #1a1a1a; --muted: #5c5c5c; --line: #d9d9d9; --surface: #ffffff; --hover: #f1f1f1; --accent: #eb6834; --accent-fg: #ffffff; --notice-bg: #fff4ee; --shadow: 0 1px 2px rgba(0,0,0,.08), 0 8px 24px rgba(0,0,0,.14); }
+      @media (prefers-color-scheme: dark) { :root { --bg: #121212; --fg: #ececec; --muted: #a3a3a3; --line: #3a3a3a; --surface: #1e1e1e; --hover: #2a2a2a; --notice-bg: #2b1a12; --shadow: 0 1px 2px rgba(0,0,0,.5), 0 8px 24px rgba(0,0,0,.6); } }
+      body { font: 16px/1.5 system-ui, sans-serif; max-width: 46rem; margin: 2rem auto; padding: 0 1rem; color: var(--fg); background: var(--bg); }
+      a { color: inherit; }
       code { word-break: break-all; }
       .warning { border: 2px solid #b00020; padding: 1rem; }
-      .notice { border: 2px solid #eb6834; background: #fff4ee; padding: 0.75rem 1rem; font-weight: 600; }
+      .notice { border: 2px solid var(--accent); background: var(--notice-bg); padding: 0.75rem 1rem; font-weight: 600; }
       li { margin-bottom: 0.5rem; }
-      .mark { display: block; width: 4rem; height: 4rem; color: #eb6834; }
+      .mark { display: block; width: 4rem; height: 4rem; color: var(--accent); }
+      .dl-row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+      .dl-button { display: inline-block; padding: 0.6rem 1.25rem; border-radius: 999px; background: var(--accent); color: var(--accent-fg); font-weight: 600; text-decoration: none; }
+      .dl-button:hover { filter: brightness(1.08); }
+      .dl-menu { position: relative; display: inline-block; }
+      .dl-trigger { display: inline-flex; align-items: center; gap: 0.5rem; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0.55rem 1rem; cursor: pointer; }
+      .dl-trigger:hover { background: var(--hover); }
+      .dl-chevron { width: 0.45rem; height: 0.45rem; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: translateY(-0.12rem) rotate(45deg); }
+      .dl-trigger[aria-expanded="true"] .dl-chevron { transform: translateY(0.1rem) rotate(225deg); }
+      .dl-surface { position: absolute; z-index: 10; top: calc(100% + 0.4rem); left: 0; min-width: 17rem; margin: 0; padding: 0.25rem; list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: 0; box-shadow: var(--shadow); }
+      .dl-surface[hidden] { display: none; }
+      .dl-surface li { margin: 0; }
+      .dl-item { display: flex; width: 100%; gap: 0.5rem; align-items: center; text-align: left; font: inherit; color: inherit; background: none; border: 0; border-radius: 0; padding: 0.5rem 0.75rem; cursor: pointer; }
+      .dl-item:hover, .dl-item:focus-visible { background: var(--hover); }
+      .dl-check { display: inline-block; width: 1rem; color: var(--accent); }
+      .dl-item span { white-space: nowrap; }
+      .dl-yours { margin-left: 0.25rem; font-size: 0.8rem; color: var(--muted); }
+      .dl-trigger:focus-visible, .dl-item:focus-visible, .dl-button:focus-visible, .dl-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      .dl-details { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 1rem 0 0; }
+      .dl-details dt { color: var(--muted); }
+      .dl-details dd { margin: 0; }
+      .dl-copy { font: inherit; font-size: 0.85rem; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 0.1rem 0.7rem; cursor: pointer; }
+      .dl-note, .dl-choose { color: var(--muted); }
+      .snapshot figure { margin: 0; }
+      .snapshot img { display: block; width: 100%; height: auto; border: 1px solid var(--line); box-shadow: var(--shadow); }
+      .snapshot figcaption { margin-top: 0.5rem; color: var(--muted); font-size: 0.9rem; }
     </style>
   </head>
   <body>

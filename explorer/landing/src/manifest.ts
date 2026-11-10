@@ -16,6 +16,8 @@ export type DownloadEntry = {
   platform: string;
   file: string;
   sha256: string;
+  /** The size in bytes, when the signed list states it. */
+  size?: number;
 };
 
 /** The signed `version.json` document. */
@@ -83,11 +85,16 @@ function parseRelease(value: unknown, index: number): ReleaseEntry {
 function parseDownload(value: unknown, index: number): DownloadEntry {
   const where = `downloads[${index}]`;
   const record = asRecord(value, where);
+  const size = record.size;
+  if (size !== undefined && (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0)) {
+    fail(`${where}.size must be a whole number of bytes`);
+  }
   return {
     name: asText(record.name, `${where}.name`),
     platform: asText(record.platform, `${where}.platform`),
     file: asText(record.file, `${where}.file`),
     sha256: asMatching(record.sha256, HEX_64, `${where}.sha256`),
+    ...(size === undefined ? {} : { size }),
   };
 }
 

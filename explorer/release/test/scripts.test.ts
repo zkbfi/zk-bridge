@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmod, readdir, writeFile } from "node:fs/promises";
+import { chmod, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -169,7 +169,41 @@ describe("promote.sh", () => {
   });
 });
 
+describe("snapshot.sh", () => {
+  it("prints usage without a directory", async () => {
+    expect((await runScript("snapshot.sh", [])).status).toBe(2);
+  });
+
+  it("is skipped on request: exit 0, a clear line, no files", async () => {
+    const output = await temporaryDirectory();
+    await writeFile(join(output, "snapshot-light.webp"), "stale");
+    const result = await runScript("snapshot.sh", [output], { RELEASE_SKIP_SNAPSHOT: "1" });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("no snapshot: RELEASE_SKIP_SNAPSHOT=1");
+    expect(await readdir(output)).toEqual([]);
+  });
+
+  it("never fails a release: when the sample build fails it exits 0 and leaves no files", async () => {
+    const bin = await temporaryDirectory();
+    await writeFile(join(bin, "pnpm"), "#!/bin/sh\necho build broke >&2\nexit 1\n");
+    await chmod(join(bin, "pnpm"), 0o755);
+    const output = await temporaryDirectory();
+    const result = spawnSync("bash", [join(scripts, "snapshot.sh"), output], { env: { PATH: `${bin}:${process.env.PATH}`, HOME: process.env.HOME! }, encoding: "utf8" });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("the landing page is built without one");
+    expect(await readdir(output)).toEqual([]);
+  });
+});
+
 describe("release.sh", () => {
+  it("takes the snapshot before the landing build and hands its directory to the build", async () => {
+    const text = await readFile(join(scripts, "release.sh"), "utf8");
+    const snapshot = text.indexOf("script/release/snapshot.sh");
+    const build = text.indexOf("LANDING_SNAPSHOT_DIR=");
+    expect(snapshot).toBeGreaterThan(-1);
+    expect(build).toBeGreaterThan(snapshot);
+  });
+
   it("refuses a channel other than stable or next", async () => {
     const result = await runScript("release.sh", [await temporaryDirectory()], { RELEASE_CHANNEL: "beta" });
     expect(result.status).toBe(1);
