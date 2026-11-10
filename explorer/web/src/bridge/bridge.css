@@ -355,8 +355,12 @@
 /* Bands */
 .zb-band-from { background: var(--zb-from-bg, var(--zb-from)); color: var(--zb-from-ink); }
 .zb-band-to { background: var(--zb-to); color: var(--zb-to-ink); }
-.zb-band-from .zb-col { padding-block: 14px 26px; }
-.zb-band-to .zb-col { padding-block: 26px 14px; }
+.zb-band-from .zb-col { padding-block: 14px calc(var(--zb-joined-h) / 2 + 14px); }
+.zb-band-to .zb-col { padding-block: 14px; }
+/* The middle row: its centre is the boundary. Its top half lies over the From band (negative margin), its lower half and the
+   drawer over the To colour (painted from the row's centre down, full width). */
+.zb-seam { position: relative; z-index: 2; margin-top: calc(var(--zb-joined-h) / -2); background: linear-gradient(to bottom, transparent calc(var(--zb-joined-h) / 2), var(--zb-to) calc(var(--zb-joined-h) / 2)); }
+.zb-seam .zb-fee-row { margin-bottom: 0; }
 .zb-amount-row { display: flex; align-items: center; gap: 10px; }
 .zb-fee-state { font-size: var(--zb-step--1); color: var(--zb-muted); white-space: nowrap; }
 .zb-fee-state[aria-live] { animation: zb-breathe 1.6s ease-in-out infinite; }

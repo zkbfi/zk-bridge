@@ -764,7 +764,9 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         </div>
       </section>
 
-      <section className="zb-band-to" aria-label={`You receive on ${destination.name}`}>
+      {/* The middle row (flip + tip, gas and time pills) sits on the seam between the two bands, half over each (owner:
+          "they should all be in between the top and bottom"); its drawer opens below it, over the To band's colour. */}
+      <div className="zb-seam">
         <div className="zb-col">
           {token === null ? (
             <div className="zb-fee-row">{flipButton}</div>
@@ -798,7 +800,12 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
               }
             />
           )}
-          <div className="zb-amount-row" style={{ marginTop: 6 }}>
+        </div>
+      </div>
+
+      <section className="zb-band-to" aria-label={`You receive on ${destination.name}`}>
+        <div className="zb-col">
+          <div className="zb-amount-row">
             <span className="zb-amount-out" aria-label={`You receive on ${destination.name}`}>
               {received === null || token === null ? "0" : <Num text={amountText(received > 0n ? received : 0n, token.decimals)} />}
             </span>
