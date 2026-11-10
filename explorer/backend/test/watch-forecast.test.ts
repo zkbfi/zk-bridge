@@ -18,7 +18,7 @@ const NOW = at(NOW_SLOT);
 const FINALIZED = NOW_SLOT - 72;
 const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
 const unknown: Economics = { kind: "unknown", why: "testnet tokens have no price" };
-const priced = (fees: bigint, id = "a"): Economics => ({ kind: "known", feesUsd: new Map([[hex(id), fees]]), deliveryUsd: 0n, unpriced: 0, block: "1" });
+const priced = (fees: bigint, id = "a"): Economics => ({ kind: "known", feesUsd: new Map([[hex(id), fees]]), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(), why: null, block: "1" });
 const base = { facts: facts(HEAD), finalizedSlot: FINALIZED, pendingProof: null, history: { kind: "not-needed" } as const, policy: DEFAULT_POLICY, nowSeconds: NOW, horizonSeconds: 90 };
 
 describe("finalizedSlotAt", () => {

@@ -284,7 +284,10 @@ export type ProofRule = {
   readonly profitMargin: number;
   /** The proof's share of the cost of one message, in dollars. */
   readonly proofCostUsd: number;
-  /** False on a testnet: no token has a price, so no fee pays for a proof. */
+  /**
+   * False on a testnet: no token has a price, so a fee is never valued; only a tip at the automatic maximum (1% of the
+   * amount, `tip-verdict.ts`) pays for a proof there.
+   */
   readonly priced: boolean;
 };
 
@@ -294,6 +297,11 @@ export type FeeReading =
   | { readonly kind: "known"; readonly feeUsd: bigint; readonly costUsd: bigint }
   /** No fee is chosen. */
   | { readonly kind: "unknown" }
+  /**
+   * The fee cannot be valued (no market for the token or the destination coin, or no price can be read): whether the
+   * tip is at least the automatic maximum of the amount (`atAutomaticMaximum`), which counts as paying.
+   */
+  | { readonly kind: "unpriced"; readonly atMaximum: boolean }
   /** Use the proof waits that were measured, whatever fees paid. */
   | { readonly kind: "observed" };
 
@@ -343,11 +351,13 @@ export type WaitEstimate = {
 };
 
 /**
- * Whether a fee pays for a proof alone, by the backend's profit rule ({@link feesPay}).
+ * Whether a fee pays for a proof alone, by the backend's profit rule ({@link feesPay}). An unpriced tip at the automatic
+ * maximum pays, as in the backend's batch (`tip-verdict.ts`).
  *
  * @returns `"pays"`, `"short"` (it does not) or `"unknown"` (no fee chosen, or no price).
  */
 export const feeVerdict = (rule: ProofRule, fee: FeeReading): "pays" | "short" | "unknown" => {
+  if (fee.kind === "unpriced") return fee.atMaximum ? "pays" : "unknown";
   if (fee.kind !== "known" || !rule.priced) return "unknown";
   return feesPay(fee.feeUsd, fee.costUsd, marginWadOf(rule.profitMargin)) ? "pays" : "short";
 };

@@ -1,0 +1,41 @@
+{
+  "_about": "The one fixture of the tip verdict (@zkb/core tip-verdict.ts, token-pricing.ts). Pools are read on PulseChain at `block` through a fake client (test/fixtures/pool-caller.ts); bigints are decimal text. Each case names the transfer's terms (a share of the amount, a fixed tip, or none = a fixed tip of 0), the token and the amount; `expected` is the verdict every consumer must reach: the dapp (web/test/bridge/tip-verdict-parity.test.ts), the backend batching (backend/test/tip-verdict-parity.test.ts) and the delivery runner (bots/test/unit/tip-verdict-parity.test.ts). Owner, 2026-11-09: a token with no market price pays at a tip of at least the frontend's automatic maximum (1% of the amount): 'yes, deliver straight away'.",
+  "block": "23000000",
+  "pulsechain": {
+    "wpls": "0xA1077a294dDE1B09bB078844df40758a5D0f9a27",
+    "factories": { "v1": "0x1715a3E4A142d8b698131108995174F37aEBA10D", "v2": "0x29eA7545DEf87022BAdc76323F373EA1e707C523" }
+  },
+  "pools": [
+    { "about": "USDC from Ethereum against WPLS: PLS at $0.00003, $300k deep", "factory": "0x1715a3E4A142d8b698131108995174F37aEBA10D", "pair": "0x00000000000000000000000000000000000000a1", "token0": "0x15D38573d2feeb82e7ad5187aB8c1D52810B1f07", "token1": "0xA1077a294dDE1B09bB078844df40758a5D0f9a27", "reserve0": "300000000000", "reserve1": "10000000000000000000000000000" },
+    { "about": "token A against WPLS: about $1 a token, $1M on the WPLS side", "factory": "0x29eA7545DEf87022BAdc76323F373EA1e707C523", "pair": "0x00000000000000000000000000000000000000a2", "token0": "0x00000000000000000000000000000000000000aa", "token1": "0xA1077a294dDE1B09bB078844df40758a5D0f9a27", "reserve0": "1000000000000000000000000", "reserve1": "33333333333000000000000000000" },
+    { "about": "token B against WPLS: $3,000 on the WPLS side, under the $10k floor, so no market", "factory": "0x1715a3E4A142d8b698131108995174F37aEBA10D", "pair": "0x00000000000000000000000000000000000000a3", "token0": "0x00000000000000000000000000000000000000bb", "token1": "0xA1077a294dDE1B09bB078844df40758a5D0f9a27", "reserve0": "1000000000000000000000", "reserve1": "100000000000000000000000000" }
+  ],
+  "prices": {
+    "plsUsdE18": "30000000000000",
+    "tokenAUsdE18": "999999999990000000",
+    "tokenAWeiPerToken": "33333333333000000000000"
+  },
+  "chains": {
+    "mainnet": { "sourceChainId": 1, "destinationChainId": 369, "wrappedNative": "0xA1077a294dDE1B09bB078844df40758a5D0f9a27" },
+    "testnet": { "sourceChainId": 11155111, "destinationChainId": 943, "wrappedNative": "0x00000000000000000000000000000000000000ee" }
+  },
+  "tokens": {
+    "A": { "address": "0x00000000000000000000000000000000000000aa", "decimals": 18, "origin": null },
+    "B": { "address": "0x00000000000000000000000000000000000000bb", "decimals": 18, "origin": null },
+    "T": { "address": "0x00000000000000000000000000000000000000cc", "decimals": 18, "origin": { "chainId": 11155111, "address": "0x00000000000000000000000000000000000000dd" } }
+  },
+  "cost": { "about": "the delivery cost estimate: the gas of one delivery and the destination's gas prices", "gasUsed": "400000", "baseFeeWei": "500000000000000", "priorityFeeWei": "10000000" },
+  "rules": { "backendProfitMargin": 1, "runnerMaximumLossPercent": 20, "dappCostMargin": 2 },
+  "cases": [
+    { "name": "priced, a 1% share: pays", "chain": "mainnet", "token": "A", "amount": "1000000000000000000000", "tip": { "kind": "share", "percent": "1" }, "unreachable": false, "expected": "pays" },
+    { "name": "priced, a tip of one base unit: below cost", "chain": "mainnet", "token": "A", "amount": "1000000000000000000000", "tip": { "kind": "fixed", "units": "1" }, "unreachable": false, "expected": "below-cost" },
+    { "name": "priced, no tip: below cost", "chain": "mainnet", "token": "A", "amount": "1000000000000000000000", "tip": { "kind": "none" }, "unreachable": false, "expected": "below-cost" },
+    { "name": "no market (a thin pool), a 1% share: pays at the automatic maximum", "chain": "mainnet", "token": "B", "amount": "1000000000000000000000", "tip": { "kind": "share", "percent": "1" }, "unreachable": false, "expected": "unpriced-at-max" },
+    { "name": "no market (a thin pool), a 0.5% share: does not pay", "chain": "mainnet", "token": "B", "amount": "1000000000000000000000", "tip": { "kind": "share", "percent": "0.5" }, "unreachable": false, "expected": "unpriced-below-max" },
+    { "name": "the price source unreachable and no recent price, a 1% share: pays at the automatic maximum", "chain": "mainnet", "token": "A", "amount": "1000000000000000000000", "tip": { "kind": "share", "percent": "1" }, "unreachable": true, "expected": "unpriced-at-max" },
+    { "name": "the price source unreachable and no recent price, no tip: does not pay", "chain": "mainnet", "token": "A", "amount": "1000000000000000000000", "tip": { "kind": "none" }, "unreachable": true, "expected": "unpriced-below-max" },
+    { "name": "testnet (no market), a 1% share: pays, delivered straight away, its batch proves at finality", "chain": "testnet", "token": "T", "amount": "1000000000000000000000", "tip": { "kind": "share", "percent": "1" }, "unreachable": false, "expected": "unpriced-at-max" },
+    { "name": "testnet (no market), a 0.5% share: does not pay", "chain": "testnet", "token": "T", "amount": "1000000000000000000000", "tip": { "kind": "share", "percent": "0.5" }, "unreachable": false, "expected": "unpriced-below-max" },
+    { "name": "testnet (no market), no tip: does not pay", "chain": "testnet", "token": "T", "amount": "1000000000000000000000", "tip": { "kind": "none" }, "unreachable": false, "expected": "unpriced-below-max" }
+  ]
+}

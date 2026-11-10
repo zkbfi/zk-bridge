@@ -54,16 +54,16 @@ proving policy. The **bot configuration** adds what only a bot needs. A sample i
 | `publisher.indexerUrl` | Required when the policy proves when a transfer waits. |
 | `runner.signer` | `private-key`, `keystore`, `mnemonic`, `ledger` or `trezor`, as in the dashboard. |
 | `runner.indexerUrl` | The indexer. |
-| `runner.maximumLossPercent` | A whole number from 0 to 100. A delivery is a loss only when its fee is below its cost. A delivery at break-even (fee equal to cost, including a zero cost with a zero fee) always delivers, even at a limit of 0. Below the cost, the runner leaves out a delivery whose loss is this share of its cost or more. The cost includes the share of the light client update that the delivery carries. A left-out message stays deliverable by anyone. Default 20. A configuration that still names `minimumMarginWei` is refused. |
+| `runner.maximumLossPercent` | A whole number from 0 to 100. A delivery is a loss only when its fee is below its cost. A delivery at break-even (fee equal to cost, including a zero cost with a zero fee) always delivers, even at a limit of 0. Below the cost, the runner leaves out a delivery whose loss is this share of its cost or more. The cost includes the share of the light client update that the delivery carries. A left-out message stays deliverable by anyone. Default 20. It judges a tip in a token that has a price; a tip in a token with no price is judged by the automatic maximum instead (see "Prices and the tip verdict"). A configuration that still names `minimumMarginWei` is refused. |
 | `runner.acceptOracleProof` | Take proofs in the oracle form (message version 2, a 65 byte proof). For local testing only: set it only when the destination light client uses the oracle stand-in as its verifier. Never on a live deployment. Default off. |
 | `runner.deliverWithoutOffer` | Deliver items with no fee offer, for the gas cost alone. Default off. |
-| `runner.deliverUnpaidAfterSeconds` | A whole number of seconds, or `null` to turn the rule off. Default 3600. A covered item that has waited this long since a stored head covered it (the `covered.timestamp` of the indexer feed) is delivered even when it has no fee offer or its offer is below the cost. An item with an offer goes through the delivery router, which pays the runner what the offer gives (the router is the only path that pays the tip, and a direct call to the bridge would leave the tokens at the router); an item with no offer goes to the bridge, as with `deliverWithoutOffer`. The loss limit does not apply. Items that pay go out first in a sweep, and the unpaid ones follow. `deliverWithoutOffer` stays the immediate rule for items with no offer. Each delivery logs `delivered_unpaid` with `messageId`, `waitedSeconds`, `gasUsed`, `costWei` and `chain`. |
+| `runner.deliverUnpaidAfterSeconds` | A whole number of seconds, or `null` to turn the rule off. Default 3600. A covered item that has waited this long since a stored head covered it (the `covered.timestamp` of the indexer feed) is delivered even when it has no fee offer, its offer is below the cost, or its tip is in a token with no price and under the automatic maximum (1% of the amount). An item with an offer goes through the delivery router, which pays the runner what the offer gives (the router is the only path that pays the tip, and a direct call to the bridge would leave the tokens at the router); an item with no offer goes to the bridge, as with `deliverWithoutOffer`. The loss limit does not apply. Items that pay go out first in a sweep, and the unpaid ones follow. `deliverWithoutOffer` stays the immediate rule for items with no offer. Each delivery logs `delivered_unpaid` with `messageId`, `waitedSeconds`, `gasUsed`, `costWei` and `chain`. |
 | `runner.maximumUnpaidSpendPerDayWei` | The most wei that unpaid deliveries may cost in a rolling 24 hours, by the chain id of the destination, as text. The cost is the gas of the receipts (gross, before any tip the router paid) plus the layout calls of the item. The runner keeps the spend in its state file, so a restart does not reset it. The runner reads the spend before each unpaid item, so the delivery that crosses the cap is the last one; after it the item is left out with the reason `unpaid-spend-cap` and a `unpaid_delivery_refused` warning. Defaults: `11155111` 50000000000000000 (0.05 ETH), `943` 1000000000000000000000000 (one million PLS). A chain with no entry and no default sends no unpaid delivery. A chain id in this map wins over the default. |
 | `runner.deliveryRouter` | Default: `delivery_router` of the deployment file. This is the operator's allowlist, not a rule of the protocol: no contract of the bridge or the mediator names a router, and anyone may deploy one. The runner delivers to this router and to no other. At start the runner reads `DeliveryRouter.rewardAddress()` from it and logs the value. The runner uses that address only for its accounting and its display. The router decides where each tip goes, so the configuration names no reward address. When the read fails, the runner stops with an error that names the router and the chain. |
 | `runner.multicall3` | The Multicall3 contract that batches the deliveries. Default `0xcA11bde05977b3631167028862bE2a173976CA11`, the canonical address. At start the runner refuses to run when the address holds no code. |
 | `runner.maximumBatchSize` | The most items in one batch transaction. Default 5. |
 | `runner.maximumBatchGas` | The most gas that the estimates of the items of one batch, with the light client update, may add up to. A delivery whose own estimate is above it is sent alone, with the gas it needs, and is never cut. Default 6000000. |
-| `runner.tokenValuationsWei` | Wei value of one whole token, by token address. A fee in the wrapped native token needs none. |
+| `runner.tokenValuationsWei` | Deprecated and ignored. The runner prices tips from PulseX pools on PulseChain, as the dapp and the backend do (see "Prices and the tip verdict"). A file that still names it starts, and the runner logs `config_deprecated` with `key: "runner.tokenValuationsWei"`; remove the key. |
 | `runner.deliveryGasFallback` | The gas that the runner assumes for one whole delivery (proof check, bridge, mediator, router) when it cannot estimate it: the first fee check runs before the proof exists, and a delivery that needs the light client update of its own batch cannot be estimated alone. A delivery that can be estimated (`eth_estimateGas` of `executeMessage`) uses its estimate. Default 1500000. A configuration that still names `proofCheckGas` or `executionGasFallback` is refused. |
 | `runner.minimumPriorityFeeWei` | The smallest priority fee in wei, by chain id. A smaller fee, set by `priorityFeeWei` or suggested by the node, is raised to it, and the fee cap rises by the same amount. Chains 943 and 369 default to 10000000 (0.01 gwei): their validators skip a tip of 0.001 gwei or less, and such a transaction waits in the pool for good and holds back every later nonce of the runner. A chain id in this map wins over the default. |
 | `runner.maximumPrerequisiteRounds` | The most layout calls that one delivery sends. Default 4. |
@@ -122,12 +122,16 @@ For each direction:
    carries it. It simulates first. A revert means that another party posted first: skip.
    - Read the call data of the message. A fee offer is a message to the mediator whose recipient is the delivery router and whose
      callback data is a `FeeDirector` (recipient, settings, limit, multiplier, callGas). No offer: skip, unless `deliverWithoutOffer`, or unless the item waited `deliverUnpaidAfterSeconds` (`runner.deliverUnpaidAfterSeconds`, in the config table).
-   - Compute the fee with `DeliveryRouter.feeInfo(token, value, gasUsed, director)` at the current fee quote. Convert it to wei
-     (the wrapped native token one for one, other tokens through `tokenValuationsWei`; no price means skip).
+   - Compute the fee with `DeliveryRouter.feeInfo(token, value, gasUsed, director)` at the current fee quote. Value it in wei
+     of the destination's coin from the one price source (see "Prices and the tip verdict"), and judge it with the one tip
+     verdict. A token with no price (no market, a testnet token, or PulseChain unreachable with no price from the last
+     10 minutes) is judged by the automatic maximum: a tip of at least 1% of the amount pays and is delivered straight
+     away; a smaller one skips with `unpriced-tip-below-maximum`, and the unpaid rule may deliver it later. An item
+     without a destination token skips with `no-price-for-fee-token`.
    - A message has no gas limit of its own: the bridge forwards all the gas it gets, and a delivery that runs out of gas
      reverts and leaves the message undelivered, so anyone can try it again. Until the delivery can be estimated, the assumed
      gas of the item is `deliveryGasFallback`.
-   - Gas cost = gas × (base fee + priority fee). Deliver only when the loss is under the limit: (cost − fee) × 100 is less
+   - A priced tip: gas cost = gas × (base fee + priority fee). Deliver only when the loss is under the limit: (cost − fee) × 100 is less
      than `maximumLossPercent` × cost. A fee at or above the cost always delivers, so a zero cost with a zero fee delivers. A fee below the cost is a loss. A loss of exactly the limit is left out, so a limit of 0
      delivers at break-even and not below. Otherwise skip with `loss-at-or-above-limit`. The first check uses the assumed gas (`deliveryGasFallback`) and needs no evidence. The
      second check uses the gas of the estimate.
@@ -220,6 +224,30 @@ line in `stateDirectory/outcomes-<pair>.jsonl`. Fields: `time`, `kind` (`deliver
 decimal strings. A skip is written once for each change of reason, not once for each pass. The state file
 `runner-<pair>-<direction>.json` holds the items that need no second look, the layout spend and losses of the last 24 hours,
 and `depositsOpen` once the bridge of the destination chain is open.
+
+### Prices and the tip verdict
+
+The runner, the backend's batching and the dapp price tokens and judge tips with one module of `@zkb/core`
+(`token-pricing.ts`, `tip-verdict.ts`), so the three never disagree on whether a tip pays (owner, 2026-11-09: "where are
+the prices coming from?").
+
+- **The price source.** PulseX pools on PulseChain, read through the runner's PulseChain RPC (the pair's chain 369
+  side), every read of a sweep pinned to one block: PLS/USD from the stablecoin pools, a token from its deepest WPLS pool
+  (at least $10k deep), an Ethereum token through its Omnibridge copy, a zkb.fi copy through its home token. A tip's
+  value in wei is the token's dollar price over the destination coin's; the wrapped native coin is exactly one for one.
+  A testnet pair has no PulseChain side and reads nothing: every testnet token has no market.
+- **The four states.** `known`; `stale` (PulseChain does not answer now, and the last price, at most 10 minutes old, is
+  used); `no-market` (no pool deep enough, a testnet token); `unreachable` (no answer and no recent price). A tip is
+  priced only when the token and the destination's coin are both `known` or `stale`.
+- **The verdict.** A priced tip `pays` when the runner's loss stays under `maximumLossPercent` of its gas cost, else it
+  is `below-cost` (`loss-at-or-above-limit`). An unpriced tip is `unpriced-at-max` when it is at least the frontend's
+  automatic maximum, 1% of the amount (`DEFAULT_CAP_WAD` of `@zkb/core`, the one constant): it counts as paying and the
+  runner delivers it straight away (owner: "yes, deliver straight away"). Below that it is `unpriced-below-max`
+  (`unpriced-tip-below-maximum`): not paying, so `deliverUnpaidAfterSeconds` applies.
+- **Which profit rule applies where.** The runner judges its own spend: `runner.maximumLossPercent`, the tip against the
+  gas it pays (with its share of a light client update). The backend judges when a proof is worth starting early:
+  `watch.profitMargin`, the fees the fee address takes against the proof plus the delivery gas of each message. The
+  dapp's low-tip warning asks for twice the total cost (`COST_MARGIN`). The unpriced rule is the same in all three.
 
 ### Opening the bridges
 
@@ -388,8 +416,9 @@ The old keys `intervalSeconds`, `jitterSeconds` and `directions.*.offsetSeconds`
 Every attempt is a log line: `traffic_sent` (direction, symbol, kind, `tokenAddress`, amount, `transactionHash`, `messageId`,
 `deployMessage`, `deploysCopy`, `callbackGas`, gas), `traffic_approved`, `traffic_skipped` with a reason, or `traffic_failed` (an error, for example
 an endpoint that does not answer; the next poll tries again). At start `traffic_tokens` lists each test token with the
-address of its copy on the other chain: the runner's `tokenValuationsWei` needs all of them, because the runner prices
-a tip only in a token it has a value for.
+address of its copy on the other chain. The test tokens have no market, so the runner judges their tips by the automatic
+maximum: a tip of `tipPercent` 1 or more is delivered straight away, a smaller one (the default 0.1) after
+`deliverUnpaidAfterSeconds`.
 
 | Reason | Meaning |
 |---|---|

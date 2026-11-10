@@ -5,6 +5,7 @@ import { addPending } from "./pending";
 import { priceNumber, usdText, type PriceQuote } from "./price-oracle";
 import { PRICE_NOTE, usePrices } from "./use-prices";
 import { priceNotice } from "./price-notice";
+import { AUTOMATIC_MAXIMUM_TEXT, dappTipVerdict } from "./tip-verdict";
 import type { Address } from "viem";
 import type { TokenInfo } from "@terminal/model/types";
 import { useDeliveryCost, useHeads, useMaxFee, usePairHealth, usePriorityFee, useSnapshots, useTokens, useUsedTokens } from "../app/queries";
@@ -249,7 +250,15 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   // The automatic fee is the rule's own figure; a share the draft signs from it rounds down by at most a unit.
   const feeUsd = automatic && auto.feeUsd !== null && tipUnits !== null ? auto.feeUsd : valueOf(tipUnits);
   // The wait the pill shows follows the fee: one that pays for a proof starts it at finality, one that does not waits for a batch.
-  const waitFee: FeeReading = feeUsd !== null && costDefaultUsd !== null && feeState === "known" ? { kind: "known", feeUsd, costUsd: costDefaultUsd } : { kind: "unknown" };
+  // The one tip verdict of zkb.fi, as the backend and the runner judge it: a tip in a token with no price pays at the
+  // automatic maximum (1% of the amount), and its proof then starts at finality.
+  const tipVerdict = token === null ? null : dappTipVerdict({ prices, states: priceStates, tokenKey: `${token.side}:${token.address}`, destinationChainId: destination.chainId, decimals: token.decimals, amount, tipUnits: feeState === "known" ? tipUnits : null, feeUsd, costUsd });
+  const unpricedVerdict = tipVerdict === "unpriced-at-max" || tipVerdict === "unpriced-below-max";
+  const waitFee: FeeReading = unpricedVerdict
+    ? { kind: "unpriced", atMaximum: tipVerdict === "unpriced-at-max" }
+    : feeUsd !== null && costDefaultUsd !== null && feeState === "known"
+      ? { kind: "known", feeUsd, costUsd: costDefaultUsd }
+      : { kind: "unknown" };
   const timeline = useTimeline(route.dir, waitFee);
   const gasBased = options.mode === "gas-multiplier";
   const expandedUsd = (() => {
@@ -364,7 +373,8 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     destinationProblemShown: typedReceiver !== "",
     symbol: token?.symbol ?? "",
     paused: gate === "stop" || gate === "sealed" ? { route: `${source.name} → ${destination.name}` } : null,
-    tipBelowBreakEven: warnings.lowFee,
+    tipBelowBreakEven: unpricedVerdict ? tipVerdict === "unpriced-below-max" : warnings.lowFee,
+    unpricedTip: unpricedVerdict ? { maximumText: AUTOMATIC_MAXIMUM_TEXT } : null,
     lowFee: feeUsd === null || costUsd === null ? null : { feeText: dollarsText(feeUsd), costText: dollarsText(costUsd) },
     highTip: warnings.highCap ? { thresholdText, tipText: dollarsText(tipUsd) } : null,
     smallTransfer: warnings.smallTransfer && amountUsd !== null ? { costText: dollarsText(costUsd), capText, capAmountText: dollarsText((amountUsd * capWad) / WAD) } : null,

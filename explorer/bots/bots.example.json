@@ -25,7 +25,6 @@
     "maximumUnpaidSpendPerDayWei": { "943": "1000000000000000000000000", "11155111": "50000000000000000" },
     "maximumBatchSize": 5,
     "maximumBatchGas": 6000000,
-    "tokenValuationsWei": {},
     "deliveryGasFallback": 1500000,
     "minimumPriorityFeeWei": { "943": "10000000", "369": "10000000" },
     "maximumDeliveriesPerSweep": 10,

@@ -13,6 +13,10 @@
  * A batch is the waiting messages of one direction that the light client does not cover yet. It pays when the fees its
  * messages carry for the fee address reach the cost of proving and delivering them: `PROOF_COST_USD` (`@zkb/core`, as `batchCostUsd`) plus the
  * delivery gas of each message on the destination, times a margin. Dollars are integers, USD × 1e18, as in `@zkb/core`.
+ *
+ * A message whose token has no price cannot be valued; its tip pays when it is at least the frontend's automatic
+ * maximum, 1% of the amount (`tipVerdict` of `@zkb/core`, the rule the runner and the dapp use too), and such a message
+ * makes its batch pay: the batch proves at its finality (owner, 2026-11-09: "yes, deliver straight away").
  */
 import { USD, batchCostUsd, batchDueAt, intervalAllows, marginWadOf, type ProofDirection } from "@zk-bridge/shared";
 import type { BackendConfig } from "../config.ts";
@@ -69,13 +73,23 @@ export function deprecatedBatchKeys(watch: BackendConfig["watch"]): string[] {
 }
 
 /**
- * What the batch is worth, read at one block. `feesUsd`: the fee each message carries for the fee address, by message
- * identifier (a message missing from it, or whose token has no price, counts nothing). `deliveryUsd`: the delivery gas
- * of one message on the destination. `unknown`: the cost or the prices could not be read, so the batch never proves
- * early.
+ * What the batch is worth, read at one block. `feesUsd`: the fee each priced message carries for the fee address, by
+ * message identifier (a message missing from it counts nothing). `atMaximum`: the messages whose token has no price and
+ * whose tip is at least the automatic maximum (1% of the amount): each makes its batch pay. `unpriced`: the messages
+ * whose token has no price and whose tip is below that. `deliveryUsd`: the delivery gas of one message on the
+ * destination, null when the destination's coin has no price (then `why` says why, and no fee is valued). `unknown`:
+ * the messages could not be read, so the batch never proves early.
  */
 export type Economics =
-  | { readonly kind: "known"; readonly feesUsd: ReadonlyMap<string, bigint>; readonly deliveryUsd: bigint; readonly unpriced: number; readonly block: string | null }
+  | {
+      readonly kind: "known";
+      readonly feesUsd: ReadonlyMap<string, bigint>;
+      readonly deliveryUsd: bigint | null;
+      readonly unpriced: number;
+      readonly atMaximum: ReadonlySet<string>;
+      readonly why: string | null;
+      readonly block: string | null;
+    }
   | { readonly kind: "unknown"; readonly why: string };
 
 /** USD × 1e18 as text with six decimals, rounded down: "0.025000". */
@@ -95,6 +109,8 @@ export type BatchPlan =
       readonly messageIds: readonly string[];
       readonly feesUsd: bigint | null;
       readonly costUsd: bigint | null;
+      /** The messages of the proof whose tip pays at the automatic maximum (no price for their token). */
+      readonly atMaximum: number;
       /** How long the oldest of them has been final. */
       readonly waitedSeconds: number;
     }
@@ -116,7 +132,7 @@ export type BatchPlan =
       readonly oldestFinalAt: number;
       readonly feesUsd: bigint | null;
       readonly costUsd: bigint | null;
-      /** Why the batch cannot pay early, when the prices are unknown. */
+      /** Why the fees cannot be valued, when they cannot (a tip at the automatic maximum still pays). */
       readonly unknownWhy: string | null;
     };
 
@@ -135,12 +151,13 @@ export type BatchInput = {
 /**
  * Whether the batch proves now, and if not, when it is expected to.
  *
- * - Due when the finalized header covers at least one message and either their fees reach the cost (`profit`), or
- *   the direction's last proof started at least `minIntervalSeconds` ago (`interval`; at once when that is 0 or the
- *   direction has no proof yet).
+ * - Due when the finalized header covers at least one message and either their fees reach the cost, or one of them
+ *   has no price and a tip at the automatic maximum (`profit`), or the direction's last proof started at least
+ *   `minIntervalSeconds` ago (`interval`; at once when that is 0 or the direction has no proof yet).
  * - Otherwise the proof is expected at the first expected finality, within the lookahead, at which the fees of the
- *   messages final by then reach the cost of proving them all; else at the fallback (`dueAt`). A message that is not
- *   final is counted for this time only: a proof can only target a finalized header.
+ *   messages final by then reach the cost of proving them all, or a message with a tip at the automatic maximum is
+ *   final; else at the fallback (`dueAt`). A message that is not final is counted for this time only: a proof can only
+ *   target a finalized header.
  *
  * Null when no message waits: with nothing to carry, the interval never starts a proof.
  */
@@ -153,12 +170,15 @@ export function planBatch(input: BatchInput): BatchPlan | null {
   const oldestFinalAt = Math.min(...(ready.length > 0 ? ready : upcoming).map((message) => message.finalAt));
   const dueAt = batchDueAt(oldestFinalAt, input.lastProofAt, rule.minIntervalSeconds);
   const known = economics.kind === "known" ? economics : null;
-  const feeOf = (message: BatchMessage) => known?.feesUsd.get(message.messageId) ?? 0n;
-  const costOf = (count: number) => (known === null ? null : batchCostUsd(count, known.deliveryUsd, rule.marginWad));
-  const feesUsd = known === null ? null : ready.reduce((sum, message) => sum + feeOf(message), 0n);
+  const priced = known !== null && known.deliveryUsd !== null ? { feesUsd: known.feesUsd, deliveryUsd: known.deliveryUsd } : null;
+  const atMaximum = (message: BatchMessage): boolean => known?.atMaximum.has(message.messageId) === true;
+  const feeOf = (message: BatchMessage) => priced?.feesUsd.get(message.messageId) ?? 0n;
+  const costOf = (count: number) => (priced === null ? null : batchCostUsd(count, priced.deliveryUsd, rule.marginWad));
+  const feesUsd = priced === null ? null : ready.reduce((sum, message) => sum + feeOf(message), 0n);
   const costUsd = costOf(ready.length);
   if (ready.length > 0) {
-    const paid = feesUsd !== null && costUsd !== null && feesUsd >= costUsd;
+    const readyAtMaximum = ready.filter(atMaximum).length;
+    const paid = readyAtMaximum > 0 || (feesUsd !== null && costUsd !== null && feesUsd >= costUsd);
     if (paid || intervalAllows(nowSeconds, input.lastProofAt, rule.minIntervalSeconds)) {
       return {
         due: true,
@@ -166,19 +186,21 @@ export function planBatch(input: BatchInput): BatchPlan | null {
         messageIds: ready.map((message) => message.messageId),
         feesUsd,
         costUsd,
+        atMaximum: readyAtMaximum,
         waitedSeconds: Math.max(0, Math.round(nowSeconds - oldestFinalAt)),
       };
     }
   }
   let profitAt: number | null = null;
   if (known !== null) {
-    let fees = feesUsd as bigint;
+    let fees = feesUsd ?? 0n;
     let count = ready.length;
     for (const message of upcoming) {
       if (message.finalAt > nowSeconds + rule.lookaheadSeconds) break;
       fees += feeOf(message);
       count += 1;
-      if (fees >= (costOf(count) as bigint)) {
+      const cost = costOf(count);
+      if (atMaximum(message) || (cost !== null && fees >= cost)) {
         profitAt = message.finalAt;
         break;
       }
@@ -195,6 +217,6 @@ export function planBatch(input: BatchInput): BatchPlan | null {
     oldestFinalAt,
     feesUsd,
     costUsd,
-    unknownWhy: economics.kind === "unknown" ? economics.why : null,
+    unknownWhy: economics.why,
   };
 }

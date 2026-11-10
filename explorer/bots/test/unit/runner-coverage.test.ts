@@ -1,4 +1,5 @@
 import { encodeFunctionData, type Hex } from "viem";
+import { testPricing } from "../support/pricing.ts";
 import { beaconLightClientAbi } from "@zk-bridge/shared";
 import { describe, expect, it } from "vitest";
 import type { FeedItem } from "../../src/indexer/client.ts";
@@ -85,12 +86,12 @@ function world(options: WorldOptions = {}) {
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
+    pricing: testPricing({}, WRAPPED_NATIVE),
     bridge: BRIDGE,
     tokenFactory: null,
     settings: {
       maximumLossPercent: 20,
       deliverWithoutOffer: false,
-      tokenValuationsWei: {},
       deliveryGasFallback: TEST_DELIVERY_GAS_FALLBACK,
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: 300_000n,

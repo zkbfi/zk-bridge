@@ -189,10 +189,11 @@ export const runnerSchema = z
      */
     multicall3: addressSchema.default(MULTICALL3_ADDRESS),
     /**
-     * The value of one whole token in wei of the native coin, as a whole number. A fee in the wrapped native token
-     * needs no entry. A fee in any other token needs one, or the runner skips the item.
+     * Deprecated and ignored, with a `config_deprecated` warning, so an old file still starts. The runner prices tips
+     * from PulseX pools on PulseChain, the one price source of the dapp and the backend; a tip in a token with no price
+     * pays when it is at least 1% of the amount.
      */
-    tokenValuationsWei: z.record(addressSchema, weiSchema).default({}),
+    tokenValuationsWei: z.record(z.string(), z.unknown()).optional(),
     /**
      * The gas that the runner assumes for one whole delivery (proof check, bridge, mediator, router) when it cannot
      * estimate it: the first fee check runs before the proof exists, and a delivery that needs a light client update in

@@ -1,4 +1,5 @@
 import { decodeFunctionData, keccak256, toFunctionSelector, type Hex } from "viem";
+import { testPricing } from "../support/pricing.ts";
 import { beaconLightClientAbi, deliveryRouterAbi, messageBridgeAbi, multicall3Abi } from "@zk-bridge/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { Simulation } from "../../src/chain/transactions.ts";
@@ -151,6 +152,7 @@ function world(options: WorldOptions = {}) {
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
+    pricing: testPricing(options.valuations ?? {}, WRAPPED_NATIVE),
     bridge: BRIDGE,
     tokenFactory: null,
     settings: {
@@ -158,7 +160,6 @@ function world(options: WorldOptions = {}) {
       deliverWithoutOffer: options.deliverWithoutOffer ?? false,
       ...(options.deliverUnpaidAfterSeconds === undefined ? {} : { deliverUnpaidAfterSeconds: options.deliverUnpaidAfterSeconds }),
       ...(options.maximumUnpaidSpendPerDayWei === undefined ? {} : { maximumUnpaidSpendPerDayWei: options.maximumUnpaidSpendPerDayWei }),
-      tokenValuationsWei: options.valuations ?? {},
       deliveryGasFallback: options.assumedGas ?? TEST_DELIVERY_GAS_FALLBACK,
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: options.prerequisiteGasFallback ?? 300_000n,
@@ -415,13 +416,19 @@ describe("delivery decisions", () => {
     expect(lenient.chain.unsimulatedSends()).toEqual([]);
   });
 
-  it("cannot compare a fee in a token that has no price, and prices it when the configuration gives one", async () => {
+  it("judges a fee in a token with no price by the automatic maximum, and by the cost when the price source knows the token", async () => {
     const six = feedItem({ id: 1, token: OTHER_TOKEN, decimals: 6 });
     const data = offerData(OTHER_TOKEN);
-    const unpriced = world({ items: [six], data });
-    unpriced.chain.feeTokens = 2_000_000n;
-    await unpriced.runner.sweep();
-    expect(unpriced.outcomes.records[0]).toMatchObject({ reason: "no-price-for-fee-token" });
+    // No market for the token: 9 of the 1000 sent is under 1%, so it does not pay.
+    const below = world({ items: [six], data });
+    below.chain.feeTokens = 9n;
+    await below.runner.sweep();
+    expect(below.outcomes.records[0]).toMatchObject({ reason: "unpriced-tip-below-maximum", costWei: expect.any(BigInt) });
+    // 10 of 1000 is the automatic maximum: it pays straight away, at no known value in wei.
+    const atMaximum = world({ items: [six], data });
+    atMaximum.chain.feeTokens = 10n;
+    expect((await atMaximum.runner.sweep()).delivered).toBe(1);
+    expect(atMaximum.outcomes.records[0]).toMatchObject({ status: "delivered", feeExpectedWei: null });
 
     // 2,000,000 base units of a 6 decimal token are 2 tokens. At 5e15 wei a token the fee is 1e16 wei: it pays.
     // The decimals come from the token on chain, not from the feed item.

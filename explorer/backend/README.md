@@ -234,7 +234,7 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
     expected to pay, the finality that crosses into a new sync-committee period, and the moment the request service
     admits a new job) and calls `decideProof` at each with the finalized slot expected then. So the warm-up applies the
     same rules as the proof: the finality and the signatures, the minimum interval since the last proof, the
-    profitability rule (fees that cannot be valued never pay early), a proof we hold, the retry wait after a failed
+    profitability rule (fees that cannot be valued pay early only through a tip at the automatic maximum), a proof we hold, the retry wait after a failed
     job and the spacing and the daily budget of jobs (`RequestService.admitAfterSeconds`), a finality a job started
     for already (no second warm-up for it) and the one keep-alive per period. Where `decideProof` would not prove,
     there is no warm-up. A keep-alive of the age rule gets none.
@@ -321,8 +321,12 @@ was in a previous hour"):
 
 - **The batch** is every waiting message the light client head does not cover. Its **fees** are what the fee address
   receives: the fee in each message's delivery terms (the delivery router's `expectedFee`, for a message sent to the
-  router), valued in dollars with the dapp's PulseX price rules at one named PulseChain block. A token without a price
-  counts nothing; testnet tokens have no price, so a testnet batch never pays. Its **cost** is the proof
+  router), valued in dollars by the one price source of `@zkb/core` (`token-pricing.ts`: PulseX pools read through the
+  backend's PulseChain client at one named block, with the dapp's four price states and its 10-minute stale rule) and
+  judged by the one tip verdict (`tip-verdict.ts`), the same as the dapp and the delivery runner. A message whose token
+  (or the destination's coin) has no price, a testnet's included, cannot be valued: its tip **pays when it is at least
+  the frontend's automatic maximum, 1% of the amount**, and such a message makes its batch pay, so the batch proves at
+  its finality (owner, 2026-11-09: "yes, deliver straight away"); a smaller tip counts nothing. Its **cost** is the proof
   (`PROOF_COST_USD`, $0.025) plus the delivery gas of each message on the destination (`deliveryGasUsd` at the newest
   base fee, the chain's minimum tip and `DELIVERY_GAS` of 400,000, an estimate that errs high), times `profitMargin`. The
   runner that delivers is not paid by us: "pays" means the fee address's take covers our costs. Dollars are integers
@@ -330,8 +334,9 @@ was in a previous hour"):
 - **Nothing waits:** no final message the head does not cover. Nothing proves, however long ago the last proof was,
   and no worker is warmed ("if there were no transfers over the bridge that are waiting from the last hour or before
   then do nothing"). Only a due handoff or the age keep-alive (`limits.keepAliveSeconds`) can prove then.
-- **Due** at a finality that covers a waiting message when the fees of the messages final by its slot reach the cost
-  (`trigger: "profit"`, at once, inside the interval too), or when the direction's **last proof** started at least
+- **Due** at a finality that covers a waiting message when the fees of the messages final by its slot reach the cost,
+  or one of them has no price and a tip at the automatic maximum (`trigger: "profit"`, at once, inside the interval
+  too; the detail then reads "a tip of at least 1% of the amount pays (no price for the token)"), or when the direction's **last proof** started at least
   `minIntervalSeconds` ago (`trigger: "interval"`; at once when the direction has no proof). The last proof is the
   newest job of the direction in the `jobs` table, whatever asked for it (a message, a handoff, a keep-alive, a user),
   except a job that failed or ended on chain without a proof; it is read on each decision, so a restart keeps the
@@ -340,15 +345,22 @@ was in a previous hour"):
   then when no new finality comes first, and the proof covers every message final by then.
 - **Looking ahead.** Messages that are not final yet, within `lookaheadSeconds`, count toward the time the batch is
   expected to pay: the expected finality at which the fees of the final and the soon final messages first cover the
-  cost. The watcher then waits for that finality rather than proving part of the batch, unless the interval ends
+  cost, or a message with a tip at the automatic maximum is final. The watcher then waits for that finality rather than proving part of the batch, unless the interval ends
   first, and the warm-up is timed to it (else to `dueAt`, and never before the batch's first finality). A proof can only target a finalized header, so such a message is never proven
   before its finality.
-- **Unknown prices** (no PulseChain endpoint, no route, an RPC error) never prove early: the batch waits for the
-  interval, and the reason is in `proof_not_due`.
+- **Unknown prices** (no PulseChain endpoint, no route, an RPC error and no price from the last 10 minutes) value no
+  fee: only a tip at the automatic maximum proves early, any other waits for the interval, and the reason is in
+  `proof_not_due`.
+- **Which profit rule applies where.** `profitMargin` is the backend's: the fees the fee address takes against the
+  proof and the delivery gas. The delivery runner judges its own gas with `runner.maximumLossPercent` (the tip against
+  what it spends), and the dapp's low-tip warning asks for twice the total cost. The unpriced rule (1% of the amount) is
+  the same in all three; the shared fixture `core/vectors/tip-verdict-vectors.json` pins it, and
+  `test/tip-verdict-parity.test.ts` runs it through the economics reader and the batch plan.
 - **Never delayed:** a period handoff and a keep-alive of the age rule prove at once, inside the interval too, and the
   waiting messages ride along (`riders`). They count as a proof: the next interval runs from them.
-- **What it means in practice.** With `minIntervalSeconds: 3600` on a testnet (where nothing pays), a direction gets at
-  most one message proof per rolling hour: a message after a quiet hour proves at its finality, and the ones that follow
+- **What it means in practice.** With `minIntervalSeconds: 3600` on a testnet (where no fee is valued), a message with
+  a tip of 1% of the amount or more proves at its finality; for the others a direction gets at most one message proof
+  per rolling hour: a message after a quiet hour proves at its finality, and the ones that follow
   within the hour wait for its end and go together. Quiet hours prove nothing; a handoff still proves on time. On
   mainnet `minIntervalSeconds: 0` with the profit rule proves every waiting message at its finality.
 - **The wire keeps its first names.** `GET /directions/:direction/pipeline` reports a batch that waits for the interval
@@ -478,7 +490,8 @@ a proof due, or no watcher runs).
 `rule` is how the direction's proofs start, resolved from the configuration as the watcher resolves it: a batch that
 does not pay waits `minIntervalSeconds` since the direction's last proof; it pays when its fees reach (`proofCostUsd`
 plus the delivery gas of each message) times `profitMargin`; `priced` is false when the pair has no PulseChain mainnet
-side to price tokens on (a testnet), where nothing pays and only the interval applies. The dapp's wait timeline reads
+side to price tokens on (a testnet), where no fee is valued: a tip of at least 1% of the amount pays, any other waits for
+the interval. The dapp's wait timeline reads
 it. `batch` is null unless the watcher's latest decision is `min-interval`. `job` is the queued or proving job, or
 null. `latestProof` is the proof that reaches furthest among the msgboard indexer's, the webhook's and the newest job's
 that did not fail. `head` is null when the indexer cannot be read. `decision` carries the `why` and `detail` of

@@ -64,7 +64,7 @@ Two rules hold the curve in place:
 
 The cost is read live. When gas rises, the floor rises with it, and the fee follows by itself.
 
-Without a dollar price for the token, as on the testnets, the automatic fee is 0.1% of the amount, or your cap if that is lower.
+Without a dollar price for the token or for the destination's coin, as on the testnets, the fee cannot be valued, so the automatic fee is your automatic fee cap: 1% of the amount unless you change it. A tip of at least 1% of the amount counts as paying: the zkb.fi runner delivers it straight away, and its proof starts once the send is final. A smaller tip is delivered by the zkb.fi runner once it has waited an hour.
 
 ## The gas level
 
@@ -114,12 +114,12 @@ The warnings about the fee are these. The page shows one at a time, the most imp
 | Warning | When it shows | What you can do |
 |---|---|---|
 | Small transfer · may not be delivered in a timely manner | The cost is more than your automatic fee cap allows for this amount. | Raise the automatic fee cap, send more, or deliver it yourself. |
-| Low tip · may take about an hour longer | The fee is under twice the cost. Bots are likely to skip it. | Raise the tip, or deliver it yourself. |
+| Low tip · may take about an hour longer | The fee is under twice the cost, or, without a dollar price, under 1% of the amount. Bots are likely to skip it; the zkb.fi runner delivers it once it has waited an hour. | Raise the tip, or deliver it yourself. |
 | High cap % | The tip, the part of the fee above the cost, is a large share of the amount: over 1% up to $100, over $1 between $100 and $1,000, over 0.1% from $1,000. | Lower the tip. A lower tip still gets delivered. |
 
 "High cap %" does not show for a small transfer: there, any fee that covers the cost is a large share.
 
-Without a dollar price, "Low tip" compares the fee with what a bot needs at today's gas price, and "High cap %" compares the whole fee with 1% of the amount.
+Without a dollar price, "Low tip" compares the fee with 1% of the amount, and "High cap %" compares the whole fee with 1% of the amount.
 
 ## Who delivers: the fee choices
 
@@ -176,7 +176,7 @@ The tip slider in the Share choice and the same value elsewhere are one value: m
 | Base fee and priority fee | The destination chain, through your RPC endpoint. |
 | Proof | A set figure of $0.025. |
 
-Prices are for display and for choosing the default fee and its warnings. What you sign is a share of the amount or an amount of the token, so the fee itself does not depend on a price after you sign. The testnets have no prices: the menu then shows the fee as a share, with ticks for what a bot needs to break even and for a typical fee.
+Prices are for display and for choosing the default fee and its warnings. The zkb.fi backend and runner read the same PulseX pools by the same rules to decide whether a tip pays. What you sign is a share of the amount or an amount of the token, so the fee itself does not depend on a price after you sign. The testnets have no prices: the menu then shows the fee as a share, with ticks for what a bot needs to break even and for a typical fee.
 
 Every rule on this page gives the same answer for the same inputs, in this app or any other that uses the same rules. Money is counted in whole units, and any rounding goes down, in your favour.
 

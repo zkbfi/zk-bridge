@@ -1,5 +1,5 @@
 import type { Address, Hex } from "viem";
-import { decodeMediatorMessage, payoutOf, readDeliveryTerms, tokenUnitsToWeiFloor, type DeliveryCall, type FeeDirector, type PayoutKind } from "@zk-bridge/shared";
+import { decodeMediatorMessage, payoutOf, readDeliveryTerms, type DeliveryCall, type FeeDirector, type PayoutKind } from "@zk-bridge/shared";
 
 /** The director is the shared one: it matches `DeliveryRouter.sol` and the vectors of the router (`@zk-bridge/shared`). */
 export type { FeeDirector };
@@ -79,66 +79,8 @@ export interface PayoutOfOfferInput {
 
 /**
  * How the router pays the tip. The native coin only when the settings ask to unwrap and the token is the wrapped native
- * token. For any other token the router pays the plain token, so the tip needs a valuation like any other token.
+ * token. For any other token the router pays the plain token, so the tip needs a price like any other token.
  */
 export function payoutOfOffer(input: PayoutOfOfferInput): PayoutKind {
   return payoutOf(input.director.settings, input.token.toLowerCase() === input.wrappedNative.toLowerCase());
-}
-
-/** Input of {@link valueFeeInWei}. */
-export interface ValueFeeInput {
-  /** The fee in the smallest unit of the token. */
-  readonly fee: bigint;
-  readonly token: Address;
-  readonly decimals: number;
-  readonly director: FeeDirector;
-  readonly wrappedNative: Address;
-  /** The value of one whole token in wei, by lowercase token address. */
-  readonly valuationsWei: Readonly<Record<string, bigint>>;
-}
-
-/** The fee measured in wei of the native coin. */
-export type FeeValue = { readonly ok: true; readonly wei: bigint } | { readonly ok: false; readonly reason: "no-price-for-fee-token" };
-
-/**
- * Turns the fee into wei, the unit of the gas cost. The wrapped native token is worth one wei per base unit, whether the
- * router pays it as the token or unwraps it. Any other token needs a configured valuation, also when the settings ask to
- * unwrap: the router then pays the plain token. Without a valuation the runner cannot compare, so it skips.
- */
-export function valueFeeInWei(input: ValueFeeInput): FeeValue {
-  const token = input.token.toLowerCase();
-  if (token === input.wrappedNative.toLowerCase()) return { ok: true, wei: input.fee };
-  const valuation = input.valuationsWei[token];
-  if (valuation === undefined || valuation <= 0n) return { ok: false, reason: "no-price-for-fee-token" };
-  return { ok: true, wei: tokenUnitsToWeiFloor(input.fee, { tokenValueInWei: valuation, tokenDecimals: input.decimals }) };
-}
-
-/** Input of {@link decideDelivery}. */
-export interface DeliveryDecisionInput {
-  /** What the tip is worth in wei. */
-  readonly feeWei: bigint;
-  /** What the delivery costs in wei, with its share of the light client update. */
-  readonly costWei: bigint;
-  /** The share of the cost that the runner accepts to lose, from 0 to 100. A loss at this share is already too much. */
-  readonly maximumLossPercent: number;
-}
-
-/**
- * The comparison of the tip with the cost. `lossWei` is the cost less the tip. It is negative when the tip is above the
- * cost.
- */
-export type DeliveryDecision =
-  | { readonly deliver: true; readonly costWei: bigint; readonly lossWei: bigint }
-  | { readonly deliver: false; readonly costWei: bigint; readonly lossWei: bigint };
-
-/**
- * Delivers when there is no loss (the tip is at or above the cost), and otherwise when the loss stays under the share of
- * the cost that the setting allows: `(cost - fee) * 100` is less than `maximumLossPercent * cost`. A loss of exactly that
- * share is left out. A tip of nothing on a cost above zero is a full loss.
- */
-export function decideDelivery(input: DeliveryDecisionInput): DeliveryDecision {
-  const { costWei, feeWei } = input;
-  const lossWei = costWei - feeWei;
-  const deliver = lossWei <= 0n || lossWei * 100n < BigInt(input.maximumLossPercent) * costWei;
-  return { deliver, costWei, lossWei };
 }

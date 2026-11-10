@@ -186,6 +186,8 @@ export async function startWatch(input: { context: BackendModuleContext; service
         destinationChainId: destination.chainId,
         deliveryRouter: destination.contracts.deliveryRouter,
         wrappedNative: destination.contracts.wrappedNative,
+        marginWad: batchRule.marginWad,
+        now: context.now,
         dependencies: {
           readMessageData: messageDataReader({ indexerUrl: config.indexerUrl as string, get }),
           pulsechain,

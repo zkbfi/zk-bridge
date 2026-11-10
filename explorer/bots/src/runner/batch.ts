@@ -86,8 +86,8 @@ interface SendPlan {
   readonly terms: SendTerms;
   /** The gas assumed for each item: its simulated gas at the single entry plus {@link BATCH_ITEM_OVERHEAD_GAS}. Also the weight of its share of the cost. */
   readonly itemGas: readonly bigint[];
-  /** What the fee of each item is worth in wei at its gas. */
-  readonly feeWei: readonly bigint[];
+  /** What the fee of each item is worth in wei at its gas; null when its token has no price (a tip at the automatic maximum). */
+  readonly feeWei: readonly (bigint | null)[];
   /** The assumed gas of the update, or zero when the call carries none. */
   readonly updateGas: bigint;
 }
@@ -263,7 +263,7 @@ async function evaluateBatch(dependencies: DeliveryDependencies, readies: readon
     }),
   );
   const unpaid: Dropped[] = [];
-  const feeWei: bigint[] = [];
+  const feeWei: (bigint | null)[] = [];
   for (const [index, ready] of readies.entries()) {
     const judgement = judgements[index] as Judgement;
     if (judgement.kind === "pay") feeWei.push(judgement.feeWei);
@@ -449,7 +449,7 @@ async function settleReceipt(
         gasUsed,
         gasCostWei: gasUsed * receipt.effectiveGasPrice,
         prerequisiteCostWei: ready.prerequisiteCostWei,
-        feeExpectedWei: plan.feeWei[index] as bigint,
+        feeExpectedWei: plan.feeWei[index] as bigint | null,
         feeReceivedTokens: reading.tokensByMessage.get(ready.messageId) ?? null,
       });
       continue;

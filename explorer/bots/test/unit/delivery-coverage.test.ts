@@ -1,4 +1,5 @@
 import { encodeFunctionData, type Hex } from "viem";
+import { testPricing } from "../support/pricing.ts";
 import { messageBridgeAbi, tokenFactoryAbi } from "@zk-bridge/shared";
 import { describe, expect, it } from "vitest";
 import type { FeedItem } from "../../src/indexer/client.ts";
@@ -42,12 +43,12 @@ function setup(options: SetupOptions = {}) {
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
+    pricing: testPricing({}, WRAPPED_NATIVE),
     bridge: BRIDGE,
     tokenFactory: options.tokenFactory ?? null,
     settings: {
       maximumLossPercent: 20,
       deliverWithoutOffer: options.deliverWithoutOffer ?? false,
-      tokenValuationsWei: {},
       deliveryGasFallback: TEST_DELIVERY_GAS_FALLBACK,
       maximumPrerequisiteRounds: options.maximumPrerequisiteRounds ?? 3,
       prerequisiteGasFallback: 300_000n,
@@ -153,17 +154,19 @@ describe("the preparation of an item: guards at the edge of external data", () =
     expect(await outcomeOf(prepare)).toEqual({ status: "skipped", messageId: word(1), reason: "no-price-for-fee-token" });
   });
 
-  it("cannot price a tip in a token that does not answer its decimals, such as a copy that is not deployed yet", async () => {
+  it("cannot price a tip in a token that does not answer its decimals, such as a copy that is not deployed yet: the automatic maximum judges it", async () => {
     const w = setup({ item: feedItem({ id: 1 }) });
     const data = { [w.item.messageId]: feeOfferData({ director: { recipient: address(0x12), settings: 1n, limit: 10n, multiplier: 0n, callGas: 0n }, value: 1000n, token: address(0x66) }) };
-    w.dependencies = {
-      ...w.dependencies,
-      indexer: fakeIndexer([w.item], data),
-      prover: feedProver(w.prover, [w.item], data),
-      settings: { ...w.dependencies.settings, tokenValuationsWei: { [address(0x66).toLowerCase()]: 10n ** 18n } },
-    };
+    const pricing = testPricing({ [address(0x66).toLowerCase()]: 10n ** 18n }, WRAPPED_NATIVE);
+    w.dependencies = { ...w.dependencies, indexer: fakeIndexer([w.item], data), prover: feedProver(w.prover, [w.item], data), pricing };
     w.chain.tokenDecimals = null;
-    expect(await outcomeOf(() => prepareItem(w.dependencies, w.item, w.ledger))).toEqual({ status: "skipped", messageId: word(1), reason: "no-price-for-fee-token" });
+    // 9 of 1000 is under 1%: no price, so it does not pay. The price source is not asked without decimals.
+    w.chain.feeTokens = 9n;
+    expect(await outcomeOf(() => prepareItem(w.dependencies, w.item, w.ledger))).toMatchObject({ status: "skipped", messageId: word(1), reason: "unpriced-tip-below-maximum" });
+    expect(pricing.asked).toEqual([]);
+    // 10 of 1000 is the automatic maximum: it pays, and the item goes on.
+    w.chain.feeTokens = 10n;
+    expect((await prepareItem(w.dependencies, w.item, w.ledger)).kind).toBe("ready");
   });
 
   it("cannot price the fee of an item that the indexer lists without a transfer, and asks the chain nothing", async () => {
@@ -377,7 +380,7 @@ describe("the destination token of a first transfer", () => {
       ...w.dependencies,
       indexer: fakeIndexer([w.item], data),
       prover: feedProver(w.prover, [w.item], data),
-      settings: { ...w.dependencies.settings, tokenValuationsWei: { [copy.toLowerCase()]: 10n ** 30n } },
+      pricing: testPricing({ [copy.toLowerCase()]: 10n ** 30n }, WRAPPED_NATIVE),
     };
     const preparation = await prepareItem(w.dependencies, w.item, w.ledger);
     if (preparation.kind !== "ready") throw new Error(`the item was expected to be ready for a batch: ${JSON.stringify(preparation)}`);

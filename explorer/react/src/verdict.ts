@@ -36,6 +36,11 @@ export type VerdictInput = {
   readonly tipBelowBreakEven: boolean;
   /** The fee and the total cost as text, for the low-fee detail; null without prices. */
   readonly lowFee?: { readonly feeText: string; readonly costText: string } | null;
+  /**
+   * The token (or the destination's coin) has no price, so the tip is judged by the automatic maximum (`tipVerdict` of
+   * `@zkb/core`, the rule of the backend and the runner too): the maximum as text, such as `1%`; or null when priced.
+   */
+  readonly unpricedTip?: { readonly maximumText: string } | null;
   /** The tip before gas is a "High cap %" (shared fee rules): the tip and the line as text; or null. */
   readonly highTip?: { readonly thresholdText: string; readonly tipText: string } | null;
   /**
@@ -77,6 +82,9 @@ export const verdictOf = (input: VerdictInput): Verdict => {
     if (input.smallTransfer != null) {
       const small = input.smallTransfer;
       return { kind: "warn", label: "Small transfer · may not be delivered in a timely manner", detail: `Delivery costs about ${small.costText}, more than the ${small.capText} (${small.capAmountText}) you allow. A bot may wait for cheaper gas: raise the cap in the tip drawer, or deliver it yourself.` };
+    }
+    if (input.tipBelowBreakEven && input.unpricedTip != null) {
+      return { kind: "warn", label: "Low tip · may take about an hour longer", detail: `No price is known for this token, so a tip pays only at ${input.unpricedTip.maximumText} of the amount or more. Bots that need a profit skip it; the zkb.fi runner delivers it once it has waited an hour, and you can deliver it yourself. Raise the tip to ${input.unpricedTip.maximumText} to go sooner.` };
     }
     if (input.tipBelowBreakEven) {
       const numbers = input.lowFee == null ? "The fee is under twice what delivering and proving it should cost" : `The fee (${input.lowFee.feeText}) is under twice what delivering and proving it should cost (${input.lowFee.costText} now)`;

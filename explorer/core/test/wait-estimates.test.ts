@@ -147,6 +147,14 @@ describe("the proof rule (vectors)", () => {
     expect(feeVerdict(live.fees[0]!.rule, { kind: "observed" })).toBe("unknown");
     expect(feeVerdict(liveRule, { kind: "known", feeUsd: 10n ** 20n, costUsd: 1n })).toBe("unknown");
   });
+
+  it("an unpriced tip at the automatic maximum pays, also on a testnet, and proves at finality; below it waits for the batch", () => {
+    expect(feeVerdict(liveRule, { kind: "unpriced", atMaximum: true })).toBe("pays");
+    expect(feeVerdict(liveRule, { kind: "unpriced", atMaximum: false })).toBe("unknown");
+    const inputs = { sourceChainId: 11155111, timing: null, rule: liveRule, proving: null };
+    expect(waitEstimate(inputs, { kind: "unpriced", atMaximum: true }).start).toBe("at-finality");
+    expect(waitEstimate(inputs, { kind: "unpriced", atMaximum: false }).start).toBe(liveRule.priced ? "batch" : "testnet");
+  });
 });
 
 describe("measured step times", () => {

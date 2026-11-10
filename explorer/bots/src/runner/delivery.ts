@@ -1,24 +1,32 @@
 import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, keccak256, type Address, type ContractFunctionArgs, type Hex } from "viem";
-import { bridgedSymbolOf, decodeMediatorMessage, deliveryRouterAbi, messageBridgeAbi, tokenFactoryAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
+import { DEFAULT_CAP_WAD, PERCENT_WAD, bridgedSymbolOf, decodeMediatorMessage, deliveryRouterAbi, feeValueOf, messageBridgeAbi, tipPays, tipVerdict, tokenFactoryAbi, type PayoutKind, type ProofDirection, type TipVerdict, type TokenValuation } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
 import type { Logger } from "../logging/logger.ts";
 import type { EvidencePackage, Prerequisite, ProverBinary } from "@zk-bridge/shared/prover";
 import type { PrerequisiteLedger } from "./prerequisite-ledger.ts";
-import { decideDelivery, feeGasUnitsOf, payoutOfOffer, readFeeOffer, valueFeeInWei, type FeeOffer } from "./fee.ts";
+import { feeGasUnitsOf, payoutOfOffer, readFeeOffer, type FeeOffer } from "./fee.ts";
+import type { TokenPricing } from "./pricing.ts";
 import type { SourceReader } from "./source-reader.ts";
 
 /** The settings of a delivery that come from the bot configuration. */
 export interface DeliverySettings {
-  /** The share of its cost that the runner accepts to lose on one delivery, from 0 to 100. A loss at this share or above leaves the item out. */
+  /**
+   * The share of its cost that the runner accepts to lose on one delivery, from 0 to 100. A loss at this share or above
+   * leaves the item out. It judges a priced tip (the `loss` rule of `tipVerdict`); an unpriced tip is judged by the
+   * automatic maximum instead.
+   */
   readonly maximumLossPercent: number;
+  /**
+   * Deliver whatever the tip, priced or not: the delayed unpaid rule sets it for the items that waited long enough.
+   * Absent: false.
+   */
+  readonly deliverAnyTip?: boolean;
   readonly deliverWithoutOffer: boolean;
   /** Seconds after which a covered item is delivered at a loss or with no offer. Null or absent: never. */
   readonly deliverUnpaidAfterSeconds?: number | null;
   /** The most wei that those deliveries cost in 24 hours on this chain. Null or absent: none is sent. */
   readonly maximumUnpaidSpendPerDayWei?: bigint | null;
-  /** The value of one whole token in wei, by lowercase address. */
-  readonly tokenValuationsWei: Readonly<Record<string, bigint>>;
   /**
    * The gas the runner assumes for one whole delivery (proof check, bridge, mediator, router) when it cannot estimate it
    * yet: the first fee check runs before the evidence exists, and a delivery that needs a light client update in the same
@@ -73,6 +81,11 @@ export interface DeliveryDependencies {
   /** The token factory of the destination chain. It names the copy that a first transfer of a native token deploys. Null when unknown. */
   readonly tokenFactory: Address | null;
   readonly settings: DeliverySettings;
+  /**
+   * Values a fee token: the one price source of zkb.fi (PulseX pools through the runner's PulseChain RPC, with the
+   * dapp's stale rule). A token with no market price is judged by the automatic maximum.
+   */
+  readonly pricing: TokenPricing;
   readonly logger: Logger;
 }
 
@@ -82,6 +95,7 @@ export type SkipReason =
   | "unpaid-spend-cap"
   | "no-price-for-fee-token"
   | "loss-at-or-above-limit"
+  | "unpriced-tip-below-maximum"
   | "message-gas-above-batch-maximum"
   | "batch-gas-above-maximum"
   | "source-log-not-found"
@@ -113,7 +127,7 @@ export type DeliveryOutcome =
       readonly gasUsed: bigint;
       readonly gasCostWei: bigint;
       readonly prerequisiteCostWei: bigint;
-      /** The fee that `feeInfo` promised at the last simulation, in wei. Null when the item had no offer. */
+      /** The fee that `feeInfo` promised at the last simulation, in wei. Null when the item had no offer, or its token no price. */
       readonly feeExpectedWei: bigint | null;
       /** The tokens that arrived at the runner, from the receipt. Null when the fee is paid in the native coin or not at all. */
       readonly feeReceivedTokens: bigint | null;
@@ -189,16 +203,21 @@ export async function withDestinationToken(dependencies: DeliveryDependencies, i
   return { ...item, transfer: { ...transfer, destinationToken } };
 }
 
+/** What {@link quoteFee} finds: the tip in tokens, how it is paid, the token's decimals and its valuation. */
+export type FeeQuoteResult =
+  | { readonly ok: true; readonly feeTokens: bigint; readonly payout: PayoutKind; readonly decimals: number; readonly valuation: TokenValuation }
+  | { readonly ok: false; readonly reason: "no-price-for-fee-token" };
+
+/** The valuation of a token whose decimals cannot be read: no price can be derived. */
+const UNVALUED: TokenValuation = { state: { kind: "unreachable" }, usdE18: null, nativeUsdE18: null, weiPerToken: null };
+
 /**
- * The fee that the router would pay to its reward address for this gas, measured in wei. `payout` tells how the router pays it.
- * When the offer carries a user call, the router counts the `callGas` of the director too (see {@link feeGasUnitsOf}).
+ * The fee that the router would pay to its reward address for this gas, in tokens, with the token's valuation from the
+ * one price source. `payout` tells how the router pays it. When the offer carries a user call, the router counts the
+ * `callGas` of the director too (see {@link feeGasUnitsOf}). A token whose decimals cannot be read is not valued (its tip
+ * is judged by the automatic maximum, which needs no price).
  */
-export async function quoteFee(
-  dependencies: DeliveryDependencies,
-  item: FeedItem,
-  offer: Extract<FeeOffer, { kind: "offer" }>,
-  gasUnits: bigint,
-): Promise<{ readonly ok: true; readonly feeWei: bigint; readonly feeTokens: bigint; readonly payout: PayoutKind } | { readonly ok: false; readonly reason: "no-price-for-fee-token" }> {
+export async function quoteFee(dependencies: DeliveryDependencies, item: FeedItem, offer: Extract<FeeOffer, { kind: "offer" }>, gasUnits: bigint): Promise<FeeQuoteResult> {
   const token = item.transfer?.destinationToken;
   if (token === undefined || token === null) return { ok: false, reason: "no-price-for-fee-token" };
   const { director } = offer;
@@ -212,17 +231,13 @@ export async function quoteFee(
   const [feeTokens] = decodeFunctionResult({ abi: deliveryRouterAbi, functionName: "feeInfo", data: answer });
   // A send that locks a native token releases a copy, which the token factory deploys with the decimals of its home
   // token. Before the first delivery the copy has no code and cannot answer, so those decimals stand in for it.
-  const decimals = (await tokenDecimals(dependencies, token.address as Address)) ?? (item.transfer?.sourceIsNative === true ? item.transfer.sourceToken.decimals : null);
-  if (decimals === null) return { ok: false, reason: "no-price-for-fee-token" };
-  const value = valueFeeInWei({
-    fee: feeTokens,
-    token: token.address as Address,
-    decimals,
-    director,
-    wrappedNative: dependencies.wrappedNative,
-    valuationsWei: dependencies.settings.tokenValuationsWei,
-  });
-  return value.ok ? { ok: true, feeWei: value.wei, feeTokens, payout } : value;
+  const transfer = item.transfer as NonNullable<FeedItem["transfer"]>;
+  const decimals = (await tokenDecimals(dependencies, token.address as Address)) ?? (transfer.sourceIsNative === true ? transfer.sourceToken.decimals : null);
+  if (decimals === null) return { ok: true, feeTokens, payout, decimals: 0, valuation: UNVALUED };
+  // A copy that zkb.fi minted takes the price of its home token on the source chain.
+  const origin = transfer.sourceIsNative === true ? { chainId: item.direction.sourceChainId, address: transfer.sourceToken.address as Address } : null;
+  const valuation = await dependencies.pricing({ address: token.address as Address, decimals, origin });
+  return { ok: true, feeTokens, payout, decimals, valuation };
 }
 
 /**
@@ -244,11 +259,11 @@ async function releasedTokenOf(dependencies: DeliveryDependencies, item: FeedIte
 
 /**
  * The decimals of a fee token, read from the token on the destination chain: the indexer's word is not trusted, and a
- * wrong value would scale the tip by a power of ten. The wrapped native token is valued per base unit and needs none.
+ * wrong value would scale the tip by a power of ten. The wrapped native token has the native coin's 18 and is not asked.
  * Null when the token does not answer, as a copy that is not deployed yet: the runner then cannot value the tip.
  */
 async function tokenDecimals(dependencies: DeliveryDependencies, token: Address): Promise<number | null> {
-  if (token.toLowerCase() === dependencies.wrappedNative.toLowerCase()) return 0;
+  if (token.toLowerCase() === dependencies.wrappedNative.toLowerCase()) return 18;
   try {
     const answer = await dependencies.chain.call({ to: token, data: encodeFunctionData({ abi: erc20Abi, functionName: "decimals" }) });
     return decodeFunctionResult({ abi: erc20Abi, functionName: "decimals", data: answer });
@@ -626,7 +641,7 @@ async function deliverDirect(dependencies: DeliveryDependencies, ledger: Prerequ
   };
 }
 
-export type Judgement = { readonly kind: "pay"; readonly feeWei: bigint } | { readonly kind: "skip"; readonly outcome: Skip };
+export type Judgement = { readonly kind: "pay"; readonly feeWei: bigint | null; readonly verdict: TipVerdict } | { readonly kind: "skip"; readonly outcome: Skip };
 
 /** Input of {@link judgeOffer}. */
 export interface JudgeOfferInput {
@@ -640,20 +655,38 @@ export interface JudgeOfferInput {
   readonly messageId: Hex;
 }
 
-/** Prices the offer at the fee gas and compares it with the cost of the cost gas. The item is left out when the loss reaches the limit. */
+/**
+ * Prices the offer at the fee gas and judges it with the one tip verdict of zkb.fi (`tipVerdict`), against the cost of
+ * the cost gas in wei. A priced tip pays when the loss stays under `maximumLossPercent` of the cost; an unpriced tip (no
+ * market, or no price can be read) pays when it is at least the frontend's automatic maximum, 1% of the amount, and is
+ * then delivered straight away. Otherwise the item is left out (`loss-at-or-above-limit`, `unpriced-tip-below-maximum`),
+ * and the delayed unpaid rule may still deliver it; that rule sets `deliverAnyTip`.
+ */
 export async function judgeOffer(dependencies: DeliveryDependencies, input: JudgeOfferInput): Promise<Judgement> {
   const { item, offer, feeGasUnits, costGasUnits, quote, messageId } = input;
+  const { settings } = dependencies;
   const priced = await quoteFee(dependencies, item, offer, feeGasUnits);
   if (!priced.ok) return { kind: "skip", outcome: skip(messageId, priced.reason) };
   const costWei = costGasUnits * (quote.baseFee + quote.priorityFee);
-  const decision = decideDelivery({ feeWei: priced.feeWei, costWei, maximumLossPercent: dependencies.settings.maximumLossPercent });
-  if (decision.deliver) return { kind: "pay", feeWei: priced.feeWei };
+  const price = { state: priced.valuation.state, perWholeToken: priced.valuation.weiPerToken };
+  const verdict = tipVerdict({ amount: offer.value, fee: priced.feeTokens, decimals: priced.decimals, price, cost: costWei, rule: { kind: "loss", maximumLossPercent: settings.maximumLossPercent } });
+  const feeWei = feeValueOf(priced.feeTokens, priced.decimals, price);
+  if (tipPays(verdict) || settings.deliverAnyTip === true) return { kind: "pay", feeWei, verdict };
+  if (verdict === "unpriced-below-max") {
+    return {
+      kind: "skip",
+      outcome: skip(messageId, "unpriced-tip-below-maximum", {
+        costWei,
+        detail: `the token has no price (${priced.valuation.state.kind}), and the tip of ${priced.feeTokens} is under the automatic maximum of ${DEFAULT_CAP_WAD / PERCENT_WAD}% of ${offer.value}, tip paid as ${priced.payout}`,
+      }),
+    };
+  }
   return {
     kind: "skip",
     outcome: skip(messageId, "loss-at-or-above-limit", {
-      feeWei: priced.feeWei,
-      costWei: decision.costWei,
-      detail: `loses ${decision.lossWei} wei of ${decision.costWei} at ${costGasUnits} gas, the limit is ${dependencies.settings.maximumLossPercent} percent, tip paid as ${priced.payout}`,
+      feeWei: feeWei as bigint,
+      costWei,
+      detail: `loses ${costWei - (feeWei as bigint)} wei of ${costWei} at ${costGasUnits} gas, the limit is ${settings.maximumLossPercent} percent, tip paid as ${priced.payout}`,
     }),
   };
 }
