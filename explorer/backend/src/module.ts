@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import type { Pair } from "@zk-bridge/shared";
+import type { PreflightResult } from "@zk-bridge/shared/msgboard";
 import type { HandoffProver, ProverBinary } from "@zk-bridge/shared/prover";
 import type { BillingReader } from "./billing.ts";
 import type { BackendConfig, ModuleName } from "./config.ts";
@@ -36,6 +37,11 @@ export type BackendModuleContext = {
   readonly endpointIdleTimeoutSeconds?: () => number | null;
   /** The `handoff-update` command, for the capture of the handoff archive (`archive/handoffs.ts`). Absent: no capture. */
   readonly handoffProver?: HandoffProver;
+  /**
+   * What the start-up test of the grind engine found, when a module that grinds runs. A failed engine means that no proof
+   * of work is started. Absent in a context without the test.
+   */
+  readonly grindEngine?: PreflightResult;
   /** Reads the light client on a side. Default (absent): viem over the side's RPC endpoint. A test replaces it. */
   readonly readLightClientOf?: (side: PairSide) => Promise<LightClientFacts>;
 };

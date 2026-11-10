@@ -167,6 +167,8 @@ These steps send transactions only where they say so. The runner does the on-cha
    `deployment-file` command, as in `docs/testnet-run.md` step 5: the same light client, gate and registry addresses,
    the new `bridge`, `mediator`, `token_factory` (the factory at nonce n + 5, which `tokenFactory()` of the new mediator
    returns) and `delivery_router`, and `start_block` of each chain = the block before its first redeploy transaction.
+   Keep the light clients' own start in `light_client_start_block` (the block before their creation: 12,020,692 on
+   Sepolia, 25,767,015 on 943); the prover scans the stored heads from it (see "What got in the way" below).
    The libraries need no entry: nothing off chain calls them. Commit `deploy/deployments/sepolia-pls943.json` with the
    new addresses (the old file goes to `deploy/deployments/archive/sepolia-pls943.2026-10.json`, so the old pair can
    still be read).
@@ -319,17 +321,83 @@ its proof archive, without a new light client update:
   needs two stored heads below the anchor. The light clients are kept and hold many heads, but the scan starts at the
   redeploy block, so evidence failed with "not enough stored headers yet to validate the block roots layout" until each
   light client had stored three heads after the redeploy. Here that was sped up with proof requests to the backend
-  (`POST /requests`, reason `message`, for messages that were waiting), three per direction. Next time: give the
-  prover the light client's own deployment block for this scan (a separate setting), or plan the extra proofs.
+  (`POST /requests`, reason `message`, for messages that were waiting), three per direction. Fixed after the fact
+  (branch `fix/layout-loop-and-grind`): the deployment file has `light_client_start_block` for each chain (the block
+  before the light client's creation, from the receipts of the October broadcast: 12,020,692 on Sepolia, creation tx
+  `0x94ff6bb85ab784e4df0dc3ff4f307c585f26999777050962b35e5f0c1988b90d` in block 12,020,693; 25,767,015 on 943, creation
+  tx `0xb34487c3ebb1580c633cb967e8c2902bb4b283cfbc7d9e4cbd70840924ba0755` in block 25,767,016), the runner writes it into
+  the prover configuration as `destination.light_client_start_block`, and the prover scans the stored heads from there
+  (`start_block` when it is absent).
 - **The first Sepolia send reverted at the gate.** The traffic bot confirmed epoch 360342 ten seconds before its end,
   and the relay `0x4a543d53bca0227af30c82aa164ebab87960e8586d2abc2ed5d78da5cdb63bda` was mined in epoch 360343
   (`ForkNotConfirmed(360343)`). The gate is the kept one; the bot sent again in its next hour. The bot should not
   confirm and send this close to an epoch boundary.
-- **One older 943 message (`...0000`) was held back** after a block hash row did not satisfy its evidence
-  ("prerequisites-not-satisfied", a loss of 0.00000064 ETH); the runner refuses such a message for
-  `prerequisiteLossRefusalSeconds` (1,800 s) and tries again after that.
+- **One 943 message looped on a block hash row that could not cover it.**
+  `0x00050000c9be6ab2a70642475d4a2ec9c896c44f8fa9c0cd0000000000000000` (943 to Sepolia, relay
+  `0xedcca15514f40c66c77dba8697219d2ac0eeb0bb096398f0d62c3ea2231b5fc0`, 02:35:42 UTC, the first message on the new 943
+  bridge) was sent before the slot of the first head that the scan from `start_block` could see. Its block hash row must
+  hold a stored head at or below its source slot; that head (slot 11274432, stored at 01:31) is older than
+  `start_block`, so the prover never offered it. It offered only the row of the head below the anchor, which the bridge
+  takes but which does not reach down to the source slot. Once the message had waited an hour, the unpaid rule
+  (`deliverUnpaidAfterSeconds`) sent that row (`addBlockHashLayout`), the evidence still listed it, and the runner logged
+  `prerequisite_loss` with `prerequisites-not-satisfied`. The unpaid pass passed "no layout spend" to its bookkeeping, so
+  the item waited the five minutes of an ordinary retry instead of `prerequisiteLossRefusalSeconds` (1,800 s): a row
+  every sweep after five minutes, about every 7 minutes, each a loss that was not charged to the unpaid cap. The fix
+  (branch `fix/layout-loop-and-grind`): the scan starts at `light_client_start_block`; the prover answers "no stored
+  header at or below source slot N" instead of offering a row that cannot cover the message; the unpaid pass counts its
+  layout spend (refusal window, recorded loss, charged to `maximumUnpaidSpendPerDayWei`); the runner state keeps, per
+  message, the layout calls it sent (none is sent twice) and the tries that paid for layout calls without covering the
+  message, and after `maximumUnsatisfiedPrerequisiteAttempts` (default 3) it sends no more for it (skip
+  `prerequisites-stuck`, warning `prerequisites_stuck`); the retry times are in the state file, so a restart keeps them.
+  Checked read only on 2026-11-09: the message is still undelivered (`deliveryStatus` 0); the bridge's one block hash
+  row (gindex 412) covers slots 11274912 to 11290176, and the source slot is 11274897. The light client logged 166
+  heads between its creation and `start_block`, the highest at or below the source slot being 11274432 (block
+  12,087,515, header still stored), so with `light_client_start_block` the prover offers the row of that head, which
+  widens row 412 down past the source slot. A run of the new `evidence` command without the setting now ends with "no
+  stored header at or below source slot 11274897" instead of offering the anchor's row. The server's Sepolia RPC must
+  serve `eth_getLogs` back to block 12,020,692 (publicnode answers "pruned history unavailable" there).
 - **The backend, the runner and the status service bypass Caddy** (see the server list above): a blue/green switch of
   the indexer without `finish` leaves them on the old index unless their URLs are changed too.
+
+### The router of 2026-11-08, night (layer 3 alone)
+
+Owner: "do both", "go ahead with the router deploy". A new `DeliveryRouter` on each chain that emits `Delivered`
+(`feat/router-delivered-event`), deployed with `REDEPLOY_MODE=router` as in "Layer 3 later, alone" below; records in
+`broadcast/RedeployLayers.s.sol/{11155111,943}/run-latest.json`, configuration `script/testnet/router-redeploy.config.testnet.json`.
+
+| Chain | New router | Nonce | Transaction | Block | Bound to mediator |
+|---|---|---|---|---|---|
+| Sepolia | `0x1c4627D76e6b423e06C61f055C2ce0d3E944Ce8a` | 22 | `0x41be362075d4f0bc50718d023ee67315550f1979fb5378b9e8dc06ffcd58f348` | 12,088,245 | `0x2c00675092e2955d27F476B5a1baC9AC5Bb6FA86` |
+| 943 | `0x6e0178049277442d5BF58963f9a1E0469B46Fce3` | 26 | `0xe7cd7bb382380d93fa011b7dfc8e1947da4129da745c9258c62cc341a66dc953` | 25,846,960 | `0x8eeF4098D3726955F7D227C4D1D92487C99F7e62` |
+
+Checked on chain (read only): both have 8,472 bytes of code, both receipts status 1, `bridge()` is the mediator of
+their chain, and `wNative()`, `rewardAddress()` and `failedDeliveryAddress()` equal those of the routers they replace.
+
+- **Deployment file.** `delivery_router` is the new router of each chain; `delivery_routers` keeps the router of the
+  redeploy (`0x3846e483C98cD0f164c29A5e40F7295A5765ABa4` on Sepolia, `0xBEa5F0fd3712B02c25Bda32C7719fB9373C0fA20` on
+  943), so the indexer reads both. `start_block` stays.
+- **Drain first.** The runner delivers to one router only (its `deliveryRouter`, else the deployment file's), so a
+  message addressed to the old router would be skipped once it switches. The traffic bot was stopped at 04:08 UTC, the
+  three messages in flight were proven on request and delivered at 04:11 (943 to Sepolia
+  `0x852c9332fca2b55a3d1da0f70bd56a32bbfd09cbca71ac24ac657cf6d41ad982`, Sepolia to 943
+  `0xc563fe50193226b648b56a6d74c8dd66d99d1b1cdb9ff51b8c96d7aed9ddea7c`), then the runner was stopped and switched.
+  Message `...0000` above stays addressed to the old router. For the runner it has no offer (its recipient is not the
+  configured router), so the unpaid rule delivers it straight to the bridge; the old router then receives the tokens
+  outside `executeMessage` and passes them on without a tip.
+- **Server** (release `f2d3e6ba3c8ed3a3928830b5a7db66a7842b430a`; backups with the suffix `.bak-20261108b`):
+  `/etc/zk-bridge/deployment.json` replaced (0644 root:root); no runner or traffic setting names a router. The indexer
+  schema changed (fee fields), so a second green ran beside the first: `indexer.yml -e action=green` with
+  `-e zkb_indexer_green_port=42071 -e zkb_green_indexer_unit=zk-bridge-indexer-pre2` filled `indexer_5bc793a78041`
+  (same counts as the first green, the two new routers added, and the old routers' deliveries with fee fields from
+  their transfer logs, `feeSource` `logs`), then `-e action=switch` with the same two variables. The `indexerUrl` of
+  the backend and the runner and the `indexerLocal` of the status service now point at 127.0.0.1:42071. Then
+  `backend.yml` and `bots.yml -e bots=runner,status,traffic`. The runner delivers to the new routers.
+- **Indexers now:** green 2 (`zk-bridge-indexer-pre2`, 42071, schema `indexer_5bc793a78041`) serves indexer.zkb.fi
+  and the services; it is a transient unit (`Restart=no`) like the first. The first green
+  (`zk-bridge-indexer-pre`, 42070) was stopped once green 2 had shown a delivery with `feeSource` `event`. The
+  pre-redeploy indexer (`zk-bridge-indexer`, 42069) is untouched and stays Caddy's fallback.
+- **Smoke test** through the new routers: a Sepolia to 943 transfer of 31.16 was delivered through the new 943 router,
+  and the fee was read from its `Delivered` event: 0.03116 to the runner, 31.12884 to the recipient.
 
 ## What the split costs a delivery
 

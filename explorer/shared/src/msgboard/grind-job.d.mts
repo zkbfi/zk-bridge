@@ -7,11 +7,16 @@ export type GrindReply =
 export interface GrindBoard {
   status(): Promise<{ enabled: boolean; workMultiplier: number | bigint | string; workDivisor: number | bigint | string }>;
   setDifficultyFactors(multiplier: bigint, divisor: bigint): void;
+  lastestBlock(): Promise<{ number: number | bigint | string }>;
   grind(category: string, payload: string): Promise<{
-    message: { hash: string; nonce: bigint };
+    message: { hash: string; nonce: bigint; blockNumber: bigint };
     stats: { isValid: boolean; difficulty: bigint; iterations: bigint; duration: number };
   }>;
 }
+
+/** The attempts of a grind, and the oldest block (in blocks behind the head) that a stamp may carry. */
+export const MAXIMUM_ATTEMPTS: number;
+export const MAXIMUM_BLOCK_AGE: number;
 
 /** Finds the proof of work for one message and builds the reply of the worker. */
 export function runGrindJob(

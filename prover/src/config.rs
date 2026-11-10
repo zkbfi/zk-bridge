@@ -304,9 +304,16 @@ pub struct DestinationConfig {
     /// The `MessageBridge` on the destination chain. The `evidence` command needs it.
     #[serde(default)]
     pub bridge: Option<String>,
-    /// The block where the light client was deployed. The scan for stored heads starts here. Default 0.
+    /// The first block of the deployment of the pair on this chain (`start_block` of the deployment file). The scan for
+    /// stored heads starts here when `light_client_start_block` is absent. Default 0.
     #[serde(default)]
     pub start_block: u64,
+    /// The block where the light client was deployed (`light_client_start_block` of the deployment file). The scan for
+    /// stored heads starts here. A light client kept across a redeploy of the bridge holds heads stored before
+    /// `start_block`, and the block hash row of a message sent just after the redeploy needs the highest of them at or
+    /// below its source slot. It must not be after `start_block`. Default: `start_block`.
+    #[serde(default)]
+    pub light_client_start_block: Option<u64>,
     /// The largest block range of one `eth_getLogs` call.
     #[serde(default = "default_log_range")]
     pub log_block_range: u64,
@@ -394,6 +401,11 @@ impl SourceConfig {
 }
 
 impl DestinationConfig {
+    /// The first block of the scan for stored heads: `light_client_start_block`, else `start_block`.
+    pub fn stored_heads_start_block(&self) -> u64 {
+        self.light_client_start_block.unwrap_or(self.start_block)
+    }
+
     /// The light client address.
     pub fn light_client_address(&self) -> Result<Address> {
         parse_address(&self.light_client, "destination.light_client")
@@ -723,6 +735,14 @@ fn validate_route(name: &str, route: &RouteConfig) -> Result<()> {
             "destination.log_block_range must be at least 1".into(),
         ));
     }
+    if destination
+        .light_client_start_block
+        .is_some_and(|block| block > destination.start_block)
+    {
+        return Err(context(
+            "destination.light_client_start_block is after destination.start_block: the light client is deployed before the bridge that reads it, and a later start misses its stored heads".into(),
+        ));
+    }
     let light_client = destination
         .light_client_address()
         .map_err(|error| context(error.to_string()))?;
@@ -792,6 +812,8 @@ mod tests {
         assert_eq!(name, "ethereum_to_pulsechain");
         assert_eq!(route.destination.log_block_range, 2_000);
         assert_eq!(route.destination.start_block, 0);
+        assert_eq!(route.destination.light_client_start_block, None);
+        assert_eq!(route.destination.stored_heads_start_block(), 0);
         assert_eq!(route.source.chain_kind().unwrap(), ChainKind::Ethereum);
     }
 
@@ -930,6 +952,51 @@ light_client = \"0x2222222222222222222222222222222222222222\"
             );
             assert!(!error.to_string().contains(pasted), "{error}");
         }
+    }
+
+    /// Claim: the scan for stored heads starts at `light_client_start_block` when it is set, at `start_block` when it is
+    /// not, and a light client start after `start_block` is refused.
+    /// Why it matters: the light clients are kept across a bridge redeploy. A scan from the redeploy block misses the heads
+    /// stored before it, and a message sent just after the redeploy then gets a block hash row that does not cover it,
+    /// again and again (message ...0000 on 2026-11-08).
+    #[test]
+    fn the_stored_head_scan_starts_at_the_light_client_deployment() {
+        let destination = "light_client = \"0x4444444444444444444444444444444444444444\"";
+        let with = |extra: &str| SAMPLE.replace(destination, &format!("{destination}\n{extra}"));
+        let config = Config::load(&with("start_block = 900"), &no_environment).unwrap();
+        assert_eq!(
+            config
+                .route(None)
+                .unwrap()
+                .1
+                .destination
+                .stored_heads_start_block(),
+            900
+        );
+        let config = Config::load(
+            &with("start_block = 900\nlight_client_start_block = 100"),
+            &no_environment,
+        )
+        .unwrap();
+        assert_eq!(
+            config
+                .route(None)
+                .unwrap()
+                .1
+                .destination
+                .stored_heads_start_block(),
+            100
+        );
+        let error = Config::load(
+            &with("start_block = 900\nlight_client_start_block = 901"),
+            &no_environment,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("light_client_start_block is after"),
+            "{error}"
+        );
     }
 
     /// Claim: bad route values are refused with the route and the key named: a zero address, a bridge

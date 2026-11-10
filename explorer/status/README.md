@@ -10,6 +10,7 @@ Each check has a timeout and ends as `ok`, `degraded` or `down`, with a latency 
 | --- | --- | --- |
 | Services | `indexer-local`, `indexer-public` | `/ready` on 127.0.0.1:42069 and on the public host |
 | | `backend-local` | `/health`: the state of each module, the queue |
+| | `grind-engine` | `/health`: the start-up test of the WASM proof-of-work engine (down when it failed) |
 | | `backend-public`, `webhook` | `/health` on the prove and webhook hosts |
 | | `site-next`, `site-main` | the page answers 200; `version.json` has a release sequence that never goes back |
 | | `gateway-next`, `gateway-main` | the dapp CID in each channel's `version.json` is served by the IPFS gateway |

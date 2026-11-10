@@ -53,6 +53,16 @@ describe("the prover configuration file", () => {
     expect(text).toContain("light_client = ");
   });
 
+  it("starts the stored head scan at the light client's own deployment block when the file names one", () => {
+    // After the bridge redeploy of 2026-11-08 the light clients were kept, so their heads stored before `start_block`
+    // were missed and message ...0000 got a block hash row that never covered it.
+    const kept = loadPair({ environment, deployment: { ...deployment, chain_a: { ...deployment.chain_a, start_block: 900, light_client_start_block: 100 } } });
+    const text = renderProverConfig(describeRoute(kept, "second-to-first"), null);
+    const destination = text.slice(text.indexOf("[routes.pulsechain_to_ethereum.destination]"));
+    expect(destination).toContain("start_block = 900\nlight_client_start_block = 100\n");
+    expect(renderProverConfig(describeRoute(pair, "second-to-first"), null)).not.toContain("light_client_start_block");
+  });
+
   it("names the header RPCs of each side in that side's section when they are set, and nothing otherwise", () => {
     const withHeaders = loadPair({
       environment: { ...environment, EXPLORER_HEADER_RPC_URL_1: "https://header.example.org/key, https://second.example.org" },

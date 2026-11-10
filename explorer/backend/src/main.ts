@@ -5,6 +5,7 @@ import { serve } from "@hono/node-server";
 import { redactError } from "@zk-bridge/shared/config";
 import type { Pair } from "@zk-bridge/shared";
 import { endpointKeyVariables, executeCommand, type CommandExecutor } from "@zk-bridge/shared/prover";
+import { grindPreflight, type PreflightResult } from "@zk-bridge/shared/msgboard";
 import { createApp } from "./app.ts";
 import { BackendConfigError, MODULE_NAMES, endpointSecrets, loadBackendPair, parseBackendConfig, readSecrets, remoteEndpoints, warmupTarget, type BackendConfig, type ModuleName } from "./config.ts";
 import { createLogger, type Logger } from "./logger.ts";
@@ -43,6 +44,14 @@ function requireIndexerUrl(config: BackendConfig): string {
   return config.indexerUrl;
 }
 
+/** Runs the test of the grind engine and logs what it found. */
+async function testGrindEngine(preflight: () => Promise<PreflightResult>, logger: Logger): Promise<PreflightResult> {
+  const result = await preflight();
+  if (result.ok) logger.info("grind_preflight_passed", { durationMilliseconds: result.durationMilliseconds });
+  else logger.error("grind_preflight_failed", { reason: result.reason, detail: result.detail });
+  return result;
+}
+
 /** What a running backend offers its caller. */
 export interface RunningBackend {
   /** The port that the server listens on. */
@@ -60,6 +69,8 @@ export interface StartBackendInput {
   readonly executor?: CommandExecutor;
   readonly now?: () => number;
   readonly write?: (line: string) => void;
+  /** The test of the grind engine. Default: {@link grindPreflight}. A test replaces it. */
+  readonly preflight?: () => Promise<PreflightResult>;
 }
 
 /**
@@ -105,6 +116,9 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     runpodEndpoints.length === 0
       ? undefined
       : createIdleTimeoutSync({ endpoints: runpodEndpoints, idleTimeoutSeconds: config.watch.warmup.idleTimeoutSeconds, sync: config.watch.warmup.syncIdleTimeout, logger, onObserved: (seconds) => idleHistory.record(now(), seconds) });
+  // Before anything can be signed or ground: the webhook posts proofs with a proof of work. A failed engine is logged and
+  // shown on /health, and the webhook refuses to grind; the other modules go on.
+  const grindEngine = input.enabled.includes("webhook") ? await testGrindEngine(input.preflight ?? grindPreflight, logger) : undefined;
   const context: BackendModuleContext = {
     storage,
     config,
@@ -115,6 +129,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     readProofNeed,
     now,
     logger,
+    ...(grindEngine === undefined ? {} : { grindEngine }),
     pingProver,
     ...(billing === undefined ? {} : { billing }),
     ...(idleSync === undefined ? {} : { endpointIdleTimeoutSeconds: () => idleSync.endpointIdleTimeoutSeconds() }),

@@ -19,11 +19,18 @@ export const MAXIMUM_THREADS: number;
 /** The first nonce of the thread with this number. */
 export function startNonceFor(index: number): number;
 
-/** The stamper of one thread, which searches the range of nonces of that thread only. */
-export function createRangeStamper(engine: StampEngine, index: number): (input: StamperInput) => { nonce: bigint; hash: `0x${string}` };
+/** The stamper of one thread, which searches the ranges of that thread in turn, until the deadline or the end of the 32 bits. */
+export function createRangeStamper(engine: StampEngine, index: number, threads?: number, limits?: { readonly deadline?: number; readonly now?: () => number }): (input: StamperInput) => { nonce: bigint; hash: `0x${string}` };
 
 /** Loads the WASM engine of `@msgboard/pow-grinder`. */
 export function loadWasmEngine(): Promise<StampEngine>;
 
-/** The stamper of one thread over the WASM engine, or `undefined` when the engine does not load. */
-export function stamperForThread(index: number, load?: () => Promise<StampEngine>): Promise<((input: StamperInput) => { nonce: bigint; hash: `0x${string}` }) | undefined>;
+/** Writes one JSON line with level, event and fields to the error output. */
+export function writeWarning(event: string, fields: Record<string, unknown>): void;
+
+/** The stamper of one thread over the WASM engine, or `undefined` (after a `grind_engine_unavailable` warning) when the engine does not load. */
+export function stamperForThread(
+  index: number,
+  threads?: number,
+  options?: { readonly load?: () => Promise<StampEngine>; readonly warn?: (event: string, fields: Record<string, unknown>) => void; readonly deadline?: number },
+): Promise<((input: StamperInput) => { nonce: bigint; hash: `0x${string}` }) | undefined>;

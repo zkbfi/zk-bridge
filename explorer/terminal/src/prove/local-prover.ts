@@ -119,6 +119,7 @@ function sideOf(chain: ChainConfig, endpoints: ProverEndpoints): PairSide {
     rpcUrl,
     beaconUrl,
     startBlock,
+    ...(chain.lightClientStartBlock === undefined ? {} : { lightClientStartBlock: chain.lightClientStartBlock }),
     finalitySeconds: 0,
     contracts: {
       bridge: chain.contracts.messageBridge,

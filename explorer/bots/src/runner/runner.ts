@@ -5,12 +5,12 @@ import type { Logger } from "../logging/logger.ts";
 import type { StateStore } from "../runtime/state-file.ts";
 import { sendBatch, type UpdateFate, type UpdateOffer } from "./batch.ts";
 import { planBatches } from "./batch-plan.ts";
-import { isFinal, prepareItem, skip, type DeliveryDependencies, type DeliveryOutcome, type Preparation, type ReadyDelivery } from "./delivery.ts";
+import { isFinal, prepareItem, skip, type DeliveryDependencies, type DeliveryOutcome, type Preparation, type PrerequisiteHistory, type ReadyDelivery } from "./delivery.ts";
 import { createPrerequisiteLedger, type BudgetStore, type PrerequisiteLedger } from "./prerequisite-ledger.ts";
 import type { OutcomeSink } from "./outcomes.ts";
 import { assessProofPayload, payloadKey, type LightClientReader, type ProofRefusal, type VerifyGuard } from "@zk-bridge/shared/prover";
 import { createSerialQueue, type SerialQueue } from "./serial-queue.ts";
-import type { PrerequisiteBudgetState, RunnerState } from "./state.ts";
+import type { PrerequisiteAttempt, PrerequisiteBudgetState, RunnerState } from "./state.ts";
 import { postUpdate } from "./update.ts";
 import { unpaidSpentWei, withUnpaidSpend } from "./unpaid-spend.ts";
 
@@ -34,7 +34,10 @@ export interface RunnerDependencies {
    * skipped, and also when a call threw.
    */
   readonly maximumDeliveriesPerSweep: number;
-  /** How long an item is not tried again after layout calls were paid for it and the delivery did not follow. */
+  /**
+   * How long an item is not tried again after layout calls were paid for it and the delivery did not follow. The state
+   * file keeps the time, so a restart does not cut it short.
+   */
   readonly prerequisiteLossRefusalMilliseconds: number;
   readonly logger: Logger;
   /** Accept oracle proofs (version 2). Set it only when the destination verifier is the oracle stand-in. Default: strict. */
@@ -94,6 +97,19 @@ const PAGE_SIZE = 100;
  */
 const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit", "no-price-for-fee-token", "anchor-not-stored"]);
 
+/**
+ * Skip reasons that leave a message uncovered after layout calls were paid for it: the rows that were sent did not
+ * cover it, or the prover then listed a call that the try could not send. Such a try counts toward
+ * `maximumUnsatisfiedPrerequisiteAttempts`.
+ */
+const UNCOVERED_REASONS: ReadonlySet<string> = new Set([
+  "prerequisites-not-satisfied",
+  "prerequisite-not-approved",
+  "prerequisite-gas-above-approval",
+  "prerequisite-reverted",
+  "prerequisite-failed",
+]);
+
 /** Skip reasons of an item that the delayed unpaid rule may still deliver: no offer, or an offer below the cost. */
 const UNPAID_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit"]);
 /**
@@ -106,7 +122,11 @@ const UNPAID_LOSS_PERCENT = 101;
 export function createRunner(dependencies: RunnerDependencies): Runner {
   const { logger, queue } = dependencies;
   const seenPayloads = new Map<Hex, number>();
-  const retryAfter = new Map<string, number>();
+  /**
+   * Items that the main pass left to the delayed unpaid rule in an earlier sweep. While they still qualify, a sweep hands
+   * them to the unpaid pass without preparing them first under the normal rules, which would only find the same skip.
+   */
+  const unpaidCandidates = new Set<string>();
   const lastSkipReason = new Map<string, string>();
   const base = { pair: dependencies.pairName, direction: dependencies.direction };
   /** The proof that waits to be posted: with the next batch, or alone at the end of a sweep. */
@@ -264,12 +284,43 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     },
   };
 
+  /**
+   * Keeps an item out of the sweeps until `milliseconds` from now. The time goes to the state file, so a restart keeps
+   * it. Times that have passed are dropped on each write.
+   */
+  async function waitFor(messageId: string, milliseconds: number): Promise<void> {
+    const now = dependencies.now();
+    await dependencies.state.update((current) => ({
+      ...current,
+      retryAfter: { ...Object.fromEntries(Object.entries(current.retryAfter).filter(([, at]) => at > now)), [messageId]: now + milliseconds },
+    }));
+  }
+
+  /** Changes the stored layout history of one message. */
+  async function updateAttempt(messageId: string, change: (attempt: PrerequisiteAttempt) => PrerequisiteAttempt): Promise<void> {
+    await dependencies.state.update((current) => {
+      const before = current.prerequisiteAttempts[messageId] ?? { sentCalls: [], unsatisfiedAttempts: 0 };
+      return { ...current, prerequisiteAttempts: { ...current.prerequisiteAttempts, [messageId]: change(before) } };
+    });
+  }
+
+  /** The layout history of one message, read fresh from the state file: an earlier pass of the same sweep may have changed it. */
+  async function historyOf(messageId: string): Promise<PrerequisiteHistory> {
+    const stored = (await dependencies.state.load()).prerequisiteAttempts[messageId];
+    return {
+      sentCalls: new Set(stored?.sentCalls ?? []),
+      unsatisfiedAttempts: stored?.unsatisfiedAttempts ?? 0,
+      recordSent: (key) => updateAttempt(messageId, (attempt) => ({ ...attempt, sentCalls: [...new Set([...attempt.sentCalls, key])] })),
+    };
+  }
+
   async function attempt(item: FeedItem, ledger: PrerequisiteLedger, delivery: DeliveryDependencies = dependencies.delivery): Promise<Preparation | null> {
     try {
-      return await queue.run(() => prepareItem(delivery, item, ledger));
+      const history = await historyOf(item.messageId);
+      return await queue.run(() => prepareItem(delivery, item, ledger, history));
     } catch (error) {
       logger.error("delivery_error", { messageId: item.messageId, error });
-      retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
+      await waitFor(item.messageId, RETRY_AFTER_MILLISECONDS);
       return null;
     }
   }
@@ -300,18 +351,28 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     // A candidate is settled by the unpaid pass at the end of the sweep, which delivers it or says why not.
     if (options.candidates !== undefined && outcome.status === "skipped" && UNPAID_REASONS.has(outcome.reason) && unpaidWaitSeconds(item) !== null) {
       options.candidates.push(item);
+      unpaidCandidates.add(item.messageId);
       return;
     }
     await record(outcome);
     if (outcome.status === "delivered") summary.delivered += 1;
     if (outcome.status === "skipped") summary.skipped += 1;
     if (outcome.status === "failed") summary.failed += 1;
-    if (outcome.status === "skipped" && !CHEAP_REASONS.has(outcome.reason)) retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
-    if (outcome.status === "failed") retryAfter.set(item.messageId, dependencies.now() + RETRY_AFTER_MILLISECONDS);
-    if (outcome.status === "skipped" && options.spentOnPrerequisites) retryAfter.set(item.messageId, dependencies.now() + dependencies.prerequisiteLossRefusalMilliseconds);
+    // A try that paid for layout calls and still found the message uncovered counts toward the stuck limit.
+    if (outcome.status === "skipped" && UNCOVERED_REASONS.has(outcome.reason) && options.spentOnPrerequisites) {
+      await updateAttempt(item.messageId, (attempt) => ({ ...attempt, unsatisfiedAttempts: attempt.unsatisfiedAttempts + 1 }));
+    }
+    const lossWindow = (outcome.status === "skipped" && options.spentOnPrerequisites) || (outcome.status === "skipped" && outcome.reason === "prerequisites-stuck");
+    if (lossWindow) await waitFor(item.messageId, dependencies.prerequisiteLossRefusalMilliseconds);
+    else if (outcome.status === "failed" || (outcome.status === "skipped" && !CHEAP_REASONS.has(outcome.reason))) await waitFor(item.messageId, RETRY_AFTER_MILLISECONDS);
     if (!isFinal(outcome)) return;
+    unpaidCandidates.delete(item.messageId);
     const proof = outcome.status === "delivered" ? outcome.transactionHash : "elsewhere";
-    await dependencies.state.update((current) => ({ ...current, finished: { ...current.finished, [item.messageId]: proof } }));
+    await dependencies.state.update((current) => {
+      const { [item.messageId]: _attempts, ...prerequisiteAttempts } = current.prerequisiteAttempts;
+      const { [item.messageId]: _retry, ...retryAfter } = current.retryAfter;
+      return { ...current, finished: { ...current.finished, [item.messageId]: proof }, prerequisiteAttempts, retryAfter };
+    });
   }
 
   /**
@@ -333,8 +394,7 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
       await ledger.recordLoss(batch.reduce((sum, pending) => sum + pending.ready.prerequisiteCostWei, 0n));
       for (const pending of batch) {
         summary.failed += 1;
-        const wait = pending.spentOnPrerequisites ? dependencies.prerequisiteLossRefusalMilliseconds : RETRY_AFTER_MILLISECONDS;
-        retryAfter.set(pending.item.messageId, dependencies.now() + wait);
+        await waitFor(pending.item.messageId, pending.spentOnPrerequisites ? dependencies.prerequisiteLossRefusalMilliseconds : RETRY_AFTER_MILLISECONDS);
       }
       return [];
     }
@@ -343,6 +403,16 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     }
     await settleUpdateFate(update, report.update);
     return report.outcomes;
+  }
+
+  /**
+   * Charges the layout calls of an unpaid try that did not deliver to the rolling cap of unpaid spend. The unpaid rule
+   * sent them, so the cap bounds them too.
+   */
+  async function recordUnpaidLoss(messageId: string, layoutWei: bigint): Promise<void> {
+    const now = dependencies.now();
+    await dependencies.state.update((current) => withUnpaidSpend(current, { id: `layout:${messageId}:${now}`, atMilliseconds: now, wei: layoutWei.toString() }, now));
+    logger.warn("unpaid_prerequisite_loss", { messageId, lossWei: layoutWei, chain: dependencies.destinationChainId });
   }
 
   /** Logs a delivery that nobody paid for and charges its receipt cost to the rolling cap. */
@@ -373,20 +443,29 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
         await settleOutcome(item, skip(item.messageId as Hex, "unpaid-spend-cap", { detail }), summary, { spentOnPrerequisites: false });
         continue;
       }
+      // As in the main pass, the ledger tells whether layout calls were sent for this item, and what they cost.
+      const spentBefore = ledger.spentWei;
       const preparation = await attempt(item, ledger, unpaidDelivery);
+      const layoutWei = ledger.spentWei - spentBefore;
+      const spentOnPrerequisites = layoutWei > 0n;
+      let outcome: DeliveryOutcome | undefined;
       if (preparation === null) {
         summary.failed += 1;
-        continue;
-      }
-      let outcome: DeliveryOutcome | undefined;
-      if (preparation.kind === "outcome") {
+        // An error after a layout call was attempted: the reservation stays charged and is a loss, and the item waits out
+        // the refusal window, as in the main pass.
+        if (spentOnPrerequisites) {
+          await ledger.recordLoss(layoutWei);
+          await waitFor(item.messageId, dependencies.prerequisiteLossRefusalMilliseconds);
+        }
+      } else if (preparation.kind === "outcome") {
         outcome = preparation.outcome;
-        await settleOutcome(item, outcome, summary, { spentOnPrerequisites: false });
+        await settleOutcome(item, outcome, summary, { spentOnPrerequisites });
       } else {
-        const pending: Pending = { item, ready: preparation.ready, spentOnPrerequisites: false };
+        const pending: Pending = { item, ready: preparation.ready, spentOnPrerequisites };
         [outcome] = await deliverBatch([pending], ledger, summary, await offerUpdate(), { delivery: unpaidDelivery });
       }
       if (outcome?.status === "delivered") await recordUnpaid(outcome, waitedSeconds);
+      else if (spentOnPrerequisites) await recordUnpaidLoss(item.messageId, layoutWei);
     }
   }
 
@@ -414,7 +493,13 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
     const candidates: FeedItem[] = [];
     for (const item of listed) {
       if (attempts >= dependencies.maximumDeliveriesPerSweep) break;
-      if ((retryAfter.get(item.messageId) ?? 0) > dependencies.now()) continue;
+      if ((state.retryAfter[item.messageId] ?? 0) > dependencies.now()) continue;
+      // An earlier sweep found that only the unpaid rule delivers this item: it goes to the unpaid pass without a second
+      // preparation under the normal rules.
+      if (unpaidCandidates.has(item.messageId) && unpaidWaitSeconds(item) !== null) {
+        candidates.push(item);
+        continue;
+      }
       const spentBefore = ledger.spentWei;
       const preparation = await attempt(item, ledger);
       const spentOnPrerequisites = ledger.spentWei > spentBefore;
@@ -424,7 +509,7 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
         // An error after a layout call was attempted is spend-bearing: the reservation stays charged, the item counts
         // toward the sweep limit, and the item waits out the refusal window. The charge is an unrecovered loss.
         if (spentOnPrerequisites) await ledger.recordLoss(ledger.spentWei - spentBefore);
-        if (spentOnPrerequisites) retryAfter.set(item.messageId, dependencies.now() + dependencies.prerequisiteLossRefusalMilliseconds);
+        if (spentOnPrerequisites) await waitFor(item.messageId, dependencies.prerequisiteLossRefusalMilliseconds);
         continue;
       }
       if (preparation.kind === "ready") {

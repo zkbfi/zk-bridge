@@ -6,7 +6,7 @@ import type { FeedItem } from "../../src/indexer/client.ts";
 import type { StateStore } from "../../src/runtime/state-file.ts";
 import { BATCH_ITEM_OVERHEAD_GAS, deliverItem, MAXIMUM_SETTLING_ROUNDS } from "../../src/runner/batch.ts";
 import { createPrerequisiteLedger } from "../../src/runner/prerequisite-ledger.ts";
-import type { DeliverySettings } from "../../src/runner/delivery.ts";
+import { prerequisiteCallKey, type DeliverySettings } from "../../src/runner/delivery.ts";
 import type { Logger } from "../../src/logging/logger.ts";
 import { createRunner } from "../../src/runner/runner.ts";
 import { CommandTimeoutError, createVerifyGuard, type VerifyGuard } from "@zk-bridge/shared/prover";
@@ -116,6 +116,7 @@ interface WorldOptions {
   maximumUnrecoveredPrerequisiteLossWei?: bigint;
   maximumBatchSize?: number;
   maximumBatchGas?: bigint;
+  maximumUnsatisfiedPrerequisiteAttempts?: number;
   /** A state that an earlier runner wrote, to test a restart. */
   state?: ReturnType<typeof memoryState>;
   startTime?: number;
@@ -166,6 +167,7 @@ function world(options: WorldOptions = {}) {
       maximumUnrecoveredPrerequisiteLossWei: options.maximumUnrecoveredPrerequisiteLossWei ?? 10n ** 18n,
       maximumBatchSize: options.maximumBatchSize ?? 5,
       maximumBatchGas: options.maximumBatchGas ?? 6_000_000n,
+      ...(options.maximumUnsatisfiedPrerequisiteAttempts === undefined ? {} : { maximumUnsatisfiedPrerequisiteAttempts: options.maximumUnsatisfiedPrerequisiteAttempts }),
     },
     logger,
   };
@@ -1441,3 +1443,144 @@ describe("the delayed unpaid delivery rule", () => {
     expect(w.state.current.unpaidSpend).toEqual([]);
   });
 });
+
+/**
+ * Message ...0000 (943 to Sepolia, 2026-11-08): the unpaid rule sent a block hash row that the prover offered but that did
+ * not cover the message, and sent it again every few minutes. These tests hold the runner side of the fix.
+ */
+describe("layout calls that do not cover the message", () => {
+  const COST = 3_000_000n;
+  const NOW_SECONDS = 10_000;
+  const HOUR = 3600;
+  const coveredFor = (id: number, waited: number): FeedItem => ({ ...feedItem({ id, token: WRAPPED_NATIVE }), covered: { timestamp: NOW_SECONDS - waited } });
+  const noOfferFor = (id: number) => ({ [word(id)]: feeOfferData({ director: fixedFee(10n), value: 1000n, recipient: address(0x13) }) });
+  const unpaid = (options: WorldOptions) => world({ startTime: NOW_SECONDS * 1000, deliverUnpaidAfterSeconds: HOUR, maximumUnpaidSpendPerDayWei: 10n ** 18n, ...options });
+  const layoutCall = (data: Hex) => ({ function: "addBlockHashLayout", reason: "no row covers the source slot", to: BRIDGE, data });
+  const layoutSends = (w: ReturnType<typeof world>) => w.chain.log.filter((entry) => entry.kind === "send" && entry.request.data.startsWith("0xdead"));
+
+  /** The prover lists the same call on every build: the row it adds never covers the message. */
+  function alwaysList(w: ReturnType<typeof world>, data: Hex = "0xdeadbeef") {
+    const counter = { builds: 0 };
+    w.prover.evidence = async () => {
+      counter.builds += 1;
+      return evidenceFor({ prerequisites: [layoutCall(data)] });
+    };
+    return counter;
+  }
+
+  it("sends a call once, waits the refusal window, records the loss and charges it to the unpaid cap", async () => {
+    const w = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1) });
+    const counter = alwaysList(w);
+    expect(await w.runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
+    expect(layoutSends(w)).toHaveLength(1);
+    expect(w.outcomes.records[0]).toMatchObject({ status: "skipped", reason: "prerequisites-not-satisfied", prerequisiteCostWei: COST });
+    expect(w.state.current.prerequisiteLosses.map((entry) => entry.wei)).toEqual([String(COST)]);
+    expect(w.state.current.unpaidSpend).toEqual([expect.objectContaining({ wei: String(COST) })]);
+    expect(w.events().find((event) => event.event === "unpaid_prerequisite_loss")).toMatchObject({ messageId: word(1), lossWei: String(COST) });
+    expect(w.state.current.prerequisiteAttempts[word(1)]).toEqual({ sentCalls: [prerequisiteCallKey(layoutCall("0xdeadbeef"))], unsatisfiedAttempts: 1 });
+    // The refusal window of a loss, not the five minutes of an ordinary retry.
+    expect(w.state.current.retryAfter[word(1)]).toBe(NOW_SECONDS * 1000 + REFUSAL_WINDOW_MILLISECONDS);
+    const builds = counter.builds;
+    w.advance(6 * 60 * 1000);
+    await w.runner.sweep();
+    expect(counter.builds).toBe(builds);
+    // After the window the same call is listed again. It is not sent again, and the try spends nothing.
+    w.advance(REFUSAL_WINDOW_MILLISECONDS);
+    await w.runner.sweep();
+    expect(counter.builds).toBe(builds + 1);
+    expect(layoutSends(w)).toHaveLength(1);
+    expect(w.state.current.unpaidSpend).toHaveLength(1);
+    expect(w.state.current.prerequisiteAttempts[word(1)]?.unsatisfiedAttempts).toBe(1);
+  });
+
+  it("stops spending on the message after the configured number of unsatisfied tries, and says so", async () => {
+    const w = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1), maximumUnsatisfiedPrerequisiteAttempts: 2 });
+    // Each build lists a new call, as a prover would that offers another row each time; none covers the message. The call
+    // listed after a send was not in the approved set, so each try ends with prerequisite-not-approved.
+    let builds = 0;
+    w.prover.evidence = async () => {
+      builds += 1;
+      return evidenceFor({ prerequisites: [layoutCall(`0xdead${builds.toString(16).padStart(4, "0")}` as Hex)] });
+    };
+    await w.runner.sweep();
+    w.advance(REFUSAL_WINDOW_MILLISECONDS + 1000);
+    await w.runner.sweep();
+    expect(layoutSends(w)).toHaveLength(2);
+    expect(w.state.current.prerequisiteAttempts[word(1)]?.unsatisfiedAttempts).toBe(2);
+    w.advance(REFUSAL_WINDOW_MILLISECONDS + 1000);
+    await w.runner.sweep();
+    expect(layoutSends(w)).toHaveLength(2);
+    expect(w.outcomes.records.at(-1)).toMatchObject({ status: "skipped", reason: "prerequisites-stuck", detail: expect.stringContaining("2 tries") });
+    expect(w.events().find((event) => event.event === "prerequisites_stuck")).toMatchObject({ messageId: word(1), unsatisfiedAttempts: 2 });
+    // A stuck message waits the refusal window too, so its evidence is not built every few minutes.
+    expect(w.state.current.retryAfter[word(1)]).toBe(NOW_SECONDS * 1000 + 2 * (REFUSAL_WINDOW_MILLISECONDS + 1000) + REFUSAL_WINDOW_MILLISECONDS);
+  });
+
+  it("defaults to three unsatisfied tries", async () => {
+    const w = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1) });
+    w.state.current = { ...w.state.current, prerequisiteAttempts: { [word(1)]: { sentCalls: [], unsatisfiedAttempts: 3 } } };
+    alwaysList(w);
+    await w.runner.sweep();
+    expect(layoutSends(w)).toHaveLength(0);
+    expect(w.outcomes.records[0]).toMatchObject({ reason: "prerequisites-stuck" });
+  });
+
+  it("keeps the refusal window, the sent calls and the count over a restart", async () => {
+    const first = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1) });
+    alwaysList(first);
+    await first.runner.sweep();
+    // A new runner over the same state file, ten minutes later: inside the window.
+    const second = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1), state: first.state, startTime: NOW_SECONDS * 1000 + 10 * 60 * 1000 });
+    const counter = alwaysList(second);
+    await second.runner.sweep();
+    expect(counter.builds).toBe(0);
+    second.advance(REFUSAL_WINDOW_MILLISECONDS);
+    await second.runner.sweep();
+    expect(counter.builds).toBe(1);
+    expect(layoutSends(second)).toHaveLength(0);
+  });
+
+  it("counts an unpaid try that throws after a layout call as a loss, waits the refusal window, and charges the cap", async () => {
+    const w = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1) });
+    alwaysList(w);
+    w.chain.sendFailure = new Error("connection lost after broadcast");
+    expect(await w.runner.sweep()).toMatchObject({ failed: 1 });
+    // The reservation of the call that may be in the pool stays charged, and it is a loss.
+    expect(w.state.current.prerequisiteLosses).toHaveLength(1);
+    expect(w.state.current.unpaidSpend).toHaveLength(1);
+    expect(w.state.current.unpaidSpend[0]?.wei).toBe(w.state.current.prerequisiteLosses[0]?.wei);
+    expect(w.state.current.retryAfter[word(1)]).toBe(NOW_SECONDS * 1000 + REFUSAL_WINDOW_MILLISECONDS);
+  });
+
+  it("forgets the history and the waiting time of a message once it is delivered", async () => {
+    const w = unpaid({ items: [coveredFor(1, 2 * HOUR)], data: noOfferFor(1) });
+    w.state.current = { ...w.state.current, prerequisiteAttempts: { [word(1)]: { sentCalls: ["0x01"], unsatisfiedAttempts: 1 } }, retryAfter: { [word(1)]: 1, [word(9)]: 2 } };
+    expect((await w.runner.sweep()).delivered).toBe(1);
+    expect(w.state.current.prerequisiteAttempts).toEqual({});
+    expect(w.state.current.retryAfter).toEqual({ [word(9)]: 2 });
+  });
+});
+
+describe("an item that only the unpaid rule delivers", () => {
+  it("is prepared under the normal rules once, and then goes straight to the unpaid pass", async () => {
+    const NOW_SECONDS = 10_000;
+    const item: FeedItem = { ...feedItem({ id: 1, token: WRAPPED_NATIVE }), covered: { timestamp: NOW_SECONDS - 7200 } };
+    const data = { [word(1)]: feeOfferData({ director: fixedFee(10n), value: 1000n, recipient: address(0x13) }) };
+    // The cap is spent, so the unpaid pass refuses before it prepares: only the main pass reads the message.
+    const w = world({ startTime: NOW_SECONDS * 1000, items: [item], data, deliverUnpaidAfterSeconds: 3600, maximumUnpaidSpendPerDayWei: 1n });
+    w.state.current = { ...w.state.current, unpaidSpend: [{ id: "0x1", atMilliseconds: NOW_SECONDS * 1000 - 1000, wei: "1" }] };
+    let reads = 0;
+    const original = w.indexer.getMessage.bind(w.indexer);
+    w.indexer.getMessage = async (id: string) => {
+      reads += 1;
+      return original(id);
+    };
+    await w.runner.sweep();
+    expect(reads).toBe(1);
+    await w.runner.sweep();
+    expect(reads).toBe(1);
+    // The outcome file keeps one line while the reason does not change.
+    expect(w.outcomes.records.map((record) => record.reason)).toEqual(["unpaid-spend-cap"]);
+  });
+});
+

@@ -48,6 +48,12 @@ export type PairSide = {
   readonly handoffUrls?: readonly string[];
   /** The first block to index: the block before the deployment. */
   readonly startBlock: number;
+  /**
+   * The block before the deployment of the light client, when it is earlier than `startBlock`: a light client kept across
+   * a redeploy of the bridge. The prover scans the stored heads of the light client from here. Absent when the file names
+   * none, and then the scan starts at `startBlock`.
+   */
+  readonly lightClientStartBlock?: number;
   /** Seconds after which a send counts as waiting for finality. */
   readonly finalitySeconds: number;
   readonly contracts: SideContracts;
@@ -102,6 +108,7 @@ const deploymentChainSchema = z.object({
   delivery_routers: z.array(addressField).nullish(),
   fork_registry: addressField.nullish(),
   start_block: z.number().int().nonnegative(),
+  light_client_start_block: z.number().int().nonnegative().optional(),
 });
 
 /**
@@ -234,6 +241,7 @@ const buildSide = (
     headerRpcUrls: parseStateUrls(options.environment[headerVariable], headerVariable),
     ...(handoffUrls.length === 0 ? {} : { handoffUrls }),
     startBlock: section.start_block,
+    ...(section.light_client_start_block === undefined ? {} : { lightClientStartBlock: section.light_client_start_block }),
     finalitySeconds: finalityOf(options.environment, definition.chainId),
     contracts: {
       bridge: normalizeAddress(section.bridge),

@@ -70,6 +70,9 @@ fn check_like_the_explorer(file: &Value, chain_id: u64) {
                         .is_none_or(|value| value.is_null() || is_address(value))
                 })
                 && section["start_block"].is_u64()
+                && section
+                    .get("light_client_start_block")
+                    .is_none_or(Value::is_u64)
                 && section.get("rpc_url").is_none_or(Value::is_string)
         })
         .filter(|section| section["chain_id"] == chain_id)
@@ -127,7 +130,13 @@ fn read(path: &Path) -> Value {
 /// Why it matters: a missing or renamed field makes the explorer drop the whole section, and a key in the file leaks.
 #[test]
 fn a_file_from_flags_passes_the_explorer_rules() {
-    let mut expected: Vec<&str> = ["chain_id", "rpc_url", "start_block"].to_vec();
+    let mut expected: Vec<&str> = [
+        "chain_id",
+        "rpc_url",
+        "start_block",
+        "light_client_start_block",
+    ]
+    .to_vec();
     expected.extend(REQUIRED_ADDRESSES);
     expected.extend(OPTIONAL_ADDRESSES);
     let mut keys = SECTION_KEYS.to_vec();
@@ -449,4 +458,41 @@ fn an_ambiguous_or_foreign_broadcast_file_is_refused() {
         "{error}"
     );
     assert!(!scratch.path("out.json").exists());
+}
+
+/// Claim: `light_client_start_block` from a flag is written when it is before `start_block`, left out when it equals it,
+/// and refused when it is after it.
+/// Why it matters: the prover scans the stored heads of the light client from this block. After a bridge redeploy that
+/// kept the light client, a scan from `start_block` misses the heads stored before it, and a message sent just after the
+/// redeploy can never get a block hash row (message ...0000, 943 to Sepolia, 2026-11-08).
+#[test]
+fn the_light_client_start_block_is_written_only_when_it_is_earlier() {
+    let scratch = Scratch::new("light-client-start");
+    let output = scratch.path("deployment.json");
+    let mut a = pairs(11155111, 0x10);
+    a.push("light_client_start_block=1000".into());
+    let mut b = pairs(943, 0x40);
+    b.push(format!("light_client_start_block={}", 0x40 * 100));
+    let (outcome, _) = run(&arguments(&output, &a, &b));
+    assert_eq!(outcome.unwrap(), 0);
+    let file = read(&output);
+    check_like_the_explorer(&file, 11155111);
+    assert_eq!(file["chain_a"]["light_client_start_block"], 1000);
+    assert!(
+        file["chain_b"].get("light_client_start_block").is_none(),
+        "equal to start_block: left out"
+    );
+
+    let late = scratch.path("late.json");
+    let mut a = pairs(11155111, 0x10);
+    a.push(format!("light_client_start_block={}", 0x10 * 100 + 1));
+    let error = run(&arguments(&late, &a, &pairs(943, 0x40)))
+        .0
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("light_client_start_block is after start_block"),
+        "{error}"
+    );
+    assert!(!late.exists());
 }

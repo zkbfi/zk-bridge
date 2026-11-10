@@ -79,16 +79,24 @@ pub fn read_stored_header(
 
 /// The slots of every head that the light client stored by an update, from its `HeadUpdated` events.
 ///
-/// The scan starts at `start_block`, the block of the deployment, and reads `log_block_range` blocks at a time.
+/// The scan starts at `start_block` and reads `log_block_range` blocks at a time. `start_block` must be at or before the
+/// deployment of the LIGHT CLIENT, not of a bridge: a light client kept across a bridge redeploy holds heads stored before
+/// it, and a message sent just after the redeploy needs one of those older heads for its block hash row.
 ///
 /// # Errors
-/// `Error::Rpc` when a log call fails. `Error::Malformed` for an event without a slot topic.
+/// `Error::Rpc` when a log call fails. `Error::Malformed` for an event without a slot topic. `Error::Config` when
+/// `log_block_range` is zero.
 pub fn read_stored_slots(
     client: &ChainClient,
     address: Address,
     start_block: u64,
     log_block_range: u64,
 ) -> Result<Vec<u64>> {
+    if log_block_range == 0 {
+        return Err(Error::Config(
+            "the log block range is zero: a scan needs at least one block per call".into(),
+        ));
+    }
     let latest = client.latest_block_number()?;
     let mut slots = Vec::new();
     let mut from = start_block;
@@ -189,6 +197,25 @@ mod tests {
             Some(B256::repeat_byte(0xaa))
         );
         assert_eq!(read_stored_header(&node, address, 19_999).unwrap(), None);
+    }
+
+    /// Claim: a log range of zero is a configuration error, not a wrapped subtraction.
+    /// Why it matters: `log_block_range - 1` on zero wraps in a release build and asks the node for every block at once.
+    #[test]
+    fn a_zero_log_range_is_refused() {
+        let handler = |method: &str, _params: &Value| -> Result<Value> {
+            match method {
+                "eth_chainId" => Ok(json!("0x171")),
+                other => panic!("unexpected {other}"),
+            }
+        };
+        let rpc = ScriptedRpc {
+            calls: Mutex::new(vec![]),
+            handler: Box::new(handler),
+        };
+        let node = ChainClient::connect("test", 369, Box::new(rpc)).unwrap();
+        let error = read_stored_slots(&node, Address::repeat_byte(0x44), 0, 0).unwrap_err();
+        assert!(matches!(error, Error::Config(_)), "{error}");
     }
 
     /// Claim: the log scan covers the whole range in pages of the given size and reads the slot from topic 1.

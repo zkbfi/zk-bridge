@@ -1,4 +1,4 @@
-import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, type Address, type ContractFunctionArgs, type Hex } from "viem";
+import { decodeEventLog, decodeFunctionData, decodeFunctionResult, encodeFunctionData, erc20Abi, keccak256, type Address, type ContractFunctionArgs, type Hex } from "viem";
 import { bridgedSymbolOf, decodeMediatorMessage, deliveryRouterAbi, messageBridgeAbi, tokenFactoryAbi, type PayoutKind, type ProofDirection } from "@zk-bridge/shared";
 import { sendTerms, worstCaseCostWei, type FeeQuote, type ReceiptLog, type TransactionPort } from "../chain/transactions.ts";
 import type { FeedItem, IndexerClient } from "../indexer/client.ts";
@@ -34,6 +34,11 @@ export interface DeliverySettings {
   readonly maximumPrerequisiteSpendPerDayWei: bigint;
   /** The unrecovered loss of a rolling 24 hours at which the runner stops sending layout calls. */
   readonly maximumUnrecoveredPrerequisiteLossWei: bigint;
+  /**
+   * The tries of one message that may spend on layout calls and end with the message still uncovered. At this count the
+   * runner sends no more layout calls for the message (skip `prerequisites-stuck`). Absent: {@link DEFAULT_MAXIMUM_UNSATISFIED_PREREQUISITE_ATTEMPTS}.
+   */
+  readonly maximumUnsatisfiedPrerequisiteAttempts?: number;
   /** The most items that one batch transaction delivers. */
   readonly maximumBatchSize: number;
   /** The most gas that one batch may use: the sum of the estimates of its items and of the block proof update. A single item above it goes alone. */
@@ -92,6 +97,7 @@ export type SkipReason =
   | "prerequisite-not-approved"
   | "prerequisite-gas-above-approval"
   | "prerequisites-not-satisfied"
+  | "prerequisites-stuck"
   | "simulation-reverted"
   | "insufficient-gas"
   | "anchor-not-stored"
@@ -280,6 +286,27 @@ type PrerequisiteEstimate =
   | { readonly ok: true; readonly gasUnits: bigint; readonly approved: readonly ApprovedPrerequisite[] }
   | { readonly ok: false; readonly outcome: Skip };
 
+/** The tries of one message that may end with layout spend and no covering row, when the settings name no number. */
+export const DEFAULT_MAXIMUM_UNSATISFIED_PREREQUISITE_ATTEMPTS = 3;
+
+/** The key of a layout call in the runner state: keccak256 of its target and its call data, lowercase. */
+export function prerequisiteCallKey(call: { readonly to: string; readonly data: string }): Hex {
+  return keccak256(`0x${call.to.slice(2).toLowerCase()}${call.data.slice(2).toLowerCase()}`);
+}
+
+/**
+ * What earlier tries did with the layout calls of one message. The runner keeps it in its state file. Without it a try
+ * starts from nothing, as one did before the state kept it.
+ */
+export interface PrerequisiteHistory {
+  /** The keys ({@link prerequisiteCallKey}) of the calls that were mined for the message and did not cover it. */
+  readonly sentCalls: ReadonlySet<string>;
+  /** The earlier tries that spent on layout calls and ended with the message still uncovered. */
+  readonly unsatisfiedAttempts: number;
+  /** Stores the key of a call that was just mined, before the evidence is built again. */
+  recordSent(key: Hex): Promise<void>;
+}
+
 /**
  * Estimates the gas of every layout call that the evidence lists, and sends none. The first call can be simulated now.
  * A later call may depend on the call before it, so a revert there is no proof of a fault: the configured fallback
@@ -334,17 +361,19 @@ async function satisfyPrerequisites(
   request: { readonly messageId: Hex; readonly transactionHash: Hex; readonly logIndex: number },
   first: EvidencePackage,
   approved: readonly ApprovedPrerequisite[],
+  history: PrerequisiteHistory | undefined,
 ): Promise<PrerequisiteResult> {
   let evidence = first;
   let costWei = 0n;
   const unsent = [...approved];
-  const sent: Prerequisite[] = [];
+  // The calls sent by earlier tries count as sent: the same call adds the same row, which did not cover the message.
+  const sent = new Set<string>(history?.sentCalls ?? []);
   for (let round = 0; round < dependencies.settings.maximumPrerequisiteRounds; round += 1) {
     if (evidence.prerequisites.length === 0) return { ok: true, evidence, costWei };
     // The calls of one function are alternatives, and the prover lists every one that could add the row until a row covers
     // the slot. A call that was sent and did not cover it stays on the list, so the next call to send is the first listed
     // one that has not been sent. A list of sent calls only means that none of them was enough.
-    const next: Prerequisite | undefined = evidence.prerequisites.find((candidate) => !sent.some((done) => sameCall(done, candidate)));
+    const next: Prerequisite | undefined = evidence.prerequisites.find((candidate) => !sent.has(prerequisiteCallKey(candidate)));
     if (next === undefined) return { ok: false, costWei, outcome: skip(request.messageId, "prerequisites-not-satisfied", { detail: `${evidence.prerequisites.length} calls remain and each was sent already` }) };
     const call = { to: next.to as Address, data: next.data as Hex };
     const approvedIndex = unsent.findIndex((entry) => sameCall(entry, call));
@@ -363,9 +392,10 @@ async function satisfyPrerequisites(
     const callCostWei = receipt.gasUsed * receipt.effectiveGasPrice;
     await ledger.settle(reserved.reservation, callCostWei);
     costWei += callCostWei;
-    sent.push(next);
+    sent.add(prerequisiteCallKey(next));
     if (!receipt.success) return { ok: false, costWei, outcome: skip(request.messageId, "prerequisite-failed", { detail: `${next.function} in ${receipt.hash}` }) };
     dependencies.logger.info("prerequisite_sent", { messageId: request.messageId, function: next.function, transactionHash: receipt.hash, gasUsed: receipt.gasUsed });
+    await history?.recordSent(prerequisiteCallKey(next));
     evidence = await dependencies.prover.evidence({ direction: dependencies.direction, transactionHash: request.transactionHash, logIndex: request.logIndex });
     if (evidence.alreadyDelivered) return { ok: false, costWei, outcome: skip(request.messageId, "already-delivered") };
   }
@@ -464,7 +494,7 @@ export type Preparation = { readonly kind: "outcome"; readonly outcome: Delivery
  * straight to the bridge here, with its own simulation. Wei spent on layout calls is lost when the item is then not
  * delivered: the skip carries the amount and the runner does not retry the item soon.
  */
-export async function prepareItem(dependencies: DeliveryDependencies, listed: FeedItem, ledger: PrerequisiteLedger): Promise<Preparation> {
+export async function prepareItem(dependencies: DeliveryDependencies, listed: FeedItem, ledger: PrerequisiteLedger, history?: PrerequisiteHistory): Promise<Preparation> {
   // The chains of the item come from the indexer. An item of another direction is none of this runner's business, and
   // its chain ids must not steer the copy lookup.
   if (listed.direction.sourceChainId !== dependencies.sourceChainId || listed.direction.destinationChainId !== dependencies.chain.chainId) {
@@ -519,10 +549,13 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
     return done(skip(messageId, "indexer-disagrees-with-evidence", { detail: "the data of the message differs from the source chain" }));
   }
 
-  const approval = await approvePrerequisiteSpend(dependencies, ledger, { item, offer, evidence, messageId, assumedGas: fallbackGas });
+  const unsent = refuseRepeatedPrerequisites(dependencies, { messageId, evidence, history });
+  if (unsent.kind === "skip") return done(unsent.outcome);
+
+  const approval = await approvePrerequisiteSpend(dependencies, ledger, { item, offer, evidence: unsent.evidence, messageId, assumedGas: fallbackGas });
   if (approval.kind === "skip") return done(approval.outcome);
 
-  const prepared = await satisfyPrerequisites(dependencies, ledger, { messageId, transactionHash: sourceTransaction, logIndex }, evidence, approval.approved);
+  const prepared = await satisfyPrerequisites(dependencies, ledger, { messageId, transactionHash: sourceTransaction, logIndex }, unsent.evidence, approval.approved, history);
   if (!prepared.ok) return done(await recordLoss(dependencies, ledger, prepared.outcome, prepared.costWei));
 
   if (offer.kind === "none") return done(await deliverDirect(dependencies, ledger, { item, messageId, evidence: prepared.evidence, prerequisiteCostWei: prepared.costWei }));
@@ -530,6 +563,30 @@ export async function prepareItem(dependencies: DeliveryDependencies, listed: Fe
   const estimate = await chain.simulate({ to: dependencies.deliveryRouter as Address, data: singleCallData(proof) });
   const assumedGas = estimate.ok ? estimate.gas + BATCH_ITEM_OVERHEAD_GAS : fallbackGas;
   return { kind: "ready", ready: { item, messageId, offer, proof, assumedGas, prerequisiteCostWei: prepared.costWei } };
+}
+
+/**
+ * Leaves out the layout calls that earlier tries sent for the message, and stops spending on a message whose tries
+ * spent on layout calls too often without covering it. Before the state kept these, a call that adds a row which does
+ * not cover the message was sent again on every try (message ...0000, 943 to Sepolia, 2026-11-08).
+ */
+function refuseRepeatedPrerequisites(
+  dependencies: DeliveryDependencies,
+  context: { readonly messageId: Hex; readonly evidence: EvidencePackage; readonly history: PrerequisiteHistory | undefined },
+): { readonly kind: "skip"; readonly outcome: Skip } | { readonly kind: "unsent"; readonly evidence: EvidencePackage } {
+  const { messageId, evidence, history } = context;
+  if (history === undefined || evidence.prerequisites.length === 0) return { kind: "unsent", evidence };
+  const maximum = dependencies.settings.maximumUnsatisfiedPrerequisiteAttempts ?? DEFAULT_MAXIMUM_UNSATISFIED_PREREQUISITE_ATTEMPTS;
+  if (history.unsatisfiedAttempts >= maximum) {
+    const detail = `${history.unsatisfiedAttempts} tries sent layout calls that did not cover the message; the runner sends no more for it. Remove its entry from prerequisiteAttempts in the runner state to try again`;
+    dependencies.logger.warn("prerequisites_stuck", { messageId, unsatisfiedAttempts: history.unsatisfiedAttempts, listed: evidence.prerequisites.map((call) => call.function) });
+    return { kind: "skip", outcome: skip(messageId, "prerequisites-stuck", { detail }) };
+  }
+  const prerequisites = evidence.prerequisites.filter((call) => !history.sentCalls.has(prerequisiteCallKey(call)));
+  if (prerequisites.length === 0) {
+    return { kind: "skip", outcome: skip(messageId, "prerequisites-not-satisfied", { detail: `each of the ${evidence.prerequisites.length} listed calls was sent by an earlier try and did not cover the message` }) };
+  }
+  return { kind: "unsent", evidence: { ...evidence, prerequisites } };
 }
 
 /** Input of {@link deliverDirect}. */

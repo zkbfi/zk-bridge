@@ -4,7 +4,7 @@ import { beaconCheck, lightClientCheck, lightClientDeadlineCheck, rpcCheck } fro
 import { bridgeCheck, gateCheck } from "./bridges.ts";
 import { benchmarksCheck, indexerFeedCheck, pipelineCheck, gpuBillingCheck } from "./pipeline.ts";
 import { runpodCheck } from "./prover.ts";
-import { backendLocalCheck, backendPublicCheck, gatewayCheck, indexerReadyCheck, siteCheck, webhookCheck } from "./services.ts";
+import { backendLocalCheck, backendPublicCheck, gatewayCheck, grindEngineCheck, indexerReadyCheck, siteCheck, webhookCheck } from "./services.ts";
 import { unitCheck } from "./units.ts";
 import { walletChecks } from "./wallets.ts";
 
@@ -16,6 +16,7 @@ export function buildChecks(deps: Deps): CheckDefinition[] {
     indexerReadyCheck(services.indexerLocal, "local"),
     indexerReadyCheck(services.indexerPublic, "public"),
     backendLocalCheck(services.backendLocal),
+    grindEngineCheck(services.backendLocal),
     backendPublicCheck(services.backendPublic),
     webhookCheck(services.webhookPublic),
     siteCheck("next", services.sites.next),

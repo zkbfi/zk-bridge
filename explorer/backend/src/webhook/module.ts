@@ -2,7 +2,7 @@ import type { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { createPublicClient, http, type Hex } from "viem";
 import { proofCategory, type Pair, type ProofDirection } from "@zk-bridge/shared";
-import { createBoardPublisher, grindInWorker, type BoardPublisher } from "@zk-bridge/shared/msgboard";
+import { createBoardPublisher, grindInWorker, guardGrind, type BoardPublisher, type PreflightResult } from "@zk-bridge/shared/msgboard";
 import { assessProofPayload, createLightClientReader, type LightClientHead } from "@zk-bridge/shared/prover";
 import type { ModuleHealth } from "../health.ts";
 import type { Logger } from "../logger.ts";
@@ -25,7 +25,7 @@ export interface WebhookSource {
   /** Where the bearer token is read. The configuration names the variable; the token is never in a file. */
   readonly environment: Readonly<Record<string, string | undefined>>;
   /** Builds the board side of msgboard. */
-  readonly makeBoard: (boardUrl: string, logger: Logger) => BoardPublisher;
+  readonly makeBoard: (boardUrl: string, logger: Logger, grindEngine: PreflightResult | undefined) => BoardPublisher;
   /** Reads the head, the root of the head and the program key of a light client. */
   readonly readLightClient: (input: { rpcUrl: string; lightClient: Hex }) => Promise<LightClientHead>;
 }
@@ -33,11 +33,12 @@ export interface WebhookSource {
 /** The real outside world. */
 export const REAL_SOURCE: WebhookSource = {
   environment: process.env,
-  makeBoard: (boardUrl, logger) =>
+  makeBoard: (boardUrl, logger, grindEngine) =>
     createBoardPublisher({
       boardUrl,
       maximumMessageBytes: MAXIMUM_BOARD_MESSAGE_BYTES,
-      grind: grindInWorker,
+      // A grind engine that failed its start-up test starts no grind, and says why.
+      grind: guardGrind(grindInWorker, grindEngine),
       grindTimeoutMilliseconds: GRIND_TIMEOUT_MILLISECONDS,
       logger,
     }),
@@ -104,7 +105,7 @@ function build(context: BackendModuleContext, source: WebhookSource): Resolved {
   };
   const publisher = createProofPublisher({
     storage: context.storage,
-    board: source.makeBoard(boardUrl, context.logger),
+    board: source.makeBoard(boardUrl, context.logger, context.grindEngine),
     categoryFor: (direction) => proofCategory(context.config.pair, direction),
     heads: { headSlot: async (direction) => (await readLightClient(direction)).headSlot },
     now: context.now,
@@ -225,8 +226,10 @@ export async function start(context: BackendModuleContext): Promise<() => Promis
   };
 }
 
-/** Running when the settings are usable, degraded when they are not. */
+/** Running when the settings are usable and the grind engine passed its test, degraded when not. */
 export function health(context: BackendModuleContext): ModuleHealth {
+  const engine = context.grindEngine;
+  if (engine !== undefined && !engine.ok) return { state: "degraded", detail: `the proof-of-work engine failed its start-up test (${engine.reason}: ${engine.detail})` };
   const current = resolve(context);
   return current.ok ? { state: "running" } : { state: "degraded", detail: current.reason };
 }

@@ -16,6 +16,8 @@ export default defineConfig({
       exclude: [
         // Thin worker entry: it only wires the thread to runGrindJob, which grind-job.test.ts covers.
         "src/msgboard/grind-worker.mjs",
+        // Thin worker entry of the preflight: grind-preflight-real.test.ts runs it on a real thread.
+        "src/msgboard/grind-preflight-worker.mjs",
       ],
       thresholds: { lines: 100, branches: 100, functions: 100, statements: 100 },
     },

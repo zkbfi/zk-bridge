@@ -1,7 +1,7 @@
 import { availableParallelism } from "node:os";
 import { Worker } from "node:worker_threads";
 import type { Hex } from "viem";
-import { MAXIMUM_THREADS } from "./grind-stamper.mjs";
+import { MAXIMUM_THREADS, loadWasmEngine, writeWarning } from "./grind-stamper.mjs";
 
 export type { GrindInput, GrindResult, GrindFunction } from "@zkb/data";
 import type { GrindFunction, GrindInput, GrindResult } from "@zkb/data";
@@ -25,9 +25,26 @@ export function threadsForGrind(): number {
  * range of nonces of its own, and the first to find a valid nonce wins: the others stop. The worker is a plain module
  * (`grind-worker.mjs`) so that it loads without a TypeScript loader.
  *
+ * At most MAXIMUM_THREADS threads run, because each has ranges of its own. When the WASM engine does not load, one
+ * thread runs: without the engine every thread would search the same nonces with the slow search of the SDK, so more
+ * threads would only repeat the work. That is logged as `grind_engine_unavailable`.
+ *
  * @throws GrindError when every worker reports an error or crashes, or when none finishes within `timeoutMilliseconds`.
  */
-export function grindOnThreads(input: GrindInput, threads: number): Promise<GrindResult> {
+export async function grindOnThreads(
+  input: GrindInput,
+  requestedThreads: number,
+  options: { readonly loadEngine?: () => Promise<unknown>; readonly warn?: (event: string, fields: Record<string, unknown>) => void } = {},
+): Promise<GrindResult> {
+  const { loadEngine = loadWasmEngine, warn = writeWarning } = options;
+  let threads = Math.max(1, Math.min(requestedThreads, MAXIMUM_THREADS));
+  const deadline = Date.now() + input.timeoutMilliseconds;
+  try {
+    await loadEngine();
+  } catch (error) {
+    warn("grind_engine_unavailable", { reason: error instanceof Error ? error.message : String(error), requestedThreads, threads: 1 });
+    threads = 1;
+  }
   return new Promise((resolve, reject) => {
     const started = Array.from(
       { length: threads },
@@ -39,6 +56,8 @@ export function grindOnThreads(input: GrindInput, threads: number): Promise<Grin
             payload: input.payload,
             timeoutMilliseconds: input.timeoutMilliseconds,
             threadIndex,
+            threads,
+            deadline,
           },
         }),
     );

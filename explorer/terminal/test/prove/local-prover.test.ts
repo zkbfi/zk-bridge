@@ -58,6 +58,9 @@ describe('toProverPair', () => {
     expect(pair.sides[1]!.contracts.lightClient).toBe(FIXTURE_PAIR.second.contracts.lightClient)
     expect(pair.sides[1]!.contracts.bridge).toBe(FIXTURE_PAIR.second.contracts.messageBridge)
     expect(pair.sides[1]!.startBlock).toBe(200)
+    expect(pair.sides[1]!.lightClientStartBlock).toBeUndefined()
+    const kept = { ...withStartBlocks, second: { ...withStartBlocks.second, lightClientStartBlock: 150 } }
+    expect(toProverPair(kept, endpoints).sides[1]!.lightClientStartBlock).toBe(150)
   })
 
   test('says which endpoint is missing', () => {

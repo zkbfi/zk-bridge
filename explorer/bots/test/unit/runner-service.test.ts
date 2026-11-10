@@ -154,6 +154,7 @@ describe("deliverySettingsOf", () => {
       maximumPrerequisiteSpendPerSweepWei: 5000n,
       maximumPrerequisiteSpendPerDayWei: 20000n,
       maximumUnrecoveredPrerequisiteLossWei: 10000n,
+      maximumUnsatisfiedPrerequisiteAttempts: 3,
       maximumBatchSize: 3,
       maximumBatchGas: 17n,
     });

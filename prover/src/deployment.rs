@@ -16,7 +16,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 /// The keys that a chain section holds, in the order of the file. A test compares them with the TypeScript schema.
-pub const SECTION_KEYS: [&str; 11] = [
+pub const SECTION_KEYS: [&str; 12] = [
     "chain_id",
     "rpc_url",
     "bridge",
@@ -28,6 +28,7 @@ pub const SECTION_KEYS: [&str; 11] = [
     "delivery_router",
     "fork_registry",
     "start_block",
+    "light_client_start_block",
 ];
 
 /// The section names of the file.
@@ -58,6 +59,9 @@ pub struct SectionDraft {
     pub fork_registry: Option<Address>,
     /// The first block to index: the block before the first deployment transaction.
     pub start_block: Option<u64>,
+    /// The block before the deployment of the light client, when it was deployed before `start_block` (a light client
+    /// kept across a redeploy of the bridge). The prover scans the stored heads from here.
+    pub light_client_start_block: Option<u64>,
 }
 
 /// A checked chain section.
@@ -85,6 +89,9 @@ pub struct ChainSection {
     pub fork_registry: Option<Address>,
     /// The first block to index.
     pub start_block: u64,
+    /// The block before the deployment of the light client, or `None` when that is `start_block`. Never after
+    /// `start_block`.
+    pub light_client_start_block: Option<u64>,
 }
 
 fn usage(reason: impl Into<String>) -> Error {
@@ -141,6 +148,9 @@ impl SectionDraft {
             match key {
                 "chain_id" => self.chain_id = Some(parse_number(value, key)?),
                 "start_block" => self.start_block = Some(parse_number(value, key)?),
+                "light_client_start_block" => {
+                    self.light_client_start_block = Some(parse_number(value, key)?)
+                }
                 "rpc_url" => {
                     check_rpc_url(value)?;
                     self.rpc_url = Some(value.to_string());
@@ -186,6 +196,15 @@ impl SectionDraft {
         if chain_id == 0 {
             return Err(usage(format!("{section}: chain_id is zero")));
         }
+        let start_block = self.start_block.ok_or_else(|| missing("start_block"))?;
+        if self
+            .light_client_start_block
+            .is_some_and(|block| block > start_block)
+        {
+            return Err(usage(format!(
+                "{section}: light_client_start_block is after start_block; the light client is deployed before the bridge that reads it"
+            )));
+        }
         Ok(ChainSection {
             chain_id,
             rpc_url: self.rpc_url,
@@ -201,7 +220,10 @@ impl SectionDraft {
             fork_registry: self
                 .fork_registry
                 .filter(|address| *address != Address::ZERO),
-            start_block: self.start_block.ok_or_else(|| missing("start_block"))?,
+            start_block,
+            light_client_start_block: self
+                .light_client_start_block
+                .filter(|block| *block != start_block),
         })
     }
 }
@@ -247,8 +269,8 @@ fn draft_of_deployment(deployment: &Value) -> Result<SectionDraft> {
             ))),
         }
     };
-    let light_client = named("BeaconLightClient")
-        .first()
+    let light_client_creation = named("BeaconLightClient").first().copied();
+    let light_client = light_client_creation
         .map(|transaction| contract_address(transaction, "BeaconLightClient"))
         .transpose()?;
     let mediator = single("TokenMediator")?;
@@ -263,12 +285,18 @@ fn draft_of_deployment(deployment: &Value) -> Result<SectionDraft> {
             .transpose()?,
         _ => None,
     };
-    let first_block = deployment["receipts"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let receipts = || deployment["receipts"].as_array().into_iter().flatten();
+    let first_block = receipts()
         .filter_map(|receipt| quantity_of(&receipt["blockNumber"]))
         .min();
+    let light_client_block = light_client_creation.and_then(|creation| {
+        receipts()
+            .find(|receipt| {
+                receipt["transactionHash"].is_string()
+                    && receipt["transactionHash"] == creation["hash"]
+            })
+            .and_then(|receipt| quantity_of(&receipt["blockNumber"]))
+    });
     Ok(SectionDraft {
         chain_id: deployment["chain"].as_u64(),
         rpc_url: None,
@@ -281,6 +309,7 @@ fn draft_of_deployment(deployment: &Value) -> Result<SectionDraft> {
         delivery_router: single("DeliveryRouter")?,
         fork_registry: single("ForkRegistry")?,
         start_block: first_block.map(|block| block.saturating_sub(1)),
+        light_client_start_block: light_client_block.map(|block| block.saturating_sub(1)),
     })
 }
 
@@ -332,6 +361,15 @@ fn section_from(
         delivery_router: flags.delivery_router.or(base.delivery_router),
         fork_registry: flags.fork_registry.or(base.fork_registry),
         start_block: flags.start_block.or(base.start_block),
+        // The block of the light client of the broadcast file belongs to that light client only: a flag that names
+        // another light client drops it.
+        light_client_start_block: flags.light_client_start_block.or(
+            if flags.light_client.is_none() {
+                base.light_client_start_block
+            } else {
+                None
+            },
+        ),
     };
     merged.finish(section)
 }
@@ -363,8 +401,8 @@ fn lowercase(address: Address) -> String {
 }
 
 impl ChainSection {
-    /// The JSON object of the section, with the keys of [`SECTION_KEYS`]. `rpc_url`, `delivery_router` and `fork_registry` are
-    /// left out when absent.
+    /// The JSON object of the section, with the keys of [`SECTION_KEYS`]. `rpc_url`, `delivery_router`, `fork_registry` and
+    /// `light_client_start_block` are left out when absent.
     pub fn to_json(&self) -> Value {
         let mut section = Map::new();
         section.insert("chain_id".into(), json!(self.chain_id));
@@ -390,6 +428,9 @@ impl ChainSection {
             }
         }
         section.insert("start_block".into(), json!(self.start_block));
+        if let Some(block) = self.light_client_start_block {
+            section.insert("light_client_start_block".into(), json!(block));
+        }
         Value::Object(section)
     }
 }
@@ -441,4 +482,59 @@ pub fn write_private_file(path: &Path, content: &str, existing: Existing) -> Res
         std::fs::rename(&target, path).map_err(failure)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn creation(name: &str, hash: &str, address: &str) -> Value {
+        json!({"transactionType": "CREATE", "contractName": name, "contractAddress": address, "hash": hash})
+    }
+
+    /// Claim: the light client start block is the block before the receipt of the `BeaconLightClient` creation, matched by
+    /// transaction hash, and a flag that names another light client drops it.
+    /// Why it matters: the prover scans stored heads from it; the block of another contract, or of another light client,
+    /// would start the scan too late.
+    #[test]
+    fn the_light_client_block_comes_from_its_own_receipt() {
+        let deployment = json!({
+            "chain": 11155111,
+            "transactions": [
+                creation("BeaconLightClient", "0xaa", "0x64ddc23ff43ea0cd2ce9a13ef6681ee651e76e4e"),
+                creation("MessageBridge", "0xbb", "0xb01856abef5b971019f1d25630450cc6bcbafb21"),
+            ],
+            "receipts": [
+                {"transactionHash": "0xbb", "blockNumber": "0xb76bd7"},
+                {"transactionHash": "0xaa", "blockNumber": "0xb76bd5"},
+            ],
+        });
+        let draft = draft_of_deployment(&deployment).unwrap();
+        assert_eq!(draft.light_client_start_block, Some(12_020_692));
+        assert_eq!(draft.start_block, Some(12_020_692));
+
+        let mut pool = vec![Some(draft.clone())];
+        let flags = [
+            "start_block=12087602".to_string(),
+            "mediator=0x2c00675092e2955d27f476b5a1bac9ac5bb6fa86".to_string(),
+            "token_factory=0xba4becf539b90c68a333a090b3a51587909f6981".to_string(),
+            "wrapped_native=0x7b79995e5f793a07bc00c21412e50ecae098e7f9".to_string(),
+            "gate=0x1782a38a37ce9fb9f53b0585b23b833847007e20".to_string(),
+        ];
+        let section = section_from(&mut pool, 0, &flags, "chain_a").unwrap();
+        assert_eq!(
+            section.light_client_start_block,
+            Some(12_020_692),
+            "kept with the light client of the file"
+        );
+
+        let mut pool = vec![Some(draft)];
+        let mut other = flags.to_vec();
+        other.push("light_client=0x4444444444444444444444444444444444444444".into());
+        let section = section_from(&mut pool, 0, &other, "chain_a").unwrap();
+        assert_eq!(
+            section.light_client_start_block, None,
+            "dropped for another light client"
+        );
+    }
 }

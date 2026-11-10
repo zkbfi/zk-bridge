@@ -10,7 +10,7 @@ describe("buildChecks", () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toEqual(
       expect.arrayContaining([
-        "indexer-local", "indexer-public", "backend-local", "backend-public", "webhook", "site-next", "site-main", "gateway-next", "gateway-main",
+        "indexer-local", "indexer-public", "backend-local", "grind-engine", "backend-public", "webhook", "site-next", "site-main", "gateway-next", "gateway-main",
         "unit-zk-bridge-backend", "unit-zk-bridge-indexer", "unit-zk-bridge-runner", "unit-zk-bridge-traffic", "unit-zk-bridge-ipfs",
         "rpc-11155111", "rpc-943", "beacon-11155111", "beacon-943", "lightclient-first-to-second", "lightclient-second-to-first", "lightclient-deadline-first-to-second", "lightclient-deadline-second-to-first",
         "bridge-11155111", "gate-11155111", "bridge-943", "gate-943",

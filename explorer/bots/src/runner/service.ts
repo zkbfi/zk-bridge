@@ -82,6 +82,7 @@ export function deliverySettingsOf(runnerConfig: RunnerConfig, destinationChainI
     maximumPrerequisiteSpendPerSweepWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerSweepWei),
     maximumPrerequisiteSpendPerDayWei: BigInt(runnerConfig.maximumPrerequisiteSpendPerDayWei),
     maximumUnrecoveredPrerequisiteLossWei: BigInt(runnerConfig.maximumUnrecoveredPrerequisiteLossWei),
+    maximumUnsatisfiedPrerequisiteAttempts: runnerConfig.maximumUnsatisfiedPrerequisiteAttempts,
     maximumBatchSize: runnerConfig.maximumBatchSize,
     maximumBatchGas: BigInt(runnerConfig.maximumBatchGas),
   };

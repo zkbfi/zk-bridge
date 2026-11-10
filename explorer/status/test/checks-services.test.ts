@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { backendLocalCheck, backendPublicCheck, gatewayCheck, indexerReadyCheck, siteCheck, webhookCheck } from "../src/checks/services.ts";
+import { backendLocalCheck, backendPublicCheck, gatewayCheck, grindEngineCheck, indexerReadyCheck, siteCheck, webhookCheck } from "../src/checks/services.ts";
 import { fakeFetch, makeDeps } from "./support.ts";
 
 const clock = () => ({ now: 1_800_000_000_000 });
@@ -73,6 +73,30 @@ describe("backend (local)", () => {
     expect(await backendLocalCheck(url).run(bad)).toEqual({ state: "down", detail: "answered something that is not the health report" });
     const status = makeDeps({ clock: c, fetch: fakeFetch({ [`${url}/health`]: { status: 502 } }, c) });
     expect(await backendLocalCheck(url).run(status)).toEqual({ state: "down", detail: "answered 502 on /health" });
+  });
+});
+
+describe("grind engine", () => {
+  const url = "http://127.0.0.1:8787";
+  const reported = (grindEngine: unknown) => ({ status: "ok", modules: {}, ...(grindEngine === undefined ? {} : { grindEngine }) });
+  const run = async (answer: object) => {
+    const c = clock();
+    return grindEngineCheck(url).run(makeDeps({ clock: c, fetch: fakeFetch({ [`${url}/health`]: answer }, c) }));
+  };
+
+  it("is ok when the start-up test passed", async () => {
+    expect(await run({ body: reported({ state: "ok", durationMilliseconds: 40 }) })).toEqual({ state: "ok", detail: "the start-up test passed in 0.0 s" });
+    expect(await run({ body: reported({ state: "ok" }) })).toMatchObject({ state: "ok" });
+  });
+
+  it("is down when the test failed, and says why", async () => {
+    expect(await run({ body: reported({ state: "failed", reason: "load-failed", detail: "no wasm" }) })).toEqual({ state: "down", detail: "the start-up test failed: load-failed (no wasm); no proof of work is started" });
+    expect(await run({ body: reported({ state: "failed" }) })).toEqual({ state: "down", detail: "the start-up test failed: unknown; no proof of work is started" });
+  });
+
+  it("is degraded when the backend reports no test, and down when /health fails", async () => {
+    expect(await run({ body: reported(undefined) })).toMatchObject({ state: "degraded" });
+    expect(await run({ status: 502 })).toEqual({ state: "down", detail: "answered 502 on /health" });
   });
 });
 

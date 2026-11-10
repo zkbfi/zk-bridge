@@ -25,7 +25,7 @@ export function createApp(input: { context: BackendModuleContext; modules: Modul
   app.get("/health", (request) => {
     const moduleStates: Record<string, ModuleHealth> = {};
     for (const name of enabled) moduleStates[name] = modules[name].health?.(context) ?? { state: "running" };
-    return request.json(buildHealthReport({ storage: context.storage, modules: moduleStates, now: context.now() }));
+    return request.json(buildHealthReport({ storage: context.storage, modules: moduleStates, now: context.now(), grindEngine: context.grindEngine }));
   });
   for (const name of enabled) modules[name].register(app, context);
   return app;

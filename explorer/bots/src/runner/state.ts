@@ -18,10 +18,23 @@ export const prerequisiteLossEntrySchema = z.object({
   wei: weiText,
 });
 
+/**
+ * What layout calls did for one message that they did not cover. `sentCalls` holds the keccak256 of each call that was
+ * sent for the message (its `to` and `data`, see `prerequisiteCallKey`); the runner does not send one of them again, because
+ * the same call adds the same row. `unsatisfiedAttempts` counts the tries that spent on layout calls and ended with the
+ * message still uncovered; at `maximumUnsatisfiedPrerequisiteAttempts` the runner stops spending on the message.
+ */
+export const prerequisiteAttemptSchema = z.object({
+  sentCalls: z.array(z.string()).default([]),
+  unsatisfiedAttempts: z.number().int().nonnegative().default(0),
+});
+
 /** One charge of layout spend. */
 export type PrerequisiteSpendEntry = z.infer<typeof prerequisiteSpendEntrySchema>;
 /** One unrecovered loss. */
 export type PrerequisiteLossEntry = z.infer<typeof prerequisiteLossEntrySchema>;
+/** The layout calls of one message that did not cover it. */
+export type PrerequisiteAttempt = z.infer<typeof prerequisiteAttemptSchema>;
 
 /** The state of the runner for one pair and direction: the items that need no second look, and the rolling spend. */
 export const runnerStateSchema = z.object({
@@ -48,6 +61,16 @@ export const runnerStateSchema = z.object({
    * it again. A state file from before this field existed parses as closed, and the next check reads the chain.
    */
   depositsOpen: z.boolean().default(false),
+  /**
+   * The layout calls that were sent for a message and did not cover it, by message identifier. A restart keeps them, so
+   * the runner neither sends the same call again nor forgets how often a message took layout spend without result.
+   */
+  prerequisiteAttempts: z.record(z.string(), prerequisiteAttemptSchema).default({}),
+  /**
+   * The time, in milliseconds since 1970, before which the runner does not try a message again, by message identifier.
+   * A restart keeps it, so a restart does not cut the refusal window after a loss short.
+   */
+  retryAfter: z.record(z.string(), z.number().int().nonnegative()).default({}),
 });
 
 /** The state of the runner for one pair and direction. */
@@ -57,4 +80,4 @@ export type RunnerState = z.infer<typeof runnerStateSchema>;
 export type PrerequisiteBudgetState = Pick<RunnerState, "prerequisiteSpend" | "deliverySpend" | "prerequisiteLosses">;
 
 /** The state of a runner that has done nothing yet. */
-export const INITIAL_RUNNER_STATE: RunnerState = { schemaVersion: 1, finished: {}, prerequisiteSpend: [], deliverySpend: [], unpaidSpend: [], prerequisiteLosses: [], depositsOpen: false };
+export const INITIAL_RUNNER_STATE: RunnerState = { schemaVersion: 1, finished: {}, prerequisiteSpend: [], deliverySpend: [], unpaidSpend: [], prerequisiteLosses: [], depositsOpen: false, prerequisiteAttempts: {}, retryAfter: {} };

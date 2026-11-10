@@ -65,6 +65,11 @@ export interface ChainConfig {
   readonly registryRpcUrl?: string
   /** The first block to scan, from `start_block` of the deployment file. Absent when the file names none. */
   readonly startBlock?: number
+  /**
+   * The block before the deployment of the light client, from `light_client_start_block` of the deployment file, when
+   * it is earlier than `startBlock`. The prover scans the stored heads of the light client from here.
+   */
+  readonly lightClientStartBlock?: number
   readonly contracts: {
     readonly messageBridge: Address
     readonly tokenMediator: Address

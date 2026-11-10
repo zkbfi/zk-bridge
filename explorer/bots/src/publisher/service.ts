@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { SecretReference } from "@zk-bridge/shared/config";
 import { BotConfigError, type PublisherConfig } from "../config/bot-config.ts";
 import { createIndexerClient } from "../indexer/client.ts";
-import { createBoardPublisher, grindInWorker, type BoardPublisher, type GrindFunction } from "@zk-bridge/shared/msgboard";
+import { GrindError, createBoardPublisher, grindInWorker, grindPreflight, type BoardPublisher, type GrindFunction, type PreflightResult } from "@zk-bridge/shared/msgboard";
 import { createLightClientReader, createProverBinary, endpointKeyVariables, executeCommand, type BackendSection, type CommandExecutor, type ProverSecret, type RemoteEndpoint } from "@zk-bridge/shared/prover";
 import { sidesOfDirection, type BotContext } from "../runtime/context.ts";
 import { runLoop } from "../runtime/loop.ts";
@@ -20,6 +20,8 @@ export const UP_TO_DATE_WAIT_SECONDS = 120;
 export interface PublisherOverrides {
   readonly executor?: CommandExecutor;
   readonly grind?: GrindFunction;
+  /** The test of the grind engine, which runs when the publisher grinds in a worker thread. Default: `grindPreflight`. */
+  readonly preflight?: () => Promise<PreflightResult>;
   readonly board?: BoardPublisher;
   readonly publicClient?: (rpcUrl: string) => PublicClient;
   readonly now?: () => number;
@@ -106,6 +108,15 @@ export async function startPublisher(input: StartPublisherInput): Promise<void> 
   if (setup.msgboardUrl === null) throw new BotConfigError("The setup file has no msgboard endpoint (msgboardUrl).");
   if (setup.policy.proveWhenTransferWaits && publisher.indexerUrl === undefined) {
     throw new BotConfigError("The policy proves when a transfer waits, so publisher.indexerUrl is required.");
+  }
+  if (overrides.board === undefined && overrides.grind === undefined) {
+    // Before the proof is made or anything is signed: a grind engine that does not work would end in the slow search of the SDK.
+    const engine = await (overrides.preflight ?? grindPreflight)();
+    if (!engine.ok) {
+      logger.error("grind_preflight_failed", { reason: engine.reason, detail: engine.detail });
+      throw new GrindError(`The proof-of-work engine failed its start-up test (${engine.reason}: ${engine.detail}), so the publisher does not start.`);
+    }
+    logger.info("grind_preflight_passed", { durationMilliseconds: engine.durationMilliseconds });
   }
   const proving = await resolveProving(context, plan);
   const boardUrl = await vault.resolve(setup.msgboardUrl);

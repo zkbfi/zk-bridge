@@ -19,7 +19,7 @@
 //! and the chain validates it. When rows are missing, the result lists the calls that add them, in the order to send them.
 
 use crate::beacon::http::HttpBeaconSource;
-use crate::beacon::{SourceBlock, StoredHead};
+use crate::beacon::{HashEvidence, SourceBlock, StoredHead};
 use crate::chain::{raw_header_from_sources, ChainClient, RawLog};
 use crate::contracts::{
     BlockHashEvidence, BlockRootsEvidence, BodyLayoutRow, HistoricalSummariesEvidence,
@@ -184,8 +184,9 @@ pub struct EvidenceRequest<'a> {
     pub log_index: u64,
     /// The stored header to anchor at. `None` anchors at the head of the light client.
     pub anchor_slot: Option<u64>,
-    /// The block where the light client was deployed. The scan for stored heads starts here.
-    pub destination_start_block: u64,
+    /// The block where the light client was deployed, not the bridge (they differ after a bridge redeploy that kept the
+    /// light client). The scan for stored heads starts here.
+    pub stored_heads_start_block: u64,
     /// The largest block range of one log call.
     pub log_block_range: u64,
     /// The time of the run, in seconds since 1970-01-01.
@@ -251,7 +252,7 @@ pub fn build_evidence(request: &EvidenceRequest<'_>) -> Result<MessageEvidence> 
     let stored_slots = read_stored_slots(
         request.destination,
         request.light_client,
-        request.destination_start_block,
+        request.stored_heads_start_block,
         request.log_block_range,
     )?;
     let prerequisites = layout_prerequisites(
@@ -540,7 +541,8 @@ fn prerequisite(
 /// The bridge takes the ancestry path from the distance between the anchor and the source block, so the row that it needs depends
 /// on the distance too: `block_roots` for the recent path, `historical_summaries` for the historical path. The block hash
 /// row must cover the source slot. Two stored headers can supply the block hash row: the highest one at or below the
-/// source slot, and the highest one at or below the anchor. Both calls are listed when both exist and differ.
+/// source slot, and the highest one at or below the anchor. Both calls are listed when both exist and differ (see
+/// `choose_hash_rows`).
 fn layout_prerequisites(
     request: &EvidenceRequest<'_>,
     anchor: &BeaconHeader,
@@ -582,6 +584,7 @@ fn layout_prerequisites(
             anchor.slot,
             source_slot,
             stored_slots,
+            &rows,
         )?);
     }
     Ok(calls)
@@ -658,25 +661,26 @@ fn hash_prerequisites(
     anchor_slot: u64,
     source_slot: u64,
     stored_slots: &[u64],
+    rows: &[BodyLayoutRow],
 ) -> Result<Vec<Prerequisite>> {
-    let mut calls: Vec<(u64, Prerequisite)> = Vec::new();
-    for wanted in [source_slot, anchor_slot] {
-        let Some(evidence) = request.beacon.hash_layout_evidence(wanted, stored_slots)? else {
-            continue;
-        };
-        if calls.iter().any(|(slot, _)| *slot == evidence.header.slot) {
-            continue;
-        }
-        let slot = evidence.header.slot;
-        let call = MessageBridgeContract::addBlockHashLayoutCall {
-            blockHashGindex: U256::from(evidence.gindex),
-            evidence: BlockHashEvidence {
-                header: to_layout_header(&evidence.header),
-                branch: evidence.branch,
-            },
-        };
-        calls.push((
-            slot,
+    let below_source = request
+        .beacon
+        .hash_layout_evidence(source_slot, stored_slots)?;
+    let below_anchor = request
+        .beacon
+        .hash_layout_evidence(anchor_slot, stored_slots)?;
+    let chosen = choose_hash_rows(source_slot, rows, below_source, below_anchor)?;
+    Ok(chosen
+        .into_iter()
+        .map(|evidence| {
+            let slot = evidence.header.slot;
+            let call = MessageBridgeContract::addBlockHashLayoutCall {
+                blockHashGindex: U256::from(evidence.gindex),
+                evidence: BlockHashEvidence {
+                    header: to_layout_header(&evidence.header),
+                    branch: evidence.branch,
+                },
+            };
             prerequisite(
                 request,
                 "addBlockHashLayout",
@@ -684,15 +688,54 @@ fn hash_prerequisites(
                     "no validated block hash row covers the source slot {source_slot}; this call uses the stored header at slot {slot}"
                 ),
                 call.abi_encode(),
-            ),
-        ));
+            )
+        })
+        .collect())
+}
+
+/// The block hash rows to send so that a row covers `source_slot`.
+///
+/// The bridge widens a row of one position to the lowest and highest slot it was given, so a row covers the source slot
+/// only when it holds a stored header at or below it and one at or above it. `below_source` is the highest stored header at
+/// or below the source slot, `below_anchor` the highest at or below the anchor (at or above the source slot). Both are sent
+/// when they differ. Without a header at or below the source slot, the anchor's row helps only when the bridge already
+/// has a row of that position that starts at or below the source slot. Otherwise no call can cover the message, and the
+/// answer is an error, not a row that the bridge takes but that leaves the message uncovered: a runner that sends such a
+/// row pays for it, sees the prerequisites still unsatisfied, and sends it again on its next try.
+///
+/// # Errors
+/// `Error::Beacon` when no stored header lies at or below the source slot and no existing row can be widened to it.
+fn choose_hash_rows(
+    source_slot: u64,
+    rows: &[BodyLayoutRow],
+    below_source: Option<HashEvidence>,
+    below_anchor: Option<HashEvidence>,
+) -> Result<Vec<HashEvidence>> {
+    let mut chosen = Vec::new();
+    match below_source {
+        Some(evidence) => chosen.push(evidence),
+        None => {
+            let widens_a_row = below_anchor.as_ref().is_some_and(|anchor| {
+                rows.iter().any(|row| {
+                    row.blockHashGindex == U256::from(anchor.gindex) && row.firstSlot <= source_slot
+                })
+            });
+            if !widens_a_row {
+                return Err(Error::Beacon(format!(
+                    "no stored header at or below source slot {source_slot}: the light client stores no head at or below it in the scanned blocks, so no block hash row can cover the message; the scan must start at the deployment of the light client (light_client_start_block)"
+                )));
+            }
+        }
     }
-    if calls.is_empty() {
-        return Err(Error::Beacon(format!(
-            "no stored header lies at or below slot {source_slot} or {anchor_slot}, so no block hash layout row can be validated for slot {source_slot} yet"
-        )));
+    if let Some(anchor) = below_anchor {
+        if chosen
+            .iter()
+            .all(|evidence| evidence.header.slot != anchor.header.slot)
+        {
+            chosen.push(anchor);
+        }
     }
-    Ok(calls.into_iter().map(|(_, call)| call).collect())
+    Ok(chosen)
 }
 
 #[cfg(test)]
@@ -751,7 +794,7 @@ mod tests {
                 transaction: B256::ZERO,
                 log_index: 0,
                 anchor_slot: None,
-                destination_start_block: 0,
+                stored_heads_start_block: 0,
                 log_block_range: 1,
                 now_unix_seconds: 0,
             };
@@ -829,7 +872,7 @@ mod tests {
                 transaction: B256::ZERO,
                 log_index: 0,
                 anchor_slot: None,
-                destination_start_block: 0,
+                stored_heads_start_block: 0,
                 log_block_range: 1,
                 now_unix_seconds: 0,
             };
@@ -871,6 +914,91 @@ mod tests {
             error.contains("source.header_rpc_urls"),
             "the error points at the setting: {error}"
         );
+    }
+
+    fn hash_evidence(slot: u64, gindex: u64) -> HashEvidence {
+        HashEvidence {
+            gindex,
+            header: BeaconHeader {
+                slot,
+                proposer_index: 0,
+                parent_root: B256::ZERO,
+                state_root: B256::ZERO,
+                body_root: B256::ZERO,
+            },
+            branch: Vec::new(),
+        }
+    }
+
+    fn slots_of(chosen: &[HashEvidence]) -> Vec<u64> {
+        chosen.iter().map(|evidence| evidence.header.slot).collect()
+    }
+
+    /// Claim: with no stored header at or below the source slot and no row to widen, the answer is an error that names
+    /// the source slot, not the anchor's row alone.
+    /// Why it matters: the anchor's row makes a row [anchor, anchor] that does not cover the source slot. A runner sent it,
+    /// saw the prerequisites still unsatisfied, and sent it again every few minutes (message ...0000, 943 to Sepolia,
+    /// 2026-11-08: source slot below the first head the scan could see).
+    #[test]
+    fn without_a_header_below_the_source_the_anchor_row_alone_is_refused() {
+        let error = choose_hash_rows(11_274_500, &[], None, Some(hash_evidence(11_275_000, 7)))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("no stored header at or below source slot 11274500"),
+            "{error}"
+        );
+        // A row of another position, or one that starts above the source slot, cannot be widened down to it either.
+        let rows = [
+            BodyLayoutRow {
+                blockHashGindex: U256::from(8),
+                firstSlot: 100,
+                lastSlot: 200,
+            },
+            BodyLayoutRow {
+                blockHashGindex: U256::from(7),
+                firstSlot: 11_274_600,
+                lastSlot: 11_274_700,
+            },
+        ];
+        assert!(
+            choose_hash_rows(11_274_500, &rows, None, Some(hash_evidence(11_275_000, 7))).is_err()
+        );
+        assert!(choose_hash_rows(11_274_500, &rows, None, None).is_err());
+    }
+
+    /// Claim: the anchor's row alone is sent when an existing row of its position starts at or below the source slot,
+    /// because the bridge then widens that row up past the source slot.
+    #[test]
+    fn the_anchor_row_alone_widens_a_row_that_starts_below_the_source() {
+        let rows = [BodyLayoutRow {
+            blockHashGindex: U256::from(7),
+            firstSlot: 100,
+            lastSlot: 200,
+        }];
+        let chosen = choose_hash_rows(500, &rows, None, Some(hash_evidence(900, 7))).unwrap();
+        assert_eq!(slots_of(&chosen), vec![900]);
+    }
+
+    /// Claim: with a header at or below the source slot, both rows are sent, source first, and once when they are the same.
+    #[test]
+    fn both_rows_are_sent_when_both_exist_and_differ() {
+        let chosen = choose_hash_rows(
+            500,
+            &[],
+            Some(hash_evidence(480, 7)),
+            Some(hash_evidence(900, 7)),
+        )
+        .unwrap();
+        assert_eq!(slots_of(&chosen), vec![480, 900]);
+        let chosen = choose_hash_rows(
+            500,
+            &[],
+            Some(hash_evidence(480, 7)),
+            Some(hash_evidence(480, 7)),
+        )
+        .unwrap();
+        assert_eq!(slots_of(&chosen), vec![480]);
     }
 
     /// Claim: a row covers both of its end slots and nothing outside them.

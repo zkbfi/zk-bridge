@@ -125,7 +125,8 @@ pub struct DeploymentFileArguments {
     #[arg(long)]
     pub broadcast: Vec<PathBuf>,
     /// A `key=value` pair for the section `chain_a`. Repeat it. Keys: chain_id, rpc_url, bridge, mediator, token_factory,
-    /// wrapped_native, gate, light_client, delivery_router, fork_registry, start_block.
+    /// wrapped_native, gate, light_client, delivery_router, fork_registry, start_block, light_client_start_block (the block
+    /// before the light client deployment, when it is earlier than start_block).
     #[arg(long)]
     pub chain_a: Vec<String>,
     /// A `key=value` pair for the section `chain_b`. The keys are those of `--chain-a`.
@@ -716,7 +717,7 @@ fn evidence_request<'a>(
         transaction,
         log_index: arguments.log_index,
         anchor_slot: arguments.anchor_slot,
-        destination_start_block: route.destination.start_block,
+        stored_heads_start_block: route.destination.stored_heads_start_block(),
         log_block_range: route.destination.log_block_range,
         now_unix_seconds: now_unix_seconds(),
     })
