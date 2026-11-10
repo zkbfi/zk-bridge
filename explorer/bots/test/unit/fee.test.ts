@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { decideDelivery, feeGasUnitsOf, payoutOfOffer, readFeeOffer, valueFeeInWei } from "../../src/runner/fee.ts";
+import { feeGasUnitsOf, payoutOfOffer, readFeeOffer } from "../../src/runner/fee.ts";
 import { DELIVERY_ROUTER, OTHER_TOKEN, WRAPPED_NATIVE, address, feeOfferData } from "../support/builders.ts";
 import { encodeFunctionData } from "viem";
-import { tokenMediatorAbi } from "@zk-bridge/shared";
+import { feeValueOf, meetsProfitRule, tokenMediatorAbi } from "@zk-bridge/shared";
 
 const director = { recipient: address(0x12), settings: 8n, limit: 0n, multiplier: 10n ** 16n, callGas: 0n };
 
@@ -36,24 +36,20 @@ describe("reading the fee offer", () => {
   });
 });
 
-describe("valuing the fee in wei", () => {
-  const base = { director, wrappedNative: WRAPPED_NATIVE, valuationsWei: {} };
+describe("valuing the fee in wei (the shared feeValueOf)", () => {
+  const known = { kind: "known" } as const;
 
-  it("counts the wrapped native token one for one", () => {
-    expect(valueFeeInWei({ ...base, fee: 123n, token: WRAPPED_NATIVE, decimals: 18 })).toEqual({ ok: true, wei: 123n });
+  it("counts the wrapped native token one for one: 1e18 wei a whole token of 18 decimals", () => {
+    expect(feeValueOf(123n, 18, { state: known, perWholeToken: 10n ** 18n })).toBe(123n);
   });
 
-  it("scales another token by its configured value and its decimals", () => {
-    const valued = valueFeeInWei({ ...base, fee: 2_500_000n, token: OTHER_TOKEN, decimals: 6, valuationsWei: { [OTHER_TOKEN.toLowerCase()]: 4_000_000_000_000_000n } });
-    expect(valued).toEqual({ ok: true, wei: 10_000_000_000_000_000n });
+  it("scales another token by its price in wei and its decimals", () => {
+    expect(feeValueOf(2_500_000n, 6, { state: known, perWholeToken: 4_000_000_000_000_000n })).toBe(10_000_000_000_000_000n);
   });
 
-  it("prices an unwrap request on another token as a token payout, so it needs a valuation", () => {
+  it("prices an unwrap request on another token as a token payout", () => {
     const unwrap = { ...director, settings: 2n };
     expect(payoutOfOffer({ director: unwrap, token: OTHER_TOKEN, wrappedNative: WRAPPED_NATIVE })).toBe("token");
-    expect(valueFeeInWei({ ...base, director: unwrap, fee: 500n, token: OTHER_TOKEN, decimals: 18 })).toEqual({ ok: false, reason: "no-price-for-fee-token" });
-    const valued = valueFeeInWei({ ...base, director: unwrap, fee: 500n, token: OTHER_TOKEN, decimals: 18, valuationsWei: { [OTHER_TOKEN.toLowerCase()]: 2n * 10n ** 18n } });
-    expect(valued).toEqual({ ok: true, wei: 1_000n });
   });
 
   it("pays the native coin only for an unwrap request on the wrapped native token", () => {
@@ -62,41 +58,41 @@ describe("valuing the fee in wei", () => {
     expect(payoutOfOffer({ director, token: WRAPPED_NATIVE, wrappedNative: WRAPPED_NATIVE })).toBe("token");
   });
 
-  it("will not guess the price of a token it does not know", () => {
-    expect(valueFeeInWei({ ...base, fee: 1n, token: OTHER_TOKEN, decimals: 18 })).toEqual({ ok: false, reason: "no-price-for-fee-token" });
+  it("will not guess the value of a token with no market price", () => {
+    expect(feeValueOf(1n, 18, { state: { kind: "no-market" }, perWholeToken: null })).toBeNull();
   });
 });
 
-describe("the delivery decision", () => {
+describe("the delivery decision (the loss rule of the shared tip verdict)", () => {
   const cost = 1_000n;
-  const decide = (feeWei: bigint, maximumLossPercent = 20) => decideDelivery({ feeWei, costWei: cost, maximumLossPercent });
+  const decide = (feeWei: bigint, maximumLossPercent = 20) => meetsProfitRule(feeWei, cost, { kind: "loss", maximumLossPercent });
 
   it("delivers a fee of 801 wei against a cost of 1,000 wei, and leaves out a fee of exactly 800 wei (a loss of 20 percent)", () => {
-    expect(decide(801n)).toEqual({ deliver: true, costWei: 1_000n, lossWei: 199n });
-    expect(decide(800n)).toEqual({ deliver: false, costWei: 1_000n, lossWei: 200n });
+    expect(decide(801n)).toBe(true);
+    expect(decide(800n)).toBe(false);
   });
 
   it("leaves out a delivery with no tip at all", () => {
-    expect(decide(0n)).toEqual({ deliver: false, costWei: 1_000n, lossWei: 1_000n });
+    expect(decide(0n)).toBe(false);
   });
 
-  it("delivers a tip above the cost, and reports a negative loss", () => {
-    expect(decide(1_200n)).toEqual({ deliver: true, costWei: 1_000n, lossWei: -200n });
+  it("delivers a tip above the cost", () => {
+    expect(decide(1_200n)).toBe(true);
   });
 
   it("asks for a tip that covers the cost when the allowed loss is 0 percent: break-even delivers, one wei below does not", () => {
-    expect(decide(1_001n, 0).deliver).toBe(true);
-    expect(decide(1_000n, 0)).toEqual({ deliver: true, costWei: 1_000n, lossWei: 0n });
-    expect(decide(999n, 0).deliver).toBe(false);
+    expect(decide(1_001n, 0)).toBe(true);
+    expect(decide(1_000n, 0)).toBe(true);
+    expect(decide(999n, 0)).toBe(false);
   });
 
   it("treats a tip of nothing on a cost above zero as a full loss, whatever the limit below 100 percent", () => {
-    expect(decide(0n, 99).deliver).toBe(false);
+    expect(decide(0n, 99)).toBe(false);
   });
 
   it("delivers anything when the allowed loss is 100 percent, except a tip of nothing", () => {
-    expect(decide(1n, 100).deliver).toBe(true);
-    expect(decide(0n, 100).deliver).toBe(false);
+    expect(decide(1n, 100)).toBe(true);
+    expect(decide(0n, 100)).toBe(false);
   });
 });
 

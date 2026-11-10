@@ -1,6 +1,7 @@
 /**
- * @zkb/core: the deterministic rules of the zkb.fi bridge screen. Pure functions over integers (bigint): no I/O,
- * no clock, no randomness. See README.md for the rules and the test vectors.
+ * @zkb/core: the deterministic rules of the zkb.fi bridge screen. Pure functions over integers (bigint): no I/O of
+ * its own, no clock, no randomness; the price source reads pools only through the client the caller passes. See
+ * README.md for the rules and the test vectors.
  */
 
 // Address helpers
@@ -181,6 +182,56 @@ export {
   type PricedToken,
   pricingAddress,
 } from "./pulsex-pricing.js";
+
+// The one price source: pool reads through the caller's client, the four price states, a token's valuation
+export {
+  type PoolReader,
+  type CountingPoolReader,
+  plsUsd,
+  tokenUsd,
+  resolvePricingAddress,
+  type NativePriceSource,
+  nativeUsd,
+  type ContractCaller,
+  isChainAnswer,
+  countingCaller,
+  poolReaderOver,
+  type PulseChainClient,
+  poolReaderAtLatest,
+  type PriceState,
+  STALE_PRICE_MAX_SECONDS,
+  isUsablePrice,
+  type PriceMap,
+  type PriceStates,
+  type PriceSubject,
+  nativePriceKey,
+  readPrices,
+  type PriceHolding,
+  holdingAfterRead,
+  holdingAfterFailure,
+  type PriceProblem,
+  priceProblemOf,
+  type PriceKeeper,
+  createPriceKeeper,
+  type TokenValuation,
+  worsePriceState,
+  tokenValuationOf,
+  tokenValuationIn,
+} from "./token-pricing.js";
+
+// The one verdict on a tip: priced by the profit rule, unpriced by the automatic maximum
+export {
+  type TipVerdict,
+  type ProfitRule,
+  type TipVerdictInput,
+  atAutomaticMaximum,
+  meetsProfitRule,
+  tipPays,
+  feeValueOf,
+  tipVerdict,
+  type TermsVerdictInput,
+  tipVerdictOfTerms,
+} from "./tip-verdict.js";
 
 // The symbol of a bridged copy
 export { BRIDGED_SYMBOL_PREFIX, bridgedSymbolOf, nativeSymbolOf } from "./bridged-symbol.js";

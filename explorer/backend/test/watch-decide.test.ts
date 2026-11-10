@@ -295,7 +295,7 @@ describe("warmupPlan", () => {
 describe("decideProof with a minimum interval since the last proof (2026-11-01)", () => {
   const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
   const unknown: Economics = { kind: "unknown", why: "testnet tokens have no price" };
-  const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, block: "9" });
+  const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(), why: null, block: "9" });
   const hex = (digit: string) => `0x${digit.repeat(64)}`;
   const ready = message(FINALIZED - 5, "a");
   const finalAt = expectedFinalityAt(ready.slot, facts(HEAD));
@@ -316,6 +316,23 @@ describe("decideProof with a minimum interval since the last proof (2026-11-01)"
     const decision = decide({ messages: [ready], batch: { rule: WAIT, economics: unknown, lastProofAt: now - 5 * 3600 } });
     expect(decision).toMatchObject({ due: true, why: "message", trigger: "interval", batch: 1, messageIds: [hex("a")], detail: `1 waiting message is final at slot ${FINALIZED}: the last proof started 18000 s ago (min interval 3600 s)` });
     expect(decide({ messages: [ready], batch: { rule: WAIT, economics: unknown, lastProofAt: null } })).toMatchObject({ due: true, trigger: "interval", detail: `1 waiting message is final at slot ${FINALIZED}: the direction has no proof yet` });
+  });
+
+  it("a message whose token has no price and whose tip is at the automatic maximum proves at its finality, inside the interval (testnet)", () => {
+    const testnet = (ids: string[]): Economics => ({ kind: "known", feesUsd: new Map(), deliveryUsd: null, unpriced: 0, atMaximum: new Set(ids), why: "testnet tokens have no price", block: null });
+    const second = message(FINALIZED - 4, "b");
+    expect(decide({ messages: [ready], batch: { rule: WAIT, economics: testnet([hex("a")]), lastProofAt: recent } })).toMatchObject({
+      due: true,
+      why: "message",
+      trigger: "profit",
+      messageIds: [hex("a")],
+      detail: `1 waiting message is final at slot ${FINALIZED}: a tip of at least 1% of the amount pays (no price for the token)`,
+    });
+    expect(decide({ messages: [ready, second], batch: { rule: WAIT, economics: testnet([hex("a"), hex("b")]), lastProofAt: recent } })).toMatchObject({
+      detail: `2 waiting messages are final at slot ${FINALIZED}: 2 tips of at least 1% of the amount pay (no price for the token)`,
+    });
+    // Below the maximum it waits for the interval, and says the fees cannot be valued.
+    expect(decide({ messages: [ready], batch: { rule: WAIT, economics: testnet([]), lastProofAt: recent } })).toMatchObject({ due: false, why: "min-interval" });
   });
 
   it("with no minimum interval, or no batch, a message proves at once as before", () => {
@@ -406,7 +423,7 @@ describe("warmupPlan with a minimum interval", () => {
   it("asks for one warm worker per batch, when the batch is expected to pay, else when the interval ends", () => {
     const upcoming = message(NOW_SLOT + 5, "b");
     const messages = [message(FINALIZED - 5, "a"), upcoming];
-    const paying = warmupPlan({ ...base, messages, batch: { rule: WAIT, economics: { kind: "known", feesUsd: new Map([[hex("b"), USD]]), deliveryUsd: 0n, unpriced: 0, block: "1" }, lastProofAt: recent } });
+    const paying = warmupPlan({ ...base, messages, batch: { rule: WAIT, economics: { kind: "known", feesUsd: new Map([[hex("b"), USD]]), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(), why: null, block: "1" }, lastProofAt: recent } });
     expect(paying.targets).toEqual([{ at: expectedFinalityAt(upcoming.slot, facts(HEAD)), why: "message", keys: [hex("a"), hex("b")] }]);
     const unpaid = warmupPlan({ ...base, messages, batch: { rule: WAIT, economics: { kind: "unknown", why: "testnet" }, lastProofAt: recent } });
     expect(unpaid.targets).toEqual([{ at: recent + 3600, why: "message", keys: [hex("a"), hex("b")] }]);
@@ -419,7 +436,7 @@ describe("warmupPlan with a minimum interval", () => {
   });
 
   it("a batch due now asks for a worker now; no waiting message asks for nothing, however long ago the last proof was", () => {
-    const due = warmupPlan({ ...base, messages: [message(FINALIZED - 5, "a")], batch: { rule: WAIT, economics: { kind: "known", feesUsd: new Map([[hex("a"), USD]]), deliveryUsd: 0n, unpriced: 0, block: "1" }, lastProofAt: recent } });
+    const due = warmupPlan({ ...base, messages: [message(FINALIZED - 5, "a")], batch: { rule: WAIT, economics: { kind: "known", feesUsd: new Map([[hex("a"), USD]]), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(), why: null, block: "1" }, lastProofAt: recent } });
     expect(due.targets).toEqual([{ at: at(NOW_SLOT), why: "message", keys: [hex("a")] }]);
     expect(warmupPlan({ ...base, messages: [], batch: { rule: WAIT, economics: { kind: "unknown", why: "x" }, lastProofAt: at(NOW_SLOT) - 5 * 3600 } })).toEqual({ targets: [], live: new Set() });
     expect(warmupPlan({ ...base, messages: [], batch: { rule: WAIT, economics: { kind: "unknown", why: "x" }, lastProofAt: null } })).toEqual({ targets: [], live: new Set() });

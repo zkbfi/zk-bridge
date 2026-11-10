@@ -1,7 +1,8 @@
 /**
  * The pure maths of the PulseX price oracle (owner: "find an oracle. i think that the pulsex exchanges serve as good
- * oracles"). Display only: prices never feed amounts, tips or fees. The reading of pools (the I/O) stays with the host;
- * this module takes pool reserves that the host has read and turns them into prices.
+ * oracles"). Prices never feed a signed amount: they show dollar values, pick the default fee and judge whether a tip
+ * pays (`tip-verdict.ts`). This module takes pool reserves that were read and turns them into prices; the reads, through
+ * the caller's client, and the state of each price are in `token-pricing.ts`.
  *
  * PLS/USD is the depth-weighted median of WPLS against the Omnibridge stablecoins (USDC, DAI, USDT) across PulseX v1 and
  * v2. A token's price is its deepest WPLS pool (at least $10k on the WPLS side, else no price) times PLS/USD. A token

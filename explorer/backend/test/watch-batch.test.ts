@@ -11,7 +11,7 @@ const FINALIZED = 500;
 /** The direction's last proof started ten minutes ago: well inside the hour. */
 const RECENT = NOW - 600;
 const msg = (messageId: string, slot: number, finalAt: number): BatchMessage => ({ messageId, slot, finalAt });
-const known = (fees: Record<string, bigint>, deliveryUsd = 0n): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd, unpriced: 0, block: "1" });
+const known = (fees: Record<string, bigint>, deliveryUsd = 0n): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd, unpriced: 0, atMaximum: new Set(), why: null, block: "1" });
 const cents = (value: number) => (BigInt(value) * USD) / 100n;
 
 describe("batchRuleFor", () => {
@@ -77,18 +77,18 @@ describe("planBatch: is there a bridge? is it profitable? has it been an hour si
 
   it("with no minimum interval, proves the final messages at once, whatever they pay", () => {
     const plan = planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 300)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: { ...RULE, minIntervalSeconds: 0 }, economics: { kind: "unknown", why: "test" }, lastProofAt: RECENT });
-    expect(plan).toEqual({ due: true, trigger: "interval", messageIds: ["a"], feesUsd: null, costUsd: null, waitedSeconds: 10 });
+    expect(plan).toEqual({ due: true, trigger: "interval", messageIds: ["a"], feesUsd: null, costUsd: null, atMaximum: 0, waitedSeconds: 10 });
   });
 
   it("a batch that pays proves at once, inside the interval, and the proof covers every final message", () => {
     const plan = planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 450, NOW - 5)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(2), b: cents(1) }), lastProofAt: RECENT });
-    expect(plan).toEqual({ due: true, trigger: "profit", messageIds: ["a", "b"], feesUsd: cents(3), costUsd: PROOF_COST_USD, waitedSeconds: 10 });
+    expect(plan).toEqual({ due: true, trigger: "profit", messageIds: ["a", "b"], feesUsd: cents(3), costUsd: PROOF_COST_USD, atMaximum: 0, waitedSeconds: 10 });
   });
 
   it("a batch that does not pay proves at its finality when the last proof is an interval or more ago, or there is none", () => {
     const messages = [msg("a", 400, NOW - 10)];
     // The owner's case: a message long after the last proof waits no extra hour.
-    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1) }), lastProofAt: NOW - 5 * 3600 })).toEqual({ due: true, trigger: "interval", messageIds: ["a"], feesUsd: cents(1), costUsd: PROOF_COST_USD, waitedSeconds: 10 });
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({ a: cents(1) }), lastProofAt: NOW - 5 * 3600 })).toEqual({ due: true, trigger: "interval", messageIds: ["a"], feesUsd: cents(1), costUsd: PROOF_COST_USD, atMaximum: 0, waitedSeconds: 10 });
     expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}), lastProofAt: NOW - 3600 })).toMatchObject({ due: true, trigger: "interval" });
     expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}), lastProofAt: null })).toMatchObject({ due: true, trigger: "interval" });
   });
@@ -127,6 +127,20 @@ describe("planBatch: is there a bridge? is it profitable? has it been an hour si
       unknownWhy: "testnet tokens have no price",
     });
     expect(planBatch({ messages: [msg("a", 400, NOW - 10)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: known({}), lastProofAt: RECENT })).toMatchObject({ due: false, feesUsd: 0n });
+  });
+
+  it("proves at finality a batch with a message whose token has no price and whose tip is at the automatic maximum, also on a testnet", () => {
+    // A testnet: no coin price, so no fee is valued; a 1% tip pays all the same (owner, 2026-11-09).
+    const testnet = (atMaximum: string[]): Economics => ({ kind: "known", feesUsd: new Map(), deliveryUsd: null, unpriced: 1, atMaximum: new Set(atMaximum), why: "testnet tokens have no price", block: null });
+    const messages = [msg("a", 400, NOW - 10), msg("b", 450, NOW - 5)];
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: testnet(["b"]), lastProofAt: RECENT })).toEqual({ due: true, trigger: "profit", messageIds: ["a", "b"], feesUsd: null, costUsd: null, atMaximum: 1, waitedSeconds: 10 });
+    // Below the maximum: it waits for the interval, and says why the fees cannot be valued.
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: testnet([]), lastProofAt: RECENT })).toMatchObject({ due: false, startWhy: "interval", feesUsd: null, costUsd: null, unknownWhy: "testnet tokens have no price" });
+    // Not final yet: the proof is expected at its finality.
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("c", 600, NOW + 100)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: testnet(["c"]), lastProofAt: RECENT })).toMatchObject({ due: false, startWhy: "profit", startAt: NOW + 100 });
+    // On a priced chain it pays its batch beside the fees of the others.
+    const mixed: Economics = { kind: "known", feesUsd: new Map([["a", 1n]]), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(["b"]), why: null, block: "1" };
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: mixed, lastProofAt: RECENT })).toMatchObject({ due: true, trigger: "profit", feesUsd: 1n, costUsd: PROOF_COST_USD, atMaximum: 1 });
   });
 
   it("with nothing final yet, expects the proof no earlier than the first finality, ordering equal times by identifier", () => {
@@ -206,7 +220,15 @@ describe("createEconomicsReader", () => {
     const { read, reads, pulse } = reader({ [id("a")]: relay(2n * 10n ** 18n), [id("b")]: relay(10n ** 17n) });
     const economics = await read([{ messageId: id("a"), destinationToken: token() }, { messageId: id("b"), destinationToken: token({ isBridgedCopy: true }) }]);
     // Two tokens at a dollar, a tenth at a dollar; one delivery at 1 gwei plus the 0.01 gwei floor, PLS at one cent.
-    expect(economics).toEqual({ kind: "known", feesUsd: new Map([[id("a"), 2n * USD], [id("b"), USD / 10n]]), deliveryUsd: (DELIVERY_GAS * (10n ** 9n + 10n ** 7n) * 10n ** 16n) / 10n ** 18n, unpriced: 0, block: "77" });
+    expect(economics).toEqual({
+      kind: "known",
+      feesUsd: new Map([[id("a"), 2n * USD], [id("b"), USD / 10n]]),
+      deliveryUsd: (DELIVERY_GAS * (10n ** 9n + 10n ** 7n) * 10n ** 16n) / 10n ** 18n,
+      unpriced: 0,
+      atMaximum: new Set(),
+      why: null,
+      block: "77",
+    });
     expect(pulse!.calls.every((call) => call.endsWith("@77"))).toBe(true);
     // The call data of a message is read once while it waits, and forgotten once it is gone.
     await read([{ messageId: id("a"), destinationToken: token() }]);
@@ -214,14 +236,17 @@ describe("createEconomicsReader", () => {
     expect(reads).toEqual([id("a"), id("b"), id("b")]);
   });
 
-  it("counts nothing for a message that pays no fee or whose token has no price", async () => {
+  it("counts nothing for a message that pays no fee; a token with no price pays only at the automatic maximum", async () => {
     const plain = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokens", args: [FEE_TOKEN, ROUTER, 1n] });
     const legacy = encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokensAndCall", args: [FEE_TOKEN, ROUTER, 1n, "0x00000000000000000000000000000000000000e1", 400_000n] });
     const overflow = (() => {
       const director = encodeAbiParameters([{ type: "address" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }, { type: "uint256" }], ["0x00000000000000000000000000000000000000e1", 0n, 1n, 2n ** 255n, 0n]);
       return encodeFunctionData({ abi: tokenMediatorAbi, functionName: "handleNativeTokensAndCall", args: [FEE_TOKEN, ROUTER, 10n ** 30n, director, 400_000n] });
     })();
-    const data = { [id("1")]: "0x12345678" as Hex, [id("2")]: plain, [id("3")]: relay(5n, "0x00000000000000000000000000000000000000c3"), [id("4")]: legacy, [id("5")]: overflow, [id("6")]: relay(10n ** 18n), [id("7")]: relay(10n ** 18n), [id("8")]: relay(10n ** 18n), [id("9")]: relay(10n ** 18n) };
+    // 0.1% of the 100 tokens sent, and 1%.
+    const below = relay(10n ** 17n);
+    const atMaximum = relay(10n ** 18n);
+    const data = { [id("1")]: "0x12345678" as Hex, [id("2")]: plain, [id("3")]: relay(5n, "0x00000000000000000000000000000000000000c3"), [id("4")]: legacy, [id("5")]: overflow, [id("6")]: below, [id("7")]: below, [id("8")]: below, [id("9")]: below, [id("c")]: atMaximum };
     const { read } = reader(data);
     const economics = await read([
       { messageId: id("1"), destinationToken: token() },
@@ -234,16 +259,39 @@ describe("createEconomicsReader", () => {
       { messageId: id("7"), destinationToken: token({ decimals: null }) },
       { messageId: id("8"), destinationToken: token({ address: "0x00000000000000000000000000000000000000f9", homeToken: null }) },
       { messageId: id("9"), destinationToken: token({ isBridgedCopy: true, homeChainId: 943, homeToken: FEE_TOKEN }) },
+      { messageId: id("c"), destinationToken: token({ address: "0x00000000000000000000000000000000000000f9", homeToken: null }) },
     ]);
-    expect(economics).toMatchObject({ kind: "known", feesUsd: new Map(), unpriced: 4 });
+    expect(economics).toMatchObject({ kind: "known", feesUsd: new Map(), unpriced: 4, atMaximum: new Set([id("c")]) });
     // A deployment without a delivery router takes no fee at all.
-    expect(await reader({ [id("6")]: relay(10n ** 18n) }, { router: null }).read([{ messageId: id("6"), destinationToken: token() }])).toMatchObject({ feesUsd: new Map() });
+    expect(await reader({ [id("6")]: relay(10n ** 18n) }, { router: null }).read([{ messageId: id("6"), destinationToken: token() }])).toMatchObject({ feesUsd: new Map(), atMaximum: new Set() });
   });
 
-  it("knows nothing on a testnet, without a PulseChain endpoint, or without a price of the destination's coin", async () => {
-    expect(await reader({}, { chainId: 943 }).read([])).toEqual({ kind: "unknown", why: "testnet tokens have no price" });
-    expect(await reader({}, { pulse: null }).read([])).toEqual({ kind: "unknown", why: "no PulseChain endpoint to read prices from" });
-    expect(await reader({}, { pulse: pulsechain({ usdc: false }) }).read([])).toEqual({ kind: "unknown", why: "no price for the destination's coin at PulseChain block 77" });
-    await expect(reader({}, { pulse: pulsechain({ failBlock: true }) }).read([])).rejects.toThrow("rpc down");
+  it("values no fee on a testnet, without a PulseChain endpoint, or without a price of the destination's coin, and still finds the tips at the automatic maximum", async () => {
+    const testnet = await reader({ [id("a")]: relay(10n ** 18n) }, { chainId: 943, pulse: null }).read([{ messageId: id("a"), destinationToken: token({ isBridgedCopy: true, homeChainId: 11155111 }) }]);
+    expect(testnet).toEqual({ kind: "known", feesUsd: new Map(), deliveryUsd: null, unpriced: 0, atMaximum: new Set([id("a")]), why: "testnet tokens have no price", block: null });
+    expect(await reader({}, { pulse: null }).read([])).toMatchObject({ deliveryUsd: null, why: "the prices could not be read" });
+    expect(await reader({}, { pulse: pulsechain({ usdc: false }) }).read([])).toMatchObject({ deliveryUsd: null, why: "no price for the destination's coin" });
+    expect(await reader({}, { pulse: pulsechain({ failBlock: true }) }).read([])).toMatchObject({ deliveryUsd: null, why: "the prices could not be read" });
+  });
+
+  it("keeps a recent price when PulseChain stops answering, by the dapp's stale rule", async () => {
+    let failBlock = false;
+    const base = pulsechain();
+    const flaky = { ...base, getBlockNumber: async () => (failBlock ? Promise.reject(new Error("rpc down")) : base.getBlockNumber()) };
+    let now = 0;
+    const read = createEconomicsReader({
+      destinationChainId: 369,
+      deliveryRouter: ROUTER,
+      wrappedNative: WPLS,
+      now: () => now,
+      dependencies: { readMessageData: async () => relay(2n * 10n ** 18n), pulsechain: flaky, destinationBaseFee: async () => 10n ** 9n },
+    });
+    const messages = [{ messageId: id("a"), destinationToken: token() }];
+    expect(await read(messages)).toMatchObject({ feesUsd: new Map([[id("a"), 2n * USD]]) });
+    failBlock = true;
+    now = 300_000;
+    expect(await read(messages)).toMatchObject({ feesUsd: new Map([[id("a"), 2n * USD]]), why: null });
+    now = 700_000;
+    expect(await read(messages)).toMatchObject({ feesUsd: new Map(), unpriced: 0, atMaximum: new Set([id("a")]), why: "the prices could not be read" });
   });
 });

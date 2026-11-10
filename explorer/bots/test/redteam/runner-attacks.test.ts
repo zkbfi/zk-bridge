@@ -8,7 +8,8 @@ import { DEFAULT_VERIFY_LIMITS, ProverCommandError, assessProofPayload, createVe
 import { describe, expect, it } from "vitest";
 import { sendBatch } from "../../src/runner/batch.ts";
 import { prepareItem, quoteFee, type DeliveryDependencies, type ReadyDelivery } from "../../src/runner/delivery.ts";
-import { decideDelivery, valueFeeInWei } from "../../src/runner/fee.ts";
+import { feeValueOf, meetsProfitRule } from "@zk-bridge/shared";
+import { testPricing } from "../support/pricing.ts";
 import type { PrerequisiteLedger } from "../../src/runner/prerequisite-ledger.ts";
 import {
   DELIVERY_ROUTER,
@@ -67,12 +68,12 @@ function dependencies(overrides: Partial<DeliveryDependencies> = {}): DeliveryDe
     multicall: MULTICALL,
     rewardAddress: REWARD_ADDRESS,
     wrappedNative: WRAPPED_NATIVE,
+    pricing: testPricing({}, WRAPPED_NATIVE),
     bridge: BRIDGE,
     tokenFactory: null,
     settings: {
       maximumLossPercent: 20,
       deliverWithoutOffer: false,
-      tokenValuationsWei: {},
       deliveryGasFallback: TEST_DELIVERY_GAS_FALLBACK,
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: 300_000n,
@@ -215,7 +216,7 @@ describe("red team: delivery decisions of the runner", () => {
     const deps = dependencies({
       indexer: fakeIndexer([item], { [item.messageId]: data }),
       prover: fakeProver({ evidence: () => evidence }),
-      settings: { ...dependencies().settings, tokenValuationsWei: { [valued.toLowerCase()]: 10n ** 30n } },
+      pricing: testPricing({ [valued.toLowerCase()]: 10n ** 30n }, WRAPPED_NATIVE),
     });
     const preparation = await prepareItem(deps, item, ledger());
     expect(preparation).toMatchObject({ kind: "outcome", outcome: { status: "skipped", reason: "indexer-disagrees-with-evidence" } });
@@ -233,7 +234,7 @@ describe("red team: delivery decisions of the runner", () => {
         indexer: fakeIndexer([item], { [item.messageId]: data }),
         prover: fakeProver({ evidence: () => evidence }),
         tokenFactory: address(0xfa),
-        settings: { ...dependencies().settings, tokenValuationsWei: { [valued.toLowerCase()]: 10n ** 18n, [copy.toLowerCase()]: 10n ** 18n } },
+        pricing: testPricing({ [valued.toLowerCase()]: 10n ** 18n, [copy.toLowerCase()]: 10n ** 18n }, WRAPPED_NATIVE),
       });
       deps.chain.predictedCopy = copy;
       return prepareItem(deps, item, ledger());
@@ -320,27 +321,25 @@ describe("red team: delivery decisions of the runner", () => {
 
 describe("red team: tip accounting", () => {
   it("ATTACK zero-cost or negative-cost inputs do not flip the decision into paying for a loss", () => {
-    expect(decideDelivery({ feeWei: 0n, costWei: 1n, maximumLossPercent: 20 }).deliver).toBe(false);
-    expect(decideDelivery({ feeWei: 0n, costWei: 1n, maximumLossPercent: 100 }).deliver).toBe(false); // a full loss is refused even at 100 percent
-    expect(decideDelivery({ feeWei: 10n ** 30n, costWei: 10n ** 30n + 1n, maximumLossPercent: 0 }).deliver).toBe(false);
+    expect(meetsProfitRule(0n, 1n, { kind: "loss", maximumLossPercent: 20 })).toBe(false);
+    expect(meetsProfitRule(0n, 1n, { kind: "loss", maximumLossPercent: 100 })).toBe(false); // a full loss is refused even at 100 percent
+    expect(meetsProfitRule(10n ** 30n, 10n ** 30n + 1n, { kind: "loss", maximumLossPercent: 0 })).toBe(false);
   });
 
-  it("ATTACK a fee token without a valuation, or with a zero/negative valuation, is never priced", () => {
-    const base = { fee: 10n ** 30n, token: address(0x66), decimals: 18, director: DIRECTOR, wrappedNative: WRAPPED_NATIVE };
-    expect(valueFeeInWei({ ...base, valuationsWei: {} }).ok).toBe(false);
-    expect(valueFeeInWei({ ...base, valuationsWei: { [address(0x66).toLowerCase()]: 0n } }).ok).toBe(false);
-    expect(valueFeeInWei({ ...base, valuationsWei: { [address(0x66).toLowerCase()]: -5n } }).ok).toBe(false);
+  it("ATTACK a fee token without a usable price is never valued", () => {
+    expect(feeValueOf(10n ** 30n, 18, { state: { kind: "no-market" }, perWholeToken: null })).toBeNull();
+    expect(feeValueOf(10n ** 30n, 18, { state: { kind: "unreachable" }, perWholeToken: 10n ** 18n })).toBeNull();
   });
 
   it("ATTACK lying indexer decimals: the runner values the tip with the decimals that the token reports on chain (BLOCKED, was B-1)", async () => {
     // The feed item claims 0 decimals for an 18-decimal token. A lie of 0 would multiply the value by 10^18.
     const token = address(0x66);
-    const deps = dependencies({ settings: { ...dependencies().settings, tokenValuationsWei: { [token.toLowerCase()]: 10n ** 18n } } });
+    const deps = dependencies({ pricing: testPricing({ [token.toLowerCase()]: 10n ** 18n }, WRAPPED_NATIVE) });
     deps.chain.feeTokens = 10n ** 17n;
     const item = feedItem({ id: 1, token, decimals: 0 });
     const quoted = await quoteFee(deps, item, { kind: "offer", director: DIRECTOR, value: 1000n, call: null }, 300_000n);
-    expect(quoted).toMatchObject({ ok: true, feeWei: 10n ** 17n });
-    // valueFeeInWei itself trusts the decimals that it is given.
-    expect(valueFeeInWei({ fee: 1n, token, director: DIRECTOR, wrappedNative: WRAPPED_NATIVE, valuationsWei: { [token.toLowerCase()]: 10n ** 18n }, decimals: 0 })).toEqual({ ok: true, wei: 10n ** 18n });
+    expect(quoted).toMatchObject({ ok: true, feeTokens: 10n ** 17n, decimals: 18 });
+    // feeValueOf itself trusts the decimals that it is given.
+    expect(feeValueOf(1n, 0, { state: { kind: "known" }, perWholeToken: 10n ** 18n })).toBe(10n ** 18n);
   });
 });

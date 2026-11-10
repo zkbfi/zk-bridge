@@ -95,7 +95,7 @@ const PAGE_SIZE = 100;
  * Skip reasons that the next sweep can settle at once: they compare numbers that change with each block, or (anchor not
  * stored) wait for a light client update that may land any moment.
  */
-const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit", "no-price-for-fee-token", "anchor-not-stored"]);
+const CHEAP_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit", "unpriced-tip-below-maximum", "no-price-for-fee-token", "anchor-not-stored"]);
 
 /**
  * Skip reasons that leave a message uncovered after layout calls were paid for it: the rows that were sent did not
@@ -110,13 +110,11 @@ const UNCOVERED_REASONS: ReadonlySet<string> = new Set([
   "prerequisite-failed",
 ]);
 
-/** Skip reasons of an item that the delayed unpaid rule may still deliver: no offer, or an offer below the cost. */
-const UNPAID_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit"]);
 /**
- * The loss limit of an unpaid delivery, in percent. Above 100 so that even a fee of zero, a loss of the whole cost,
- * passes the fee check: the item is delivered whatever its fee, and the daily cap bounds the spend.
+ * Skip reasons of an item that the delayed unpaid rule may still deliver: no offer, an offer below the cost, or a tip in
+ * a token with no price that is under the automatic maximum (1% of the amount).
  */
-const UNPAID_LOSS_PERCENT = 101;
+const UNPAID_REASONS: ReadonlySet<string> = new Set(["no-fee-offer", "loss-at-or-above-limit", "unpriced-tip-below-maximum"]);
 
 /** Builds the runner. It keeps in memory only caches that a restart may lose; the state file keeps what must last. */
 export function createRunner(dependencies: RunnerDependencies): Runner {
@@ -425,14 +423,14 @@ export function createRunner(dependencies: RunnerDependencies): Runner {
 
   /**
    * The delayed unpaid rule. It runs after the paid items of the sweep went out. Each candidate is a covered item that
-   * waited long enough and that the normal rules left out: no offer, or an offer below the cost. The item is prepared
-   * again with the loss limit lifted. An item with an offer goes to the delivery router, which pays what the offer gives
+   * waited long enough and that the normal rules left out: no offer, an offer below the cost, or a tip in a token with no
+   * price under the automatic maximum. The item is prepared again with the fee check lifted (`deliverAnyTip`). An item with an offer goes to the delivery router, which pays what the offer gives
    * (the bridge alone would leave the tokens at the router); an item with none goes to the bridge. The cap of the daily
    * spend is read before each item, from the receipts, so one delivery may pass the cap and no second follows.
    */
   async function deliverUnpaid(candidates: readonly FeedItem[], ledger: PrerequisiteLedger, summary: SweepCounts): Promise<void> {
     const { settings } = dependencies.delivery;
-    const unpaidDelivery: DeliveryDependencies = { ...dependencies.delivery, settings: { ...settings, deliverWithoutOffer: true, maximumLossPercent: UNPAID_LOSS_PERCENT } };
+    const unpaidDelivery: DeliveryDependencies = { ...dependencies.delivery, settings: { ...settings, deliverWithoutOffer: true, deliverAnyTip: true } };
     for (const item of candidates.slice(0, dependencies.maximumDeliveriesPerSweep)) {
       const waitedSeconds = unpaidWaitSeconds(item) as number;
       const capWei = settings.maximumUnpaidSpendPerDayWei ?? null;

@@ -1,4 +1,5 @@
 import { decodeFunctionData, encodeAbiParameters, encodeEventTopics, encodeFunctionResult, keccak256, toFunctionSelector, type Hex } from "viem";
+import { testPricing } from "../support/pricing.ts";
 import { messageBridgeAbi, multicall3Abi } from "@zk-bridge/shared";
 import { describe, expect, it } from "vitest";
 import type { ReceiptLog, ReceiptSummary } from "../../src/chain/transactions.ts";
@@ -87,12 +88,12 @@ function setup(options: { deliveryRouter?: DeliveryDependencies["deliveryRouter"
     multicall: options.multicall === undefined ? MULTICALL : options.multicall,
     rewardAddress: options.rewardAddress === undefined ? REWARD_ADDRESS : options.rewardAddress,
     wrappedNative: WRAPPED_NATIVE,
+    pricing: testPricing({}, WRAPPED_NATIVE),
     bridge: BRIDGE,
     tokenFactory: null,
     settings: {
       maximumLossPercent: 20,
       deliverWithoutOffer: false,
-      tokenValuationsWei: {},
       deliveryGasFallback: TEST_DELIVERY_GAS_FALLBACK,
       maximumPrerequisiteRounds: 3,
       prerequisiteGasFallback: ITEM_GAS,

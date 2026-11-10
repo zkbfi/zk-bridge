@@ -901,7 +901,7 @@ describe("the direction watcher, warm-ups", () => {
 describe("the direction watcher, with a minimum interval since the last proof (2026-11-01)", () => {
   const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n };
   const USD = 10n ** 18n;
-  const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, block: "7" });
+  const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(), why: null, block: "7" });
   const finalAt = (slot: number) => expectedFinalityAt(slot, facts()) * 1000;
   /** The last proof started when message `a` was sent: its finality is inside the hour. */
   const LAST = slotStart(HEAD + 100);
@@ -1137,7 +1137,7 @@ describe("the direction watcher reports its decisions (2026-11-01)", () => {
   const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n };
   const LAST = slotStart(HEAD + 100);
   const USD = 10n ** 18n;
-  const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, block: "7" });
+  const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(), why: null, block: "7" });
   const finalAt = (slot: number) => expectedFinalityAt(slot, facts()) * 1000;
 
   it("a batch that waits: its size, worth and times in milliseconds, with the slot clock of the light client", async () => {

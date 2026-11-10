@@ -33,6 +33,14 @@ describe("the Bridge pill's verdict", () => {
     expect(pressable(verdict)).toBe(true);
   });
 
+  it("says a tip in a token with no price pays only at the automatic maximum", () => {
+    const verdict = verdictOf({ ...base, tipBelowBreakEven: true, unpricedTip: { maximumText: "1%" } });
+    expect(verdict.label).toBe("Low tip · may take about an hour longer");
+    expect(verdict.detail).toBe("No price is known for this token, so a tip pays only at 1% of the amount or more. Bots that need a profit skip it; the zkb.fi runner delivers it once it has waited an hour, and you can deliver it yourself. Raise the tip to 1% to go sooner.");
+    // At the maximum there is no low tip to warn about.
+    expect(verdictOf({ ...base, tipBelowBreakEven: false, unpricedTip: { maximumText: "1%" } }).kind).toBe("go");
+  });
+
   it("names the numbers in the low-fee detail when it has them", () => {
     const verdict = verdictOf({ ...base, tipBelowBreakEven: true, lowFee: { feeText: "$0.05", costText: "$0.04" } });
     expect(verdict.detail).toBe("The fee ($0.05) is under twice what delivering and proving it should cost ($0.04 now). Bots that need a profit skip it; the zkb.fi runner delivers it once it has waited an hour, and you can deliver it yourself. Raise the tip to go sooner.");

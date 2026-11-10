@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { testPricing } from "../support/pricing.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -320,7 +321,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
   const callbackOf = (fields: { settings: bigint; limit: bigint; multiplier: bigint }) =>
     encodeFeeDirector(director(fields), { router: stack.deliveryRouter, protectedAddresses: [], destinationToken: stack.token, destinationWrappedNative: stack.token });
 
-  async function makeRunner(items: ReturnType<typeof feedItem>[], offers: Record<string, Hex>, overrides: { tokenValuationsWei?: Record<string, bigint> } = {}) {
+  async function makeRunner(items: ReturnType<typeof feedItem>[], offers: Record<string, Hex>, overrides: { valuations?: Record<string, bigint> } = {}) {
     const signer = await createMnemonicSource({ mnemonic: ANVIL_MNEMONIC }).openSigner(`m/44'/60'/0'/0/${ACCOUNT.runner}`);
     const chain = createTransactionPort({ client: stack.chain.publicClient, signer, chainId: 369, receiptTimeoutMilliseconds: 60_000 });
     const prover = fakeProver({ evidence: () => evidenceFor({ executeData: emptyExecuteMessage(4242n) }) });
@@ -345,13 +346,13 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
         multicall: stack.multicall3,
         rewardAddress: account(ACCOUNT.reward).address,
         wrappedNative: stack.wrappedNative,
+        // One whole fee token is worth one whole native coin.
+        pricing: testPricing(overrides.valuations ?? { [stack.token.toLowerCase()]: 10n ** 18n }, stack.wrappedNative),
         bridge: stack.mediatorBridge,
         tokenFactory: null,
         settings: {
           maximumLossPercent: 20,
           deliverWithoutOffer: false,
-          // One whole fee token is worth one whole native coin.
-          tokenValuationsWei: overrides.tokenValuationsWei ?? { [stack.token.toLowerCase()]: 10n ** 18n },
           deliveryGasFallback: 1_500_000n,
           maximumPrerequisiteRounds: 2,
           prerequisiteGasFallback: 300_000n,
@@ -514,7 +515,7 @@ describe.skipIf(!toolsPresent)("delivery through the real delivery router", () =
     const offer = { settings: 2n, limit: 10n ** 18n, multiplier: 3n * 10n ** 18n };
     await arm(callbackOf(offer), 10);
     const unwrap = item(10);
-    const { runner, outcomes } = await makeRunner([unwrap], { [unwrap.messageId]: offerData(offer) }, { tokenValuationsWei: {} });
+    const { runner, outcomes } = await makeRunner([unwrap], { [unwrap.messageId]: offerData(offer) }, { valuations: {} });
     // With no valuation of the token the runner cannot price the tip. It does not treat the tip as native coin.
     expect(await runner.sweep()).toMatchObject({ delivered: 0, skipped: 1 });
     expect(outcomes.records[0]).toMatchObject({ status: "skipped", reason: "no-price-for-fee-token" });

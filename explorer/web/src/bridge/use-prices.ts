@@ -7,55 +7,25 @@ import { useMemo } from "react";
 import { rpcTransport } from "../app/rpc-transport";
 import { createPublicClient } from "viem";
 import { CLIENT_BATCH, rpcChain } from "@terminal/chain/rpc-transport";
-import type { ContractCaller } from "@zk-bridge/shared";
+import { countingCaller, isChainAnswer, poolReaderAtLatest, type PulseChainClient } from "@zk-bridge/shared";
 import { PRICE_NOTE, samplePrices, usePrices as usePricesFrom, type CountingPoolReader, type PriceSource } from "@zkb/react";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 import type { TokenInfo } from "@terminal/model/types";
 import { useServices } from "../app/services";
-import { poolReaderOver } from "./price-oracle";
 
 export { PRICE_NOTE, samplePrices };
 
 const PULSECHAIN = rpcChain({ id: 369, name: "PulseChain", symbol: "PLS" });
 
-/** Errors that are the chain's answer (no such pair, no data), not a failure to reach it. */
-const ANSWERS = new Set(["ContractFunctionRevertedError", "ContractFunctionZeroDataError", "AbiDecodingZeroDataError"]);
-
-/** Whether an error is the chain answering "nothing there", as opposed to the request not getting through. */
-export const isChainAnswer = (error: unknown): boolean => {
-  for (let cause: unknown = error, depth = 0; cause instanceof Error && depth < 8; cause = (cause as { cause?: unknown }).cause, depth += 1) {
-    if (ANSWERS.has(cause.name)) return true;
-  }
-  return false;
-};
+// Telling a chain's answer from a failed request is the one price source's (`@zkb/core`), shared with the backend and the runner.
+export { countingCaller, isChainAnswer };
 
 /**
- * The caller, counting the reads that failed to get through. The pool reader reads a failed call as "no pool", which
- * would pass for "no market"; the count lets the price layer tell the two apart.
+ * A pool reader over a PulseChain RPC at its latest block; reads are batched into multicall calls and all pinned there.
+ * It counts the reads that did not get through (`poolReaderAtLatest` of the one price source).
  */
-export const countingCaller = (client: ContractCaller): { readonly caller: ContractCaller; readonly failures: () => number } => {
-  let failed = 0;
-  const caller: ContractCaller = {
-    ...client,
-    readContract: (async (call: Parameters<ContractCaller["readContract"]>[0]) => {
-      try {
-        return await client.readContract(call);
-      } catch (error) {
-        if (!isChainAnswer(error)) failed += 1;
-        throw error;
-      }
-    }) as ContractCaller["readContract"],
-  };
-  return { caller, failures: () => failed };
-};
-
-/** A pool reader over a PulseChain RPC at its latest block; reads are batched into multicall calls and all pinned there. */
-export const poolReaderFor = async (rpcUrl: string): Promise<CountingPoolReader> => {
-  const client = createPublicClient({ chain: PULSECHAIN, transport: rpcTransport(rpcUrl), batch: CLIENT_BATCH });
-  const block = await client.getBlockNumber();
-  const { caller, failures } = countingCaller(client as unknown as ContractCaller);
-  return { ...poolReaderOver(caller, block), failures };
-};
+export const poolReaderFor = (rpcUrl: string): Promise<CountingPoolReader> =>
+  poolReaderAtLatest(createPublicClient({ chain: PULSECHAIN, transport: rpcTransport(rpcUrl), batch: CLIENT_BATCH }) as unknown as PulseChainClient);
 
 /**
  * The dollar price of each token (key `<side>:<address>`) and of each chain's native coin (key `native:<chainId>`), or

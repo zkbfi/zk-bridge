@@ -25,6 +25,7 @@ import { openSigner, type Signer } from "../signing/open-signer.ts";
 import type { DeliveryDependencies, DeliverySettings } from "./delivery.ts";
 import { createDepositOpener, type DepositOpener } from "./opener.ts";
 import { createFileOutcomeSink } from "./outcomes.ts";
+import { createTokenPricing, pulseChainClientOf } from "./pricing.ts";
 import { createRunner, type Runner } from "./runner.ts";
 import { createSerialQueue } from "./serial-queue.ts";
 import { createSourceReader } from "./source-reader.ts";
@@ -75,7 +76,6 @@ export function deliverySettingsOf(runnerConfig: RunnerConfig, destinationChainI
     deliverWithoutOffer: runnerConfig.deliverWithoutOffer,
     deliverUnpaidAfterSeconds: runnerConfig.deliverUnpaidAfterSeconds,
     maximumUnpaidSpendPerDayWei: runnerUnpaidSpendCapWei(runnerConfig, destinationChainId),
-    tokenValuationsWei: valuations(runnerConfig.tokenValuationsWei),
     deliveryGasFallback: BigInt(runnerConfig.deliveryGasFallback),
     maximumPrerequisiteRounds: runnerConfig.maximumPrerequisiteRounds,
     prerequisiteGasFallback: BigInt(runnerConfig.prerequisiteGasFallback),
@@ -86,10 +86,6 @@ export function deliverySettingsOf(runnerConfig: RunnerConfig, destinationChainI
     maximumBatchSize: runnerConfig.maximumBatchSize,
     maximumBatchGas: BigInt(runnerConfig.maximumBatchGas),
   };
-}
-
-function valuations(settings: Readonly<Record<string, string>>): Readonly<Record<string, bigint>> {
-  return Object.fromEntries(Object.entries(settings).map(([token, wei]) => [token.toLowerCase(), BigInt(wei)]));
 }
 
 /** The direction the other way round. */
@@ -154,6 +150,12 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
     now: () => new Date(now()),
     knownSecrets: vault.knownSecrets,
   });
+  if (runnerConfig.tokenValuationsWei !== undefined) {
+    logger.warn("config_deprecated", {
+      key: "runner.tokenValuationsWei",
+      detail: "ignored: the runner prices tips from PulseX pools on PulseChain, as the dapp and the backend do; a token with no price pays at a tip of at least 1% of the amount. Remove the key",
+    });
+  }
   const ports = new Map<number, { readonly chain: TransactionPort; readonly client: PublicClient }>();
   const portOf = (rpcUrl: string, chainId: number) => {
     const known = ports.get(chainId);
@@ -222,6 +224,8 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       bridge: destination.contracts.bridge,
       tokenFactory: destination.contracts.tokenFactory as Address,
       settings: deliverySettingsOf(runnerConfig, destination.chainId),
+      // The prices are PulseX's: read on PulseChain when the pair has it. A testnet pair has no market and reads none.
+      pricing: createTokenPricing({ destinationChainId: destination.chainId, wrappedNative: destination.contracts.wrappedNative, pulsechain: pulseChainClientOf(pair.sides, (side) => portOf(side.rpcUrl, side.chainId).client), now }),
       logger: directionLogger,
     };
     const state = createStateFile({

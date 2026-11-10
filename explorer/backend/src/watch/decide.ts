@@ -3,7 +3,7 @@
  * network, no clock. The keep-alive rules are the planner's (`keepalive/plan.ts`); this file only asks it.
  */
 import type { Hex } from "viem";
-import { SLOTS_PER_EPOCH, expectedFinalityAt, finalizedSlotAt, slotAtTime, slotStartTime } from "@zk-bridge/shared";
+import { DEFAULT_CAP_WAD, PERCENT_WAD, SLOTS_PER_EPOCH, expectedFinalityAt, finalizedSlotAt, slotAtTime, slotStartTime } from "@zk-bridge/shared";
 import { assess, formatHours, type Assessment, type LightClientFacts, type Policy, type SourceHistory } from "../keepalive/plan.ts";
 import type { ProofPlace } from "../requests/held-proofs.ts";
 import { planBatch, usdText, type BatchPlan, type BatchRule, type Economics } from "./batch.ts";
@@ -291,7 +291,9 @@ export function decideProof(input: DecisionInput): ProofDecision {
     if (plan.due) {
       const how =
         plan.trigger === "profit"
-          ? "their fees cover the cost"
+          ? plan.atMaximum > 0
+            ? `${plan.atMaximum === 1 ? "a tip" : `${plan.atMaximum} tips`} of at least ${DEFAULT_CAP_WAD / PERCENT_WAD}% of the amount ${plan.atMaximum === 1 ? "pays" : "pay"} (no price for the token)`
+            : "their fees cover the cost"
           : batch.lastProofAt === null
             ? "the direction has no proof yet"
             : `the last proof started ${Math.round(nowSeconds - batch.lastProofAt)} s ago (min interval ${batch.rule.minIntervalSeconds} s)`;

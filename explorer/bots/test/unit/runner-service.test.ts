@@ -127,7 +127,7 @@ function standardOverrides(extra: RunnerOverrides = {}) {
 }
 
 describe("deliverySettingsOf", () => {
-  it("reads every wei text as a number and lowercases the token addresses of the valuations", () => {
+  it("reads every wei text as a number, and drops the deprecated tokenValuationsWei", () => {
     const parsed = parseBotConfig({
       schemaVersion: 1,
       stateDirectory: "/s",
@@ -147,7 +147,6 @@ describe("deliverySettingsOf", () => {
       deliverWithoutOffer: true,
       deliverUnpaidAfterSeconds: 3600,
       maximumUnpaidSpendPerDayWei: 10n ** 24n,
-      tokenValuationsWei: { [`0x${"ab".repeat(20)}`]: 1000n },
       deliveryGasFallback: 11n,
       maximumPrerequisiteRounds: 2,
       prerequisiteGasFallback: 13n,
@@ -266,6 +265,14 @@ describe("startRunner runs one pass", () => {
     const { overrides } = standardOverrides();
     await run(started, overrides);
     expect(started.created.events().find((event) => event.event === "runner_started")).toMatchObject({ deliveryRouter: named });
+  });
+
+  it("accepts the deprecated tokenValuationsWei, warns that it is ignored, and prices from PulseChain instead", async () => {
+    const started = await prepare({ runnerExtra: { tokenValuationsWei: { [`0x${"ab".repeat(20)}`]: "1000" } } });
+    const { overrides } = standardOverrides();
+    await run(started, overrides);
+    expect(started.created.events().find((event) => event.event === "config_deprecated")).toMatchObject({ level: "warn", key: "runner.tokenValuationsWei" });
+    expect(started.created.events().some((event) => event.event === "runner_started")).toBe(true);
   });
 
   it("builds the prover wrapper itself when none is given, and reads the priority fee that the configuration sets", async () => {
