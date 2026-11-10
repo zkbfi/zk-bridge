@@ -1,4 +1,5 @@
 /** The downloads block: one primary button for the visitor's platform, a menu to switch, and the chosen file's details. */
+import { copyable } from "./copy.ts";
 import type { DownloadEntry } from "./manifest.ts";
 import { platformLabel, platformRank } from "./platform.ts";
 import type { Detection } from "./platform.ts";
@@ -77,8 +78,7 @@ function details(entry: DownloadEntry): string {
   const size = entry.size === undefined ? "" : `<dt>Size</dt><dd>${escape(formatSize(entry.size))}</dd>`;
   return [
     `<dl class="dl-details"><dt>File</dt><dd><code>${escape(entry.file)}</code></dd>${size}`,
-    `<dt>SHA-256</dt><dd><code class="dl-sha">${escape(entry.sha256)}</code> `,
-    `<button type="button" class="dl-copy" data-copy="${escape(entry.sha256)}">Copy</button></dd></dl>`,
+    `<dt>SHA-256</dt><dd>${copyable(entry.sha256, "Copy SHA-256")}</dd></dl>`,
   ].join("");
 }
 
@@ -126,7 +126,7 @@ export function renderDownloads(
   const { programs, anySystem } = groupDownloads(downloads);
   const other = anySystem.length === 0 ? "" : [
     `<div class="dl-program"><h3>Files for every system</h3><ul>`,
-    anySystem.map((entry) => `<li><a href="${escape(address(baseUrl, entry))}" rel="noopener">${escape(entry.name)}</a>${entry.size === undefined ? "" : ` (${escape(formatSize(entry.size))})`}<br>SHA-256: <code>${escape(entry.sha256)}</code></li>`).join(""),
+    anySystem.map((entry) => `<li><a href="${escape(address(baseUrl, entry))}" rel="noopener">${escape(entry.name)}</a>${entry.size === undefined ? "" : ` (${escape(formatSize(entry.size))})`}<br>SHA-256: ${copyable(entry.sha256, "Copy SHA-256")}</li>`).join(""),
     `</ul></div>`,
   ].join("");
   return [

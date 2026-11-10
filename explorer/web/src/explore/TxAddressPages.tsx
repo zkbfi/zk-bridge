@@ -5,6 +5,7 @@
  * each chain, what it did through zkb.fi, and its transfers and proofs.
  */
 import { useQuery } from "@tanstack/react-query";
+import { CopyValue } from "../ui/CopyValue";
 import { useState, type ReactNode } from "react";
 import { getAddress, type Address, type Hex } from "viem";
 import type { PairConfig } from "@terminal/model/types";
@@ -42,7 +43,7 @@ export const BlockDrawer = ({ detail }: { readonly detail: Extract<StepDetail, {
     <DrawerGrid
       rows={[
         ["Block", <a href={explore({ kind: "block", chainId: detail.chainId, id: detail.number.toString() })}>{detail.number.toLocaleString("en-US")}</a>],
-        ["Hash", detail.hash !== null ? <span className="zb-mono">{shortHex(detail.hash)}</span> : block === undefined || block.hash === null ? <Missing why="Read from the chain" /> : <span className="zb-mono">{shortHex(block.hash)}</span>],
+        ["Hash", detail.hash !== null ? <CopyValue value={detail.hash} label="Copy block hash">{shortHex(detail.hash)}</CopyValue> : block === undefined || block.hash === null ? <Missing why="Read from the chain" /> : <CopyValue value={block.hash} label="Copy block hash">{shortHex(block.hash)}</CopyValue>],
         ["Time", block === undefined ? <Missing why="Read from the chain" /> : new Date(Number(block.timestamp) * 1000).toLocaleString("en-GB")],
         ["Slot", detail.slot === null ? <Missing why="Not known" /> : <a href={explore({ kind: "slot", id: detail.slot.toString() })}>{detail.slot.toLocaleString("en-US")}</a>],
         ["Committee", detail.period === null ? <Missing why="Not known" /> : <>period {detail.period.toLocaleString("en-US")} · <Missing why="The indexer does not record the signers" /> signed</>],

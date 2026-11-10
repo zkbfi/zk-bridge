@@ -95,6 +95,10 @@
 .zb-xband-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
 .zb-xamt { display: inline-flex; align-items: center; gap: 10px; word-break: normal; }
 .zb-xcopy { display: inline-grid; place-items: center; width: 28px; height: 28px; color: inherit; flex: none; }
+.zb-copyable { display: inline; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 3px; }
+.zb-copyable:hover { text-decoration: underline dotted; text-underline-offset: 0.2em; }
+.zb-copyable:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.zb-copystatus { margin-left: 6px; font-size: var(--zb-step-micro); color: var(--zb-muted); }
 .zb-xcopy .zb-icon { width: 16px; height: 16px; }
 .zb-xv > b { font-weight: 700; white-space: nowrap; }
 .zb-xusd { color: var(--zb-muted); white-space: nowrap; }
