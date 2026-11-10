@@ -64,6 +64,9 @@ export interface PlannedTransaction {
 /** A named failure of input validation. The message tells the user what to fix. */
 export class PlanInputError extends Error {
   override readonly name = 'PlanInputError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 /** How a token relay delivers: a plain release, or a release that also calls the receiver. */

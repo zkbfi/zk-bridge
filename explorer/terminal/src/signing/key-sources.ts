@@ -23,6 +23,9 @@ export const SECRET_VARIABLES = {
 /** A secret file has permissions that let other users read it. */
 export class InsecureFileError extends Error {
   override readonly name = 'InsecureFileError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 /** A mutable view of the environment. Tests pass a plain object. */

@@ -45,6 +45,7 @@ async function openPanel(input: {
   readonly set: readonly EndpointKey[]
   readonly transport: ReturnType<typeof fakeTransport>['transport']
   readonly reviews?: FlowStep[][]
+  readonly onReview?: (title: string, steps: readonly FlowStep[]) => void
   readonly closed?: string[]
   readonly dataSource?: DataSource
 }) {
@@ -60,7 +61,7 @@ async function openPanel(input: {
   hosts = await renderApp({ width: 120, height: 40, pair, connection: runtime, dataSource: input.dataSource ?? dataSourceWithHead(HEAD), files: {} })
   opened = await renderModalAlone(
     hosts.services,
-    <ProofModal transport={input.transport} refreshMilliseconds={150} onReview={(_title, steps) => input.reviews?.push([...steps])} onClose={() => input.closed?.push('closed')} />,
+    <ProofModal transport={input.transport} refreshMilliseconds={150} onReview={input.onReview ?? ((_title, steps) => input.reviews?.push([...steps]))} onClose={() => input.closed?.push('closed')} />,
   )
   return opened
 }
@@ -164,6 +165,19 @@ describe('the proof panel reads the latest proof', () => {
     expect(reviews).toHaveLength(1)
     expect(reviews[0]![0]!.plan.functionSignature).toBe('update(bytes,bytes)')
     expect(reviews[0]![0]!.plan.chain.chainId).toBe(369)
+  })
+
+  test('a review that cannot open shows its reason with any keyed endpoint hidden', async () => {
+    const { transport } = fakeTransport({ get: async () => ({ status: 200, body: { payload: payloadOf(proofMessage()) } }) })
+    const onReview = () => {
+      throw new Error(`cannot plan against ${URLS.backendUrl}`)
+    }
+    const view = await openPanel({ set: ['msgboardIndexerUrl'], transport, onReview })
+    await view.until('from the msgboard indexer')
+    await view.press('3')
+    const frame = await view.until('cannot plan against')
+    expect(frame).toContain('cannot plan against')
+    expect(frame).not.toContain(KEY)
   })
 
   test('a direction with no proof says so and opens no review', async () => {

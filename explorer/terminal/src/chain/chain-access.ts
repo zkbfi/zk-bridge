@@ -12,6 +12,9 @@ import { readChainSnapshot, readRouterAddresses, type ChainSnapshotResult, type 
 /** The RPC URL of a chain is not set. */
 export class MissingRpcError extends Error {
   override readonly name = 'MissingRpcError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 /** The native balance of one address on each chain of the pair. Null means the chain could not be read. */

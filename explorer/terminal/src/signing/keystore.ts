@@ -19,6 +19,9 @@ const pbkdf2Async = promisify(pbkdf2)
 /** The keystore file is not a version 3 keystore that this reader supports. */
 export class KeystoreFormatError extends Error {
   override readonly name = 'KeystoreFormatError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 /** The password does not open the keystore: the message authentication code differs. */

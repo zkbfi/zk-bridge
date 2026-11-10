@@ -100,6 +100,9 @@ export interface ProverEndpoints {
 /** An endpoint or a start block is missing for a chain. */
 export class ProverInputError extends Error {
   override readonly name = 'ProverInputError'
+  constructor(message: string) {
+    super(message)
+  }
 }
 
 const UNUSED_ADDRESS = '0x0000000000000000000000000000000000000000'
