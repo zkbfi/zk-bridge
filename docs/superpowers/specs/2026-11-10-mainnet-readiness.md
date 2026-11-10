@@ -145,6 +145,18 @@ Residual, accepted under 1.4 unless the owner asks for an upgrade path: after a 
 from X stop (the gate seals), messages from X can no longer be proven, and copies held on X of tokens native to the
 other chain cannot go home; their originals stay locked. Messages into X keep working. Sends in the last two or three
 epochs before the fork strand (1.6). A new route serves new transfers.
+Owner, 2026-11-10: "why wouldn't it just be a matter of telling pulsechain that gloas is ready to be accepted as well?
+and can't we add some of these checks and function calls to something like the explorer page? i think the frontend can
+help a lot in this regard, prevent bridges when we are near a fork for example". Then: "yes, start part 1 and 2".
+- **Part 1 (frontend, testnet now, no contract change).** The dapp and the terminal read each chain's fork schedule
+  (`/eth/v1/config/fork_schedule`) and refuse sends from a chain from one hour (at least three epochs) before its next
+  scheduled fork until the other side is shown to follow it. The explorer and status pages show, per route, the next
+  fork with a countdown, the gate state and the registry's latest observation, with buttons anyone can press to post an
+  observation and to seal a gate. This builds the cutover that `known-issues.md` 1.5 already claims; nothing in
+  `explorer/` implemented it on 2026-11-10.
+- **Part 2 (contracts, layer 1 and 2 freeze).** "Telling PulseChain" is a proof, never a trusted call: the verifier takes
+  the Gloas rule from proven fork data (the `ForkRegistry` observation, or the source state's own proven shape) instead
+  of the immutable `gloasForkSlot`; the gate's allowed shapes and the verifier's provable shapes come from one list.
 - **D3.** Replaced by the owner's assumption above: no deploy date counts as safe, so the deployment waits for nothing.
   The two fixes go into the layer 1 and 2 freeze with D1.
 - Size: M for the two fixes and their tests.
