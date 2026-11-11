@@ -20,6 +20,7 @@ describe("the proof rows for the indexer's proof archive", () => {
       held: [],
       evidence: [{ messageId: "0xaa", direction: "first-to-second", body: "{}", storedAt: 7 }],
       handoffs: [],
+      forkProofs: [],
     });
     storage.database.prepare("UPDATE proofs SET body = ? WHERE direction = 'second-to-first'").run(JSON.stringify({ pair: "p" }));
     ensureProofTable(storage);
@@ -35,6 +36,6 @@ describe("the proof rows for the indexer's proof archive", () => {
     const app = createApp({ context: base.context, modules: MODULES, enabled: ["archive"] });
     const answer = await app.request("/archive/proofs");
     expect(answer.status).toBe(200);
-    expect(await answer.json()).toEqual({ board: [], held: [], evidence: [], handoffs: [] });
+    expect(await answer.json()).toEqual({ board: [], held: [], evidence: [], handoffs: [], forkProofs: [] });
   });
 });

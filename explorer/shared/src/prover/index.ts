@@ -13,3 +13,4 @@ export * from "./verify-guard.js";
 export * from "./prover-binary.js";
 export * from "./prover-config.js";
 export * from "./remote-endpoints.js";
+export * from "./fork-proof-record.js";

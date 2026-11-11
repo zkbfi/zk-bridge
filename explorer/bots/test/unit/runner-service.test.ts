@@ -362,6 +362,7 @@ describe("startRunner opens the bridge of the destination chain", () => {
     expect(started.created.events().filter((event) => event.event === "proof_prefetched").map((event) => event.blockNumber)).toEqual(["899", "900"]);
     expect(started.created.events().find((event) => event.event === "proof_prefetched" && event.blockNumber === "900")).toMatchObject({ chainId: 1, blockNumber: "900", direction: "first-to-second" });
     expect(configs[0]).toContain(`proof_cache_dir = "${cacheDirectory}"`);
+    expect(configs[0]).toMatch(/fork_proof_archive_urls = \["https?:\/\/[^"]+\/api\/proofs\/fork-proofs"\]/);
   });
 
   it("takes the opening proof entry from the indexer's proof archive once it proves the stored head's key, and asks no node for it", async () => {

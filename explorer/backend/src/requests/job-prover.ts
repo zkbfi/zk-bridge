@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import type { Pair } from "@zk-bridge/shared";
-import { createProverBinary, type BackendSection, type CommandExecutor, type HandoffProver, type ProverBinary } from "@zk-bridge/shared/prover";
-import { handoffArchiveBases, type BackendConfig, type BackendSecrets } from "../config.ts";
+import { createProverBinary, type BackendSection, type CommandExecutor, type ForkProofProver, type HandoffProver, type ProverBinary } from "@zk-bridge/shared/prover";
+import { forkProofArchiveBases, handoffArchiveBases, type BackendConfig, type BackendSecrets } from "../config.ts";
 import type { Logger } from "../logger.ts";
 
 /** Input of {@link createProverFactories}. */
@@ -24,8 +24,8 @@ export interface ProverFactories {
    * prover starts from the head on chain.
    */
   readonly proverForJob: (jobId: string) => ProverBinary;
-  /** A wrapper without a proving backend, for `verify`, `evidence` and `handoff-update`. */
-  readonly utilityProver: ProverBinary & HandoffProver;
+  /** A wrapper without a proving backend, for `verify`, `evidence`, `handoff-update` and `fork-proof`. */
+  readonly utilityProver: ProverBinary & HandoffProver & ForkProofProver;
 }
 
 /** Builds the prover wrappers from the configuration. */
@@ -39,6 +39,7 @@ export function createProverFactories(input: ProverFactoryInput): ProverFactorie
     temporaryDirectory: join(dirname(config.databasePath), "tmp"),
     stateCacheDirectory: join(dirname(config.databasePath), "beacon-states"),
     handoffArchiveUrls: handoffArchiveBases(config),
+    forkProofArchiveUrls: forkProofArchiveBases(config),
     logger: input.logger,
   };
   const webhookBase = config.publicUrl.replace(/\/+$/, "");

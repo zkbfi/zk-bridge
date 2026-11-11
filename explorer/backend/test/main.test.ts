@@ -363,7 +363,7 @@ describe("startBackend", () => {
     const running = await startBackend({ config, pair: PAIR, enabled: ["archive"], environment: ENVIRONMENT, write: () => {} });
     try {
       const report = (await (await fetch(`http://127.0.0.1:${running.port}/health`)).json()) as { modules: Record<string, unknown> };
-      expect(report.modules).toEqual({ archive: { state: "degraded", detail: "indexerUrl is not set; 0 handoff records, 0 periods failing" } });
+      expect(report.modules).toEqual({ archive: { state: "degraded", detail: "indexerUrl is not set; 0 handoff records, 0 periods failing; fork proof capture off" } });
     } finally {
       await running.stop();
     }

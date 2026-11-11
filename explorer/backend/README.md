@@ -42,6 +42,8 @@ The backend reads no endpoint from the environment.
 | `handoffUrls` | Optional. More beacon APIs of each chain, by chain identifier, as a list. Asked for the committee handoff update of a period that the beacon endpoint and the states cannot give, and for states after `stateUrls` (prover `source.handoff_urls`). See "The handoff archive". |
 | `handoffArchiveUrls` | Optional. More base URLs of the handoff archive (`<base>/<chainId>/<period>.json`), asked after this backend's own table and the indexer's, such as `https://<gateway>/ipfs/<cid>/handoff-updates`. |
 | `handoffCapture` | `{ enabled: true, backfillPeriods: 8, intervalSeconds: 600 }`. The capture of the handoff archive (archive module). |
+| `forkProofCapture` | `{ enabled: true, intervalSeconds: 120 }`. The capture of the fork proof archive (archive module). See "The fork proof archive". |
+| `forkProofArchiveUrls` | Optional. More base URLs of the fork proof archive (`<base>/<chainId>/<stateRoot>.json`), asked by the `evidence` command after this backend's own table and the indexer's, such as `https://<gateway>/ipfs/<cid>/fork-proofs`. |
 | `headerRpcUrls` | Optional. More execution RPCs of each chain, by chain identifier, as a list. The prover asks them in order, only for `debug_getRawHeader`, when the RPC endpoint lacks it (the `opening-proof` command needs the raw header of the other chain's block, and the `evidence` command the raw header of a Gloas source block). The prover file names them for both sides of a route (`source.header_rpc_urls`, `destination.header_rpc_urls`). Every header is checked against its block hash. |
 | `msgboardUrl` | The msgboard node. The `webhook` and `msgboard-indexer` modules need it. |
 | `indexerUrl` | The chain indexer. The `requests` module needs it and refuses to start without it. Without it the archive reports `degraded`. |
@@ -200,6 +202,32 @@ states the prover builds those updates from, so the archive module captures one 
   handoff update and for states (`source.handoff_urls`).
 - The watcher's planner asks the same sources (`readHistoryFrom` in `src/keepalive/sources.ts`), so "stranded" means
   none of them has the period; its reason lists each source by host and what it answered.
+
+### The fork proof archive
+
+Owner, 2026-11-10: "yes, and save fork proofs in the watcher too". Every message proof carries the fork proof of the
+state of its source block (`MessageProof.sourceFork`, `docs/audit/known-issues.md` 1.22). PulseChain nodes prune old
+states and an Ethereum mainnet state is hundreds of MB, so a message left unproven for long could become unprovable. The
+archive module saves the proof while the state is fresh (`src/archive/fork-proofs.ts`):
+
+- Every `forkProofCapture.intervalSeconds` (120) it reads, like the watcher, the messages of each direction from the
+  chain indexer (`GET /api/feed`, statuses `waiting_for_finality` and `covered`: older than the finality window and not
+  delivered; up to 5 pages of 200, newest first). For each source block without a record, oldest first and once per
+  block, it runs `zk-bridge-prover fork-proof --route <route> --tx <hash>`. The record (about 1 KB) is checked again
+  (`checkForkProofRecord` of `@zk-bridge/shared/prover`) and goes into the `fork_proofs` table, keyed by chain and state
+  root, for good. Several messages of one block share it. A failed block (not final yet, or no node gives the proof)
+  waits the interval, doubled with each failure, at most 6 hours (`fork_proof_capture_failed`); `fork_proof_captured`
+  logs a success. A direction whose source has no beacon endpoint, a backend without `indexerUrl`, and
+  `forkProofCapture.enabled: false` capture nothing (`fork_proof_capture_off` says why). `GET /health` counts the records
+  and the failing blocks.
+- `GET /archive/fork-proofs/<chainId>/<stateRoot>.json` gives a record exactly as stored. It is loopback-only like
+  `/archive/proofs`, whose field `forkProofs` lists the records of the last 7 days for the indexer (older ones reach it
+  through the nightly snapshot, table `fork_proofs`).
+- Every prover run of the backend names the archive as `source.fork_proof_archive_urls`: this backend's route, then
+  `<indexerUrl>/api/proofs/fork-proofs`, then `forkProofArchiveUrls`. The `evidence` command asks it last, after the
+  nodes (prover README, "The `fork-proof` command"), and checks every record against the state root of the source header.
+- Load: one `fork-proof` run per source block that carries a message. The prover asks the compact multiproof route first
+  (about 1 KB, served by Lodestar) and reads the whole state only from a node without it (about 4.5 MB on the testnets).
 
 ## Proving on finality
 

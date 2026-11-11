@@ -60,6 +60,12 @@ export interface RouteOptions {
    * `<base>/<chainId>/<period>.json`, asked last for the committee handoff update of a period no beacon node gives.
    */
   readonly handoffArchiveUrls?: readonly string[];
+  /**
+   * The fork proof archive of the route's source chain (`source.fork_proof_archive_urls`): base URLs that serve
+   * `<base>/<chainId>/<stateRoot>.json`, asked last by the `evidence` command for the fork proof of a source state that no
+   * beacon node serves any more. See `fork-proof-record.ts`.
+   */
+  readonly forkProofArchiveUrls?: readonly string[];
 }
 
 /** One direction of a pair, as the prover configuration file describes a route. */
@@ -154,6 +160,12 @@ function handoffSourceLines(handoffUrls: readonly string[], archiveUrls: readonl
   return lines;
 }
 
+/** `fork_proof_archive_urls` of the source. */
+function forkProofArchiveLines(archiveUrls: readonly string[]): readonly string[] {
+  if (archiveUrls.length === 0) return [];
+  return [`fork_proof_archive_urls = [${archiveUrls.map((url) => quoted(url, "fork proof archive url")).join(", ")}]`];
+}
+
 /**
  * `header_rpc_urls` of one side: the endpoints that the prover asks for the raw header when the main RPC lacks
  * `debug_getRawHeader`. The `opening-proof` command reads them on the destination, the `evidence` command on the source
@@ -222,6 +234,7 @@ export function renderProverConfig(
     ...stateLines(source.stateUrls ?? [], options.stateCacheDirectory),
     ...headerLines(source.headerRpcUrls ?? [], "source"),
     ...handoffSourceLines(source.handoffUrls ?? [], options.handoffArchiveUrls ?? []),
+    ...forkProofArchiveLines(options.forkProofArchiveUrls ?? []),
     "",
     `[routes.${route.name}.destination]`,
     `chain_id = ${destination.chainId}`,

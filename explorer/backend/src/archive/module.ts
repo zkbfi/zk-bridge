@@ -6,6 +6,8 @@ import { createPublicClient, http } from "viem";
 import type { PairSide } from "@zk-bridge/shared";
 import { readLightClient } from "../keepalive/sources.ts";
 import { createHandoffCapture, handoffPeriods, LIVE_HANDOFF_MILLISECONDS, readHandoff, type HandoffCapture } from "./handoffs.ts";
+import { createForkProofCapture, LIVE_FORK_PROOF_MILLISECONDS, readForkProof, sentMessagesReader, type ForkProofCapture } from "./fork-proofs.ts";
+import { fetchJsonGet } from "../keepalive/sources.ts";
 import { readProofRows } from "./proof-rows.ts";
 import { createReceiptIndexReader } from "./receipt.ts";
 import { createIndexerClient } from "./work-list.ts";
@@ -17,6 +19,40 @@ const MESSAGE_ID_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 
 const services = new WeakMap<BackendModuleContext, ArchiveService | null>();
 const captures = new WeakMap<BackendModuleContext, HandoffCapture | null>();
+const forkCaptures = new WeakMap<BackendModuleContext, ForkProofCapture | null>();
+
+/** How long one indexer read of the fork proof capture may take, in milliseconds. */
+export const FORK_CAPTURE_READ_TIMEOUT_MILLISECONDS = 30_000;
+
+/**
+ * The fork proof capture of a context, or null when it is off, the context has no `fork-proof` command, or no chain
+ * indexer lists the messages. A direction whose source chain has no beacon endpoint is left out.
+ */
+function forkCaptureFor(context: BackendModuleContext): ForkProofCapture | null {
+  if (forkCaptures.has(context)) return forkCaptures.get(context) as ForkProofCapture | null;
+  const { config, pair } = context;
+  const [first, second] = pair.sides;
+  const indexerUrl = config.indexerUrl;
+  // The global fetch is read at call time, so a test can replace it.
+  const get = (url: string) => fetchJsonGet(globalThis.fetch, FORK_CAPTURE_READ_TIMEOUT_MILLISECONDS)(url);
+  const reader = (source: PairSide, destination: PairSide) => sentMessagesReader({ indexerUrl: indexerUrl as string, sourceChainId: source.chainId, destinationChainId: destination.chainId, get });
+  const created =
+    !config.forkProofCapture.enabled || context.forkProofProver === undefined || indexerUrl === undefined
+      ? null
+      : createForkProofCapture({
+          storage: context.storage,
+          prover: context.forkProofProver,
+          targets: [
+            { direction: "first-to-second" as const, chainId: first.chainId, readMessages: reader(first, second) },
+            { direction: "second-to-first" as const, chainId: second.chainId, readMessages: reader(second, first) },
+          ].filter((target) => (target.chainId === first.chainId ? first : second).beaconUrl !== null),
+          intervalMilliseconds: config.forkProofCapture.intervalSeconds * 1000,
+          logger: context.logger,
+          now: context.now,
+        });
+  forkCaptures.set(context, created);
+  return created;
+}
 
 /** The handoff capture of a context, or null when it is off or the context has no `handoff-update` command. */
 function captureFor(context: BackendModuleContext): HandoffCapture | null {
@@ -45,6 +81,7 @@ function captureFor(context: BackendModuleContext): HandoffCapture | null {
 }
 
 const HANDOFF_FILE = /^(\d{1,9})\.json$/;
+const FORK_PROOF_FILE = /^(0x[0-9a-fA-F]{64})\.json$/;
 const CHAIN_ID = /^\d{1,12}$/;
 
 /** The archive service of a context, or null when the configuration names no chain indexer. */
@@ -74,7 +111,15 @@ function serviceFor(context: BackendModuleContext): ArchiveService | null {
  */
 export function register(app: Hono, context: BackendModuleContext): void {
   const service = serviceFor(context);
-  app.get("/archive/proofs", (request) => request.json(readProofRows(context.storage, context.now() - LIVE_HANDOFF_MILLISECONDS)));
+  app.get("/archive/proofs", (request) => request.json(readProofRows(context.storage, context.now() - LIVE_HANDOFF_MILLISECONDS, context.now() - LIVE_FORK_PROOF_MILLISECONDS)));
+  app.get("/archive/fork-proofs/:chainId/:file", (request) => {
+    const chainId = request.req.param("chainId");
+    const file = FORK_PROOF_FILE.exec(request.req.param("file"));
+    if (!CHAIN_ID.test(chainId) || file === null) return request.json({ error: "the path must be /archive/fork-proofs/<chainId>/<stateRoot>.json" }, 400);
+    const record = readForkProof(context.storage, Number(chainId), file[1] as string);
+    if (record === null) return request.json({ error: "no fork proof record for this state" }, 404);
+    return request.body(record, 200, { "content-type": "application/json" });
+  });
   app.get("/archive/handoffs/:chainId", (request) => {
     const chainId = request.req.param("chainId");
     if (!CHAIN_ID.test(chainId)) return request.json({ error: "the chain id must be a whole number" }, 400);
@@ -104,7 +149,11 @@ export async function runArchiveCycle(context: BackendModuleContext): Promise<vo
 
 /** Starts the pass timer. Resolves with the function that stops it and waits for the running pass. */
 export async function start(context: BackendModuleContext): Promise<() => Promise<void>> {
-  const stopCapture = startCapture(context);
+  const stopHandoffs = startCapture(context);
+  const stopForkProofs = startForkCapture(context);
+  const stopCapture = async () => {
+    await Promise.all([stopHandoffs(), stopForkProofs()]);
+  };
   const service = serviceFor(context);
   if (service === null) {
     context.logger.warn("archive_without_indexer", {});
@@ -123,6 +172,30 @@ export async function start(context: BackendModuleContext): Promise<() => Promis
 /** Runs one capture pass now. A test calls it. Does nothing when the capture is off. */
 export async function runHandoffCapture(context: BackendModuleContext): Promise<void> {
   await captureFor(context)?.runOnce();
+}
+
+/** Runs one fork proof capture pass now. A test calls it. Does nothing when the capture is off. */
+export async function runForkProofCapture(context: BackendModuleContext): Promise<void> {
+  await forkCaptureFor(context)?.runOnce();
+}
+
+/** Starts the timer of the fork proof capture, when it is on. Resolves with nothing to wait for otherwise. */
+function startForkCapture(context: BackendModuleContext): () => Promise<void> {
+  const capture = forkCaptureFor(context);
+  if (capture === null) {
+    const { config } = context;
+    const reason = !config.forkProofCapture.enabled ? "forkProofCapture.enabled is false" : context.forkProofProver === undefined ? "no fork-proof command in this context" : "indexerUrl is not set";
+    context.logger.warn("fork_proof_capture_off", { reason });
+    return async () => {};
+  }
+  const pass = () => void capture.runOnce();
+  pass();
+  const timer = setInterval(pass, context.config.forkProofCapture.intervalSeconds * 1000);
+  timer.unref();
+  return async () => {
+    clearInterval(timer);
+    await capture.settled();
+  };
 }
 
 /** Starts the capture timer of the handoff archive, when the capture is on. Resolves with nothing to wait for otherwise. */
@@ -146,7 +219,11 @@ function startCapture(context: BackendModuleContext): () => Promise<void> {
 export function health(context: BackendModuleContext): ModuleHealth {
   const service = serviceFor(context);
   const capture = captureFor(context)?.status();
-  const handoffs = capture === undefined ? "handoff capture off" : `${capture.kept} handoff records, ${capture.failing} periods failing`;
+  const forks = forkCaptureFor(context)?.status();
+  const handoffs = [
+    capture === undefined ? "handoff capture off" : `${capture.kept} handoff records, ${capture.failing} periods failing`,
+    forks === undefined ? "fork proof capture off" : `${forks.kept} fork proof records, ${forks.failing} blocks failing`,
+  ].join("; ");
   if (service === null) return { state: "degraded", detail: `indexerUrl is not set; ${handoffs}` };
   const status = service.status();
   const detail = `${status.entries} entries, ${status.withEvidence} with evidence, ${status.failing} failing; ${handoffs}`;
