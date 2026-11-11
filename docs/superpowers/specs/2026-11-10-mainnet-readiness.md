@@ -125,6 +125,13 @@ router's source entry points). This reverses the user decision of 2026-10-24 ("A
   unsupported shape and records no successor. A sealed route keeps paying out; a new route is a separate deployment that
   the old one does not know. Rule: no contract ever holds a successor or redirect pointer that a seal, or anyone, can
   set; which route users take is chosen off chain (signed releases, docs).
+  Owner, 2026-11-11, on sealing PulseChain (its seal needs a GPU-proved fork observation, Ethereum's only a Merkle
+  branch): "lets assume that everything will flow through the backend for now. gpu is available. treat it the same. yes,
+  it will get better over time, but assume that the main way that users will interact is through a runnable backend and
+  gpu." On the seal signer's gas: "dont worry about it. lets assume that will be provided." On the bundled fork
+  schedule aging out: "lets assume that we will upgrade ... remember, this is just beta software. we are going to
+  iterate". Decision: the backend seals both chains the same way: it watches each chain's fork, and on PulseChain it
+  proves the fork observation on the GPU, posts it to the fork registry, then seals.
 - **Status 2026-11-10, seal-only gate (branch `feat/seal-only-gate`, not merged, not deployed).** Built test-first. The
   router change below is reverted (`git revert -m 1 33f79395`): the router's entries are again the ones deployed on
   testnet. `BeaconForkGate` gets two modes, appended to the enum: `SealOnly` (3, Ethereum and Sepolia) and
