@@ -110,9 +110,10 @@ either, caps live only in frontends and the runner, which anyone can bypass with
   followed by an open route)? (c) needs no new contract **(guess: it moves users once, and the old route keeps paying
   out)**.
 - Size: (a) S; (b) M plus audit scope; (c) S plus a second deployment.
-- **Decided 2026-11-10, owner: "yes, and save fork proofs in the watcher too"** (answering the recommendation "a trial
-  route plus caps in our apps"): (c) a first route with a `sendCutoffTimestamp`, plus (a) frontend and runner caps during
-  it. The cutoff date and the cap amounts are still open.
+- **Decided 2026-11-10, owner: "no to the trial route"**, then: "no, no caps in the uis. otherwise you are just shackling
+  the user". No trial route and no send caps in the dapp or the terminal: the permanent route launches open. The only
+  limits on a launch are the audit and the accepted risks (1.3, 1.4). The runner's daily cap on what it spends
+  delivering unpaid items stays: it limits our spending, not the user's sends.
 
 **A4. Mainnet deployment config and dry run.** There is no mainnet bridge config and no `deploy/deployments/eth-pls.json`;
 only `script/hardened/bridge.config.example.json` and the testnet files. Fill: verifier and `verifierCodeHash` per
@@ -307,7 +308,8 @@ measurements; it must read mainnet benchmarks after launch. The gate confirm ste
 goes away if D1 is yes. Size: S each.
 
 **F4. Limited-launch caps in the dapp and the terminal** (if D2 is (a) or alongside it): a per-send value cap and a token
-allowlist, with plain copy that says the cap is the frontend's, not the contract's. Size: S to M.
+allowlist, with plain copy that says the cap is the frontend's, not the contract's. Size: S to M. **Dropped 2026-11-10 (D2): no caps in
+the UIs.**
 
 ### E. Ops and keys
 
@@ -397,13 +399,13 @@ commit and a note in `known-issues.md`. Fix review by the auditor. The testnet r
 1. Deploy (Ethereum first, then PulseChain; one deployer, nonces fixed between dry run and run; on PulseChain pass
    `--with-gas-price` with the priority fee from the start, `docs/redeploy-2026-11-gas.md`).
 2. Deployment file, indexer, backend, runner, status page on the mainnet pair; the runner opens both bridges.
-3. Release to `next.zkb.fi` with mainnet; caps per D2; team transfers both ways, small amounts, every direction and
+3. Release to `next.zkb.fi` with mainnet; team transfers both ways, small amounts, every direction and
    token kind (native, ERC-20, a copy's first deployment, a relay with a call).
 4. Watch: light-client deadlines, GPU spend (`/billing`), runner spend, delivery times (`/benchmarks`).
 5. Promote to stable when a set of checks holds for a period the owner names **(guess: 14 days with no strand, no
    failed paid proof, no stuck message)**.
 
-**Phase 5: open.** Lift frontend caps (or wait for the cutoff route to close and point users at the open route, D2 (c)).
+**Phase 5: open.** The route is open from deployment (D2: no caps); this phase is the public announcement.
 Turn on alerts (E4). Revisit `minIntervalSeconds`, the unpaid caps and the keep-alive age from measured mainnet traffic.
 
 ## Costs (estimate)
@@ -424,7 +426,7 @@ Measure each billed item in the first week of Phase 4 before reporting a monthly
 
 | Risk | Mitigation |
 |---|---|
-| A contract bug after deployment (no admin, no pause) | Audit (S1); limited launch with caps (D2); the route can be replaced, users move; accepted risk 1.4 |
+| A contract bug after deployment (no admin, no pause) | Audit (S1); no caps (D2); the route can be replaced, users move; accepted risk 1.4 |
 | A forged header drains a mediator (committee or SP1 soundness) | Accepted (1.3, 1.8); a flow limiter (D2 (b)) bounds it; SP1 version policy (`docs/sp1-version-policy.md`) |
 | A PulseChain light client strands because nodes pruned the states | Handoff archive from period one, exported to IPFS (B2); deadline check on the status page; alerts (E4) |
 | A fork of unknown shape on either chain | The gate seals sends from that chain; copies held there of the other chain's tokens stay stuck (A6, 1.4); a new route serves new transfers |
@@ -441,7 +443,7 @@ Measure each billed item in the first week of Phase 4 before reporting a monthly
 | Id | Question | Blocks |
 |---|---|---|
 | D1 | Sends carry their own gate evidence (layers 1 to 3 change) before mainnet, or confirm-then-send? Decided: evidence. | audit scope |
-| D2 | Limited-launch caps: frontend and runner only, an immutable flow limiter, or a first route with a send cutoff? Decided: trial route with a cutoff, plus app caps. | audit scope |
+| D2 | Limited-launch caps: frontend and runner only, an immutable flow limiter, or a first route with a send cutoff? Decided: no caps and no trial route; the route launches open. | audit scope |
 | D3 | Replaced: forks are unpredictable; Gloas chosen by evidence, one shape list for gate and verifier (A6) | audit scope |
 | D4 | The licence | audit docs |
 | D5 | Keep-alive age on mainnet, per light client | Ethereum gas spend |

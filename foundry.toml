@@ -24,6 +24,7 @@ fs_permissions = [
   { access = "read", path = "./.deploy" },
   { access = "read", path = "./light-client/tests/fixtures" },
   { access = "read", path = "./test/hardened/fixtures" },
+  { access = "read", path = "./deploy/gas-defaults.json" },
   # script/testnet/DeployTestTokens.s.sol writes the test token file of the testnet next to its deployment file.
   { access = "read-write", path = "./deploy/deployments" },
 ]
@@ -48,6 +49,7 @@ fs_permissions = [
   { access = "read", path = "./script/hardened" },
   { access = "read", path = "./light-client/tests/fixtures" },
   { access = "read", path = "./test/hardened/fixtures" },
+  { access = "read", path = "./deploy/gas-defaults.json" },
 ]
 
 [profile.deep.fuzz]

@@ -357,7 +357,14 @@ was in a previous hour"):
   the frontend's automatic maximum, 1% of the amount**, and such a message makes its batch pay, so the batch proves at
   its finality (owner, 2026-11-09: "yes, deliver straight away"); a smaller tip counts nothing. Its **cost** is the proof
   (`PROOF_COST_USD`, $0.025) plus the delivery gas of each message on the destination (`deliveryGasUsd` at the newest
-  base fee, the chain's minimum tip and `DELIVERY_GAS` of 400,000, an estimate that errs high), times `profitMargin`. The
+  base fee, the chain's minimum tip and the **delivery gas**), times `profitMargin`. The delivery gas is **500,000** (the
+  start figure of `deploy/gas-defaults.json`; forge measures a plain token delivery at 469,247 gas to a new recipient and
+  452,134 to an existing holder, the first delivery through the router at 552,261) until the destination chain's recent
+  deliveries are known: from **10 recorded deliveries through the delivery router** on, it is their **90th percentile**
+  (the newest 200 receipts, read from the chain indexer's `GET /api/delivery-cost?chainId=`, kind `token_callback`),
+  above or below 500,000. The log line `watch_delivery_gas` names the source (`start` or `measured`), the figure and the
+  sample count whenever they change; an unreadable indexer gives the start figure and a `watch_delivery_gas_unreadable`
+  warning. The
   runner that delivers is not paid by us: "pays" means the fee address's take covers our costs. Dollars are integers
   (USD × 1e18), as in `@zkb/core`.
 - **Nothing waits:** no final message the head does not cover. Nothing proves, however long ago the last proof was,
