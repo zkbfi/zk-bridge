@@ -97,6 +97,18 @@ router's source entry points). This reverses the user decision of 2026-10-24 ("A
 - **D1.** Build sends with gate evidence before mainnet, or launch with confirm-then-send? **Decided 2026-11-10, owner:
   "go ahead with your choice for d1": sends carry their own gate evidence.** Built in the same layer 1 and 2 freeze as
   A6 (A1), test-first.
+- **Design, 2026-11-10.** Owner: "yes, write it up and start building. keep the contracts simple. just check if the
+  proof has already been provided and then make sure it is provided. you should be able to do this with just a basic
+  multicall, right?" The gate already does the check: `admit` returns when the current epoch is confirmed, confirms with
+  the evidence it is given otherwise, and reverts with `ForkNotConfirmed` on empty evidence; `confirm` does nothing in a
+  confirmed epoch. A confirmation covers its epoch only (`HeaderNotInCurrentEpoch`), and a fork starts at an epoch's
+  first slot, so no admitted send is unproven. What is missing is the evidence and the send in one transaction. A
+  generic multicall contract (Multicall3) cannot do it: the bridge would see Multicall3 as the sender. A self-multicall
+  by delegatecall reuses `msg.value` across calls. So the "multicall" is two lines in the router: every send entry of
+  `DeliveryRouter` (layer 3) takes `bytes gateEvidence` and, when it is not empty, calls `gate.confirm(gateEvidence)`
+  before it sends as today. Layers 1 and 2 do not change. Sends straight to the mediator keep confirm-then-send.
+  The frontends attach evidence when the current epoch is unconfirmed or ends within 60 s, otherwise empty; a late empty
+  send fails with `ForkNotConfirmed`, never passes unproven.
 - Size: M for the contracts and tests, M for `@zkb/data`, the dapp, the terminal and the traffic bot.
 
 **A3. Caps for a limited launch.** The contracts cannot be capped after deployment. Two on-chain options exist in the
