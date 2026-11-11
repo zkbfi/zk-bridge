@@ -172,7 +172,7 @@ The tip slider in the Share choice and the same value elsewhere are one value: m
 | Number | Where it comes from |
 |---|---|
 | Dollar prices | PulseX pools on PulseChain, read through your RPC endpoint at one block. |
-| Delivery gas | The 90th percentile of recent deliveries measured by the indexer, or 550,000 gas when none is measured yet. |
+| Delivery gas | The 90th percentile of recent deliveries measured by the indexer, or 600,000 gas when none is measured yet. |
 | Base fee and priority fee | The destination chain, through your RPC endpoint. |
 | Proof | A set figure of $0.025. |
 

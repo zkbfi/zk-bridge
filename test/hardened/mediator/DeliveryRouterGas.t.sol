@@ -12,17 +12,25 @@ import {MediatorFixture, MockWrappedNative, TEST_CALLBACK_GAS} from "./utils/Med
 import {CallBurner, CallRecorder} from "./utils/CallTargets.sol";
 
 /// @notice Measures the gas of a whole delivery through the delivery router: the bridge execution, the mediator release,
-/// and the callback of the router, which pays the tip and the recipient. The explorer uses the figure as the default delivery gas
-/// when the indexer has no delivery samples (`EXPLORER_DEFAULT_DELIVERY_GAS`, documented in `docs/explorer.md`).
-/// The delivery goes through the mock bridge, which reads no proof. So the figure leaves out the cost of the proof check
-/// of the real bridge (`MessageBridgeGas.t.sol`: about 290,000 gas on the recent path). A transaction adds 21,000 gas
-/// and the cost of its calldata.
+/// and the callback of the router, which pays the tip and the recipient. The explorer uses a delivery figure as the
+/// default delivery gas when the indexer has no delivery samples (`EXPLORER_DEFAULT_DELIVERY_GAS`, documented in
+/// `docs/explorer.md`). The delivery goes through the mock bridge, which reads no proof. So the figure leaves out the
+/// cost of the proof check of the real bridge (`MessageBridgeGas.t.sol`: 322,834 gas on the recent path). A transaction
+/// adds 21,000 gas and the cost of its calldata. These are figures of calls inside one transaction, with the accounts
+/// that the fixture touched still warm. The gas of the whole first transaction through the real bridge, cold, as a
+/// receipt would show it, is checked against the same default in `BridgeWorld.t.sol`
+/// (`test_theExplorerDefaultCoversTheFirstDeliveryThroughTheRouter`).
 contract DeliveryRouterGasTest is MediatorFixture {
     uint256 internal constant TRANSACTION_BASE_GAS = 21_000;
-    /// @dev The proof check of the real bridge on the recent path, from `MessageBridgeGas.t.sol`.
-    uint256 internal constant BRIDGE_EXECUTION_GAS = 290_655;
+    /// @dev The proof check of the real bridge on the recent path, from `MessageBridgeGas.t.sol`
+    /// (`test_gas_executeMessage_recentPath`). It was 290,655 when this test was written and 300,645 before the fork
+    /// proof of the source state; the fork proof added 22,189 (`docs/hardened-build-contract.md`).
+    uint256 internal constant BRIDGE_EXECUTION_GAS = 322_834;
+    /// @dev The calldata of `executeMessage` with the proof of the recent path of `MessageBridgeGas.t.sol`: 4,132 bytes,
+    /// 35,020 gas at 4 gas a zero byte and 16 gas any other byte.
+    uint256 internal constant PROOF_CALLDATA_GAS = 35_020;
     /// @dev The default delivery gas of the explorer indexer (`EXPLORER_DEFAULT_DELIVERY_GAS`).
-    uint256 internal constant EXPLORER_DEFAULT_DELIVERY_GAS = 550_000;
+    uint256 internal constant EXPLORER_DEFAULT_DELIVERY_GAS = 600_000;
 
     MockERC20 internal tokenB;
     DeliveryRouter internal router;
@@ -70,8 +78,10 @@ contract DeliveryRouterGasTest is MediatorFixture {
         console2.log("delivery router delivery, multiplier of total fee (call gas):", multiplier);
         console2.log("delivery router delivery, gas based fee (call gas):", gasBased);
         console2.log("add for a transaction:                        ", TRANSACTION_BASE_GAS);
+        console2.log("add for the proof check of the real bridge:   ", BRIDGE_EXECUTION_GAS);
+        console2.log("add for the calldata of the proof:            ", PROOF_CALLDATA_GAS);
         assertLt(
-            gasBased + BRIDGE_EXECUTION_GAS + TRANSACTION_BASE_GAS,
+            gasBased + BRIDGE_EXECUTION_GAS + TRANSACTION_BASE_GAS + PROOF_CALLDATA_GAS,
             EXPLORER_DEFAULT_DELIVERY_GAS,
             "the default of the explorer stays above a real delivery"
         );

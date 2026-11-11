@@ -29,6 +29,21 @@ contract MessageBridgeGasTest is MessageScenes {
         assertLt(used, 400_000);
     }
 
+    /// The calldata of a delivery through the recent path: `DeliveryRouterGas.t.sol` adds it to the call gas when it
+    /// compares a delivery with the default of the explorer (`PROOF_CALLDATA_GAS`). Shanghai prices a zero byte at 4 gas
+    /// and any other byte at 16.
+    function test_gas_calldataOfTheRecentPath() public {
+        Scene memory scene = _messageScene(bridge);
+        bytes memory data = abi.encodeCall(MessageBridge.executeMessage, (_messageProof(scene, MessageFixtures.deliver())));
+        uint256 gas;
+        for (uint256 i = 0; i < data.length; i++) {
+            gas += data[i] == 0 ? 4 : 16;
+        }
+        emit log_named_uint("executeMessage, recent path, calldata bytes", data.length);
+        emit log_named_uint("executeMessage, recent path, calldata gas", gas);
+        assertEq(gas, 35_020, "update PROOF_CALLDATA_GAS in DeliveryRouterGas.t.sol");
+    }
+
     /// Gas of a delivery through the historical path (more than 8192 slots), where the ancestry branch is 45 siblings long.
     function test_gas_executeMessage_historicalPath() public {
         (, MessageBridge.MessageProof memory proof) = _historicalMessage();

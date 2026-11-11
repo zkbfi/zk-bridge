@@ -239,25 +239,33 @@ contract BeaconForkGateCanariesTest is GateSupport {
 
     /// Claim: the constructor refuses to build a gate when the probe cannot be deployed. Shows: with code planted at the
     /// address that the probe would take, the deployment reverts with `ProbeDeploymentFailed`, and with the address free
-    /// it succeeds. Matters: a gate with no probe would admit every deposit and never detect a canary.
+    /// it succeeds at the predicted addresses. Matters: a gate with no probe would admit every deposit and never detect a
+    /// canary.
+    /// @dev The addresses are predicted inside the call that builds the gate, from the nonce of this contract at that
+    /// moment. Predicted before the call, they would be wrong whenever the call is a transaction of its own (forge
+    /// isolation mode raises the nonce of the sender), and the code would be planted at an address that no build uses.
     function test_HB02_canary_constructorRefusesAProbeThatCannotBeDeployed() public {
-        address nextGate = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
-        address probeAddress = vm.computeCreateAddress(nextGate, 1);
-        vm.etch(probeAddress, hex"00");
         // The failed creation of the probe burns all the gas that it gets, so the build runs with a fixed amount of gas.
         vm.expectRevert(BeaconForkGate.ProbeDeploymentFailed.selector);
-        this.buildGateWithFixedGas{gas: 5_000_000}();
+        this.buildGateWithCodeAtTheProbeAddress{gas: 5_000_000}(hex"00");
 
-        vm.etch(probeAddress, "");
-        address freeGate = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
-        BeaconForkGate built = BeaconForkGate(this.buildGateWithFixedGas{gas: 5_000_000}());
-        assertEq(address(built), freeGate);
-        assertEq(built.opcodeProbe(), vm.computeCreateAddress(freeGate, 1));
+        (address built, address predictedGate, address predictedProbe) =
+            this.buildGateWithCodeAtTheProbeAddress{gas: 5_000_000}("");
+        assertEq(built, predictedGate, "the gate sits at the predicted address");
+        assertEq(BeaconForkGate(built).opcodeProbe(), predictedProbe, "the probe sits at the predicted address");
+        assertGt(predictedProbe.code.length, 0, "the probe was deployed");
     }
 
-    /// @dev Builds a gate from this contract, so that a test can cap the gas of the build.
-    function buildGateWithFixedGas() external returns (address) {
-        return address(_newGate(BeaconForkGate.GateMode.DetectBeaconRoots));
+    /// @dev Plants `code` at the address that the probe of the next gate built here will take, then builds that gate.
+    /// Called from this contract, so that a test can cap the gas of the build.
+    function buildGateWithCodeAtTheProbeAddress(bytes calldata code)
+        external
+        returns (address built, address predictedGate, address predictedProbe)
+    {
+        predictedGate = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
+        predictedProbe = vm.computeCreateAddress(predictedGate, 1);
+        vm.etch(predictedProbe, code);
+        built = address(_newGate(BeaconForkGate.GateMode.DetectBeaconRoots));
     }
 
     // ================================================================ real opcodes

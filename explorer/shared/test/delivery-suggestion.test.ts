@@ -12,7 +12,7 @@ const kind = (overrides: Partial<DeliveryCostReport["kinds"]["token"]> = {}) => 
   sampleCount: 0,
   averageGas: null,
   p90Gas: null,
-  defaultGas: "550000",
+  defaultGas: "600000",
   isDefault: true,
   ...overrides,
 });
@@ -44,7 +44,7 @@ describe("the data source", () => {
     const source = describeDataSource(report(), "message");
     expect(source.kind).toBe("default");
     expect(source.description).toBe("default, no deliveries measured yet");
-    expect(source.gas).toBe(550_000n);
+    expect(source.gas).toBe(600_000n);
     expect(source.sampleCount).toBe(0);
   });
 
@@ -241,8 +241,8 @@ describe("the suggested tip range", () => {
     const source = describeDataSource(report(), "token_callback");
     expect(source.kind).toBe("measured");
     const unmeasured = describeDataSource(report({ kinds: { token_callback: kind(), token: kind(), message: kind() } }), "token_callback");
-    expect(unmeasured.gas).toBe(550_000n);
-    expect(describeDataSource(report(), "message").gas).toBe(550_000n);
+    expect(unmeasured.gas).toBe(600_000n);
+    expect(describeDataSource(report(), "message").gas).toBe(600_000n);
   });
 });
 
