@@ -97,7 +97,7 @@ describe("record files", () => {
   it("are written once: a second run finds them identical, and other content under the same name fails loudly", async () => {
     const archive = await filledArchive();
     const first = await writeMirrorRecords(archive, mirror);
-    expect(first).toEqual({ written: { "storage-proofs": 2, "light-client-proofs": 1, evidence: 1, "handoff-updates": 0, conflicts: 1 }, identical: 0, conflicts: [] });
+    expect(first).toEqual({ written: { "storage-proofs": 2, "light-client-proofs": 1, evidence: 1, "handoff-updates": 0, "fork-proofs": 0, conflicts: 1 }, identical: 0, conflicts: [] });
     const files = await listFiles(mirror);
     expect(files).toHaveLength(5);
     // Readable by everyone who may enter the mirror (the archive user writes, root and the pull read).
@@ -179,7 +179,7 @@ describe("record files", () => {
     expect(restored?.postedTransactionHash).toBe(`0x${"77".repeat(32)}`);
     const second = await importMirror(archive, mirror);
     expect(second.storage_proofs.unchanged + second.light_client_proofs.unchanged + second.message_evidence.unchanged).toBe(5);
-    expect(await archive.counts()).toEqual({ storageProofs: 2, lightClientProofs: 1, evidence: 1, handoffUpdates: 0, conflicts: 0 });
+    expect(await archive.counts()).toEqual({ storageProofs: 2, lightClientProofs: 1, evidence: 1, handoffUpdates: 0, forkProofs: 0, conflicts: 0 });
   });
 });
 
@@ -441,5 +441,5 @@ describe("the command line of the mirror", { timeout: 60_000 }, () => {
 });
 
 it("names every directory of the mirror", () => {
-  expect(MIRROR_DIRECTORIES).toEqual(["storage-proofs", "light-client-proofs", "evidence", "handoff-updates", "conflicts", "beacon-states", "snapshots", "manifests"]);
+  expect(MIRROR_DIRECTORIES).toEqual(["storage-proofs", "light-client-proofs", "evidence", "handoff-updates", "fork-proofs", "conflicts", "beacon-states", "snapshots", "manifests"]);
 });

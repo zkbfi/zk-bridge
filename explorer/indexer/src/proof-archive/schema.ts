@@ -16,7 +16,7 @@
 export const PROOF_ARCHIVE_SCHEMA = "proof_archive";
 
 /** The version that {@link MIGRATION} brings the schema to. */
-export const PROOF_ARCHIVE_VERSION = 2;
+export const PROOF_ARCHIVE_VERSION = 3;
 
 /**
  * The migration, as one script: one transaction under an advisory lock, so two indexers that start at once (the blue
@@ -110,5 +110,25 @@ CREATE TABLE IF NOT EXISTS proof_archive.handoff_updates (
   PRIMARY KEY (chain_id, period)
 );
 INSERT INTO proof_archive.schema_version (version) VALUES (2) ON CONFLICT DO NOTHING;
+-- Version 3: the fork proof of each source beacon block that carries a message (the fork version and the genesis validators
+-- root under the state root of the block). PulseChain nodes prune old states, so the proof cannot be made again later.
+-- Several messages of one block share one row. The text is kept exactly as the backend stored it, so the bytes and hash hold.
+CREATE TABLE IF NOT EXISTS proof_archive.fork_proofs (
+  chain_id integer NOT NULL,
+  state_root text NOT NULL CHECK (state_root = lower(state_root)),
+  slot bigint NOT NULL,
+  block_root text NOT NULL,
+  execution_block_number bigint NOT NULL,
+  execution_block_hash text NOT NULL,
+  shape integer NOT NULL,
+  record text NOT NULL,
+  sha256 text NOT NULL,
+  stored_at bigint,
+  source text NOT NULL,
+  ingested_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (chain_id, state_root)
+);
+CREATE INDEX IF NOT EXISTS fork_proofs_by_slot ON proof_archive.fork_proofs (chain_id, slot);
+INSERT INTO proof_archive.schema_version (version) VALUES (3) ON CONFLICT DO NOTHING;
 COMMIT;
 `;

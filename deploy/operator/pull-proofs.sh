@@ -52,7 +52,7 @@ RSYNC=${ZKB_PULL_RSYNC:-rsync}
 LOG_MAX=1000000
 SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 # Records: never deleted here. The rest: the server's window.
-RECORD_DIRS="storage-proofs light-client-proofs evidence handoff-updates conflicts"
+RECORD_DIRS="storage-proofs light-client-proofs evidence handoff-updates fork-proofs conflicts"
 PRUNED_DIRS="beacon-states snapshots manifests"
 
 TMP_FILES=("")

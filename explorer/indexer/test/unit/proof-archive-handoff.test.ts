@@ -107,10 +107,10 @@ describe("the validation of a handoff update", { timeout: 60_000 }, () => {
 });
 
 describe("the handoff update table", { timeout: 60_000 }, () => {
-  it("is created by the migration (version 2), upserts once, and never deletes", async () => {
+  it("is created by the migration (version 2 of 3), upserts once, and never deletes", async () => {
     const { archive, sql } = await freshArchive();
     await archive.migrate();
-    expect((await sql.query("SELECT version FROM proof_archive.schema_version ORDER BY version")).rows).toEqual([{ version: 1 }, { version: 2 }]);
+    expect((await sql.query("SELECT version FROM proof_archive.schema_version ORDER BY version")).rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
     expect(await archive.putHandoff(built())).toBe("inserted");
     expect(await archive.putHandoff(built({ storedAt: 999 }))).toBe("unchanged");
     expect(await archive.handoff(11155111, PERIOD)).toEqual(built());
@@ -250,7 +250,7 @@ describe("the mirror", { timeout: 60_000 }, () => {
       yield undefined;
       yield "x";
     }
-    expect(await importRecords(target, { storage: none(), lightClient: none(), evidence: none(), handoffs: junk() })).toMatchObject({ handoff_updates: { invalid: 2 } });
+    expect(await importRecords(target, { storage: none(), lightClient: none(), evidence: none(), handoffs: junk(), forkProofs: none() })).toMatchObject({ handoff_updates: { invalid: 2 } });
   });
 });
 
@@ -332,7 +332,7 @@ describe("the read routes", { timeout: 60_000 }, () => {
     expect((await routes.request("/api/proofs/handoffs/11155111/9999999999.json")).status).toBe(400);
     expect((await routes.request("/api/proofs/handoffs/x")).status).toBe(400);
     expect((await routes.request("/api/proofs/handoffs/99999999999")).status).toBe(400);
-    expect(await (await routes.request("/api/proofs/summary")).json()).toEqual({ storageProofs: 0, lightClientProofs: 0, evidence: 0, handoffUpdates: 2, conflicts: 0 });
+    expect(await (await routes.request("/api/proofs/summary")).json()).toEqual({ storageProofs: 0, lightClientProofs: 0, evidence: 0, handoffUpdates: 2, forkProofs: 0, conflicts: 0 });
   });
 
   it("answer 503 while the archive is off", async () => {

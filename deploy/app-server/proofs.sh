@@ -16,6 +16,7 @@
 #   light-client-proofs/<pair>/<direction>/<start>-<new>-<proof hash>.<sha256>.json   never deleted
 #   evidence/<pair>/<direction>/<message id>-<body sha256>.<sha256>.json       never deleted
 #   handoff-updates/<chain id>/<period>.<sha256>.json   a source chain's sync-committee handoff update   never deleted
+#   fork-proofs/<chain id>/<state root>.<sha256>.json   the fork proof of a source block that carries a message   never deleted
 #   conflicts/conflict.<sha256>.json         the archive's conflict reports    never deleted
 #   beacon-states/<chain>/<slot>-<root>.ssz|.summary   from the runner and the backend; kept ZKB_PROOFS_RETENTION_DAYS
 #   snapshots/<stamp>.sqlite                 the backend's database, one a night; kept ZKB_PROOFS_RETENTION_DAYS
@@ -61,7 +62,7 @@
 # it when it has been copied; the nightly run does not make or keep any.
 #
 # publish: a separate PUBLIC tree, never the mirror. The archive user builds it: the CLI writes the allowlisted tree
-# (storage-proofs, light-client-proofs, evidence, handoff-updates, README.txt), the beacon states of the mirror are copied in (the whole
+# (storage-proofs, light-client-proofs, evidence, handoff-updates, fork-proofs, README.txt), the beacon states of the mirror are copied in (the whole
 # window; only plain files named <12-digit slot>-0x<64 hex>.ssz or .summary under a numeric chain directory, never a
 # link), and manifest.json is written. Root takes it as a tar stream into a directory only root can write (links,
 # special files and hard links stop the run), and the CLI's sanitizer (public-check) must pass on that copy. --dry-run stops there, leaves the tree and prints its path for
@@ -127,7 +128,7 @@ OFFSITE_DIR=${ZKB_PROOFS_OFFSITE_DIR:-/etc/zk-bridge/proofs/offsite.d}
 DATABASE_URL_VALUE='postgresql:///zkb_indexer?host=/var/run/postgresql'
 CLI_SCRIPT=$RELEASE_DIR/explorer/indexer/bin/zk-bridge-proof-archive.mjs
 # The directories of the mirror: records (never pruned), then those that keep the window.
-MIRROR_DIRS="storage-proofs light-client-proofs evidence handoff-updates conflicts beacon-states snapshots manifests"
+MIRROR_DIRS="storage-proofs light-client-proofs evidence handoff-updates fork-proofs conflicts beacon-states snapshots manifests"
 # How many beacon states of each chain an import gives each service (the services' own cache keeps 16).
 STATES_PER_CHAIN=16
 

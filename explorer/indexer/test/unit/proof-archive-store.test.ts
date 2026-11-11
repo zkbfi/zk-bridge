@@ -14,8 +14,8 @@ describe("the proof archive schema", () => {
     const { archive, sql } = await freshArchive();
     await archive.migrate();
     const tables = await sql.query<{ table_name: string }>("SELECT table_name FROM information_schema.tables WHERE table_schema = 'proof_archive' ORDER BY table_name");
-    expect(tables.rows.map((row) => row.table_name)).toEqual(["conflicts", "handoff_updates", "light_client_proofs", "message_evidence", "schema_version", "storage_proofs"]);
-    expect((await sql.query("SELECT version FROM proof_archive.schema_version")).rows).toEqual([{ version: 1 }, { version: 2 }]);
+    expect(tables.rows.map((row) => row.table_name)).toEqual(["conflicts", "fork_proofs", "handoff_updates", "light_client_proofs", "message_evidence", "schema_version", "storage_proofs"]);
+    expect((await sql.query("SELECT version FROM proof_archive.schema_version")).rows).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
     expect(emptyTally()).toEqual({ inserted: 0, unchanged: 0, merged: 0, conflict: 0 });
   });
 });
@@ -43,7 +43,7 @@ describe("storage proofs", () => {
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0]).toMatchObject({ table: "proof_archive.storage_proofs", column: "proof", source: "unknown" });
     expect((await sql.query<{ nonce: string }>("SELECT proof->>'nonce' AS nonce FROM proof_archive.storage_proofs")).rows).toEqual([{ nonce: "0x1" }]);
-    expect(await archive.counts()).toEqual({ storageProofs: 1, lightClientProofs: 0, evidence: 0, handoffUpdates: 0, conflicts: 1 });
+    expect(await archive.counts()).toEqual({ storageProofs: 1, lightClientProofs: 0, evidence: 0, handoffUpdates: 0, forkProofs: 0, conflicts: 1 });
   });
 });
 

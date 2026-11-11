@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { evidenceRecordSchema, handoffRecord, handoffRecordSchema, lightClientProofRecordSchema, storageProofRecordSchema, type EvidenceRecord, type LightClientProofRecord, type StorageProofRecord } from "./records";
+import { evidenceRecordSchema, forkProofArchiveRecord, forkProofRecordSchema, handoffRecord, handoffRecordSchema, lightClientProofRecordSchema, storageProofRecordSchema, type EvidenceRecord, type LightClientProofRecord, type StorageProofRecord } from "./records";
 import { listFiles, recordsOf } from "./bundle";
 import { mergedMirrorRecords, mirrorRecords } from "./mirror";
 import type { ProofArchive } from "./store";
@@ -23,9 +23,9 @@ export type PublicSource =
   | { readonly kind: "bundle"; readonly bundle: string }
   | { readonly kind: "mirror"; readonly mirror: string };
 
-const MIRROR_DIRECTORY = { storage_proofs: "storage-proofs", light_client_proofs: "light-client-proofs", message_evidence: "evidence", handoff_updates: "handoff-updates" } as const;
+const MIRROR_DIRECTORY = { storage_proofs: "storage-proofs", light_client_proofs: "light-client-proofs", message_evidence: "evidence", handoff_updates: "handoff-updates", fork_proofs: "fork-proofs" } as const;
 
-async function* rowsOf(source: PublicSource, table: "storage_proofs" | "light_client_proofs" | "message_evidence" | "handoff_updates"): AsyncGenerator<unknown> {
+async function* rowsOf(source: PublicSource, table: "storage_proofs" | "light_client_proofs" | "message_evidence" | "handoff_updates" | "fork_proofs"): AsyncGenerator<unknown> {
   if (source.kind === "archive") {
     for await (const page of source.archive.pages(table)) yield* page;
   } else if (source.kind === "bundle") {
@@ -86,6 +86,13 @@ handoff-updates/<chain id>/<period>.json
   of period N of chain C at <this tree>/handoff-updates/C/N.json. Nobody has to trust the file: the zk proof checks the
   committee signatures, and a wrong update gives no valid proof.
 
+fork-proofs/<chain id>/<state root>.json
+  The fork proof of one source beacon block: the fork version and the genesis validators root of the chain, each with
+  its branch up to the state root of the block (the record names the slot, the block root, the execution block and the
+  shape of the state). A prover reads the proof of the block with state root S of chain C at
+  <this tree>/fork-proofs/C/S.json when no beacon node serves that state any more. Check: the two branches against the
+  state root (the same rule the bridge runs on chain); a wrong record gives no valid proof.
+
 beacon-states/<chain id>/<slot>-<state root>.ssz (and .summary)
   Beacon states that a prover verified and kept, as SSZ. Check: hash_tree_root of the state equals the root in the name.
 `;
@@ -118,9 +125,14 @@ export function publicEvidence(record: EvidenceRecord) {
   return { messageId: record.messageId, bodyHash: record.bodyHash, pair: record.pair, direction: record.direction, body: record.body };
 }
 
+/** What the public list of fork proofs and the public tree show of one record: where it is and what names it. */
+export function publicForkProofEntry(entry: { readonly slot: number; readonly stateRoot: string; readonly blockRoot: string; readonly executionBlockNumber: number }) {
+  return { slot: entry.slot, stateRoot: entry.stateRoot, blockRoot: entry.blockRoot, executionBlockNumber: entry.executionBlockNumber };
+}
+
 /** Writes the public tree of the records into `out` (which should be empty). Returns the files per kind. */
-export async function exportPublicTree(source: PublicSource, out: string): Promise<Record<"storageProofs" | "lightClientProofs" | "evidence" | "handoffUpdates", number>> {
-  const counts = { storageProofs: 0, lightClientProofs: 0, evidence: 0, handoffUpdates: 0 };
+export async function exportPublicTree(source: PublicSource, out: string): Promise<Record<"storageProofs" | "lightClientProofs" | "evidence" | "handoffUpdates" | "forkProofs", number>> {
+  const counts = { storageProofs: 0, lightClientProofs: 0, evidence: 0, handoffUpdates: 0, forkProofs: 0 };
   await mkdir(out, { recursive: true });
   await put(out, "README.txt", PUBLIC_README);
 
@@ -171,6 +183,14 @@ export async function exportPublicTree(source: PublicSource, out: string): Promi
     await put(out, `handoff-updates/${parsed.data.chainId}/${parsed.data.period}.json`, parsed.data.record);
     counts.handoffUpdates += 1;
   }
+
+  for await (const raw of rowsOf(source, "fork_proofs")) {
+    const parsed = forkProofRecordSchema.safeParse(raw);
+    if (!parsed.success || !forkProofArchiveRecord(parsed.data).ok) throw new Error("a fork proof record does not parse");
+    // The file is the record text exactly as the backend stored it.
+    await put(out, `fork-proofs/${parsed.data.chainId}/${parsed.data.stateRoot}.json`, parsed.data.record);
+    counts.forkProofs += 1;
+  }
   return counts;
 }
 
@@ -183,6 +203,7 @@ const ALLOWED_PATHS = [
   new RegExp(`^light-client-proofs/[a-z0-9-]+/${DIRECTION}/\\d+-\\d+-${HASH}\\.json$`),
   new RegExp(`^evidence/[a-z0-9-]+/${DIRECTION}/${HASH}-[0-9a-f]{64}\\.json$`),
   /^handoff-updates\/\d+\/\d+\.json$/,
+  new RegExp(`^fork-proofs/\\d+/${HASH}\\.json$`),
   /^beacon-states\/\d+\/\d{12}-0x[0-9a-f]{64}\.(ssz|summary)$/,
 ];
 
@@ -245,6 +266,19 @@ function scanHandoff(file: string, text: string, problems: string[]): void {
 }
 
 /**
+ * A fork proof holds only hex, numbers and fixed key names. It must pass the whole check of `checkForkProofRecord` for the
+ * chain and state root its path names (the branches included); the text is then scanned as usual.
+ */
+function scanForkProof(file: string, text: string, problems: string[]): void {
+  const match = /^fork-proofs\/(\d+)\/(0x[0-9a-f]{64})\.json$/.exec(file) as RegExpExecArray;
+  if (!forkProofArchiveRecord({ chainId: Number(match[1]), stateRoot: match[2] as string, record: text, storedAt: null, source: "public" }).ok) {
+    problems.push("is not a valid fork proof for its path");
+    return;
+  }
+  scanJson(JSON.parse(text), problems);
+}
+
+/**
  * The manifest lists files by path with their SHA-256 in plain hex, which the general rule would take for keys. Its
  * `files` must name allowed paths with 64 hex digits and a size; everything else in it is scanned as usual.
  */
@@ -299,6 +333,8 @@ export async function checkPublicTree(root: string): Promise<PublicProblem[]> {
       }
     } else if (file.startsWith("handoff-updates/")) {
       scanHandoff(file, text, found);
+    } else if (file.startsWith("fork-proofs/")) {
+      scanForkProof(file, text, found);
     } else if (file.endsWith(".json")) {
       try {
         scanJson(JSON.parse(text), found);

@@ -20,7 +20,7 @@ import type { ProofArchive } from "./store";
  */
 
 /** The record directories: never pruned. */
-export const RECORD_DIRECTORIES = ["storage-proofs", "light-client-proofs", "evidence", "handoff-updates", "conflicts"] as const;
+export const RECORD_DIRECTORIES = ["storage-proofs", "light-client-proofs", "evidence", "handoff-updates", "fork-proofs", "conflicts"] as const;
 /** The directories that keep a window of days. */
 export const PRUNED_DIRECTORIES = ["beacon-states", "snapshots", "manifests"] as const;
 export const MIRROR_DIRECTORIES = [...RECORD_DIRECTORIES, ...PRUNED_DIRECTORIES] as const;
@@ -56,6 +56,7 @@ export function mirrorFile(kind: RecordDirectory, record: Record<string, unknown
   else if (kind === "light-client-proofs") stem = [record.pair, record.direction, `${record.startSlot}-${record.newSlot}-${lower(record.proofHash)}`];
   else if (kind === "evidence") stem = [record.pair, record.direction, `${lower(record.messageId)}-${lower(record.bodyHash).slice(2)}`];
   else if (kind === "handoff-updates") stem = [record.chainId, record.period];
+  else if (kind === "fork-proofs") stem = [record.chainId, lower(record.stateRoot)];
   else stem = ["conflict"];
   return { path: `${kind}/${stem.map(segment).join("/")}.${sha256(text)}.json`, text };
 }
@@ -93,6 +94,7 @@ const TABLES = [
   ["light_client_proofs", "light-client-proofs"],
   ["message_evidence", "evidence"],
   ["handoff_updates", "handoff-updates"],
+  ["fork_proofs", "fork-proofs"],
   ["conflicts", "conflicts"],
 ] as const;
 
@@ -101,7 +103,7 @@ export type MirrorWrite = { readonly written: Record<RecordDirectory, number>; i
 
 /** Writes every row of the archive as a record file into the mirror. */
 export async function writeMirrorRecords(archive: ProofArchive, mirror: string): Promise<MirrorWrite> {
-  const result: MirrorWrite = { written: { "storage-proofs": 0, "light-client-proofs": 0, evidence: 0, "handoff-updates": 0, conflicts: 0 }, identical: 0, conflicts: [] };
+  const result: MirrorWrite = { written: { "storage-proofs": 0, "light-client-proofs": 0, evidence: 0, "handoff-updates": 0, "fork-proofs": 0, conflicts: 0 }, identical: 0, conflicts: [] };
   for (const [table, kind] of TABLES) {
     for await (const page of archive.pages(table)) {
       for (const row of page) {
@@ -169,12 +171,13 @@ export async function* mergedMirrorRecords(mirror: string, kind: string): AsyncG
 }
 
 /** Upserts every record file of the mirror; the same rules as an import of a bundle. */
-export function importMirror(archive: ProofArchive, mirror: string): Promise<Record<"storage_proofs" | "light_client_proofs" | "message_evidence" | "handoff_updates", IngestTally>> {
+export function importMirror(archive: ProofArchive, mirror: string): Promise<Record<"storage_proofs" | "light_client_proofs" | "message_evidence" | "handoff_updates" | "fork_proofs", IngestTally>> {
   return importRecords(archive, {
     storage: mirrorRecords(mirror, "storage-proofs"),
     lightClient: mirrorRecords(mirror, "light-client-proofs"),
     evidence: mirrorRecords(mirror, "evidence"),
     handoffs: mirrorRecords(mirror, "handoff-updates"),
+    forkProofs: mirrorRecords(mirror, "fork-proofs"),
   });
 }
 

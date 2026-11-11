@@ -22,7 +22,7 @@ export const USAGE = `usage: zk-bridge-proof-archive <command> [options]
   migrate                               create or upgrade the proof_archive schema
   export --out <bundle>                 write <bundle>/archive/*.ndjson from the archive
   import --in <bundle>                  upsert <bundle>/archive/*.ndjson into the archive (conflicts: exit 3)
-  ingest-backend --sqlite <file>        upsert the proofs, evidence and handoff updates of a backend SQLite snapshot
+  ingest-backend --sqlite <file>        upsert the proofs, evidence, handoff updates and fork proofs of a backend SQLite snapshot
   ingest-cache --dir <proof cache>      upsert the entries of a runner proof cache
   manifest-write --dir <bundle> --commit <sha> [--ipfs-log <file>] [--public]
   manifest-check --dir <bundle>         re-hash the files of a bundle (mismatch: exit 1)
@@ -156,7 +156,7 @@ export async function main(argv: readonly string[], environment: ArchiveEnvironm
       case "ingest-backend": {
         const { rows, skipped } = readBackendSnapshot(required(options, "sqlite"));
         const tally = await ingestBackendRows(archive, environment.EXPLORER_PAIR ?? DEFAULT_PAIR_NAME, rows);
-        print({ ingested: tally, skipped, rows: { board: rows.board.length, held: rows.held.length, evidence: rows.evidence.length, handoffs: rows.handoffs.length } });
+        print({ ingested: tally, skipped, rows: { board: rows.board.length, held: rows.held.length, evidence: rows.evidence.length, handoffs: rows.handoffs.length, forkProofs: rows.forkProofs.length } });
         return tally.conflict > 0 ? 3 : 0;
       }
       case "ingest-cache": {
