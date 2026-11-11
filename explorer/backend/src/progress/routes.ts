@@ -16,7 +16,7 @@ import { decisionBoardOf } from "../watch/decisions.ts";
 import { createWarmupStore } from "../watch/warmup-store.ts";
 import { buildBenchmarks, parseWindow, WINDOW_LIMITS, type Benchmarks } from "./benchmarks.ts";
 import { createIndexerReads, type IndexedHead, type IndexerReads } from "./indexer.ts";
-import { buildPipeline, knownProofs, pipelineRuleOf } from "./pipeline.ts";
+import { buildPipeline, knownProofs, pipelineRuleOf, type Pipeline } from "./pipeline.ts";
 import { batchRuleFor } from "../watch/batch.ts";
 import { buildProgress, clockFromHead, type Estimates } from "./progress.ts";
 
@@ -71,8 +71,15 @@ export function workerWarmAt(storage: Storage, direction: ProofDirection, at: nu
 /** What the routes need beyond the context. A test passes its own indexer reads. */
 export type ProgressOptions = { readonly indexer?: IndexerReads | null; readonly callerOf: (request: Context) => string };
 
+/** What the read routes share with the route steps (`steps/routes.ts`): the indexer reads and the pipeline of a direction. */
+export type ProgressReads = {
+  readonly indexer: IndexerReads | null;
+  /** The pipeline of a direction, as `GET /directions/:direction/pipeline` answers it. */
+  readonly pipelineOf: (direction: ProofDirection) => Promise<Pipeline>;
+};
+
 /** Adds the three read routes. */
-export function registerProgressRoutes(app: Hono, context: BackendModuleContext, options: ProgressOptions): void {
+export function registerProgressRoutes(app: Hono, context: BackendModuleContext, options: ProgressOptions): ProgressReads {
   const { storage, pair, now } = context;
   const indexer = options.indexer !== undefined ? options.indexer : context.config.indexerUrl === undefined ? null : createIndexerReads({ baseUrl: context.config.indexerUrl, now });
   const limiter = createReadLimiter({ perMinute: READS_PER_CALLER_PER_MINUTE, now });
@@ -177,27 +184,29 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     return request.json(progress);
   });
 
+  async function pipelineOf(direction: ProofDirection): Promise<Pipeline> {
+    const heads = indexer === null ? null : await indexer.heads().catch(() => null);
+    const active = findActiveJob(storage, direction);
+    return buildPipeline({
+      direction,
+      rule: ruleOf(direction),
+      activeJob: active,
+      latestJob: findLatestJob(storage, direction),
+      proofs: knownProofs(storage, direction),
+      head: headOf(heads, pair, direction),
+      decision: board.latest(direction),
+      workerWarm: active !== null && workerWarmAt(storage, direction, active.createdAt),
+      estimates: await estimates(),
+      now: now(),
+    });
+  }
+
   app.get("/directions/:direction/pipeline", async (request) => {
     const direction = request.req.param("direction") as ProofDirection;
     if (!PROOF_DIRECTIONS.includes(direction)) return request.json({ error: "unknown direction" }, 404);
     const refused = limited(request);
     if (refused !== null) return refused;
-    const heads = indexer === null ? null : await indexer.heads().catch(() => null);
-    const active = findActiveJob(storage, direction);
-    return request.json(
-      buildPipeline({
-        direction,
-        rule: ruleOf(direction),
-        activeJob: active,
-        latestJob: findLatestJob(storage, direction),
-        proofs: knownProofs(storage, direction),
-        head: headOf(heads, pair, direction),
-        decision: board.latest(direction),
-        workerWarm: active !== null && workerWarmAt(storage, direction, active.createdAt),
-        estimates: await estimates(),
-        now: now(),
-      }),
-    );
+    return request.json(await pipelineOf(direction));
   });
 
   app.get("/benchmarks", async (request) => {
@@ -357,4 +366,6 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
       byDay,
     });
   });
+
+  return { indexer, pipelineOf };
 }

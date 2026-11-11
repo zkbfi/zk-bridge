@@ -140,6 +140,8 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     handoffProver: provers.utilityProver,
     forkProofProver: provers.utilityProver,
     observationProver: provers.observationProver,
+    headProver: provers.observationProver,
+    openingProver: provers.utilityProver,
     readProofNeed,
     now,
     logger,

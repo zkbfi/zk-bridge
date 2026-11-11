@@ -118,7 +118,7 @@ async function liveBackend(proofToOnChainMs?: number) {
     delivered.push({ messageId: `0x${index}`, status: "delivered", direction: { sourceChainId: 11155111, destinationChainId: 943 }, sent: { timestamp: coveredAt - 900 }, covered: { headSlot: null, timestamp: coveredAt }, delivered: { timestamp: coveredAt + wait } });
   }
   const state = { message: null as IndexedMessage | null };
-  const indexer: IndexerReads = { message: async () => state.message, heads: async () => [], headUpdates: async () => updates, delivered: async () => delivered };
+  const indexer: IndexerReads = { message: async () => state.message, heads: async () => [], headUpdates: async () => updates, delivered: async () => delivered, covered: async () => [] };
   const app = new Hono();
   registerProgressRoutes(app, backend.context, { indexer, callerOf: () => "10.0.0.1" });
   const get = async (path: string) => (await (await app.request(path)).json()) as Record<string, any>;

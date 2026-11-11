@@ -194,6 +194,12 @@ export const backendConfigSchema = z
           })
           .strict()
           .default({ enabled: true, retryMinutes: 60, maxProofsPerVersionPerDay: 4 }),
+        /**
+         * The keep-alive of the fork registry's own light client (`seal/registry-watch.ts`): when nobody updated it for one
+         * sync committee period (about 22.75 hours on PulseChain), the backend proves an update on the GPU and posts it with
+         * this signer, so a fold of the observation program stays short (at most 64 periods).
+         */
+        registryKeepAlive: z.object({ enabled: z.boolean().default(true) }).strict().default({ enabled: true }),
       })
       .strict()
       .optional(),

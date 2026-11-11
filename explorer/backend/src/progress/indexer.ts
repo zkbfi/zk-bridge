@@ -9,13 +9,16 @@ import { z } from "zod";
 export const INDEXER_READ_TIMEOUT_MILLISECONDS = 5_000;
 
 /** How long an answer is kept, in milliseconds, by kind. */
-export const CACHE_MILLISECONDS = { message: 5_000, heads: 10_000, headUpdates: 30_000, delivered: 60_000 } as const;
+export const CACHE_MILLISECONDS = { message: 5_000, heads: 10_000, headUpdates: 30_000, delivered: 60_000, covered: 15_000 } as const;
 
 /** The most messages the cache keeps; the oldest goes first. */
 export const MESSAGE_CACHE_LIMIT = 256;
 
 /** How many head updates and delivered messages one read takes. */
 export const LIST_LIMIT = 200;
+
+/** How many covered messages one read takes. */
+export const COVERED_READ_LIMIT = 20;
 
 const timestamped = z.object({ timestamp: z.number() }).passthrough();
 
@@ -70,6 +73,8 @@ export interface IndexerReads {
   headUpdates(chainId: number): Promise<readonly HeadUpdate[]>;
   /** The newest delivered messages from one chain to another, newest first. */
   delivered(sourceChainId: number, destinationChainId: number): Promise<readonly IndexedMessage[]>;
+  /** The newest messages from one chain to another that a light client head covers and nobody delivered, newest first. */
+  covered(sourceChainId: number, destinationChainId: number): Promise<readonly IndexedMessage[]>;
 }
 
 /** Builds the reads over the chain indexer at `baseUrl`. `fetchFunction` is read at call time. */
@@ -110,6 +115,11 @@ export function createIndexerReads(input: { baseUrl: string; now: () => number; 
     delivered: (sourceChainId, destinationChainId) =>
       cached(`delivered:${sourceChainId}>${destinationChainId}`, CACHE_MILLISECONDS.delivered, async () => {
         const query = new URLSearchParams({ direction: `${sourceChainId}>${destinationChainId}`, status: "delivered", limit: String(LIST_LIMIT) });
+        return (await read(`/api/feed?${query}`, feedSchema, "the feed", false))!.items;
+      }),
+    covered: (sourceChainId, destinationChainId) =>
+      cached(`covered:${sourceChainId}>${destinationChainId}`, CACHE_MILLISECONDS.covered, async () => {
+        const query = new URLSearchParams({ direction: `${sourceChainId}>${destinationChainId}`, status: "covered", limit: String(COVERED_READ_LIMIT) });
         return (await read(`/api/feed?${query}`, feedSchema, "the feed", false))!.items;
       }),
   };

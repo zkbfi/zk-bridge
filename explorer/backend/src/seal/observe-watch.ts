@@ -76,6 +76,48 @@ export type ObservationWatchInput = {
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
+ * Proves one observation and stores it in `fork_observations`: the attempt row is written before the first await, so a
+ * caller that passes `id` can name the job at once. The GPU time counts toward the direction's budget and shows in the
+ * billing and the benchmarks, like a proving job. Logged; never throws.
+ */
+export async function proveObservation(input: {
+  readonly id: string;
+  readonly storage: Storage;
+  readonly chainId: number;
+  readonly registry: Address;
+  readonly direction: ProofDirection;
+  readonly version: Hex;
+  readonly why: ObservationWhy;
+  readonly now: () => number;
+  readonly logger: Logger;
+  readonly prove: () => Promise<ObservationOutcome>;
+}): Promise<{ readonly id: string; readonly observation: ForkObservationPackage } | { readonly id: string; readonly stage: "prove" | "check"; readonly error: string }> {
+  const { id, storage, chainId, registry, version, why, logger } = input;
+  const startedAt = input.now();
+  insertObservationAttempt(storage, { id, chainId, version, why, at: startedAt });
+  logger.warn("observation_proving", { chainId, registry, version, why });
+  let outcome: ObservationOutcome;
+  try {
+    outcome = await input.prove();
+  } catch (error) {
+    failObservationAttempt(storage, { id, error: "the prover could not make an observation proof", at: input.now() });
+    logger.warn("observation_prove_failed", { chainId, registry, version, error });
+    return { id, stage: "prove", error: messageOf(error) };
+  }
+  const provedAt = input.now();
+  recordProveTiming(storage, { jobId: `observation-${id}`, direction: input.direction, startedAt, provedAt, timing: outcome.timing });
+  const { observation } = outcome;
+  if (observation.chainId !== chainId || observation.registry.toLowerCase() !== registry.toLowerCase()) {
+    failObservationAttempt(storage, { id, error: "the proof is for another registry", at: provedAt });
+    logger.error("observation_wrong_registry", { chainId, registry, provedChainId: observation.chainId, provedRegistry: observation.registry });
+    return { id, stage: "check", error: "the proof is for another registry" };
+  }
+  storeObservationProof(storage, { id, observation, at: provedAt });
+  logger.info("observation_proved", { chainId, registry, version: observation.observedVersion, asked: version, shape: observation.shape, foldSteps: observation.foldSteps, seconds: Math.round((provedAt - startedAt) / 1000) });
+  return { id, observation };
+}
+
+/**
  * The watch of one chain. `check` never throws, and two checks never overlap, so a slow proof cannot become two.
  */
 export function createObservationWatch(input: ObservationWatchInput): { check(): Promise<ObservationCheckOutcome | null> } {
@@ -122,32 +164,11 @@ export function createObservationWatch(input: ObservationWatchInput): { check():
 
   /** Proves an observation and stores it, or gives the outcome of a failed try (logged). */
   async function proveOne(version: Hex, why: ObservationWhy): Promise<{ id: string; observation: ForkObservationPackage } | { failed: ObservationCheckOutcome }> {
-    const id = randomUUID();
-    const startedAt = input.now();
-    insertObservationAttempt(storage, { id, chainId, version, why, at: startedAt });
-    logger.warn("observation_proving", { chainId, registry, version, why });
     if (why === "new-version") input.alert(`The ${chainName} chain runs fork version ${version}, which its fork registry does not hold: proving a fork observation on the GPU.`);
-    let outcome: ObservationOutcome;
-    try {
-      outcome = await input.prove();
-    } catch (error) {
-      failObservationAttempt(storage, { id, error: "the prover could not make an observation proof", at: input.now() });
-      logger.warn("observation_prove_failed", { chainId, registry, version, error });
-      if (why === "new-version") input.alert(`The fork observation for ${chainName} could not be proven; it is tried again in ${input.limits.retryMinutes} minutes.`);
-      return { failed: { kind: "failed", stage: "prove", error: messageOf(error) } };
-    }
-    const provedAt = input.now();
-    // Its GPU time counts toward the direction's budget and shows in the billing and the benchmarks, like a proving job.
-    recordProveTiming(storage, { jobId: `observation-${id}`, direction: input.direction, startedAt, provedAt, timing: outcome.timing });
-    const { observation } = outcome;
-    if (observation.chainId !== chainId || observation.registry.toLowerCase() !== registry.toLowerCase()) {
-      failObservationAttempt(storage, { id, error: "the proof is for another registry", at: provedAt });
-      logger.error("observation_wrong_registry", { chainId, registry, provedChainId: observation.chainId, provedRegistry: observation.registry });
-      return { failed: { kind: "failed", stage: "prove", error: "the proof is for another registry" } };
-    }
-    storeObservationProof(storage, { id, observation, at: provedAt });
-    logger.info("observation_proved", { chainId, registry, version: observation.observedVersion, asked: version, shape: observation.shape, foldSteps: observation.foldSteps, seconds: Math.round((provedAt - startedAt) / 1000) });
-    return { id, observation };
+    const proven = await proveObservation({ id: randomUUID(), storage, chainId, registry, direction: input.direction, version, why, now: input.now, logger, prove: input.prove });
+    if ("observation" in proven) return proven;
+    if (proven.stage === "prove" && why === "new-version") input.alert(`The fork observation for ${chainName} could not be proven; it is tried again in ${input.limits.retryMinutes} minutes.`);
+    return { failed: { kind: "failed", stage: "prove", error: proven.error } };
   }
 
   const run = async (): Promise<ObservationCheckOutcome> => {

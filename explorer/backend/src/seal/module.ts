@@ -4,8 +4,10 @@
  * observations that let it seal ({@link createObservationWatch}). It signs with the signer of `seal.signer`, configured as
  * the runner's signer of `explorer/bots` (a private key, a keystore, a mnemonic or a hardware wallet; secrets by
  * reference, never in the file), and sends through the runner's transaction port (exact gas with a buffer, the chain's
- * minimum priority fee, a receipt wait). Nothing is sent unless it simulated without a revert. Its one route serves the
- * newest observation proof of a chain: `GET /fork-observations/:chainId/latest`.
+ * minimum priority fee, a receipt wait). Nothing is sent unless it simulated without a revert. On a chain with a registry it
+ * also keeps the registry's own light client alive ({@link createRegistryKeepAlive}): the fallback poster of that route step
+ * when nobody updated it for a period. Its one route serves the newest observation proof of a chain:
+ * `GET /fork-observations/:chainId/latest`.
  */
 import type { Hono } from "hono";
 import { createPublicClient, http, type Address, type PublicClient } from "viem";
@@ -32,6 +34,9 @@ import type { Logger as BotLogger } from "../../../bots/src/logging/logger.ts";
 import type { Logger } from "../logger.ts";
 import type { BackendModuleContext } from "../module.ts";
 import { createSealWatch, type SealSender } from "./seal-watch.ts";
+import { createRegistryKeepAlive } from "./registry-watch.ts";
+import { createStepChainReads } from "../steps/chain.ts";
+import { stepServiceOf } from "../steps/routes.ts";
 
 /** What a test replaces. */
 export type SealDependencies = {
@@ -120,6 +125,8 @@ export async function start(context: BackendModuleContext, dependencies: SealDep
   const alert = (text: string): void => logger.error("alert", { text });
   const stoppers: Array<() => void> = [];
   const observing: number[] = [];
+  const keepingAlive: number[] = [];
+  const stepChain = context.stepChain ?? createStepChainReads({ clientOf: clientOf as (side: PairSide) => PublicClient });
   for (const side of pair.sides) {
     const client = clientOf(side) as unknown as GateChainClient;
     const beacon = side.beaconUrl === null ? undefined : createBeaconProofSource({ url: side.beaconUrl });
@@ -137,6 +144,23 @@ export async function start(context: BackendModuleContext, dependencies: SealDep
     const period = epochSeconds(side.chainId) * 1000;
     stoppers.push(every(period, () => void watch.check()));
     const registry = side.contracts.forkRegistry;
+    if (registry !== null && context.headProver !== undefined && config.seal.registryKeepAlive.enabled) {
+      const keepAlive = createRegistryKeepAlive({
+        chainId: side.chainId,
+        chainName: side.name,
+        pair: config.pair,
+        now: context.now,
+        logger,
+        alert,
+        readState: () => stepChain.registryLightClient(side, registry),
+        service: stepServiceOf(context),
+        simulate: (call) => client.estimateGas({ account: signer.address, to: call.to, data: call.data }),
+        send,
+      });
+      void keepAlive.check();
+      stoppers.push(every(period, () => void keepAlive.check()));
+      keepingAlive.push(side.chainId);
+    }
     if (registry === null || side.beaconUrl === null || context.observationProver === undefined || !config.seal.observation.enabled) continue;
     const prover = context.observationProver;
     const beaconUrl = side.beaconUrl;
@@ -170,7 +194,7 @@ export async function start(context: BackendModuleContext, dependencies: SealDep
     stoppers.push(every(period, () => void observe.check()));
     observing.push(side.chainId);
   }
-  logger.info("seal_started", { chains: pair.sides.map((side) => side.chainId), observing, signer: signer.address });
+  logger.info("seal_started", { chains: pair.sides.map((side) => side.chainId), observing, keepingAlive, signer: signer.address });
   return async () => {
     for (const stop of stoppers) stop();
   };

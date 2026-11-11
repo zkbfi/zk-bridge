@@ -13,6 +13,8 @@ import { startWatch } from "../watch/module.ts";
 import { createWarmupStore, noteJobWorkerWait } from "../watch/warmup-store.ts";
 import { recordProveTiming } from "./timings.ts";
 import { registerProgressRoutes } from "../progress/routes.ts";
+import { registerStepRoutes } from "../steps/routes.ts";
+import { pruneStepRequests } from "../steps/store.ts";
 
 /** The largest request body in bytes. A real body is under 300 bytes. */
 export const MAXIMUM_BODY_BYTES = 4096;
@@ -38,6 +40,11 @@ const requestBodySchema = z
   });
 
 const services = new WeakMap<BackendModuleContext, RequestService>();
+
+/** The request service of a context: the route steps ask it for a light client update. */
+export function requestServiceOf(context: BackendModuleContext): RequestService {
+  return serviceFor(context);
+}
 
 /** The request service of a context. One context has one service. */
 function serviceFor(context: BackendModuleContext): RequestService {
@@ -120,7 +127,8 @@ function describeJob(job: Job) {
  */
 export function register(app: Hono, context: BackendModuleContext): void {
   const service = serviceFor(context);
-  registerProgressRoutes(app, context, { callerOf: (request) => callerOf(request, context.config) });
+  const progress = registerProgressRoutes(app, context, { callerOf: (request) => callerOf(request, context.config) });
+  registerStepRoutes(app, context, { callerOf: (request) => callerOf(request, context.config), progress });
 
   app.post(
     "/requests",
@@ -167,9 +175,13 @@ export async function start(context: BackendModuleContext): Promise<() => Promis
   if (context.config.limits.secondsBetweenJobsPerDirection !== undefined) {
     context.logger.warn("config_deprecated", { key: "limits.secondsBetweenJobsPerDirection", detail: "ignored: a job starts once per new finality of the source chain and direction; remove the key" });
   }
-  service.prune();
+  const prune = () => {
+    service.prune();
+    pruneStepRequests(context.storage, context.now() - context.config.limits.requestRetentionHours * 3_600_000);
+  };
+  prune();
   service.recover();
-  const timer = setInterval(() => service.prune(), PRUNE_INTERVAL_MILLISECONDS);
+  const timer = setInterval(prune, PRUNE_INTERVAL_MILLISECONDS);
   timer.unref();
   const stopWatch = await startWatch({ context, service });
   return async () => {
