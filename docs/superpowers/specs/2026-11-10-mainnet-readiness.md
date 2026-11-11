@@ -109,6 +109,18 @@ router's source entry points). This reverses the user decision of 2026-10-24 ("A
   before it sends as today. Layers 1 and 2 do not change. Sends straight to the mediator keep confirm-then-send.
   The frontends attach evidence when the current epoch is unconfirmed or ends within 60 s, otherwise empty; a late empty
   send fails with `ForkNotConfirmed`, never passes unproven.
+- **Superseded the same day: a seal-only gate.** Owner, on the per-epoch design: "your 60s window presupposes that the
+  transaction will be fast enough to be put in the right epoch. why should it be? why wouldn't i as a user try to save
+  more gas?", "i do not understand why wwe can't just enforce with the frontend. no proof writing on the deposit",
+  "yeah, but your implementation sounds really expensive", then, on the seal-only gate: "well, yes, the middle ground
+  was always correct, and it also gave us our previous, first possible upgrade path right?". Decision: no fork evidence
+  on a send. The gate admits a send unless it is sealed (one storage read, about 3,500 gas, the same for every send).
+  Anyone seals it with a proof of an unsupported shape (`seal`, unchanged); the backend watcher posts that proof in the
+  first blocks of such a fork. Sealing retires the route (the fork upgrade path: seal, deploy a new route, frontends
+  switch, the old route keeps paying out what it can prove). The frontends pause sends 12 hours before every scheduled
+  fork, and use a cached and bundled fork schedule when the beacon node cannot be reached. The router change of
+  2026-11-10 (`gateEvidence` on router sends) is reverted. Gap accepted: a direct caller in the minutes between an
+  unsupported fork's activation and the seal.
 - **Status 2026-11-10 (branch `feat/router-gate-evidence`, not merged, not deployed).** Built test-first. The router's
   entries are `wrapAndRelayTokens()` (no evidence), `wrapAndRelayTokens(address,bytes)` and
   `relayTokensAndCall(address,bytes,uint256,bytes)`; the old receiver forms are removed, so the dapp and the terminal
