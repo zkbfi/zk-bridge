@@ -18,6 +18,8 @@ if command -v shellcheck >/dev/null 2>&1; then
   for script in pull-proofs.sh install-proofs-pull.sh test.sh; do
     check "shellcheck operator/$script" shellcheck -S warning "$DIR/$script"
   done
+else
+  printf 'SKIP  shellcheck is not installed (brew install shellcheck)\n'
 fi
 if grep -hv '^[[:space:]]*#' "$DIR/pull-proofs.sh" "$DIR/install-proofs-pull.sh" | grep -q 'zkb\.fi'; then fail "operator scripts name zkb.fi"; else pass "operator scripts name no host of zkb.fi"; fi
 
@@ -110,7 +112,16 @@ record() { # record <dir/stem> <content>: a record file named by its content
   mkdir -p "$(dirname "$remote/$1")"
   mv "$tmp" "$remote/$1.$(sha "$tmp").json"
 }
-for d in storage-proofs light-client-proofs evidence conflicts beacon-states snapshots manifests; do mkdir -p "$remote/$d"; done
+# Every directory the pull asks for, read from the script itself, so the fake server cannot drift from it (it once
+# lacked handoff-updates, and every pull failed). The real server creates them all on each export (MIRROR_DIRS in
+# deploy/app-server/proofs.sh).
+mirror_dirs=$(sed -nE 's/^(RECORD|PRUNED)_DIRS="(.*)"$/\2/p' "$DIR/pull-proofs.sh" | tr '\n' ' ')
+missing_dirs=""
+for d in storage-proofs light-client-proofs evidence handoff-updates fork-proofs conflicts beacon-states snapshots manifests; do
+  case " $mirror_dirs " in *" $d "*) ;; *) missing_dirs="$missing_dirs $d" ;; esac
+done
+if [ -z "$missing_dirs" ]; then pass "the pull asks for every directory of the mirror"; else fail "pull-proofs.sh does not pull:$missing_dirs"; fi
+for d in $mirror_dirs; do mkdir -p "$remote/$d"; done
 record storage-proofs/369/0xabc/100-0xdead '{"proof":1}'
 record evidence/p/first-to-second/0x0e-aa '{"e":1}'
 state1=11155111/000000000100-0x$(printf 'a%.0s' $(seq 1 64)).ssz
@@ -144,7 +155,8 @@ if [ -f "$local_dir/zk-bridge-proofs-20261030T033000Z.tar.gz" ] && grep -q '1 bu
 if [ -n "$(find "$local_dir" "$lm" -maxdepth 0 -perm 0700 | sed -n 2p)" ]; then pass "the local mirror is private to this user (0700 directories)"; else fail "local mirror modes: $(ls -ld "$local_dir" "$lm")"; fi
 
 # The next day: the server pruned a state, a snapshot and its first manifest, lost a record, and added new files.
-ls -li "$lm/beacon-states/$state2" | awk '{print $1}' >"$T/inode-1"
+# (A failed first pull leaves no file: record that, so the remaining checks still run and report.)
+{ ls -li "$lm/beacon-states/$state2" 2>/dev/null || echo missing; } | awk '{print $1}' >"$T/inode-1"
 rm "$remote/beacon-states/$state1" "$remote/snapshots/20261101T033000Z.sqlite" "$remote/manifests/20261101T033000Z.json"
 lost=$(cd "$remote" && ls evidence/p/first-to-second/)
 rm "$remote/evidence/p/first-to-second/$lost"
@@ -155,7 +167,7 @@ record light-client-proofs/p/first-to-second/1-2-0xff '{"lc":1}'
 write_manifest 20261102T033000Z
 status=0
 pull || status=$?
-ls -li "$lm/beacon-states/$state2" | awk '{print $1}' >"$T/inode-2"
+{ ls -li "$lm/beacon-states/$state2" 2>/dev/null || echo missing-2; } | awk '{print $1}' >"$T/inode-2"
 if [ "$status" -eq 0 ] && [ ! -e "$lm/beacon-states/$state1" ] && [ ! -e "$lm/snapshots/20261101T033000Z.sqlite" ] && [ ! -e "$lm/manifests/20261101T033000Z.json" ] \
   && [ -f "$lm/beacon-states/$state3" ] && [ -f "$lm/snapshots/20261102T033000Z.sqlite" ] && [ -n "$(ls "$lm/light-client-proofs/p/first-to-second/")" ]; then
   pass "a pull deletes what the server pruned and fetches what is new"
@@ -180,7 +192,7 @@ printf 'corrupt\n' >"$lm/beacon-states/$state2"
 status=0
 pull || status=$?
 if [ "$status" -ne 0 ] && [ "$(cat "$lm/beacon-states/$state2")" = corrupt ] && grep -q "differs from the manifest: beacon-states/$state2" "$local_dir/pull.log"; then pass "a file that differs from the manifest fails the run and is left alone"; else fail "corrupt file (status $status)"; fi
-cp "$remote/beacon-states/$state2" "$lm/beacon-states/$state2"
+cp "$remote/beacon-states/$state2" "$lm/beacon-states/$state2" 2>/dev/null || fail "restore the corrupted state (the pulls before failed)"
 
 # A real manifest lists thousands of files with long paths. The check must not fail on a long list (a `grep -q` at
 # the end of a pipe ends early, and under pipefail the SIGPIPE of the writer turned a match into a failure).
