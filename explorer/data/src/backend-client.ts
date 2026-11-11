@@ -5,6 +5,7 @@ import type { JsonRequestInit } from "./msgboard/board-http.js";
 import type { ProofDirection } from "./proof-message.js";
 import { evidencePackageSchema, type EvidencePackage } from "./prover/packages.js";
 import { latestForkObservationSchema, type LatestForkObservation } from "./fork-observation.js";
+import { routeStepsSchema, stepJobSchema, stepProofSchema, type RouteStepKind, type RouteSteps, type StepJob, type StepProof, type StepRequestAnswer, type StepRequestInput } from "./route-steps.js";
 import { benchmarksSchema, directionPipelineSchema, transferProgressSchema, type Benchmarks, type DirectionPipeline, type TransferProgress } from "./pipeline-views.js";
 
 /** Posts a JSON body and parses the JSON of the answer. The `postJsonResponse` of the msgboard code fits it. */
@@ -41,6 +42,8 @@ const requestAcceptedSchema = z.object({ requestId: z.string(), jobId: z.string(
 const rateLimitedSchema = z.object({ error: z.literal("rate-limited"), retryAfterSeconds: z.number(), why: z.string().optional(), detail: z.string().optional() }).passthrough();
 const nothingToProveSchema = z.object({ error: z.literal("nothing-to-prove"), why: z.string().optional() }).passthrough();
 const cannotCheckSchema = z.object({ error: z.literal("cannot-check"), retryAfterSeconds: z.number() }).passthrough();
+const notServedSchema = z.object({ error: z.literal("not-served"), detail: z.string().optional() }).passthrough();
+const stepAcceptedSchema = z.object({ jobId: z.string(), joined: z.literal(true).optional(), ready: z.literal(true).optional() }).passthrough();
 const requestStatusSchema = jobViewSchema.and(z.object({ requestId: z.string(), reason: z.string(), messageId: hashSchema.nullable(), requestedAt: z.number() }));
 const directionStatusSchema = z.object({ direction: directionSchema, job: jobViewSchema.nullable() }).passthrough();
 
@@ -193,6 +196,49 @@ export function createBackendClient(input: { baseUrl: string; fetchJson: JsonFet
       const response = await get(`/benchmarks?window=${encodeURIComponent(window)}`);
       if (response.status !== 200) refuseStatus(response, "benchmarks");
       return parseAnswer(benchmarksSchema, response, "benchmarks");
+    },
+    /** Every pending step of the route, both directions, with its situation and constraints. */
+    async routeSteps(): Promise<RouteSteps> {
+      const response = await get("/route/steps");
+      if (response.status !== 200) refuseStatus(response, "the route steps");
+      return parseAnswer(routeStepsSchema, response, "the route steps");
+    },
+    /** Asks the backend to make the proof of a step. A refusal (see {@link StepRequestAnswer}) comes back as a value. */
+    async requestStep(request: StepRequestInput): Promise<StepRequestAnswer> {
+      const response = await input.postJson(`${base}/steps/requests`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request) });
+      if (response.status === 429) {
+        const limited = parseAnswer(rateLimitedSchema, response, "a step request");
+        return { refused: "rate-limited", retryAfterSeconds: limited.retryAfterSeconds, ...(limited.why === undefined ? {} : { why: limited.why }), ...(limited.detail === undefined ? {} : { detail: limited.detail }) };
+      }
+      if (response.status === 409) {
+        const nothing = parseAnswer(nothingToProveSchema, response, "a step request");
+        return { refused: "nothing-to-prove", ...(nothing.why === undefined ? {} : { why: nothing.why }) };
+      }
+      if (response.status === 503) {
+        const unknown = parseAnswer(cannotCheckSchema, response, "a step request");
+        return { refused: "cannot-check", retryAfterSeconds: unknown.retryAfterSeconds };
+      }
+      if (response.status === 404) {
+        const off = parseAnswer(notServedSchema, response, "a step request");
+        return { refused: "not-served", ...(off.detail === undefined ? {} : { detail: off.detail }) };
+      }
+      if (response.status !== 202) refuseStatus(response, "a step request");
+      const accepted = parseAnswer(stepAcceptedSchema, response, "a step request");
+      return { jobId: accepted.jobId, ...(accepted.joined === true ? { joined: true as const } : {}), ...(accepted.ready === true ? { ready: true as const } : {}) };
+    },
+    /** One step job, or null when the backend does not know it. */
+    async stepJob(jobId: string): Promise<StepJob | null> {
+      const response = await get(`/steps/jobs/${encodeURIComponent(jobId)}`);
+      if (response.status === 404) return null;
+      if (response.status !== 200) refuseStatus(response, "a step job");
+      return parseAnswer(stepJobSchema, response, "a step job");
+    },
+    /** The finished proof of a step, public fields only, or null when there is none. */
+    async stepProof(kind: RouteStepKind, subject: string): Promise<StepProof | null> {
+      const response = await get(`/steps/proofs/${kind}/${encodeURIComponent(subject)}`);
+      if (response.status === 404) return null;
+      if (response.status !== 200) refuseStatus(response, "a step proof");
+      return parseAnswer(stepProofSchema, response, "a step proof");
     },
     /** The health report. */
     async health(): Promise<BackendHealth> {

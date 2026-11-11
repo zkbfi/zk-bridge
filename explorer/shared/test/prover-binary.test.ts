@@ -285,6 +285,29 @@ describe("fork-proof", () => {
   });
 });
 
+describe("prove from a named head", () => {
+  const head = { slot: 64, root: word(0x77), nextCommitteeHash: word(0x00) };
+  const programKey = word(0x88);
+
+  it("names the head, the committee hash and the program key, with the proving backend and no webhook", async () => {
+    const { binary, seen, events } = await setup({ code: 0, stdout: `${JSON.stringify(proofPackage)}\n`, stderr: "ts=1 level=info event=prove_timing total_ms=1000" }, { secret: true, handoff: { webhookUrl: "https://hook.example", bearerVariable: "BEARER" } });
+    const outcome = await binary.proveFromHead({ direction: "second-to-first", head, programKey });
+    expect(outcome).toMatchObject({ kind: "proof", proofPackage, timing: { total_ms: 1000 } });
+    expect(seen[0]!.spec.args.slice(2)).toEqual(["prove", "--route", "pulsechain_to_ethereum", "--head-slot", "64", "--head-root", word(0x77), "--next-committee-hash", word(0x00), "--program-vkey", programKey, "--to", "stdout"]);
+    expect(seen[0]!.configText).toContain('backend = "remote"');
+    expect(events().find((event) => event.event === "head_proof_proved")).toMatchObject({ startHeadSlot: 64, timingReported: true });
+  });
+
+  it("gives up-to-date, needs a proving backend, throws the command error and refuses another output", async () => {
+    expect(await (await setup({ code: 3 })).binary.proveFromHead({ direction: "first-to-second", head, programKey })).toEqual({ kind: "up-to-date" });
+    await expect((await setup({ code: 0 }, { backend: null })).binary.proveFromHead({ direction: "first-to-second", head, programKey })).rejects.toThrow(/no proving backend/);
+    await expect((await setup({ code: 1, stderr: "the head is not final" })).binary.proveFromHead({ direction: "first-to-second", head, programKey })).rejects.toThrow(/not final/);
+    await expect((await setup({ code: 0, stdout: JSON.stringify({ ...proofPackage, newHeadSlot: "x" }) })).binary.proveFromHead({ direction: "first-to-second", head, programKey })).rejects.toThrow(/unexpected package/);
+    const quiet = await (await setup({ code: 0, stdout: JSON.stringify(proofPackage) })).binary.proveFromHead({ direction: "first-to-second", head, programKey });
+    expect(quiet).toMatchObject({ kind: "proof", timing: null });
+  });
+});
+
 describe("fork-observation", () => {
   const registry = "0x4444444444444444444444444444444444444444" as const;
   const observation = {

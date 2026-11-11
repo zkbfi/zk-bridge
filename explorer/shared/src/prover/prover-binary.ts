@@ -127,6 +127,28 @@ export interface ForkObservationProver {
   forkObservation(request: DirectionRequest & { readonly registry: Address }): Promise<ObservationOutcome>;
 }
 
+/** A light client head to prove from: what `head()`, `headers(head)` and `syncCommittees(period + 1)` of the light client give. */
+export interface StartingHead {
+  readonly slot: number;
+  readonly root: Hex;
+  /** The committee hash of the period after the head's; zero when the light client holds none. */
+  readonly nextCommitteeHash: Hex;
+}
+
+/**
+ * `prove` from a head that the command line names, apart from {@link ProverBinary} like {@link OpeningProver}: the
+ * backend proves the update of a light client that is not the destination of a route (the fork registry's own light
+ * client, which follows PulseChain on PulseChain). It needs the proving backend.
+ */
+export interface HeadProver {
+  /**
+   * `prove --route <route> --head-slot <s> --head-root <r> --next-committee-hash <h> --program-vkey <k> --to stdout`: one
+   * update of the SOURCE chain of the route of `direction`, from `head`, for the program `programKey`. The prover reads
+   * nothing from the destination chain. Exit code 3 gives `up-to-date`. @throws ProverCommandError when the prover fails.
+   */
+  proveFromHead(request: DirectionRequest & { readonly head: StartingHead; readonly programKey: Hex }): Promise<ProveOutcome>;
+}
+
 /** The `handoff-update` command, apart from {@link ProverBinary} like {@link OpeningProver}: only the handoff capture uses it. */
 export interface HandoffProver {
   /**
@@ -208,7 +230,7 @@ function parseSingleJsonLine(stdout: string, command: string): unknown {
  * of mode 0700, writes it with mode 0600, and removes the directory when the command ends. The proving key goes to
  * the child through the environment variable that the file names. No secret is ever an argument.
  */
-export function createProverBinary(input: ProverBinaryInput): ProverBinary & OpeningProver & HandoffProver & ForkProofProver & ForkObservationProver {
+export function createProverBinary(input: ProverBinaryInput): ProverBinary & OpeningProver & HandoffProver & ForkProofProver & ForkObservationProver & HeadProver {
   const environment: Record<string, string> = { ...input.baseEnvironment };
   const secrets: readonly ProverSecret[] = input.proverSecret === null ? [] : "variable" in input.proverSecret ? [input.proverSecret] : input.proverSecret;
   for (const secret of secrets) environment[secret.variable] = secret.value;
@@ -264,6 +286,20 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary & Ope
           timingReported: timing !== null,
           ...timing,
         });
+        return { kind: "proof", proofPackage: parsed.data, timing } as const;
+      });
+    },
+    async proveFromHead(request) {
+      if (input.backend === null) throw new Error("this prover wrapper has no proving backend");
+      return withConfigFile(request.direction, input.backend, async (path, route) => {
+        const head = ["--head-slot", String(request.head.slot), "--head-root", request.head.root, "--next-committee-hash", request.head.nextCommitteeHash, "--program-vkey", request.programKey];
+        const output = await run("prove", ["--config", path, "prove", "--route", route, ...head, "--to", "stdout"]);
+        if (output.code === EXIT_UP_TO_DATE) return { kind: "up-to-date" } as const;
+        if (output.code !== 0) throw new ProverCommandError("prove", output.code, tailOf(output.stderr));
+        const parsed = proofPackageSchema.safeParse(parseSingleJsonLine(output.stdout, "prove"));
+        if (!parsed.success) throw new ProverOutputError(`prove printed an unexpected package: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+        const timing = parseProveTiming(output.stderr);
+        input.logger.info("head_proof_proved", { route, startHeadSlot: request.head.slot, newHeadSlot: parsed.data.newHeadSlot, timingReported: timing !== null, ...timing });
         return { kind: "proof", proofPackage: parsed.data, timing } as const;
       });
     },
