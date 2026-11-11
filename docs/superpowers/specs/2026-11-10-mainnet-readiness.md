@@ -110,9 +110,9 @@ either, caps live only in frontends and the runner, which anyone can bypass with
   followed by an open route)? (c) needs no new contract **(guess: it moves users once, and the old route keeps paying
   out)**.
 - Size: (a) S; (b) M plus audit scope; (c) S plus a second deployment.
-- **Decided 2026-11-10, owner: "yes, and save fork proofs in the watcher too"** (answering the recommendation "a trial
-  route plus caps in our apps"): (c) a first route with a `sendCutoffTimestamp`, plus (a) frontend and runner caps during
-  it. The cutoff date and the cap amounts are still open.
+- **Decided 2026-11-10, owner: "no to the trial route"** (after the trial route was explained: it closes itself on a date,
+  bounds inflow to a flawed route, does not protect what is already inside, and splits the bridged copies between two
+  routes): (a) frontend and runner caps only, on the permanent route from the start. The cap amounts are still open.
 
 **A4. Mainnet deployment config and dry run.** There is no mainnet bridge config and no `deploy/deployments/eth-pls.json`;
 only `script/hardened/bridge.config.example.json` and the testnet files. Fill: verifier and `verifierCodeHash` per
@@ -437,7 +437,7 @@ Measure each billed item in the first week of Phase 4 before reporting a monthly
 | Id | Question | Blocks |
 |---|---|---|
 | D1 | Sends carry their own gate evidence (layers 1 to 3 change) before mainnet, or confirm-then-send? Decided: evidence. | audit scope |
-| D2 | Limited-launch caps: frontend and runner only, an immutable flow limiter, or a first route with a send cutoff? Decided: trial route with a cutoff, plus app caps. | audit scope |
+| D2 | Limited-launch caps: frontend and runner only, an immutable flow limiter, or a first route with a send cutoff? Decided: frontend and runner caps only, no trial route. | audit scope |
 | D3 | Replaced: forks are unpredictable; Gloas chosen by evidence, one shape list for gate and verifier (A6) | audit scope |
 | D4 | The licence | audit docs |
 | D5 | Keep-alive age on mainnet, per light client | Ethereum gas spend |
