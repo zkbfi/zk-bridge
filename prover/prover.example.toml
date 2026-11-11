@@ -52,6 +52,10 @@ bridge = "0x0000000000000000000000000000000000000001"          # REPLACE
 # The handoff archive: base URLs that serve <base>/<chain id>/<period>.json (docs/proof-archive.md), asked last for a
 # handoff update and for the committees of a store whose head state no node serves. Nothing in a record is trusted.
 # handoff_archive_urls = ["http://127.0.0.1:8787/archive/handoffs", "https://gateway.zkb.fi/ipfs/<cid>/handoff-updates"]
+# The fork proof archive: base URLs that serve <base>/<chain id>/<state root>.json (docs/proof-archive.md), the fork proof
+# of each source block that carried a message, saved while a node served its state. The `evidence` command asks them last
+# for the fork proof of a source state that no node serves. Every record is checked against the state root first.
+# fork_proof_archive_urls = ["http://127.0.0.1:8787/archive/fork-proofs", "https://gateway.zkb.fi/ipfs/<cid>/fork-proofs"]
 # A directory for the states the prover fetched and verified. A later run reads the state of its start head from here first,
 # so it does not depend on a node that still serves an old state. Keeps the 16 newest states and every state younger than
 # 3 days, files of mode 0600.

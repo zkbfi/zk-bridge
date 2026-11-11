@@ -204,6 +204,35 @@ impl ChainClient {
         Ok((!receipt.is_null()).then_some(receipt))
     }
 
+    /// The execution block that holds a mined transaction: its number and hash from the receipt, and its timestamp from
+    /// the block of that hash. The `fork-proof` command starts from it.
+    ///
+    /// # Errors
+    /// `Error::Usage` when the transaction is not mined, `Error::Malformed` when the node does not know the block of the
+    /// receipt or answers in another shape.
+    pub fn source_block_of_transaction(&self, hash: B256) -> Result<crate::beacon::SourceBlock> {
+        let receipt = self.transaction_receipt(hash)?.ok_or_else(|| {
+            Error::Usage(format!(
+                "the source chain has no receipt for transaction {hash:#x}"
+            ))
+        })?;
+        let block_hash: B256 = receipt["blockHash"]
+            .as_str()
+            .and_then(|text| text.parse().ok())
+            .ok_or_else(|| Error::Malformed("the receipt has no blockHash".into()))?;
+        let number = parse_quantity(&receipt["blockNumber"])?;
+        let block = self.block_by_hash(block_hash)?.ok_or_else(|| {
+            Error::Malformed(format!(
+                "the source chain does not know block {block_hash:#x}"
+            ))
+        })?;
+        Ok(crate::beacon::SourceBlock {
+            number,
+            hash: block_hash,
+            timestamp: parse_quantity(&block["timestamp"])?,
+        })
+    }
+
     /// The logs of one contract with topic 0 `topic`, in the block range `from..=to`.
     pub fn logs(&self, address: Address, topic: B256, from: u64, to: u64) -> Result<Vec<RawLog>> {
         let filter = json!([{
@@ -387,6 +416,49 @@ mod tests {
     fn connect_refuses_a_wrong_chain_id() {
         let error = client(|_, _| Ok(json!("0x1"))).err().expect("must fail");
         assert!(error.to_string().contains("chain id 1"));
+    }
+
+    /// Claim: the source block of a transaction has the number and hash of its receipt and the timestamp of that block. A
+    /// transaction that is not mined, a receipt without a block hash and a block the node does not know are refused.
+    /// Why it matters: the `fork-proof` command keys its record by this block.
+    #[test]
+    fn the_source_block_of_a_transaction_comes_from_its_receipt() {
+        let hash = format!("{:#x}", B256::repeat_byte(5));
+        let answering = move |receipt: Value, block: Value| {
+            client(move |method, _| match method {
+                "eth_chainId" => Ok(json!("0x171")),
+                "eth_getTransactionReceipt" => Ok(receipt.clone()),
+                "eth_getBlockByHash" => Ok(block.clone()),
+                _ => Ok(Value::Null),
+            })
+            .unwrap()
+        };
+        let chain = answering(
+            json!({"blockHash": hash, "blockNumber": "0x10"}),
+            json!({"timestamp": "0x64"}),
+        );
+        let block = chain
+            .source_block_of_transaction(B256::repeat_byte(1))
+            .unwrap();
+        assert_eq!(
+            (block.number, block.hash, block.timestamp),
+            (16, B256::repeat_byte(5), 100)
+        );
+        let error = |chain: ChainClient| {
+            chain
+                .source_block_of_transaction(B256::repeat_byte(1))
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(error(answering(Value::Null, Value::Null)).contains("no receipt"));
+        assert!(
+            error(answering(json!({"blockNumber": "0x10"}), Value::Null)).contains("no blockHash")
+        );
+        assert!(error(answering(
+            json!({"blockHash": hash, "blockNumber": "0x10"}),
+            Value::Null
+        ))
+        .contains("does not know block"));
     }
 
     /// Claim: block receipts fall back to one receipt per transaction when the node lacks `eth_getBlockReceipts`.

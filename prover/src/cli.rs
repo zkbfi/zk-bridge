@@ -103,6 +103,15 @@ pub enum Command {
     /// from `light_client/updates` of each `source.handoff_urls` entry. The archive itself is never asked. Run it once the
     /// period has ended. Exit code 1 names every source tried.
     HandoffUpdate(HandoffUpdateArguments),
+    /// Print the fork proof record of the source block of one transaction, as one JSON record.
+    ///
+    /// The record is what the fork proof archive keeps (docs/proof-archive.md): `fork.current_version` and
+    /// `genesis_validators_root` proven under the state root of the source header that a message proof of that block takes
+    /// (`MessageProof.sourceFork`), checked against the genesis validators root of the chain. The proof comes from the
+    /// compact multiproof route of the node or of `source.state_urls`, else from the whole state. The archive itself is
+    /// never asked. Run it once the block is final, while the nodes still keep its state. Exit code 1 when the block is not
+    /// final yet ("not final yet") or no source gives the proof.
+    ForkProof(ForkProofArguments),
     /// Write the deployment file that the explorer reads (`chain_a` and `chain_b` sections), and print a summary.
     ///
     /// The addresses come from `--chain-a` and `--chain-b` pairs, from Foundry broadcast files, or from both (a pair
@@ -144,6 +153,18 @@ pub struct HandoffUpdateArguments {
     /// The sync committee period.
     #[arg(long)]
     pub period: u64,
+}
+
+/// The arguments of `fork-proof`.
+#[derive(Debug, Args)]
+pub struct ForkProofArguments {
+    /// The route of the configuration whose source chain the transaction is on. It may be left out when the file has
+    /// exactly one route.
+    #[arg(long)]
+    pub route: Option<String>,
+    /// The hash of a transaction on the source chain. Every message in its block shares the record.
+    #[arg(long)]
+    pub tx: String,
 }
 
 /// The arguments of `opening-proof`.
@@ -665,6 +686,10 @@ fn run_evidence(
         beacon_source(route.source.chain_kind()?, &route.source.beacon_url),
         &route.source.state_urls,
         state_cache.as_ref(),
+    )
+    .with_fork_proof_archive(
+        route.source.chain_id,
+        named_clients(&route.source.fork_proof_archive_urls),
     );
     let source_header_sources = header_clients(
         "source",
@@ -911,6 +936,43 @@ fn run_handoff_update(
     Ok(0)
 }
 
+/// Prints the fork proof record of the source block of one transaction (see [`crate::beacon::fork_archive`]).
+///
+/// # Errors
+/// The errors of [`ChainClient::source_block_of_transaction`] and [`HttpBeaconSource::fork_proof_record`], and the route
+/// errors.
+fn run_fork_proof(
+    config: &Config,
+    arguments: &ForkProofArguments,
+    out: &mut dyn std::io::Write,
+) -> Result<i32> {
+    let (_, route) = config.route(arguments.route.as_deref())?;
+    let source = &route.source;
+    let transaction = parse_hash(&arguments.tx, "--tx")?;
+    let chain = connect("source", source.chain_id, source.execution_url()?)?;
+    let block = chain.source_block_of_transaction(transaction)?;
+    let state_cache = source
+        .state_cache_dir
+        .clone()
+        .map(|directory| (directory, source.chain_id));
+    let beacon = with_state_sources(
+        beacon_source(source.chain_kind()?, &source.beacon_url),
+        &source.state_urls,
+        state_cache.as_ref(),
+    );
+    let record = beacon.fork_proof_record(&block, source.chain_id)?;
+    Logger::standard().info(
+        "fork_proof_built",
+        &[
+            ("execution_block", block.number.to_string()),
+            ("slot", record["slot"].to_string()),
+            ("shape", record["shape"].to_string()),
+        ],
+    );
+    write_json(out, &record)?;
+    Ok(0)
+}
+
 /// Writes the deployment file and prints a summary of it.
 ///
 /// # Errors
@@ -1010,6 +1072,7 @@ pub fn run(
         Command::Checkpoint(checkpoint) => run_checkpoint(Some(&config), checkpoint, out),
         Command::OpeningProof(opening) => run_opening_proof(&config, opening, out),
         Command::HandoffUpdate(handoff) => run_handoff_update(&config, handoff, out),
+        Command::ForkProof(fork) => run_fork_proof(&config, fork, out),
         Command::DeploymentFile(_) => unreachable!("deployment-file returned above"),
         Command::Verify(_) => unreachable!("verify returned above"),
     }
