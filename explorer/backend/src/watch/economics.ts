@@ -9,6 +9,11 @@
  * cannot be valued: its tip pays when it is at least the frontend's automatic maximum (1% of the amount), and such a
  * message makes its batch pay (owner, 2026-11-09: "yes, deliver straight away"). A smaller tip counts nothing.
  *
+ * The gas of one delivery is `dependencies.deliveryGas` (`delivery-gas.ts`): 500,000 (`deploy/gas-defaults.json`; forge
+ * measures 469,247 for a plain token delivery to a new recipient, 452,134 to an existing holder, 552,261 for the first
+ * through the router) until the indexer has 10 recorded deliveries through the router on the destination chain, then
+ * their 90th percentile.
+ *
  * The runner that delivers is not paid by the backend: "pays" means the fee address's take covers our costs.
  */
 import type { Address, Hex } from "viem";
@@ -36,13 +41,6 @@ import {
 } from "@zk-bridge/shared";
 import type { Economics } from "./batch.ts";
 
-/**
- * The gas one delivery is counted at. A message has no gas limit of its own, so this is an estimate: the proof check
- * (the bridge test measures 290,655), the bridge, the release and the tip, rounded up. Above what a plain release uses,
- * so the cost errs high and a batch proves early only when it surely pays.
- */
-export const DELIVERY_GAS = 400_000n;
-
 /** The destination token of a message, as the indexer lists it. */
 export type DestinationToken = {
   readonly address: Address;
@@ -63,6 +61,12 @@ export type EconomicsDependencies = {
   readonly pulsechain: PulseChainClient | null;
   /** The base fee of the newest block of the destination chain, in wei (0 when it reports none). */
   readonly destinationBaseFee: () => Promise<bigint>;
+  /**
+   * The gas one delivery is counted at (`delivery-gas.ts`): the measured 90th percentile of recent deliveries on the
+   * destination chain, or the 500,000 start figure of `deploy/gas-defaults.json` until there are enough of them.
+   * A message has no gas limit of its own, so the cost of its delivery is this estimate.
+   */
+  readonly deliveryGas: () => Promise<bigint>;
 };
 
 /** Input of {@link createEconomicsReader}. */
@@ -112,6 +116,7 @@ export function createEconomicsReader(input: EconomicsInput): (messages: readonl
   const marginWad = input.marginWad ?? WAD;
   return async (messages) => {
     const baseFeeWei = await dependencies.destinationBaseFee();
+    const deliveryGas = await dependencies.deliveryGas();
     const gas = { baseFeeWei, priorityFeeWei: minimumPriorityFeeWei(destinationChainId) };
     for (const known of [...data.keys()]) if (!messages.some((message) => message.messageId === known)) data.delete(known);
     const carried: { readonly message: ValuedMessage; readonly token: DestinationToken | null; readonly terms: NonNullable<ReturnType<typeof termsOf>>; readonly fee: bigint }[] = [];
@@ -123,7 +128,7 @@ export function createEconomicsReader(input: EconomicsInput): (messages: readonl
       if (terms === null) continue;
       let fee = 0n;
       try {
-        fee = expectedFee(terms.director, { value: terms.value, gasUsed: DELIVERY_GAS, ...gas, payout: terms.payout }).fee;
+        fee = expectedFee(terms.director, { value: terms.value, gasUsed: deliveryGas, ...gas, payout: terms.payout }).fee;
       } catch {
         // The router would revert on an overflow: no fee.
       }
@@ -133,7 +138,7 @@ export function createEconomicsReader(input: EconomicsInput): (messages: readonl
     const holding = await prices.read(subjects, [destinationChainId]);
     const native = holding.data?.get(nativePriceKey(destinationChainId)) ?? null;
     const nativeState = holding.states.get(nativePriceKey(destinationChainId));
-    const deliveryUsd = native === null ? null : deliveryGasUsd({ gasUsed: DELIVERY_GAS, ...gas, nativePriceE18: native.usdE18, level: DEFAULT_GAS_LEVEL });
+    const deliveryUsd = native === null ? null : deliveryGasUsd({ gasUsed: deliveryGas, ...gas, nativePriceE18: native.usdE18, level: DEFAULT_GAS_LEVEL });
     const feesUsd = new Map<string, bigint>();
     const atMaximum = new Set<string>();
     let unpriced = 0;
@@ -144,7 +149,7 @@ export function createEconomicsReader(input: EconomicsInput): (messages: readonl
       const verdict = tipVerdictOfTerms({
         director: terms.director,
         amount: terms.value,
-        gas: { gasUsed: DELIVERY_GAS, ...gas, payout: terms.payout },
+        gas: { gasUsed: deliveryGas, ...gas, payout: terms.payout },
         decimals,
         price,
         cost: deliveryUsd === null ? null : PROOF_COST_USD + deliveryUsd,

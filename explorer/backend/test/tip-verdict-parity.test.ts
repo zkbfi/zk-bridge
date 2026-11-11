@@ -10,7 +10,7 @@ import { encodeAbiParameters, encodeFunctionData, type Address, type Hex } from 
 import { WAD, marginWadOf, tokenMediatorAbi } from "@zk-bridge/shared";
 import { FIXTURE_COST, amountOf, chainsOf, directorOf, fixtureClient, tipUnitsOf, tipVectors, tokenOf, type TipCase } from "../../core/test/fixtures/pool-caller.ts";
 import { planBatch, type BatchRule } from "../src/watch/batch.ts";
-import { DELIVERY_GAS, createEconomicsReader } from "../src/watch/economics.ts";
+import { createEconomicsReader } from "../src/watch/economics.ts";
 
 const ROUTER: Address = "0x00000000000000000000000000000000000000d1";
 const MESSAGE: Hex = `0x${"ab".repeat(32)}`;
@@ -38,6 +38,8 @@ async function backendOf(entry: TipCase) {
       // A testnet pair has no PulseChain side.
       pulsechain: chains.destinationChainId === 369 ? fixtureClient({ unreachable: entry.unreachable }) : null,
       destinationBaseFee: async () => FIXTURE_COST.baseFeeWei,
+      // The fixture is priced at its own delivery gas, shared by the three packages.
+      deliveryGas: async () => FIXTURE_COST.gasUsed,
     },
   });
   const economics = await read([
@@ -50,10 +52,6 @@ async function backendOf(entry: TipCase) {
 }
 
 describe("the tip verdict of the shared fixture, as the backend's batching decides it", () => {
-  it("counts the fixture's delivery gas and priority fee", () => {
-    expect(DELIVERY_GAS).toBe(FIXTURE_COST.gasUsed);
-  });
-
   for (const entry of tipVectors.cases) {
     it(entry.name, async () => {
       const { economics, plan } = await backendOf(entry);

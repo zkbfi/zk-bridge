@@ -5,7 +5,7 @@
  */
 import { createPublicClient, http, type Hex } from "viem";
 import { z } from "zod";
-import { PROOF_DIRECTIONS, epochSeconds, messageBridgeAbi, secondsPerSlot, type ContractCaller, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
+import { BACKEND_START_DELIVERY_GAS, PROOF_DIRECTIONS, epochSeconds, messageBridgeAbi, secondsPerSlot, type ContractCaller, type Pair, type PairSide, type ProofDirection } from "@zk-bridge/shared";
 import { BackendConfigError, type BackendConfig } from "../config.ts";
 import { DEFAULT_POLICY, type LightClientFacts } from "../keepalive/plan.ts";
 import { fetchJsonGet, handoffSources, readHistoryFrom, readLightClient, type JsonGet } from "../keepalive/sources.ts";
@@ -16,6 +16,7 @@ import { findActiveJob, lastProofStartedAt } from "../requests/jobs.ts";
 import type { RequestService } from "../requests/service.ts";
 import { batchRuleFor, deprecatedBatchKeys } from "./batch.ts";
 import { MIN_PARTICIPANTS } from "./decide.ts";
+import { createDeliveryGasReader } from "./delivery-gas.ts";
 import { createEconomicsReader, type DestinationToken } from "./economics.ts";
 import { createFinalityFeed } from "./feed.ts";
 import { createDepositsReader } from "./deposits.ts";
@@ -192,6 +193,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
           readMessageData: messageDataReader({ indexerUrl: config.indexerUrl as string, get }),
           pulsechain,
           destinationBaseFee: async () => (await destinationClient.getBlock()).baseFeePerGas ?? 0n,
+          deliveryGas: createDeliveryGasReader({ indexerUrl: config.indexerUrl as string, chainId: destination.chainId, get, logger, start: BACKEND_START_DELIVERY_GAS }),
         },
       }),
       submit: (request) => service.submit(request),

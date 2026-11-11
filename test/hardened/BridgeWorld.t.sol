@@ -518,6 +518,41 @@ contract BridgeWorldTest is WorldSupport {
         assertLt(receiptGas, EXPLORER_DEFAULT_DELIVERY_GAS, "the default of the explorer covers the first delivery");
     }
 
+    /// Claim: the start figure of the backend (`deploy/gas-defaults.json`, `backendStartDeliveryGas`) covers a plain token
+    /// delivery to a new recipient, the costliest plain kind. Shows: the gas that the receipt of that transaction would
+    /// carry (the whole transaction less the refund) is below the figure read from the file. Matters: the watcher counts
+    /// the cost of a delivery at this figure until it has measured deliveries; a figure below the real gas makes it
+    /// prove batches that do not pay.
+    /// forge-config: default.isolate = true
+    /// forge-config: deep.isolate = true
+    function test_theBackendStartFigureCoversAPlainTokenDeliveryToANewRecipient() public {
+        uint256 startGas =
+            vm.parseJsonUint(vm.readFile("deploy/gas-defaults.json"), ".backendStartDeliveryGas");
+        // The first message of a token deploys its copy, which is not the common kind. Do it plainly first.
+        (Vm.Log[] memory first,) = _relayFromA(alice, receiverOnB, 100 ether);
+        _deliverToB(first);
+
+        vm.txGasPrice(1 gwei);
+        (Vm.Log[] memory recorded,) = _relayFromA(alice, makeAddr("fresh plain recipient"), 100 ether);
+        Transit memory transit = _proveForB(recorded);
+        vm.chainId(CHAIN_B);
+        vm.prank(bob, bob);
+        bridgeB.executeMessage(transit.proof);
+        Vm.Gas memory spent = vm.lastCallGas();
+
+        assertTrue(bridgeB.messageCallStatus(transit.messageId), "the message executed");
+        // Control: isolation is on, so each call is a transaction of at least 21,000 gas.
+        vm.prank(bob, bob);
+        BridgedToken(mediatorB.bridgedTokenAddress(address(nativeToken))).transfer(bob, 0);
+        assertGe(vm.lastCallGas().gasTotalUsed, 21_000, "control: isolation is on, each call is a transaction");
+        uint256 refund = uint256(int256(spent.gasRefunded));
+        if (refund > spent.gasTotalUsed / 5) refund = spent.gasTotalUsed / 5;
+        uint256 receiptGas = spent.gasTotalUsed - refund;
+        emit log_named_uint("gas of the receipt, plain delivery to a new recipient", receiptGas);
+        emit log_named_uint("backend start figure", startGas);
+        assertLt(receiptGas, startGas, "the backend start figure covers a plain token delivery");
+    }
+
     /// Claim: with an enforcing gate on chain A, the first poster of an epoch confirms the fork with `gate.confirm` and
     /// then sends, and later senders just send. Nothing passes evidence through a send. Shows: a send in an unconfirmed
     /// epoch reverts with `ForkNotConfirmed` and emits no log; the first poster confirms (`ForkConfirmed`) and sends; a

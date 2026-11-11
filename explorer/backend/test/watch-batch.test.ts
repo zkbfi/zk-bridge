@@ -3,8 +3,10 @@ import { encodeAbiParameters, encodeFunctionData, type Address, type Hex } from 
 import { PROOF_COST_USD, PULSEX_FACTORIES, STABLES, USD, WAD, WPLS, tokenMediatorAbi, batchCostUsd, marginWadOf } from "@zk-bridge/shared";
 import { makeConfig } from "./support.ts";
 import { batchRuleFor, deprecatedBatchKeys, planBatch, usdText, type BatchMessage, type BatchRule, type Economics } from "../src/watch/batch.ts";
-import { DELIVERY_GAS, createEconomicsReader, type DestinationToken } from "../src/watch/economics.ts";
+import { createEconomicsReader, type DestinationToken } from "../src/watch/economics.ts";
 
+/** The gas of one delivery that these tests count at. */
+const DELIVERY_GAS = 500_000n;
 const RULE: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 384, marginWad: WAD };
 const NOW = 1_000_000;
 const FINALIZED = 500;
@@ -211,6 +213,7 @@ describe("createEconomicsReader", () => {
         },
         pulsechain: pulse,
         destinationBaseFee: async () => 10n ** 9n,
+        deliveryGas: async () => DELIVERY_GAS,
       },
     });
     return { read, reads, pulse };
@@ -284,7 +287,7 @@ describe("createEconomicsReader", () => {
       deliveryRouter: ROUTER,
       wrappedNative: WPLS,
       now: () => now,
-      dependencies: { readMessageData: async () => relay(2n * 10n ** 18n), pulsechain: flaky, destinationBaseFee: async () => 10n ** 9n },
+      dependencies: { readMessageData: async () => relay(2n * 10n ** 18n), pulsechain: flaky, destinationBaseFee: async () => 10n ** 9n, deliveryGas: async () => DELIVERY_GAS },
     });
     const messages = [{ messageId: id("a"), destinationToken: token() }];
     expect(await read(messages)).toMatchObject({ feesUsd: new Map([[id("a"), 2n * USD]]) });
