@@ -4,6 +4,7 @@ export {
   GateEvidenceError,
   type GateChainClient,
   GATE_MODES,
+  isSealOnlyMode,
   type GateMode,
   type GateStatus,
   readGateStatus,

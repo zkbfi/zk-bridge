@@ -18,6 +18,8 @@
  *   `EXPLORER_MNEMONIC_FILE`, `EXPLORER_MNEMONIC_PASSPHRASE`, `EXPLORER_TREZOR_CONTACT`.
  * - Operator files: `EXPLORER_HANDOFF_FILE`, `EXPLORER_EVIDENCE_FILE`.
  * - `EXPLORER_TOKEN_VALUATIONS_WEI` prices of tokens in wei, for delivery fee suggestions (see `config/token-valuations.ts`).
+ * - `EXPLORER_CONFIG_DIR` the configuration directory: the Prover setup file, and in `fork-schedules/` the last fork
+ *   schedule of each chain that the fork cutover read, for when the beacon node does not answer.
  *
  * The secrets in that list are removed from the environment as soon as they are read.
  */
@@ -36,6 +38,8 @@ import {
   type ConnectionLayer,
   type ConnectionSettings,
 } from '@zk-bridge/shared'
+import { createForkScheduleStore } from '@zk-bridge/shared'
+import { fileForkScheduleText, forkScheduleDirectory } from '@zk-bridge/shared/config'
 import { loadUserSettings } from './connections-model'
 import {
   createDefaultProverSetupServices,
@@ -94,6 +98,7 @@ export async function buildServices(machine: BootstrapMachine): Promise<Bootstra
       readTextFile: machine.readTextFile,
       defaultPairId: pair.id,
       tokenValuationsWei: parseTokenValuations(environment[TOKEN_VALUATIONS_VARIABLE]),
+      forkSchedules: createForkScheduleStore(fileForkScheduleText(forkScheduleDirectory(environment))),
     },
   }
 }

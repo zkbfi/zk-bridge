@@ -40,6 +40,19 @@ describe('forkCutoverCheckFor', () => {
     expect(await check(pair.first.chainId)).toMatchObject({ kind: 'paused', destinationChainId: pair.second.chainId })
   })
 
+  test('decides from the saved copy when the beacon node does not answer', async () => {
+    const { bundledForkSchedule, createForkScheduleStore, memoryForkScheduleText } = await import('@zk-bridge/shared')
+    const scheduleStore = createForkScheduleStore(memoryForkScheduleText())
+    // Saved after the release's copy, so the saved copy is the newer one. The light client head (slot 1000) is before the fork.
+    const savedAt = (bundledForkSchedule(pair.first.chainId)?.fetchedAt ?? 0) + 100
+    const flowClient = () => ({ readContract: async () => 1000n }) as never
+    const live = forkCutoverCheckFor({ pair, connection: { resolved: () => ({}) } as never, chainAccess: { flowClient }, fetch: beacon, nowSeconds: () => savedAt, scheduleStore })!
+    expect(await live(pair.first.chainId)).not.toHaveProperty('schedule')
+    const silent = (async () => Promise.reject(new Error('offline'))) as unknown as typeof globalThis.fetch
+    const later = forkCutoverCheckFor({ pair, connection: { resolved: () => ({}) } as never, chainAccess: { flowClient }, fetch: silent, nowSeconds: () => savedAt + 3600, scheduleStore })!
+    expect(await later(pair.first.chainId)).toMatchObject({ kind: 'paused', schedule: { origin: 'cache', fetchedAt: savedAt } })
+  })
+
   test('uses the system clock by default', async () => {
     const check = forkCutoverCheckFor({ pair, connection: { resolved: () => ({}) } as never, chainAccess: { flowClient: () => ({ readContract: async () => 99_999n }) as never }, fetch: beacon })!
     expect((await check(pair.first.chainId)).kind).toBe('open')

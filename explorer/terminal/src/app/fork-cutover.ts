@@ -4,7 +4,7 @@
  * before signing when the light client on the other chain cannot follow a fork that the source chain is about to make
  * (`decideForkCutover` of `@zk-bridge/shared`). Nothing here sends.
  */
-import { createForkCutoverCheck, type CutoverRoute, type ForkCutoverCheck } from '@zk-bridge/shared'
+import { createForkCutoverCheck, type CutoverRoute, type ForkCutoverCheck, type ForkScheduleStore } from '@zk-bridge/shared'
 import type { ChainAccess } from '../chain/chain-access'
 import { beaconUrlsFor } from '../config/default-beacon'
 import type { ConnectionRuntime } from '../data/connection-runtime'
@@ -32,6 +32,8 @@ export function cutoverRouteOf(pair: PairConfig): (sourceChainId: number) => Cut
  * @param input.chainAccess The chain access whose flow clients read the light client heads.
  * @param input.fetch The `fetch` to use. Default: the global one.
  * @param input.nowSeconds The clock in seconds. Default: the system clock.
+ * @param input.scheduleStore Where the last fork schedule of each chain is kept, for when the beacon node does not answer
+ * (a file in the terminal's configuration directory, `localStorage` on the web page). Absent: only the bundled copy.
  */
 export function forkCutoverCheckFor(input: {
   readonly pair: PairConfig
@@ -39,6 +41,7 @@ export function forkCutoverCheckFor(input: {
   readonly chainAccess: Pick<ChainAccess, 'flowClient'>
   readonly fetch?: typeof fetch
   readonly nowSeconds?: () => number
+  readonly scheduleStore?: ForkScheduleStore | undefined
 }): ForkCutoverCheck | undefined {
   const { connection, chainAccess } = input
   if (connection === null) return undefined
@@ -49,5 +52,6 @@ export function forkCutoverCheckFor(input: {
     beaconUrlsFor: (chainId) => beaconUrlsFor(connection.resolved(), chainId),
     ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
     ...(input.nowSeconds === undefined ? {} : { nowSeconds: input.nowSeconds }),
+    scheduleStore: input.scheduleStore,
   })
 }

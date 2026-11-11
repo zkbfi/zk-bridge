@@ -12,6 +12,7 @@ import {
   GATE_SAFETY_SECONDS,
   gateConfirmWindow,
   GateEvidenceError,
+  isSealOnlyMode,
   readGateStatus,
   SHAPE_REQUEST_ORDER,
   SIMULATION_RETRY_MILLISECONDS,
@@ -111,6 +112,17 @@ describe("readGateStatus", () => {
     const detecting = await readGateStatus({ client: asClient(clientOf({ mode: 2, enforcing: false })), gate: fixture.gate });
     expect(detecting).toMatchObject({ mode: "detect-beacon-roots-and-registry", needsConfirmation: false });
     expect((await readGateStatus({ client: asClient(clientOf({ sealed: true })), gate: fixture.gate })).needsConfirmation).toBe(false);
+  });
+
+  it("names the two seal-only modes, which never need a confirmation: a send is admitted unless the gate is sealed", async () => {
+    const sealOnly = await readGateStatus({ client: asClient(clientOf({ mode: 3, enforcing: true, confirmed: [0n, false] })), gate: fixture.gate });
+    expect(sealOnly).toMatchObject({ mode: "seal-only", enforcing: true, confirmedEpoch: null, needsConfirmation: false });
+    const withRegistry = await readGateStatus({ client: asClient(clientOf({ mode: 4, enforcing: true, confirmed: [0n, false] })), gate: fixture.gate });
+    expect(withRegistry).toMatchObject({ mode: "seal-only-with-registry", needsConfirmation: false });
+    expect(isSealOnlyMode("seal-only")).toBe(true);
+    expect(isSealOnlyMode("seal-only-with-registry")).toBe(true);
+    expect(isSealOnlyMode("enforcing")).toBe(false);
+    await expect(readGateStatus({ client: asClient(clientOf({ mode: 5 })), gate: fixture.gate })).rejects.toThrow("unknown mode 5");
   });
 
   it("pins the evidence to the block two behind the latest, and to the latest itself on a young chain", async () => {
@@ -233,6 +245,15 @@ describe("ensureGateConfirmed", () => {
     expect(await ensure(clientOf({ mode: 1, enforcing: false }), fetchImpl)).toEqual({ kind: "not-needed", reason: "not-enforcing", epoch });
     expect(await ensure(clientOf({ sealed: true }), fetchImpl)).toEqual({ kind: "sealed", epoch });
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on a seal-only gate, and reads no beacon node", async () => {
+    const fetchImpl = recordedFetch();
+    const client = clientOf({ mode: 3, enforcing: true, confirmed: [0n, false] });
+    expect(await ensure(client, fetchImpl)).toEqual({ kind: "not-needed", reason: "seal-only", epoch });
+    expect(await ensure(clientOf({ mode: 4, enforcing: true, sealed: true }), fetchImpl)).toEqual({ kind: "sealed", epoch });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(client.estimateGas).not.toHaveBeenCalled();
   });
 
   it("returns the confirmation to send first, simulated from the sender", async () => {

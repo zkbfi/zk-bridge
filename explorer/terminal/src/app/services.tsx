@@ -6,6 +6,7 @@ import type { ChainAccess } from '../chain/chain-access'
 import type { ConnectionRuntime } from '../data/connection-runtime'
 import type { DataSource } from '../data/data-source'
 import type { PairConfig } from '../model/types'
+import type { ForkScheduleStore } from '@zk-bridge/shared'
 import { fetchClient, type HttpClient } from '../config/connection-tests'
 import {
   chooseSecretStore,
@@ -98,6 +99,11 @@ export interface AppServices {
   readonly defaultPairId: string
   /** The value of one whole token in wei, by lowercase address, for delivery fee suggestions. See `config/token-valuations.ts`. */
   readonly tokenValuationsWei: Readonly<Record<string, bigint>>
+  /**
+   * Where the fork cutover keeps the last fork schedule of each chain (files in the configuration directory), for when the
+   * beacon node does not answer. Absent: only the schedule bundled with the release.
+   */
+  readonly forkSchedules?: ForkScheduleStore
 }
 
 const ServicesContext = createContext<AppServices | null>(null)

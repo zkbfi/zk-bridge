@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createForkScheduleStore, memoryForkScheduleText } from "@zk-bridge/shared";
 import { bridgeCheck, forkCutoverCheck, gateCheck } from "../src/checks/bridges.ts";
 import type { ChainClient } from "../src/deps.ts";
 import { fakeFetch, makeDeps, pair } from "./support.ts";
@@ -67,6 +68,15 @@ describe("gateCheck", () => {
     expect(await gateCheck(registry, 943).run(registry)).toEqual({ state: "ok", detail: "detection mode (detect-beacon-roots-and-registry): admits sends until PulseChain testnet gains beacon roots or a newer opcode, then enforces for good" });
   });
 
+  it("reports a seal-only gate as ok: it admits every send until it is sealed, and needs no confirmation", async () => {
+    const sealOnly = makeDeps({ client: () => gate({ mode: 3, confirmed: [0n, false] }) });
+    expect(await gateCheck(sealOnly, 11155111).run(sealOnly)).toEqual({ state: "ok", detail: "seal-only mode (seal-only): admits every send until a proof of a fork the route cannot follow seals it" });
+    const withRegistry = makeDeps({ client: () => gate({ mode: 4, confirmed: [0n, false] }) });
+    expect((await gateCheck(withRegistry, 943).run(withRegistry)).detail).toContain("seal-only mode (seal-only-with-registry)");
+    const sealed = makeDeps({ client: () => gate({ mode: 3, sealed: true }) });
+    expect((await gateCheck(sealed, 943).run(sealed)).state).toBe("down");
+  });
+
   it("is degraded for an enforcing-mode gate that does not enforce", async () => {
     const broken = makeDeps({ client: () => gate({ mode: 0, enforcing: false }) });
     expect(await gateCheck(broken, 943).run(broken)).toEqual({ state: "degraded", detail: "mode enforcing but not enforcing, it admits every send" });
@@ -102,14 +112,14 @@ describe("forkCutoverCheck", () => {
   };
 
   it("is ok while no pause is near, with the next fork and its countdown", async () => {
-    const run = deps(3 * 3600);
+    const run = deps(14 * 3600);
     const check = forkCutoverCheck(run, "first-to-second");
     expect(check.id).toBe("fork-cutover-first-to-second");
     expect(check.name).toBe("Sepolia sends before a fork");
     const outcome = await check.run(run);
     expect(outcome.state).toBe("ok");
     expect(outcome.detail).toContain("Sends from Sepolia pause at");
-    expect(outcome.detail).toContain("1 h before the Altair fork (epoch 100)");
+    expect(outcome.detail).toContain("12 h before the Altair fork (epoch 100)");
     expect(outcome.detail).toContain("(Sends pause in 1h 59m) gate not sealed, mode enforcing");
   });
 
@@ -145,6 +155,17 @@ describe("forkCutoverCheck", () => {
   it("says when the gate is sealed", async () => {
     const run = deps(8 * 86_400, { isSealed: true });
     expect((await forkCutoverCheck(run, "first-to-second").run(run)).detail).toContain("gate sealed, mode enforcing");
+  });
+
+  it("keeps the schedule it read, and decides from that copy when the beacon node stops answering", async () => {
+    const forkSchedules = createForkScheduleStore(memoryForkScheduleText());
+    const clock = { now: NOW_SECONDS * 1000 };
+    const live = makeDeps({ clock, fetch: fakeFetch(beacon(14 * 3600), clock), client: () => client(), forkSchedules });
+    expect((await forkCutoverCheck(live, "first-to-second").run(live)).state).toBe("ok");
+    const silent = makeDeps({ clock, fetch: fakeFetch({}, clock), client: () => client(), forkSchedules });
+    const outcome = await forkCutoverCheck(silent, "first-to-second").run(silent);
+    expect(outcome.state).toBe("ok");
+    expect(outcome.detail).toContain("(Sends pause in 1h 59m) Sepolia's beacon node did not answer, so this uses the fork schedule saved by this app at");
   });
 
   it("is degraded when the source chain has no beacon endpoint", async () => {

@@ -5,15 +5,22 @@ import { beaconHeaderRoot, hashPair, type BeaconBlockHeader } from "@zkb/core";
 import {
   beaconForkGateAbi,
   createForkCutoverCheck,
+  createForkScheduleStore,
   createGateCheck,
+  layeredForkScheduleStore,
+  memoryForkScheduleText,
+  forkScheduleKey,
+  readCutoverFacts,
   offerSeal,
   readForkGateState,
   readForkObservation,
   readLightClientHead,
   SIMULATION_ACCOUNT,
   type BeaconProofSource,
+  type ForkScheduleText,
   type GateChainClient,
 } from "../src/index.js";
+import type { ForkScheduleCopy } from "@zkb/core";
 
 const GATE: Address = "0x1111111111111111111111111111111111111111";
 const REGISTRY: Address = "0x2222222222222222222222222222222222222222";
@@ -43,6 +50,7 @@ describe("createForkCutoverCheck", () => {
       beaconUrlsFor: () => urls,
       nowSeconds: () => now,
       fetch: beaconFetch(epoch),
+      bundled: () => null,
     });
   it("pauses inside the window", async () => {
     const verdict = await make(1000n, forkTime - 60)(11155111);
@@ -51,15 +59,87 @@ describe("createForkCutoverCheck", () => {
   it("opens once the light client head is past the fork", async () => {
     expect((await make(1_601n, forkTime + 10)(11155111)).kind).toBe("open");
   });
-  it("is unknown when the beacon node cannot be reached", async () => {
-    expect(await make(1000n, forkTime, 50, [])(11155111)).toMatchObject({ kind: "unknown", reason: "beacon-unreachable" });
+  it("is blocked when the beacon node cannot be reached and no copy is at hand", async () => {
+    expect(await make(1000n, forkTime, 50, [])(11155111)).toMatchObject({ kind: "blocked", reason: "no-fork-schedule", newestCopyAt: null });
   });
   it("is open for a chain with no route", async () => {
     expect(await make(1000n, forkTime)(1)).toEqual({ kind: "open", next: null, pausesAt: null, secondsToPause: null });
   });
-  it("uses the system clock and the global fetch by default", async () => {
+  it("uses the system clock, the global fetch and the bundled schedule by default", async () => {
     const check = createForkCutoverCheck({ routeOf: () => ({ destinationChainId: 943, lightClient: LIGHT_CLIENT }), clientFor: () => ({ readContract: async () => 10n }) as never, beaconUrlsFor: () => [] });
-    expect((await check(1)).kind).toBe("unknown");
+    // Chain 5 has no bundled schedule, so with no beacon node and no store nothing can be used.
+    expect((await check(5)).kind).toBe("blocked");
+  });
+});
+
+describe("readCutoverFacts with saved and bundled schedules", () => {
+  const forkTime = 1_000_000 + 50 * 384;
+  const route = { routeOf: () => ({ destinationChainId: 943, lightClient: LIGHT_CLIENT }), clientFor: () => ({ readContract: async () => 10n }) as never };
+  const copyAt = (fetchedAt: number, epoch = 70): ForkScheduleCopy => ({ forks: [{ version: "0x90000070", epoch, name: "Altair" }], clock: { genesisTime: 1_000_000, secondsPerSlot: 12, slotsPerEpoch: 32 }, fetchedAt });
+
+  it("saves what the beacon node answered, then decides from that copy when the node stops answering", async () => {
+    const text = memoryForkScheduleText();
+    const store = createForkScheduleStore(text);
+    const live = await readCutoverFacts({ ...route, sourceChainId: 11155111, beaconUrlsFor: () => ["https://b"], fetch: beaconFetch(50), scheduleStore: store, nowSeconds: () => forkTime - 100_000, bundled: () => null });
+    expect(live?.source).toMatchObject({ kind: "known" });
+    expect(live?.source).not.toHaveProperty("copy");
+    expect(await store.load(11155111)).toMatchObject({ fetchedAt: forkTime - 100_000, forks: [{ epoch: 0 }, { epoch: 50 }] });
+
+    const later = await readCutoverFacts({ ...route, sourceChainId: 11155111, beaconUrlsFor: () => [], scheduleStore: store, nowSeconds: () => forkTime - 1000, bundled: () => copyAt(forkTime - 200_000) });
+    expect(later?.source).toMatchObject({ kind: "known", copy: { origin: "cache", fetchedAt: forkTime - 100_000, liveFailure: "no beacon endpoint is set for this chain" } });
+  });
+  it("falls back to the bundled copy, and to none when every copy is older than seven days", async () => {
+    const base = { ...route, sourceChainId: 11155111, beaconUrlsFor: () => [] as string[] };
+    const bundled = await readCutoverFacts({ ...base, nowSeconds: () => forkTime, bundled: () => copyAt(forkTime - 10) });
+    expect(bundled?.source).toMatchObject({ kind: "known", copy: { origin: "bundled", fetchedAt: forkTime - 10 } });
+    const stale = await readCutoverFacts({ ...base, scheduleStore: createForkScheduleStore(memoryForkScheduleText()), nowSeconds: () => forkTime + 8 * 86_400, bundled: () => copyAt(forkTime) });
+    expect(stale?.source).toEqual({ kind: "unreachable", reason: "no beacon endpoint is set for this chain", newestCopyAt: forkTime });
+  });
+});
+
+describe("fork schedule stores", () => {
+  const copy: ForkScheduleCopy = { forks: [{ version: "0x90000070", epoch: 50, name: "Altair" }], clock: { genesisTime: 1_000_000, secondsPerSlot: 12, slotsPerEpoch: 32 }, fetchedAt: 1_700_000_000 };
+
+  it("keeps a copy per chain under its key, and reads back what it wrote", async () => {
+    const text = memoryForkScheduleText();
+    const store = createForkScheduleStore(text);
+    expect(await store.load(1)).toBeNull();
+    await store.save(1, copy);
+    expect(await store.load(1)).toEqual(copy);
+    expect(await store.load(369)).toBeNull();
+    expect(forkScheduleKey(1)).toBe("zkb.fork-schedule.1");
+    expect(JSON.parse((await text.read("zkb.fork-schedule.1")) as string)).toEqual(copy);
+  });
+  it("holds no copy when the place throws or holds something else, and never throws itself", async () => {
+    const broken: ForkScheduleText = {
+      read: () => {
+        throw new Error("SecurityError");
+      },
+      write: () => {
+        throw new Error("QuotaExceededError");
+      },
+    };
+    const store = createForkScheduleStore(broken);
+    await expect(store.save(1, copy)).resolves.toBeUndefined();
+    expect(await store.load(1)).toBeNull();
+    const text = memoryForkScheduleText();
+    await text.write(forkScheduleKey(1), "not json");
+    await text.write(forkScheduleKey(2), JSON.stringify({ ...copy, fetchedAt: "yesterday" }));
+    const odd = createForkScheduleStore(text);
+    expect(await odd.load(1)).toBeNull();
+    expect(await odd.load(2)).toBeNull();
+  });
+  it("layers stores: saves to each, loads the newest", async () => {
+    const memory = createForkScheduleStore(memoryForkScheduleText());
+    const disk = createForkScheduleStore(memoryForkScheduleText());
+    await disk.save(1, { ...copy, fetchedAt: copy.fetchedAt + 50 });
+    await memory.save(1, copy);
+    const layered = layeredForkScheduleStore([memory, disk]);
+    expect((await layered.load(1))?.fetchedAt).toBe(copy.fetchedAt + 50);
+    await layered.save(2, copy);
+    expect(await memory.load(2)).toEqual(copy);
+    expect(await disk.load(2)).toEqual(copy);
+    expect(await layered.load(3)).toBeNull();
   });
 });
 
@@ -71,9 +151,16 @@ describe("createGateCheck with a cutover", () => {
     expect(await check({ chainId: 11155111, gate: GATE, account: GATE })).toEqual({ kind: "paused", verdict: paused });
     expect(client.readContract).not.toHaveBeenCalled();
   });
+  it("answers paused for a route blocked for want of a fork schedule", async () => {
+    const blocked = { kind: "blocked", reason: "no-fork-schedule", detail: "x", newestCopyAt: null } as const;
+    const client = { getBlock: vi.fn(), readContract: vi.fn(), call: vi.fn(), estimateGas: vi.fn() };
+    const check = createGateCheck({ clientFor: () => client as never, beaconUrlsFor: () => [], cutover: async () => blocked });
+    expect(await check({ chainId: 11155111, gate: GATE, account: GATE })).toEqual({ kind: "paused", verdict: blocked });
+    expect(client.readContract).not.toHaveBeenCalled();
+  });
   it("goes on to the gate when the route is open or unknown", async () => {
     const client = { getBlock: vi.fn(async () => ({ number: 5n, timestamp: 1n })), readContract: vi.fn(async () => Promise.reject(new Error("gate read"))), call: vi.fn(), estimateGas: vi.fn() };
-    const check = createGateCheck({ clientFor: () => client as never, beaconUrlsFor: () => [], cutover: async () => ({ kind: "unknown", reason: "beacon-unreachable", detail: "x" }) });
+    const check = createGateCheck({ clientFor: () => client as never, beaconUrlsFor: () => [], cutover: async () => ({ kind: "unknown", reason: "light-client-unreadable", detail: "x" }) });
     await expect(check({ chainId: 11155111, gate: GATE, account: GATE })).rejects.toThrow("gate read");
   });
 });

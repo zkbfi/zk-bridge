@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { EMPTY_CONNECTION_SETTINGS } from "@zk-bridge/shared";
-import { CONNECTION_STORAGE_KEY, loadUserConnections, saveUserConnections, type ConnectionStorage } from "../../src/config/connection-storage";
+import { createForkScheduleStore, EMPTY_CONNECTION_SETTINGS } from "@zk-bridge/shared";
+import { CONNECTION_STORAGE_KEY, loadUserConnections, saveUserConnections, storageForkScheduleText, type ConnectionStorage } from "../../src/config/connection-storage";
 
 const memoryStorage = (initial?: string): ConnectionStorage & { readonly dump: () => string | null } => {
   let value: string | null = initial ?? null;
@@ -179,5 +179,28 @@ describe("the msgboard node per chain", () => {
     const result = saveUserConnections(storage, { ...EMPTY_CONNECTION_SETTINGS, msgboardUrls: { 1: "https://board.example.org/0123456789abcdef0123456789abcdef" } }, { protocol: "https:", hostname: "zkb.fi", pathname: "/" } as never);
     expect(result.reason).toBe("key-like-url");
     expect(storage.dump()).not.toMatch(/0123456789abcdef/);
+  });
+});
+
+describe("storageForkScheduleText", () => {
+  const copy = { forks: [{ version: "0x90000070", epoch: 50, name: "Altair" }], clock: { genesisTime: 1_000_000, secondsPerSlot: 12, slotsPerEpoch: 32 }, fetchedAt: 1_700_000_000 };
+
+  it("keeps the fork schedule copy of a chain in the page's storage under its own key", async () => {
+    const values = new Map<string, string>();
+    const storage: ConnectionStorage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => void values.set(key, value) };
+    const store = createForkScheduleStore(storageForkScheduleText(storage));
+    expect(await store.load(1)).toBeNull();
+    await store.save(1, copy);
+    expect(JSON.parse(values.get("zkb.fork-schedule.1")!)).toEqual(copy);
+    expect(await store.load(1)).toEqual(copy);
+  });
+
+  it("holds nothing without storage, or when the storage throws", async () => {
+    const none = createForkScheduleStore(storageForkScheduleText(null));
+    await none.save(1, copy);
+    expect(await none.load(1)).toBeNull();
+    const broken = createForkScheduleStore(storageForkScheduleText(throwing()));
+    await broken.save(1, copy);
+    expect(await broken.load(1)).toBeNull();
   });
 });

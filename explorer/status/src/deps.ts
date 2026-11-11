@@ -1,5 +1,5 @@
 import type { PublicClient } from "viem";
-import type { Pair } from "@zk-bridge/shared";
+import type { ForkScheduleStore, Pair } from "@zk-bridge/shared";
 import type { StatusConfig } from "./config.ts";
 
 /** The reads that the checks make on a chain. A viem `PublicClient` has them all. */
@@ -22,6 +22,11 @@ export type Deps = {
   readonly apiKey?: string;
   /** The longest a request may take, in milliseconds. */
   readonly requestTimeoutMilliseconds: number;
+  /**
+   * Where the fork cutover check keeps the last fork schedule of each chain (memory, and a file next to the database), for
+   * when the beacon node does not answer. Absent: only the schedule bundled with the release.
+   */
+  readonly forkSchedules?: ForkScheduleStore;
 };
 
 /** The label of a chain on the page. */

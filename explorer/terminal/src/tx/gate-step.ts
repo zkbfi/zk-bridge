@@ -80,9 +80,11 @@ export function decideGateStep(answer: GateCheckAnswer, input: { readonly chain:
     case 'sealed':
       return { kind: 'refuse', message: `The ${chain.name} deposit gate is sealed: it admits no send in epoch ${answer.epoch} or later. Nothing was sent.` }
     case 'paused': {
-      const destination = chainNameOf(answer.verdict.destinationChainId) ?? `chain ${answer.verdict.destinationChainId}`
+      // A route blocked for want of a fork schedule names no destination; its words name only the source.
+      const destinationId = answer.verdict.kind === 'paused' ? answer.verdict.destinationChainId : null
+      const destination = destinationId === null ? '' : (chainNameOf(destinationId) ?? `chain ${destinationId}`)
       const text = forkCutoverText(answer.verdict, { source: chain.name, destination }, Math.floor(input.nowMilliseconds / 1000))
-      return { kind: 'refuse', message: `${text.headline} Nothing was sent.` }
+      return { kind: 'refuse', message: `${text.headline}${text.scheduleNote === null ? '' : ` ${text.scheduleNote}`} Nothing was sent.` }
     }
     case 'wait':
       if (waits >= GATE_WAIT_LIMIT) {

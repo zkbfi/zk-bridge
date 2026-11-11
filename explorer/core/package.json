@@ -32,7 +32,8 @@
     "prepare": "tsc -p tsconfig.build.json",
     "test": "vitest run --coverage",
     "test:unit": "vitest run",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "fork-schedules": "node scripts/fetch-fork-schedules.mjs"
   },
   "dependencies": {
     "viem": "2.56.9"

@@ -30,7 +30,7 @@ which is deliberately the last option everywhere.
 | `EXPLORER_MNEMONIC`, `EXPLORER_MNEMONIC_PASSPHRASE` | Used when the mnemonic field is left empty. Removed from the environment when read. |
 | `EXPLORER_TREZOR_CONTACT` | Required by Trezor Connect for its manifest. |
 | `EXPLORER_HANDOFF_FILE`, `EXPLORER_EVIDENCE_FILE` | Prefill the operator dialogs. |
-| `EXPLORER_CONFIG_DIR` | Where the Prover setup file lives. |
+| `EXPLORER_CONFIG_DIR` | Where the Prover setup file lives, and in `fork-schedules/` the last fork schedule of each chain that the fork cutover read, used when no beacon node answers. |
 | `EXPLORER_TOKEN_VALUATIONS_WEI` | Optional prices for delivery fee suggestions. A JSON object from a token address to the value of one whole token in wei, as a decimal text. The wrapped native token needs no entry (one whole token is 10^18 wei). The bots take the same setting as `tokenValuationsWei`. |
 
 ## Connections: the indexer first, RPC as fallback

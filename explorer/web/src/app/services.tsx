@@ -12,8 +12,8 @@ import type { DataSource } from "@terminal/data/data-source";
 import { createFixtureDataSource, FIXTURE_NOW } from "@terminal/data/fixtures";
 import { createConnectionRuntime, type ConnectionRuntime } from "@terminal/data/connection-runtime";
 import type { PairConfig } from "@terminal/model/types";
-import { beaconLightClientAbi, migrateBoardUrls, type ExplorerConnectionInput, type ExplorerConnection, type Pair } from "@zk-bridge/shared";
-import { loadUserConnections, type ConnectionStorage } from "../config/connection-storage";
+import { beaconLightClientAbi, createForkScheduleStore, migrateBoardUrls, type ExplorerConnectionInput, type ExplorerConnection, type ForkScheduleStore, type Pair } from "@zk-bridge/shared";
+import { loadUserConnections, storageForkScheduleText, type ConnectionStorage } from "../config/connection-storage";
 import type { WebConfiguration } from "../config/environment";
 import { createFixtureIndexerClient } from "../data/fixture-indexer-client";
 import { createFallbackIndexerClient, type IndexerClient } from "../data/indexer-client";
@@ -46,6 +46,11 @@ export type Services = {
   readonly probe: Prober;
   /** What the fork surfaces read: the cutover facts, the gate and registry state, the seal offer. */
   readonly forks: ForkPort;
+  /**
+   * Where the fork cutover keeps the last fork schedule of each chain (`localStorage`), for when the beacon node does not
+   * answer. Absent on the sample page, which reads no chain.
+   */
+  readonly forkSchedules?: ForkScheduleStore;
   /** The clock in unix seconds. The fixture page pins it so that the sample data stays the same. */
   readonly now: () => number;
 };
@@ -138,6 +143,7 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
     ...(live.createConnection === undefined ? {} : { createConnection: live.createConnection }),
     ...(live.connectionOptions === undefined ? {} : { connectionOptions: live.connectionOptions }),
   });
+  const forkSchedules = createForkScheduleStore(storageForkScheduleText(live.storage ?? null));
   return {
     ...base,
     dataSource: connection.dataSource,
@@ -149,7 +155,8 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
     transport: realPanelTransport,
     readLightClientHead: (chainId) => readHeadSlot(connection, pair, chainId),
     probe: createProber(),
-    forks: createForkPort({ pair, connection }),
+    forks: createForkPort({ pair, connection, scheduleStore: forkSchedules }),
+    forkSchedules,
     now: () => Math.floor(Date.now() / 1000),
   };
 };

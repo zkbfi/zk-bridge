@@ -68,4 +68,21 @@ describe('terminalGateCheck with a pair', () => {
     // The system clock is long after the fork and the light client head (slot 1000) is before it: paused.
     expect(await check({ chainId: FIXTURE_PAIR.first.chainId, gate: GATE, account: ACCOUNT })).toMatchObject({ kind: 'paused' })
   })
+
+  test('keeps the schedule it read in the store it is given', async () => {
+    const { createForkScheduleStore, memoryForkScheduleText } = await import('@zk-bridge/shared')
+    const scheduleStore = createForkScheduleStore(memoryForkScheduleText())
+    const fetch = (async (url: string) => {
+      const body = url.includes('fork_schedule')
+        ? { data: [{ current_version: '0x90000070', epoch: '50' }] }
+        : url.includes('genesis')
+          ? { data: { genesis_time: '1000000' } }
+          : { data: { SECONDS_PER_SLOT: '12', SLOTS_PER_EPOCH: '32' } }
+      return new Response(JSON.stringify(body), { status: 200 })
+    }) as unknown as typeof globalThis.fetch
+    const flow = { ...enforcingClient(), readContract: async () => 1000n } as never
+    const check = terminalGateCheck({ pair: FIXTURE_PAIR, connection: { resolved: () => ({}) } as never, chainAccess: { flowClient: () => flow }, fetch, scheduleStore })!
+    await check({ chainId: FIXTURE_PAIR.first.chainId, gate: GATE, account: ACCOUNT })
+    expect(await scheduleStore.load(FIXTURE_PAIR.first.chainId)).toMatchObject({ forks: [{ version: '0x90000070', epoch: 50 }] })
+  })
 })

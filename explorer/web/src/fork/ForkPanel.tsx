@@ -16,7 +16,7 @@ import type { WebStep } from "../tx/bridge-steps";
 import { CopyValue } from "../ui/CopyValue";
 import { useWallet } from "../wallet/wallet-port";
 import { RouteIcons, XGroup, KV } from "../explore/parts";
-import { gateLine, nextForkLine, observationLine, pauseLine, routeStatusOf } from "./fork-model";
+import { gateLine, nextForkLine, observationLine, pauseLine, routeStatusOf, scheduleLine } from "./fork-model";
 import { useForkChainState, useForkCutover, useSealOffer } from "./use-fork";
 
 /** One route: its status word, the next fork of the source chain, the pause, and the light client head. */
@@ -38,6 +38,9 @@ const RouteBlock = ({ source, destination, names }: { readonly source: ChainConf
       </KV>
       <KV k={`Sends from ${source.name}`}>
         <span data-testid="fork-pause">{pauseLine(verdict, nowSeconds, destination.name)}</span>
+      </KV>
+      <KV k="Fork schedule">
+        <span data-testid="fork-schedule">{scheduleLine(verdict, nowSeconds)}</span>
       </KV>
       {head === null ? null : (
         <KV k={`Light client on ${destination.name}`}>

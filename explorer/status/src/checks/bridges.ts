@@ -1,5 +1,5 @@
 import { parseAbi } from "viem";
-import { readGateStatus } from "@zkb/data";
+import { isSealOnlyMode, readGateStatus } from "@zkb/data";
 import { decideForkCutover, forkCutoverText, readCutoverFacts, readForkGateState, readForkObservation, type ProofDirection } from "@zk-bridge/shared";
 import { labelOf, type Deps } from "../deps.ts";
 import type { CheckSpec } from "../types.ts";
@@ -22,7 +22,8 @@ export const bridgeCheck = (deps: Deps, chainId: number): Spec => ({
 });
 
 /** The gate on a chain: whether it enforces, and the epoch it confirmed last. A gate in a detection mode admits sends by design until the chain
- * gains beacon roots or a newer opcode; only an enforcing-mode gate that does not enforce is degraded, and a sealed one is down (`readGateStatus` of `@zkb/data`). */
+ * gains beacon roots or a newer opcode; a seal-only gate admits every send until it is sealed; only an enforcing-mode gate that does not enforce
+ * is degraded, and a sealed one is down (`readGateStatus` of `@zkb/data`). */
 export const gateCheck = (deps: Deps, chainId: number): Spec => ({
   id: `gate-${chainId}`,
   name: `${labelOf(deps, chainId)} gate`,
@@ -30,6 +31,7 @@ export const gateCheck = (deps: Deps, chainId: number): Spec => ({
   async run(run) {
     const status = await readGateStatus({ client: run.client(chainId), gate: sideOf(run, chainId).contracts.gate });
     if (status.sealed) return { state: "down", detail: "sealed after a fork, it refuses every send and the seal never clears" };
+    if (isSealOnlyMode(status.mode)) return { state: "ok", detail: `seal-only mode (${status.mode}): admits every send until a proof of a fork the route cannot follow seals it` };
     if (!status.enforcing) {
       if (status.mode === "enforcing") return { state: "degraded", detail: "mode enforcing but not enforcing, it admits every send" };
       return { state: "ok", detail: `detection mode (${status.mode}): admits sends until ${labelOf(run, chainId)} gains beacon roots or a newer opcode, then enforces for good` };
@@ -61,6 +63,8 @@ export const forkCutoverCheck = (deps: Deps, direction: ProofDirection): Spec =>
         clientFor: (chainId) => run.client(chainId),
         beaconUrlsFor: () => (source.beaconUrl === null ? [] : [source.beaconUrl]),
         fetch: run.fetch,
+        nowSeconds: () => Math.floor(run.now() / 1000),
+        ...(run.forkSchedules === undefined ? {} : { scheduleStore: run.forkSchedules }),
       });
       const now = run.now() / 1000;
       const verdict = decideForkCutover({ sourceChainId: source.chainId, ...(facts as NonNullable<typeof facts>), nowSeconds: now });
@@ -71,7 +75,8 @@ export const forkCutoverCheck = (deps: Deps, direction: ProofDirection): Spec =>
       const gateText = `gate ${gate.sealed ? "sealed" : "not sealed"}, mode ${gate.mode}`;
       const registryText = observed === null ? "" : `; registry ${observed.observed ? `version ${observed.version}, shape ${observed.shape}, slot ${observed.slot}` : "has observed nothing"}`;
       const state = verdict.kind === "open" ? "ok" : "degraded";
-      return { state, detail: `${text.headline ?? `no fork is scheduled on ${names.source}`}${text.countdown === null ? "" : ` (${text.countdown})`} ${gateText}${registryText}` };
+      const scheduleText = text.scheduleNote === null ? "" : ` ${text.scheduleNote}`;
+      return { state, detail: `${text.headline ?? `no fork is scheduled on ${names.source}`}${text.countdown === null ? "" : ` (${text.countdown})`}${scheduleText} ${gateText}${registryText}` };
     },
   };
 };

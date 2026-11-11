@@ -63,10 +63,16 @@ export class GateEvidenceError extends Error {
 export type GateChainClient = Pick<PublicClient, "getBlock" | "readContract" | "call" | "estimateGas">;
 
 /** The modes of a gate, by the index of `BeaconForkGate.GateMode`. */
-export const GATE_MODES = ["enforcing", "detect-beacon-roots", "detect-beacon-roots-and-registry"] as const;
+export const GATE_MODES = ["enforcing", "detect-beacon-roots", "detect-beacon-roots-and-registry", "seal-only", "seal-only-with-registry"] as const;
 
 /** One of {@link GATE_MODES}. */
 export type GateMode = (typeof GATE_MODES)[number];
+
+/**
+ * Whether a gate admits every send unless it is sealed (`SealOnly`, `SealOnlyWithRegistry`): no epoch, no confirmation, no
+ * evidence. Its only rule is the seal.
+ */
+export const isSealOnlyMode = (mode: GateMode): boolean => mode === "seal-only" || mode === "seal-only-with-registry";
 
 /**
  * How many blocks behind the latest one the evidence block is. The evidence names the parent beacon block root of one
@@ -104,7 +110,7 @@ export interface GateStatus {
   readonly evidenceBlock: EvidenceBlock;
   /** The epoch of the next block (one slot after the latest): the epoch that a send now lands in. */
   readonly epoch: bigint;
-  /** Whether a send in `epoch` needs a confirmation first: the gate enforces, is not sealed, and has not confirmed `epoch`. */
+  /** Whether a send in `epoch` needs a confirmation first: the gate enforces per epoch (not a seal-only mode), is not sealed, and has not confirmed `epoch`. */
   readonly needsConfirmation: boolean;
 }
 
@@ -143,7 +149,7 @@ export async function readGateStatus(input: { readonly client: GateChainClient; 
     block: { number: blockNumber, timestamp: block.timestamp, parentBeaconBlockRoot: block.parentBeaconBlockRoot ?? null },
     evidenceBlock: { number: evidenceNumber, timestamp: evidence.timestamp, parentBeaconBlockRoot: evidence.parentBeaconBlockRoot ?? null },
     epoch,
-    needsConfirmation: (enforcing as boolean) && !(sealed as boolean) && confirmedEpoch !== epoch,
+    needsConfirmation: (enforcing as boolean) && !isSealOnlyMode(modeName) && !(sealed as boolean) && confirmedEpoch !== epoch,
   };
 }
 
@@ -396,8 +402,8 @@ export const SIMULATION_RETRY_MILLISECONDS = 2_000;
 
 /** The answer of {@link ensureGateConfirmed}. */
 export type GateConfirmation =
-  /** The send needs no confirmation: the gate does not enforce, or the epoch is confirmed already. */
-  | { readonly kind: "not-needed"; readonly reason: "not-enforcing" | "confirmed"; readonly epoch: bigint }
+  /** The send needs no confirmation: the gate does not enforce, is seal-only (it admits every send until sealed), or the epoch is confirmed already. */
+  | { readonly kind: "not-needed"; readonly reason: "not-enforcing" | "seal-only" | "confirmed"; readonly epoch: bigint }
   /** The gate is sealed for good: no send passes, with or without evidence. */
   | { readonly kind: "sealed"; readonly epoch: bigint }
   | WaitForGateHeader
@@ -460,6 +466,7 @@ export async function ensureGateConfirmed(input: {
   const status = await readGateStatus(input);
   if (status.sealed) return { kind: "sealed", epoch: status.epoch };
   if (!status.enforcing) return { kind: "not-needed", reason: "not-enforcing", epoch: status.epoch };
+  if (isSealOnlyMode(status.mode)) return { kind: "not-needed", reason: "seal-only", epoch: status.epoch };
   if (!status.needsConfirmation) return { kind: "not-needed", reason: "confirmed", epoch: status.epoch };
   const evidence = await buildGateEvidence({ ...input, status });
   if (evidence.kind === "wait") return evidence;
@@ -483,8 +490,11 @@ export async function ensureGateConfirmed(input: {
   return { kind: "confirm", call, gas, epoch: evidence.epoch, forkVersion: evidence.forkVersion, shape: evidence.shape, validUntil: evidence.validUntil, evidence };
 }
 
-/** The route is paused before a fork (`decideForkCutover`): nothing is sent, and the gate is not asked. */
-export type GatePaused = { readonly kind: "paused"; readonly verdict: Extract<ForkCutoverVerdict, { readonly kind: "paused" }> };
+/**
+ * The route is paused before a fork, or waits for a fork schedule (`decideForkCutover`): nothing is sent, and the gate is
+ * not asked.
+ */
+export type GatePaused = { readonly kind: "paused"; readonly verdict: Extract<ForkCutoverVerdict, { readonly kind: "paused" | "blocked" }> };
 
 /** What {@link GateCheck} answers: what {@link ensureGateConfirmed} answers, or that the route is paused before a fork. */
 export type GateCheckAnswer = GateConfirmation | GatePaused;
@@ -509,15 +519,15 @@ export function createGateCheck(input: {
   readonly noneText?: string;
   readonly fetch?: typeof fetch;
   /**
-   * The fork cutover check (`createForkCutoverCheck`). When it says a send from the chain is paused before a fork, the gate
-   * check answers `paused` and does not read the gate. Absent: no cutover.
+   * The fork cutover check (`createForkCutoverCheck`). When it says a send from the chain is paused before a fork, or blocked
+   * for want of a fork schedule, the gate check answers `paused` and does not read the gate. Absent: no cutover.
    */
   readonly cutover?: (chainId: number) => Promise<ForkCutoverVerdict>;
 }): GateCheck {
   return async ({ chainId, gate, account }) => {
     if (input.cutover !== undefined) {
       const verdict = await input.cutover(chainId);
-      if (verdict.kind === "paused") return { kind: "paused", verdict };
+      if (verdict.kind === "paused" || verdict.kind === "blocked") return { kind: "paused", verdict };
     }
     const sources = input.beaconUrlsFor(chainId).map((url) => createBeaconProofSource({ url, ...(input.fetch === undefined ? {} : { fetch: input.fetch }) }));
     const beacon = fallbackBeaconSource(sources, input.noneText === undefined ? {} : { noneText: input.noneText });

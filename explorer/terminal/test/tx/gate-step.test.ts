@@ -70,6 +70,23 @@ describe('decideGateStep', () => {
     expect((decide(unnamed, 0, 1_800_600_000) as { message: string }).message).toContain("chain 424242's light client")
   })
 
+  test('refuses a send while no fork schedule can be used, and names the copy a pause was decided from', () => {
+    const blocked: GateCheckAnswer = { kind: 'paused', verdict: { kind: 'blocked', reason: 'no-fork-schedule', detail: 'x', newestCopyAt: null } }
+    expect(decide(blocked, 0, 1_800_600_000)).toEqual({
+      kind: 'refuse',
+      message:
+        "Sends from Ethereum wait: Ethereum's beacon node did not answer, and no copy of its fork schedule is at hand, so a fork in the next 12 hours cannot be ruled out. Sends resume once a beacon node answers (Settings, Beacon endpoints). Nothing was sent.",
+    })
+    const fork = { version: '0x90000075', name: 'Fulu', epoch: 500, slot: 16_000, time: 1_800_000 }
+    const fromCopy: GateCheckAnswer = {
+      kind: 'paused',
+      verdict: { kind: 'paused', destinationChainId: 369, fork, pausedSince: 1_756_800, lightClientHead: 15_000n, leadSeconds: 43_200, schedule: { origin: 'cache', fetchedAt: 1_700_000, liveFailure: 'x' } },
+    }
+    expect((decide(fromCopy, 0, 1_800_600_000) as { message: string }).message).toContain(
+      "now. Ethereum's beacon node did not answer, so this uses the fork schedule saved by this app at 1970-01-20 16:13 UTC. Nothing was sent.",
+    )
+  })
+
   test('waits a slot for the header, and gives up after the limit', () => {
     const wait: GateConfirmation = { kind: 'wait', epoch: 7n, headerEpoch: 6n, retryAfterSeconds: 12 }
     expect(decide(wait, GATE_WAIT_LIMIT - 1)).toEqual({ kind: 'wait', wait: { chainName: 'Ethereum', epoch: 7n, seconds: 12 } })

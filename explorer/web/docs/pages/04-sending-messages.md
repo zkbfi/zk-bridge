@@ -78,6 +78,6 @@ An executor cannot make the message fail by giving it too little gas. A delivery
 
 ## The gate and your send
 
-On an enforcing chain, the first send in each epoch needs a gate confirmation. The page Safety explains the gate.
+The gate admits every send until it is sealed after a fork; a send needs nothing extra. The page Safety explains the gate.
 
-If a send fails with a gate error, wait one slot and try again.
+On a gate of the older kind (the testnet gates), the first send in each epoch needs a gate confirmation, which the app adds before your send. If a send fails with a gate error there, wait one slot and try again.
