@@ -206,7 +206,7 @@ export function createStepService(input: StepServiceInput): StepService {
     const readyAt = latest.updatedAt + limits.secondsBeforeRetryAfterFailure * 1000;
     if (readyAt <= now()) return null;
     const seconds = Math.max(1, Math.ceil((readyAt - now()) / 1000));
-    return { refused: "rate-limited", retryAfterSeconds: seconds, why: "limit", detail: `the last proof of this step failed; the next try is allowed in ${seconds} s` };
+    return { refused: "rate-limited", retryAfterSeconds: seconds, why: "limit", detail: "the last proof of this step failed" };
   };
 
   /** Starts a row, or joins the one a concurrent request started (the unique index). */
