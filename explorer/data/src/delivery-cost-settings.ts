@@ -8,6 +8,15 @@
  */
 export const DEFAULT_DELIVERY_GAS = 600_000n;
 
+/**
+ * The gas the backend's watcher counts for one delivery until it has measured deliveries of its own, from
+ * `deploy/gas-defaults.json` (`backendStartDeliveryGas`), the one source of the figure. This constant is a copy so that
+ * the browser bundle needs no file; a test checks it equals the file, and `test/hardened/BridgeWorld.t.sol`
+ * (`test_theBackendStartFigureCoversAPlainTokenDeliveryToANewRecipient`) checks the file stays above the measured gas
+ * of a plain token delivery to a new recipient (469,247 when measured; 452,134 to an existing holder).
+ */
+export const BACKEND_START_DELIVERY_GAS = 500_000n;
+
 /** How many of the newest samples of each kind the report uses. */
 export const DEFAULT_SAMPLE_LIMIT = 200;
 
