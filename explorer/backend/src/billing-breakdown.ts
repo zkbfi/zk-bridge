@@ -11,7 +11,8 @@
  *
  *   1. proving            the worker runs a proof job. The job's `worker_total_ms` (the whole request on the worker,
  *                         including `worker_queue_ms`, the wait for the GPU behind another proof) or, when the worker
- *                         reported none, `remote_ms` (the accepted request, an upper bound), ending at `proved_at`:
+ *                         reported none, `remote_ms` (the accepted request, an upper bound that also holds RunPod's wait
+ *                         to allocate a GPU, which RunPod does not bill), ending at `proved_at`:
  *                         [proved_at - D, proved_at]. A job without `remote_ms` (an older prover) counts from its
  *                         own `started_at`. The local build and native run before the request, the verification
  *                         after it and the part of the request outside the worker (`remote_overhead_ms`: network,
@@ -19,7 +20,10 @@
  *   2. startingUp         the cold start, before a worker can take work:
  *                         - a session, from `started_at` to `ready_at`, when that took 5 s or more
  *                           (`COLD_START_FLOOR_SECONDS`; a faster answer found a worker that was up already);
- *                           a used session that never answered ready, from its start to its end;
+ *                           a used session that never answered ready (`ready_at` null) claims nothing of its own, since
+ *                           no record says that a worker ran: only when the job that took it met a worker that was
+ *                           not ready too (`not_ready_count` above 0) was the worker starting, and then it counts from
+ *                           the session's start to that job's request. Its billed time beyond that stays unaccounted;
  *                         - a job that was answered "not ready" (`not_ready_count` above 0) and waited
  *                           `wait_worker_ms`, ending where its accepted request starts (`proved_at - remote_ms`).
  *   3. waitingForProof    a ready worker with nothing to do before its proof: in a used session, from `ready_at`
@@ -46,10 +50,14 @@
  *     (or the start of the UTC day when RunPod returned no hour). Only time before it is compared; our records after
  *     it are `notYetBilled` (seconds, and dollars at the period's rate, an estimate), never part of `unaccounted`.
  *     `buckets + unaccounted` add up to `billed`, the bill up to `billedThrough`.
- *   - `unaccounted` can still be negative, from genuine disagreement between record and bill: it is small and comes
- *     mostly from proving being an upper bound. `remote_ms` includes the queueing until the GPU image reports
- *     `worker_total_ms`, so a job from before that field (or one whose worker did not report) is counted longer than
- *     the worker ran. A negative that stays large is a real mismatch: records that claim time RunPod did not bill.
+ *   - `unaccounted` can still be negative, from genuine disagreement between record and bill. The main cause is proving
+ *     being an upper bound for a job whose worker reported no `worker_total_ms` (an image that predates the field):
+ *     `remote_ms` is the whole accepted request, and when RunPod was slow to allocate a GPU the load balancer held the
+ *     request for that wait, which RunPod does not bill. The hours with such waits over-claim by about the wait, while
+ *     the hours without agree. (RunPod's load-balancing endpoint, which this prover calls, returns no `executionTime`
+ *     or `delayTime`: those belong to queue endpoints. The worker's own `timings` are the only measure.) A negative
+ *     that stays large when every job reports `worker_total_ms` is a real mismatch: records that claim time RunPod did
+ *     not bill.
  *
  * Worked example (idle timeout 60 s, times in seconds). A session starts at 0, answers ready at 40 (a cold start of
  * 40 s), and ends `used` at 100 when a job begins. The job's request starts at 110 and the worker proves for 50 s, so
@@ -62,6 +70,11 @@
  *                    the tail of job 2 is 240 to 300                                        = 60  => 90
  *   unusedEarlyStarts 0
  *   Sum 300 s. If RunPod billed 310 s, unaccounted is 10 s; if it billed 290 s, unaccounted is -10 s.
+ *
+ * A session that never answered ready (`ready_at` null), used at 50 s by a job whose request starts at 60 s:
+ *   - the job was answered "ready" at once: startingUp 0, waitingForProof 0 (the session claims nothing);
+ *   - the job was answered "not ready" first (and waited 5 s, 55 to 60): startingUp 0 to 60 = 60 s (the job's own wait,
+ *     55 to 60, lies inside it and counts once).
  */
 import type { BillingBucket } from "./billing.ts";
 import { COLD_START_FLOOR_SECONDS } from "./watch/warmup.ts";
@@ -139,7 +152,8 @@ export function accountTimeline(input: { sessions: readonly SessionRecord[]; job
   const idleMsAt = (at: number) => input.idleSecondsAt(at) * 1000;
   const raw: Record<Bucket, Interval[]> = { proving: [], startingUp: [], waitingForProof: [], unusedEarlyStarts: [], idleAfterJob: [] };
 
-  const requestStarts: number[] = [];
+  // Where each job's request starts, and whether the job met a worker that was not ready (a start-up it saw itself).
+  const requests: Array<{ start: number; metColdWorker: boolean }> = [];
   for (const job of input.jobs) {
     const request = job.remoteMs;
     const duration = job.workerTotalMs ?? request;
@@ -149,13 +163,14 @@ export function accountTimeline(input: { sessions: readonly SessionRecord[]; job
       raw.proving.push([job.provedAt - duration, job.provedAt]);
       if (request !== null) {
         const requestStart = job.provedAt - request;
-        requestStarts.push(requestStart);
-        if ((job.notReadyCount ?? 0) > 0 && job.waitWorkerMs !== null) raw.startingUp.push([requestStart - job.waitWorkerMs, requestStart]);
+        const metColdWorker = (job.notReadyCount ?? 0) > 0;
+        requests.push({ start: requestStart, metColdWorker });
+        if (metColdWorker && job.waitWorkerMs !== null) raw.startingUp.push([requestStart - job.waitWorkerMs, requestStart]);
       }
     }
     raw.idleAfterJob.push([job.provedAt, job.provedAt + idleMsAt(job.provedAt)]);
   }
-  requestStarts.sort((left, right) => left - right);
+  requests.sort((left, right) => left.start - right.start);
 
   for (const session of input.sessions) {
     if (session.outcome !== "used") {
@@ -166,10 +181,12 @@ export function accountTimeline(input: { sessions: readonly SessionRecord[]; job
     const ready = session.readyAt;
     const cold = ready === null || ready - session.startedAt >= COLD_START_FLOOR_SECONDS * 1000;
     // The job that took the worker: the first request that starts from shortly before the session's end.
-    const request = requestStarts.find((start) => start >= session.endedAt - 120_000);
-    const waitEnd = request === undefined ? session.endedAt : Math.min(request, session.endedAt + idleMsAt(session.endedAt));
+    const request = requests.find((candidate) => candidate.start >= session.endedAt - 120_000);
+    const waitEnd = request === undefined ? session.endedAt : Math.min(request.start, session.endedAt + idleMsAt(session.endedAt));
     if (ready === null) {
-      raw.startingUp.push([session.startedAt, session.endedAt]);
+      // No answer of "ready" came, so no record says that a worker ran. The worker was starting up only when the job
+      // that took the session met a worker that was not ready too; then until that job's request.
+      if (request?.metColdWorker === true) raw.startingUp.push([session.startedAt, request.start]);
     } else if (cold) {
       raw.startingUp.push([session.startedAt, ready]);
       raw.waitingForProof.push([ready, waitEnd]);

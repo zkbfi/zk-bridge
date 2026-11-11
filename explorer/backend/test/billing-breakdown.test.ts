@@ -86,8 +86,14 @@ describe("the billing breakdown", () => {
     expect(warm).toMatchObject({ startingUp: 0, waitingForProof: 50 });
     // The 5 s floor is a cold start.
     expect(seconds([session({ start: 0, readyAt: at(5), end: 50 })], []).startingUp).toBe(5);
-    // A used session that never answered ready was all start-up.
-    expect(seconds([session({ start: 0, readyAt: null, end: 50 })], [])).toMatchObject({ startingUp: 50, waitingForProof: 0 });
+    // A used session that never answered ready proves nothing about a worker, so it claims no time by itself.
+    expect(seconds([session({ start: 0, readyAt: null, end: 50 })], [])).toMatchObject({ startingUp: 0, waitingForProof: 0 });
+    // The job that took it found a ready worker (not_ready_count 0): still nothing from the session.
+    expect(seconds([session({ start: 0, readyAt: null, end: 50 })], [job(60, 30)])).toMatchObject({ startingUp: 0, waitingForProof: 0 });
+    // The job that took it met a worker that was not ready: the worker was starting up to the job's request.
+    expect(seconds([session({ start: 0, readyAt: null, end: 50 })], [job(60, 30, { waitWorkerMs: 5 * S, notReadyCount: 1 })])).toMatchObject({ startingUp: 60, waitingForProof: 0 });
+    // The request cannot start before the session: nothing to claim.
+    expect(seconds([session({ start: 100, readyAt: null, end: 150 })], [job(60, 30, { waitWorkerMs: 5 * S, notReadyCount: 1, startedAt: null })]).startingUp).toBe(5);
   });
 
   it("ends the waiting at the request of the job, or after the idle timeout when the job came much later", () => {

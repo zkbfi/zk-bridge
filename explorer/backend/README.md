@@ -697,7 +697,12 @@ lags, so only time before `billedThrough` (ISO, the start of RunPod's latest hou
 compared: the records after it are `notYetBilled` (`{ seconds, usd }`, an estimate at the period's rate), and `billed`
 is the bill that was compared, which the six buckets add up to. Each breakdown has `billedThrough`, `billed` and
 `notYetBilled`. What remains negative is a real disagreement between record and bill, small ones mostly from proving
-being an upper bound (`remote_ms` includes queueing until the GPU image reports `worker_total_ms`). The status page shows
+being an upper bound: a job whose worker reported no `worker_total_ms` (an image that predates the field) is counted by
+`remote_ms`, the whole accepted request, which also holds the wait of RunPod's load balancer for a GPU that RunPod does
+not bill; hours with such a wait over-claim by about the wait. The load-balancing endpoint returns no `executionTime` or
+`delayTime` (those are for queue endpoints), so only the worker's own `timings` fix it. A used warm-up session that never
+answered ready claims no time of its own; it counts as start-up (from its start to the job's request) only when the job
+that took it was answered "not ready" too. The status page shows
 the last 24 hours (`GPU billing`), degraded when `unaccounted` is more than 25% of the compared bill; it says "billing
 caught up to 03:00 UTC" when records after that are left out.
 
