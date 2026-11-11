@@ -215,4 +215,19 @@ describe("the confirm model with a call", () => {
     expect(buildConfirmView(hidden).blockedReason).toMatch(/differs from the one that was shown/);
     expect(buildConfirmView(missing).blockedReason).toMatch(/differs from the one that was shown/);
   });
+
+  it("refuses a call that was shown but is not in the bytes, and a call that is in the bytes but was not shown, when the fee director itself matches", async () => {
+    const withCall = await tippedStep({ callTarget, callData: "0xabcd" });
+    const sentence = "The call after the delivery in the call data differs from the one that was shown. Nothing was sent.";
+    // The bytes of a step with no call, but the disclosure promises a call.
+    const without = await tippedStep();
+    const promised: WebStep = { ...without, disclosure: { ...without.disclosure, deliveryCall: { target: callTarget, data: "0xabcd" } } };
+    expect(buildConfirmView(promised).blockedReason).toBe(sentence);
+    // The bytes of a step with a call, but the disclosure shows none.
+    const unannounced: WebStep = { ...withCall, disclosure: { ...withCall.disclosure, deliveryCall: null } };
+    expect(buildConfirmView(unannounced).blockedReason).toBe(sentence);
+    // The honest steps are not blocked.
+    expect(buildConfirmView(withCall).blockedReason).toBeNull();
+    expect(buildConfirmView(without).blockedReason).toBeNull();
+  });
 });

@@ -115,19 +115,17 @@ const usePaletteShortcuts = (open: () => void, enabled: boolean): void => {
   }, [open, enabled]);
 };
 
-const renderRoute = (route: Route, navigate: (next: Route) => void, update: (next: Route) => void) => {
+/** The routes that render in the plain frame: Explore, Bridge, Activity and Message have their own frames, and Docs its own page. */
+type FramedRoute = Exclude<Route, { readonly name: "explore" | "bridge" | "activity" | "message" | "docs" }>;
+
+const renderRoute = (route: FramedRoute, navigate: (next: Route) => void, update: (next: Route) => void) => {
   if (route.name === "home" || route.name === "global") return <GlobalView />;
-  if (route.name === "explore") return null;
-  if (route.name === "bridge") return null;
-  if (route.name === "activity") return null;
   if (route.name === "pair") return <PairView key={route.pairId} route={route} onChange={update} />;
   if (route.name === "audit") return <AuditView />;
   if (route.name === "prover") return <ProverView />;
   if (route.name === "settings") return <ConnectionsView />;
   if (route.name === "history") return <HistoryPage route={route} onNavigate={navigate} onUpdate={update} />;
-  if (route.name === "address") return <AddressView address={route.address} />;
-  // The message route renders in Explore's frame (see the Shell); it never reaches here.
-  return null;
+  return <AddressView address={route.address} />;
 };
 
 const shortAccount = (account: string | null): string => (account === null ? "No wallet" : `${account.slice(0, 6)}…${account.slice(-4)}`);
@@ -279,7 +277,7 @@ export const Shell = () => {
           </div>
         ) : route.name === "explore" ? (
           <div key={route.page === undefined ? "explore" : `explore-${route.page.kind}`} className={route.page === undefined ? slideClass : ""}>
-            <ExploreScreen route={route} onRoute={(next, mode = "push") => (mode === "replace" ? update(next) : navigate(next))} />
+            <ExploreScreen route={route} onRoute={update} />
           </div>
         ) : route.name === "message" ? (
           // The message page is one of Explore's pages (mockup explore-message.html), framed as they are.

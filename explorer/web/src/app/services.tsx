@@ -88,6 +88,9 @@ const readHeadSlot = async (connection: ConnectionRuntime, pair: PairConfig, cha
   return reader.readContract({ abi: beaconLightClientAbi, address: chain.contracts.lightClient, functionName: "head" });
 };
 
+/** The base URL of the indexer in force, or null when none is set. */
+export const indexerBaseOf = (resolved: ReturnType<ConnectionRuntime["resolved"]>): string | null => resolved.indexerUrl?.value ?? null;
+
 /**
  * Builds the services for a configuration and a pair.
  *
@@ -139,7 +142,7 @@ export const createServices = (configuration: WebConfiguration, pair: PairConfig
     ...base,
     dataSource: connection.dataSource,
     indexer: createFallbackIndexerClient(connection),
-    explore: createIndexerExploreSource(() => connection.resolved().indexerUrl?.value ?? null),
+    explore: createIndexerExploreSource(() => indexerBaseOf(connection.resolved())),
     chainAccess: connection.chainAccess,
     connection,
     endpoints: () => connection.resolved(),

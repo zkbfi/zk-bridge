@@ -182,9 +182,9 @@ export const shareScans = (keep: (key: string, load: () => Promise<HistoryScan>)
       const controller = new AbortController();
       const scan = keep(request.key, () => request.load(controller.signal));
       entry = { controller, scan, wanted: 0 };
-      const started = entry;
+      // Only this scan removes its own entry, and only once, so the entry under the key is always this one.
       const forget = (): void => {
-        if (running.get(request.key) === started) running.delete(request.key);
+        running.delete(request.key);
       };
       scan.then(forget, forget);
       running.set(request.key, entry);
@@ -193,8 +193,9 @@ export const shareScans = (keep: (key: string, load: () => Promise<HistoryScan>)
     joined.wanted += 1;
     return new Promise<HistoryScan>((resolve, reject) => {
       let settled = false;
+      // Called once at most: by the abort of the signal (the listener fires once and is removed when the scan settles first), or
+      // at once when the signal is already aborted.
       const leave = (): void => {
-        if (settled) return;
         settled = true;
         joined.wanted -= 1;
         if (joined.wanted === 0) abortUnlessJoined(joined, request.signal?.reason);

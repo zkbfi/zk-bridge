@@ -47,7 +47,7 @@ export const DirectionMenu = ({ current, onPick, onClose }: DirectionMenuProps) 
     return gate === "stop" || gate === "sealed" ? `paused: the gate on ${from.name} is closed` : null;
   };
   const list = useRef<HTMLDivElement>(null);
-  const items = (): HTMLElement[] => [...(list.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]:not([aria-disabled="true"])') ?? [])];
+  const items = (): HTMLElement[] => [...list.current!.querySelectorAll<HTMLElement>('[role="menuitemradio"]:not([aria-disabled="true"])')];
 
   useEffect(() => {
     (items().find((item) => item.getAttribute("aria-checked") === "true") ?? items()[0])?.focus();

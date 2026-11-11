@@ -26,7 +26,7 @@ export const AddressView = ({ address }: { readonly address: Address }) => {
       <Panel title="Balances">
         {snapshots.error === null ? null : <Notice tone="error">Balances did not load: {snapshots.error.message}</Notice>}
         {snapshots.data === undefined ? <Text color="fg.muted" fontSize="sm">Loading…</Text> : null}
-        {(snapshots.data ?? []).map((result) =>
+        {snapshots.data?.map((result) =>
           result.status === "error" ? (
             <Notice key={result.chain.chainId} tone="error">
               {result.chain.name}: {result.message}

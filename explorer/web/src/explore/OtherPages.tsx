@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CopyValue } from "../ui/CopyValue";
 import type { ReactNode } from "react";
 import type { Address } from "viem";
-import type { ChainConfig, PairConfig, TokenInfo } from "@terminal/model/types";
+import type { ChainConfig, FeedItem, PairConfig, TokenInfo } from "@terminal/model/types";
 import { formatRoute, type ExplorePage } from "../app/route";
 import { useAudit, useDeliveryCost, useFeed, useTokens } from "../app/queries";
 import { useServices } from "../app/services";
@@ -26,14 +26,14 @@ import { explorerLinksOf, explorerUrl, useChainReader } from "./chain-reader";
 import { chainNamer } from "./ExploreScreen";
 import { statusWord } from "./explore-model";
 import { KV, RouteIcons, shortHex, XBand, XGroup, XRow } from "./parts";
-import { CONTRACT_NAMES, type ContractKey } from "./contract-names";
+import { CONTRACT_NAMES, contractKeyOf } from "./contract-names";
+import { Missing } from "./TxAddressPages";
 import { StrandingLine } from "../stranding/StrandingLine";
 import { SLOTS_PER_PERIOD } from "./tx-model";
 
 const explore = (page: ExplorePage): string => formatRoute({ name: "explore", page });
 const chainOf = (pair: PairConfig, chainId: number): ChainConfig => (pair.first.chainId === chainId ? pair.first : pair.second);
 const otherOf = (pair: PairConfig, chainId: number): ChainConfig => (pair.first.chainId === chainId ? pair.second : pair.first);
-const Missing = ({ why }: { readonly why: string }) => <span title={why}>—</span>;
 const External = ({ url, label }: { readonly url: string | undefined; readonly label: string }) =>
   url === undefined ? null : (
     <a href={url} target="_blank" rel="noreferrer" aria-label={label}>
@@ -80,7 +80,8 @@ export const ProofPage = ({ chainId, number }: { readonly chainId: number; reado
   const reader = useChainReader()(chainId);
   const { explore: source } = useServices();
   const clock = useQuery({ queryKey: ["explore", "beacon-clocks"], queryFn: () => source.beaconClocks() }).data?.find((entry) => entry.trackedChainId === tracked.chainId);
-  const prices = usePrices([]).data;
+  // A price read needs at least one token to start; the native coins are what the cost is priced in.
+  const prices = usePrices(nativeTokensOf(pair)).data;
   const verifier = useQuery({ queryKey: ["verifier", chainId], enabled: reader !== null, queryFn: () => reader!.verifier(holder.contracts.lightClient) }).data;
   const label = (
     <>
@@ -144,7 +145,7 @@ export const TokenPage = ({ id }: { readonly id: string }) => {
   const [side, address] = id.split(":") as ["first" | "second", Address];
   const token: TokenInfo | undefined = tokens.find((candidate) => candidate.side === side && candidate.address.toLowerCase() === address.toLowerCase());
   const audit = useAudit(pair.id).data ?? [];
-  const feed = (useFeed(pair.id, {}, 100).data?.items ?? []).filter((item) => item.token !== null && token !== undefined && (item.token.address.toLowerCase() === token.address.toLowerCase() || item.token.address.toLowerCase() === token.counterpart?.toLowerCase()));
+  const feed = (useFeed(pair.id, {}, 100).data?.items ?? []).filter((item): item is FeedItem & { readonly token: TokenInfo } => item.token !== null && token !== undefined && (item.token.address.toLowerCase() === token.address.toLowerCase() || item.token.address.toLowerCase() === token.counterpart?.toLowerCase()));
   const home = chainOf(pair, side === "first" ? pair.first.chainId : pair.second.chainId);
   if (token === undefined) return <XBand label={home.name} big={shortHex(address)} sub="This pair has no such token." />;
   const other = otherOf(pair, home.chainId);
@@ -165,7 +166,7 @@ export const TokenPage = ({ id }: { readonly id: string }) => {
         {feed.length === 0 ? <p className="zb-small">No transfers of this token yet.</p> : null}
         {feed.slice(0, 20).map((item) => {
           const { source, destination } = chainsFor(pair, item.direction);
-          return <XRow key={item.id} href={explore({ kind: "tx", chainId: source.chainId, id: item.sourceTransactionHash })} title={<><Num text={amountText(item.amount ?? 0n, token.decimals)} /> {item.token?.symbol}</>} sub={<RouteIcons from={source.chainId} to={destination.chainId} names={names} />} status={statusWord(item.status)} />;
+          return <XRow key={item.id} href={explore({ kind: "tx", chainId: source.chainId, id: item.sourceTransactionHash })} title={<><Num text={amountText(item.amount ?? 0n, token.decimals)} /> {item.token.symbol}</>} sub={<RouteIcons from={source.chainId} to={destination.chainId} names={names} />} status={statusWord(item.status)} />;
         })}
       </div>
     </>
@@ -179,14 +180,14 @@ export const BlockPage = ({ chainId, number }: { readonly chainId: number; reado
   const reader = useChainReader()(chainId);
   const block = useQuery({ queryKey: ["block", chainId, number.toString()], enabled: reader !== null, queryFn: () => reader!.block(number), retry: 0 });
   const proofs = useProofs().filter((proof) => (proof.chainId === chainId && proof.blockNumber === number) || (proof.chainId !== chainId && proof.executionBlockNumber === number));
-  const data = block.data as (Awaited<ReturnType<NonNullable<typeof reader>["block"]>> & { readonly transactions?: readonly unknown[] }) | undefined;
+  const data = block.data;
   return (
     <>
       <XBand label={chain.name} big={`Block ${number.toLocaleString("en-US")}`} sub={<External url={explorerUrl(chainId, "block", number.toString())} label="On the chain's explorer" />} />
       <div className="zb-col zb-xpage">
         <KV k="Hash">{data === undefined ? <Missing why={block.isError ? "The chain has no such block yet" : "Read from the chain"} /> : <CopyValue value={data.hash ?? ""} label="Copy block hash">{shortHex(data.hash ?? "")}</CopyValue>}</KV>
         <KV k="Time">{data === undefined ? <Missing why="Read from the chain" /> : new Date(Number(data.timestamp) * 1000).toLocaleString("en-GB")}</KV>
-        <KV k="Transactions">{data?.transactions === undefined ? <Missing why="Read from the chain" /> : data.transactions.length}</KV>
+        <KV k="Transactions">{data === undefined ? <Missing why="Read from the chain" /> : data.transactions.length}</KV>
         <KV k="Gas used">{data === undefined ? <Missing why="Read from the chain" /> : data.gasUsed.toLocaleString("en-US")}</KV>
         <KV k="Base fee">{data?.baseFeePerGas == null ? <Missing why="Read from the chain" /> : <><Num text={amountText(data.baseFeePerGas, 9)} /> gwei</>}</KV>
         <KV k="Previous" href={explore({ kind: "block", chainId, id: (number - 1n).toString() })}>{(number - 1n).toLocaleString("en-US")}</KV>
@@ -227,15 +228,15 @@ export const SlotPage = ({ slot }: { readonly slot: bigint }) => {
 export const ContractPage = ({ chainId, address }: { readonly chainId: number; readonly address: Address }) => {
   const { pair } = useServices();
   const chain = chainOf(pair, chainId);
-  const key = Object.entries(chain.contracts).find(([, value]) => value?.toLowerCase() === address.toLowerCase())?.[0];
+  const key = contractKeyOf(chain, address);
   const reader = useChainReader()(chainId);
   const account = useQuery({ queryKey: ["account", chainId, address], enabled: reader !== null, queryFn: () => reader!.account(address) }).data;
   const proofs = useProofs().filter((proof) => proof.chainId === chainId);
   return (
     <>
-      <XBand label={chain.name} big={key === undefined ? "Contract" : (CONTRACT_NAMES[key as ContractKey] ?? key)} sub={<><span className="zb-mono zb-break">{address}</span><External url={explorerUrl(chainId, "address", address)} label="On the chain's explorer" /></>} />
+      <XBand label={chain.name} big={key === null ? "Contract" : CONTRACT_NAMES[key]} sub={<><span className="zb-mono zb-break">{address}</span><External url={explorerUrl(chainId, "address", address)} label="On the chain's explorer" /></>} />
       <div className="zb-col zb-xpage">
-        <KV k="Part of">{key === undefined ? "not this deployment" : "this deployment"}</KV>
+        <KV k="Part of">{key === null ? "not this deployment" : "this deployment"}</KV>
         <KV k="Code">{account === undefined ? <Missing why="Read from the chain" /> : account.isContract ? "deployed" : "none (an account)"}</KV>
         <KV k="Balance">{account === undefined ? <Missing why="Read from the chain" /> : <><Num text={amountText(account.balance, 18)} /> {chain.nativeSymbol}</>}</KV>
         <KV k="As an address" href={explore({ kind: "address", id: address })}><span className="zb-mono">{shortHex(address)}</span></KV>

@@ -7,6 +7,9 @@ import type { PairConfig } from "@terminal/model/types";
 import { WalletContext, type WalletPort, type WalletStatus, type WalletTransaction } from "./wallet-port";
 import { defaultRpcUrl } from "@terminal/config/default-rpc";
 
+/** The endpoint of a chain that has neither a configured URL nor a public default: the local node, which is what a development chain runs on. */
+const NO_ENDPOINT_URL = "http://127.0.0.1:8545";
+
 /**
  * Builds the wagmi configuration for a pair: one chain per side, public transports from the page configuration, and the
  * injected connector (the wallet in the browser). WalletConnect is not wired in: it needs a project identifier and an
@@ -16,14 +19,13 @@ import { defaultRpcUrl } from "@terminal/config/default-rpc";
  * @param rpcUrls The public RPC URL of each chain. A chain with none uses the default of its definition.
  */
 export const createWalletConfig = (pair: PairConfig, rpcUrls: Readonly<Record<number, string>>): Config => {
-  const chains = [pair.first, pair.second].map((chain): Chain =>
-    rpcChain({ id: chain.chainId, name: chain.name, symbol: chain.nativeSymbol, rpcUrl: rpcUrls[chain.chainId] ?? defaultRpcUrl(chain.chainId) ?? "http://127.0.0.1:8545" }),
-  );
+  const urlOf = (chain: PairConfig["first"]): string => rpcUrls[chain.chainId] ?? defaultRpcUrl(chain.chainId) ?? NO_ENDPOINT_URL;
+  const chains = [pair.first, pair.second].map((chain): Chain => rpcChain({ id: chain.chainId, name: chain.name, symbol: chain.nativeSymbol, rpcUrl: urlOf(chain) }));
   const [first, second] = chains as [Chain, Chain];
   return createConfig({
     chains: [first, second],
     connectors: [injected()],
-    transports: { [first.id]: rpcTransport(rpcUrls[first.id] ?? defaultRpcUrl(first.id) ?? undefined), [second.id]: rpcTransport(rpcUrls[second.id] ?? defaultRpcUrl(second.id) ?? undefined) },
+    transports: { [first.id]: rpcTransport(urlOf(pair.first)), [second.id]: rpcTransport(urlOf(pair.second)) },
     ssr: false,
   });
 };

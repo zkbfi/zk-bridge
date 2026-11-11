@@ -86,11 +86,11 @@ const detailOf = (item: FeedItem, pair: PairConfig): MessageDetail => {
 /**
  * An indexer client with no network. It answers from the fixture feed.
  *
- * @param options The pair to describe.
+ * @param options The pair to describe, and the feed to answer from (default: the fixture feed).
  */
-export const createFixtureIndexerClient = (options: { readonly pair?: PairConfig } = {}): IndexerClient => {
+export const createFixtureIndexerClient = (options: { readonly pair?: PairConfig; readonly feed?: readonly FeedItem[] } = {}): IndexerClient => {
   const pair = options.pair ?? FIXTURE_PAIR;
-  const feed = buildFixtureFeed(FIXTURE_NOW);
+  const feed = options.feed ?? buildFixtureFeed(FIXTURE_NOW);
   return {
     async message(messageId) {
       const item = feed.find((candidate) => candidate.id === messageId.toLowerCase());
