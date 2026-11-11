@@ -138,8 +138,8 @@ For each direction:
      delivers at break-even and not below. Otherwise skip with `loss-at-or-above-limit`. The first check uses the assumed gas (`deliveryGasFallback`) and needs no evidence. The
      second check uses the gas of the estimate.
    - Build the evidence with `zk-bridge-prover evidence`. The log index inside the receipt comes from the source receipt.
-     When no beacon node serves the state of the source block any more, the prover takes its fork proof from the
-     indexer's proof archive (`<indexerUrl>/api/proofs/fork-proofs`, `source.fork_proof_archive_urls`), checked against
+     When it holds no state of the source block and no node serves the multiproof route, the prover takes its fork proof
+     from the indexer's proof archive before it downloads a whole state (`<indexerUrl>/api/proofs/fork-proofs`, `source.fork_proof_archive_urls`), checked against
      the source state root.
      Skip when the bridge shows the message as delivered.
    - Before the first layout call, estimate the gas of every layout call: simulate the first, and use

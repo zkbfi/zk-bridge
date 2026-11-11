@@ -62,8 +62,8 @@ export interface RouteOptions {
   readonly handoffArchiveUrls?: readonly string[];
   /**
    * The fork proof archive of the route's source chain (`source.fork_proof_archive_urls`): base URLs that serve
-   * `<base>/<chainId>/<stateRoot>.json`, asked last by the `evidence` command for the fork proof of a source state that no
-   * beacon node serves any more. See `fork-proof-record.ts`.
+   * `<base>/<chainId>/<stateRoot>.json`, asked by the `evidence` command for the fork proof of a source state before it
+   * downloads the whole state (after a held state and the multiproof route). See `fork-proof-record.ts`.
    */
   readonly forkProofArchiveUrls?: readonly string[];
 }

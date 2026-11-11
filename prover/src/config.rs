@@ -291,7 +291,8 @@ pub struct SourceConfig {
     pub handoff_archive_urls: Vec<String>,
     /// The fork proof archive (docs/proof-archive.md): base URLs that serve `<base>/<chain id>/<state root>.json`, the
     /// fork proof record of each source block that carried a message, saved by the backend while a node served the state.
-    /// The `evidence` command asks them last, in order, for the fork proof of a source state that no node serves. Nothing
+    /// The `evidence` command asks them in order for the fork proof of a source state that it does not hold and no node
+    /// gives through the multiproof route, before it downloads the whole state. Nothing
     /// in a record is trusted: it is checked against the state root of the source header.
     #[serde(default)]
     pub fork_proof_archive_urls: Vec<String>,

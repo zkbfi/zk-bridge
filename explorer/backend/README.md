@@ -224,8 +224,9 @@ archive module saves the proof while the state is fresh (`src/archive/fork-proof
   `/archive/proofs`, whose field `forkProofs` lists the records of the last 7 days for the indexer (older ones reach it
   through the nightly snapshot, table `fork_proofs`).
 - Every prover run of the backend names the archive as `source.fork_proof_archive_urls`: this backend's route, then
-  `<indexerUrl>/api/proofs/fork-proofs`, then `forkProofArchiveUrls`. The `evidence` command asks it last, after the
-  nodes (prover README, "The `fork-proof` command"), and checks every record against the state root of the source header.
+  `<indexerUrl>/api/proofs/fork-proofs`, then `forkProofArchiveUrls`. The `evidence` command asks it after a held state and the
+  multiproof route of the nodes and before it downloads a whole state (prover README, "The `fork-proof` command"), and
+  checks every record against the state root of the source header.
 - Load: one `fork-proof` run per source block that carries a message. The prover asks the compact multiproof route first
   (about 1 KB, served by Lodestar) and reads the whole state only from a node without it (about 4.5 MB on the testnets).
 

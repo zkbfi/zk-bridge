@@ -497,8 +497,8 @@ pub struct HttpBeaconSource {
     /// The handoff archive (`source.handoff_archive_urls`), asked last, and the chain id its paths name.
     archive: Vec<ArchiveClient>,
     chain_id: u64,
-    /// The fork proof archive (`source.fork_proof_archive_urls`, see [`super::fork_archive`]), asked last for the fork
-    /// proof of a source state that no node serves.
+    /// The fork proof archive (`source.fork_proof_archive_urls`, see [`super::fork_archive`]), asked for the fork proof
+    /// of a source state after the multiproof route and before the whole state (see [`Self::source_fork`]).
     fork_archive: Vec<ArchiveClient>,
 }
 
@@ -557,7 +557,7 @@ impl HttpBeaconSource {
     }
 
     /// The same source with the fork proof archive (`source.fork_proof_archive_urls`, see [`super::fork_archive`]), asked
-    /// last for the fork proof of a source state that no node serves, and the chain id its paths name. Every record is
+    /// for the fork proof of a source state before the whole state is downloaded, and the chain id its paths name. Every record is
     /// checked against the state root with the genesis validators root of this chain before it is used.
     pub fn with_fork_proof_archive(mut self, chain_id: u64, archive: Vec<ArchiveClient>) -> Self {
         self.chain_id = chain_id;
@@ -886,12 +886,14 @@ impl HttpBeaconSource {
     /// 1. a verified state in memory or in the state store, without a request;
     /// 2. the compact multiproof route of Lodestar (`/eth/v0/beacon/proof/state`) on the node, then on each state URL: about
     ///    1 KB, where a whole Ethereum mainnet state is hundreds of MB;
-    /// 3. the whole state (`/eth/v2/debug/beacon/states`) from the node, then from each state URL (see [`Self::state_for`]);
-    /// 4. the fork proof archive, in order: a record saved when the block was new, for a state no node keeps any more.
+    /// 3. the fork proof archive, in order: a record saved when the block was new (about 1 KB);
+    /// 4. the whole state (`/eth/v2/debug/beacon/states`) from the node, then from each state URL (see [`Self::state_for`]):
+    ///    the last resort, because it is hundreds of MB on Ethereum mainnet.
     ///
-    /// A proof from 2 or 4 is checked against `state_root` with the genesis validators root of this chain, by the rule of
-    /// `ForkShape.judge`, before it is used: no node and no archive is trusted. A proof from 1 or 3 comes from a state that
-    /// hashed to `state_root`.
+    /// A proof from 2 or 3 is checked against `state_root` with the genesis validators root of this chain, by the rule of
+    /// `ForkShape.judge`, before it is used: no node and no archive is trusted. A proof from 1 or 4 comes from a state that
+    /// hashed to `state_root`. The archive comes before the whole state because a checked record is as sound as the state
+    /// and costs a thousandth of the download.
     ///
     /// # Errors
     /// `Error::Beacon` naming the state root and why each source gave none.
@@ -909,11 +911,6 @@ impl HttpBeaconSource {
                 Err(reason) => reasons.push(format!("{} multiproof: {reason}", client_name(index))),
             }
         }
-        let state_error = match self.state_for(state_root) {
-            Ok(state) => return Ok(state.fork_proof()),
-            Err(error) => error,
-        };
-        reasons.push(format!("state: {state_error}"));
         for archive in &self.fork_archive {
             match super::fork_archive::ask_fork_archive(
                 archive,
@@ -936,6 +933,11 @@ impl HttpBeaconSource {
                 }
             }
         }
+        let state_error = match self.state_for(state_root) {
+            Ok(state) => return Ok(state.fork_proof()),
+            Err(error) => error,
+        };
+        reasons.push(format!("state: {state_error}"));
         Err(Error::Beacon(format!(
             "no source gave the fork proof of the state {state_root:#x}: {}",
             reasons.join("; ")
@@ -5473,6 +5475,45 @@ mod fork_proof_tests {
             ),
             (4, 1)
         );
+    }
+
+    /// Claim: with a good archive record, the message proof takes the fork proof from the archive and never downloads the
+    /// whole state, though the node serves it; with a refused record it downloads the state and the proof is the same.
+    /// Why it matters: a checked record is as sound as the state, and on Ethereum mainnet the state is hundreds of MB.
+    #[test]
+    fn the_archive_is_asked_before_the_whole_state() {
+        let (pages, x, _, state_root) = gloas_world(11_441_300);
+        let record = source_over_node(ChainKind::Sepolia, Node(pages.clone()))
+            .fork_proof_record(&x, SEPOLIA_ID)
+            .unwrap();
+        let expected = fork_from_record(
+            &record,
+            SEPOLIA_ID,
+            &state_root,
+            &SEPOLIA.genesis_validators_root,
+        )
+        .unwrap();
+        let archive_path = format!("/{SEPOLIA_ID}/{state_root:#x}.json");
+        let with = |text: String| {
+            let states = Arc::new(AtomicUsize::new(0));
+            let node = Counting {
+                pages: pages.clone(),
+                multiproof_requests: Arc::new(AtomicUsize::new(0)),
+                state_requests: states.clone(),
+            };
+            let source = source_over_node(ChainKind::Sepolia, node).with_fork_proof_archive(
+                SEPOLIA_ID,
+                vec![archive_of(vec![(archive_path.clone(), text.into_bytes())])],
+            );
+            (
+                source.source_fork(state_root).unwrap(),
+                states.load(Ordering::SeqCst),
+            )
+        };
+        assert_eq!(with(record.to_string()), (expected.clone(), 0));
+        let mut flipped = record.clone();
+        flipped["versionBranch"][2] = serde_json::json!(format!("{:#x}", B256::repeat_byte(1)));
+        assert_eq!(with(flipped.to_string()), (expected, 1));
     }
 
     /// Claim: a node whose multiproof route fails with a server error is passed over with the status in the message.

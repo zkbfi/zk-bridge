@@ -160,7 +160,7 @@ export interface ProverBinaryInput {
   readonly proofCacheDirectory?: string;
   /** The handoff archive the prover asks last for a missed period (`source.handoff_archive_urls`). */
   readonly handoffArchiveUrls?: readonly string[];
-  /** The fork proof archive the `evidence` command asks last for a pruned source state (`source.fork_proof_archive_urls`). */
+  /** The fork proof archive the `evidence` command asks before it downloads a source state (`source.fork_proof_archive_urls`). */
   readonly forkProofArchiveUrls?: readonly string[];
   readonly logger: LogSink;
 }
