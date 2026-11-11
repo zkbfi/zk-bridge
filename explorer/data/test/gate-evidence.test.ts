@@ -8,11 +8,13 @@ import {
   createBeaconProofSource,
   describeRevert,
   ensureGateConfirmed,
+  ensureSendEvidence,
   GATE_BLOCK_SECONDS,
   GATE_SAFETY_SECONDS,
   gateConfirmWindow,
   GateEvidenceError,
   readGateStatus,
+  sendEvidenceRule,
   SHAPE_REQUEST_ORDER,
   SIMULATION_RETRY_MILLISECONDS,
   type BeaconProofSource,
@@ -326,6 +328,62 @@ describe("describeRevert", () => {
     expect(describeRevert("text")).toBe("an error");
     expect(describeRevert(null)).toBe("an error");
     expect(describeRevert({ shortMessage: 7, data: "0x12", cause: { shortMessage: "inner", data: 5 } })).toBe("inner");
+  });
+});
+
+describe("ensureSendEvidence", () => {
+  const validUntil = BigInt(fixture.expected.validUntil);
+  const secondsBeforeEnd = (seconds: number) => () => (Number(validUntil) - seconds) * 1000;
+  const evidenceFor = (client: ReturnType<typeof clientOf>, now = secondsBeforeEnd(200), fetchImpl = recordedFetch()) =>
+    ensureSendEvidence({ client: asClient(client), gate: fixture.gate, beacon: beaconOf(fetchImpl), now });
+
+  it("returns the evidence to put in the send in an unconfirmed epoch, checked natively and not simulated", async () => {
+    const client = clientOf();
+    const result = await evidenceFor(client);
+    expect(result).toMatchObject({ kind: "evidence", gateEvidence: fixture.expected.encoded, epoch, forkVersion: "0x90000076", shape: 255, validUntil });
+    expect(client.estimateGas).not.toHaveBeenCalled();
+  });
+
+  it("sends empty evidence in a confirmed epoch and on a gate that does not enforce, and refuses a sealed gate, with no beacon request", async () => {
+    const fetchImpl = recordedFetch();
+    expect(await evidenceFor(clientOf({ confirmed: [epoch, true] }), secondsBeforeEnd(200), fetchImpl)).toEqual({ kind: "not-needed", reason: "confirmed", epoch });
+    expect(await evidenceFor(clientOf({ mode: 1, enforcing: false }), secondsBeforeEnd(5), fetchImpl)).toEqual({ kind: "not-needed", reason: "not-enforcing", epoch });
+    expect(await evidenceFor(clientOf({ sealed: true }), secondsBeforeEnd(200), fetchImpl)).toEqual({ kind: "sealed", epoch });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("waits for the next epoch in the last minute, confirmed or not: a late send may land in the next epoch", async () => {
+    const fetchImpl = recordedFetch();
+    const late = { kind: "late", epoch, secondsLeft: GATE_SAFETY_SECONDS - 1, waitSeconds: GATE_SAFETY_SECONDS - 1 + GATE_BLOCK_SECONDS };
+    expect(await evidenceFor(clientOf(), secondsBeforeEnd(GATE_SAFETY_SECONDS - 1), fetchImpl)).toEqual(late);
+    expect(await evidenceFor(clientOf({ confirmed: [epoch, true] }), secondsBeforeEnd(GATE_SAFETY_SECONDS - 1), fetchImpl)).toEqual(late);
+    expect(await evidenceFor(clientOf(), secondsBeforeEnd(GATE_SAFETY_SECONDS), fetchImpl)).toMatchObject({ kind: "evidence" });
+  });
+
+  it("waits when no header of the epoch is on chain yet", async () => {
+    const client = clientOf();
+    client.getBlock.mockResolvedValue({ number: blockNumber, timestamp: validUntil - 12n, parentBeaconBlockRoot: fixture.block.parentBeaconBlockRoot });
+    // The next block opens epoch + 1, so its whole length is left.
+    expect(await evidenceFor(client, () => Number(validUntil) * 1000)).toMatchObject({ kind: "wait", epoch: epoch + 1n, headerEpoch: epoch });
+  });
+
+  it("reads the clock with Date.now by default", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue((Number(validUntil) - 10) * 1000);
+    try {
+      expect(await ensureSendEvidence({ client: asClient(clientOf()), gate: fixture.gate, beacon: beaconOf() })).toMatchObject({ kind: "late", secondsLeft: 10 });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("decides from the status alone with sendEvidenceRule", async () => {
+    const status = await readGateStatus({ client: asClient(clientOf()), gate: fixture.gate });
+    const at = (seconds: number) => (Number(validUntil) - seconds) * 1000;
+    expect(sendEvidenceRule(status, at(200))).toEqual({ kind: "attach" });
+    expect(sendEvidenceRule({ ...status, needsConfirmation: false }, at(200))).toEqual({ kind: "empty", reason: "confirmed" });
+    expect(sendEvidenceRule({ ...status, enforcing: false }, at(1))).toEqual({ kind: "empty", reason: "not-enforcing" });
+    expect(sendEvidenceRule({ ...status, sealed: true }, at(200))).toEqual({ kind: "sealed" });
+    expect(sendEvidenceRule(status, at(30))).toEqual({ kind: "late", secondsLeft: 30, waitSeconds: 30 + GATE_BLOCK_SECONDS });
   });
 });
 

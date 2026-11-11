@@ -6,14 +6,17 @@
  * never holds a key. The wallet signs.
  *
  * The deposit gate: right before the estimate of a send on a chain with a gate, the sequence asks the gate check (no
- * cache: an epoch lasts 6.4 minutes on Ethereum and Sepolia, and someone else may confirm meanwhile). When the epoch needs
- * a confirmation, the sequence inserts the step `confirm(evidence)` before the send, with the gas of its simulation plus
- * the usual margin. When the beacon header of the epoch is not on chain yet, it waits and asks again. When the send's
- * estimate still reverts with `ForkNotConfirmed` (the epoch rolled over), it asks once more.
+ * cache: an epoch lasts 6.4 minutes on Ethereum and Sepolia, and someone else may confirm meanwhile). A send of the native
+ * coin goes through the delivery router and carries its own gate evidence: the sequence puts the evidence that the check
+ * returns (or none) into the send, so it stays one transaction. For a token relay straight to the mediator, when the epoch
+ * needs a confirmation, the sequence inserts the step `confirm(evidence)` before the send, with the gas of its simulation
+ * plus the usual margin. When the beacon header of the epoch is not on chain yet, or too little of the epoch is left, it
+ * waits and asks again. When the send's estimate still reverts with `ForkNotConfirmed` or `HeaderNotInCurrentEpoch` (the
+ * epoch rolled over), it asks once more.
  */
 import type { Address, Hash, Hex } from "viem";
-import { isForkNotConfirmed, revertText, type GateCheck, type GateCheckAnswer } from "@zk-bridge/shared";
-import { decideGateStep, gateErrorText, GATE_WAIT_LIMIT, passesGate, withKnownGas, type GateDecision, type GateWait } from "@terminal/tx/gate-step";
+import { isGateEpochPassed, revertText, type GateCheck, type GateCheckAnswer } from "@zk-bridge/shared";
+import { carriesGateEvidence, decideGateStep, gateErrorText, GATE_WAIT_LIMIT, passesGate, withGateEvidence, withKnownGas, type GateDecision, type GateWait } from "@terminal/tx/gate-step";
 import { prepareTransaction, type PrepareClient, type PreparedTransaction } from "@terminal/tx/prepare";
 import type { WebStep } from "./bridge-steps";
 
@@ -138,36 +141,44 @@ export const createTransactionSequence = (dependencies: SequenceDependencies): T
   };
 
   /**
-   * Asks the gate before a send. Returns true when the send may be prepared now; false when the sequence went on in
-   * another way (a confirmation step inserted and prepared, a wait, an error, or a stale answer).
+   * Asks the gate before a send. Returns the send decision when the send may be prepared now; null when the sequence went
+   * on in another way (a confirmation step inserted and prepared, a wait, an error, or a stale answer).
    */
-  const settleGate = async (step: WebStep, mine: number, attempt: Attempt, checkGate: GateCheck): Promise<boolean> => {
+  const settleGate = async (step: WebStep, mine: number, attempt: Attempt, checkGate: GateCheck): Promise<Extract<GateDecision, { kind: "send" }> | null> => {
     const chain = step.plan.chain;
     let answer: GateCheckAnswer;
     try {
-      answer = await checkGate({ chainId: chain.chainId, gate: chain.contracts.gate as Address, account: dependencies.account });
+      answer = await checkGate({ chainId: chain.chainId, gate: chain.contracts.gate as Address, account: dependencies.account, ...(carriesGateEvidence(step.plan) ? { carriesEvidence: true } : {}) });
     } catch (error) {
       if (mine === generation) publish({ phase: "error", error: gateErrorText(error, chain.name, BEACON_HINT) });
-      return false;
+      return null;
     }
-    if (mine !== generation) return false;
+    if (mine !== generation) return null;
     const decision = decideGateStep(answer, { chain, nowMilliseconds: now(), waits: attempt.waits });
     switch (decision.kind) {
       case "send":
-        return true;
+        return decision;
       case "refuse":
         publish({ phase: "error", error: decision.message });
-        return false;
+        return null;
       case "wait":
         publish({ phase: "waiting", gateWait: decision.wait });
         await sleep(decision.wait.seconds * 1000);
         if (mine === generation) await prepareCurrent({ ...attempt, waits: attempt.waits + 1 });
-        return false;
+        return null;
       case "confirm":
         publish({ steps: [...state.steps.slice(0, state.stepIndex), confirmStepOf(decision), ...state.steps.slice(state.stepIndex)] });
         await prepareCurrent(attempt);
-        return false;
+        return null;
     }
+  };
+
+  /** The step with the gate evidence of the decision, for a send that carries it; the step itself otherwise. */
+  const withEvidenceOf = (step: WebStep, decision: Extract<GateDecision, { kind: "send" }>): WebStep => {
+    if (!carriesGateEvidence(step.plan)) return step;
+    const carried: WebStep = { ...step, plan: withGateEvidence(step.plan, decision.gateEvidence) };
+    publish({ steps: state.steps.map((existing, index) => (index === state.stepIndex ? carried : existing)) });
+    return carried;
   };
 
   const prepareCurrent = async (attempt: Attempt = FIRST_ATTEMPT): Promise<void> => {
@@ -179,14 +190,19 @@ export const createTransactionSequence = (dependencies: SequenceDependencies): T
     const { checkGate } = dependencies;
     const gated = checkGate !== undefined && step.gateConfirm === undefined && passesGate(step.plan);
     try {
-      if (gated && !(await settleGate(step, mine, attempt, checkGate))) return;
-      const prepared = await prepareTransaction(step.gateConfirm === undefined ? client : withKnownGas(client, step.gateConfirm.gas), dependencies.account, step.plan);
+      let ready = step;
+      if (gated) {
+        const decision = await settleGate(step, mine, attempt, checkGate);
+        if (decision === null) return;
+        ready = withEvidenceOf(step, decision);
+      }
+      const prepared = await prepareTransaction(ready.gateConfirm === undefined ? client : withKnownGas(client, ready.gateConfirm.gas), dependencies.account, ready.plan);
       if (mine !== generation) return;
       publish({ phase: "review", prepared });
     } catch (error) {
       if (mine !== generation) return;
       // The epoch rolled over between the check and the estimate, or the node had not seen the confirmation: ask once more.
-      if (gated && !attempt.redone && isForkNotConfirmed(error)) return prepareCurrent({ redone: true, waits: 0 });
+      if (gated && !attempt.redone && isGateEpochPassed(error)) return prepareCurrent({ redone: true, waits: 0 });
       publish({ phase: "error", error: `Could not prepare the transaction: ${revertText(error, { chainName: step.plan.chain.name }) ?? messageOf(error)}` });
     }
   };

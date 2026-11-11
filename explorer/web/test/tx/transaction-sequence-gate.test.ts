@@ -369,3 +369,65 @@ describe("createTransactionSequence: the deposit gate", () => {
     expect(canRetry({ ...base, phase: "review", outcomes: [] })).toBe(false);
   });
 });
+
+describe("createTransactionSequence: a native send carries its own gate evidence", () => {
+  const nativeSend = async () => {
+    const { context, tokens } = await buildFixtureContext({ allowance: 0n });
+    const draft = computeBridgeDraft(
+      { token: "first:native", amount: "1", receiver: FIXTURE_ACCOUNT, mode: "plain", data: "", callGas: "", callbackGas: "" },
+      { ...DEFAULT_DELIVERY_OPTIONS, mode: "none" },
+      { pair: FIXTURE_PAIR, tokens, context, report: null, priorityFeeWei: null },
+    );
+    if (draft.status !== "ready") throw new Error(draft.reason ?? "not ready");
+    return draft.steps;
+  };
+  const evidenceAnswer = { kind: "evidence", gateEvidence: EVIDENCE, epoch: 360_335n, forkVersion: "0x90000075", shape: 6, validUntil: 4_102_444_800n, evidence: {} } as const;
+
+  it("puts the evidence into the one router send, with no confirmation step, and empties it once the epoch is confirmed", async () => {
+    const answers = [evidenceAnswer as never, NOT_NEEDED];
+    const calls: Parameters<GateCheck>[0][] = [];
+    const check: GateCheck = async (input) => {
+      calls.push(input);
+      return answers[Math.min(calls.length - 1, answers.length - 1)]!;
+    };
+    const sent: { to: Address; data: Hex }[] = [];
+    const sequence = createTransactionSequence({
+      account: FIXTURE_ACCOUNT,
+      clientFor: () => client(),
+      checkGate: check,
+      sendTransaction: async (transaction) => {
+        sent.push(transaction);
+        return hashOf(sent.length);
+      },
+    });
+    const steps = await nativeSend();
+    expect(steps).toHaveLength(1);
+    expect(steps[0]!.plan.functionSignature).toBe("wrapAndRelayTokens(address,bytes)");
+    sequence.start(steps);
+    await phase(sequence, "review");
+    expect(calls).toEqual([{ chainId: FIXTURE_PAIR.first.chainId, gate: GATE, account: FIXTURE_ACCOUNT, carriesEvidence: true }]);
+    const state = sequence.getState();
+    expect(state.steps).toHaveLength(1);
+    expect(state.prepared?.plan.data.includes(EVIDENCE.slice(2))).toBe(true);
+    expect(state.steps[0]!.plan.arguments.at(-1)?.value).toBe(EVIDENCE);
+    // A retry asks the gate again; the epoch is confirmed now, so the send goes with empty evidence.
+    sequence.cancel();
+    sequence.start(steps);
+    await phase(sequence, "review");
+    expect(sequence.getState().prepared?.plan.data).toBe(steps[0]!.plan.data);
+  });
+
+  it("puts the evidence into the router send that follows another step, and leaves that step as it was", async () => {
+    const check: GateCheck = async () => evidenceAnswer as never;
+    const sequence = createTransactionSequence({ account: FIXTURE_ACCOUNT, clientFor: () => client(), checkGate: check, sendTransaction: async () => hashOf(1) });
+    const [approval] = await stepsWithApproval();
+    const [native] = await nativeSend();
+    sequence.start([approval!, native!]);
+    await phase(sequence, "review");
+    sequence.confirm();
+    await until(sequence, (state) => state.phase === "review" && state.stepIndex === 1, "router send under review");
+    const state = sequence.getState();
+    expect(state.steps[0]).toBe(approval);
+    expect(state.steps[1]!.plan.arguments.at(-1)?.value).toBe(EVIDENCE);
+  });
+});

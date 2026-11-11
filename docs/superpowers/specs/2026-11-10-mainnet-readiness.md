@@ -109,6 +109,18 @@ router's source entry points). This reverses the user decision of 2026-10-24 ("A
   before it sends as today. Layers 1 and 2 do not change. Sends straight to the mediator keep confirm-then-send.
   The frontends attach evidence when the current epoch is unconfirmed or ends within 60 s, otherwise empty; a late empty
   send fails with `ForkNotConfirmed`, never passes unproven.
+- **Status 2026-11-10 (branch `feat/router-gate-evidence`, not merged, not deployed).** Built test-first. The router's
+  entries are `wrapAndRelayTokens()` (no evidence), `wrapAndRelayTokens(address,bytes)` and
+  `relayTokensAndCall(address,bytes,uint256,bytes)`; the old receiver forms are removed, so the dapp and the terminal
+  need the new router deployed (layer 3 alone) before their release. The router reaches the gate at call time through
+  `bridge.bridgeContract().depositGate()` and calls `admit(evidence)` rather than `confirm`: the same check-then-prove,
+  through the `IDepositGate` interface, and it returns instead of reverting on a detection-mode gate that has not
+  detected. Layers 1 and 2 unchanged (their ABIs regenerate byte for byte). One deviation from the text above: evidence
+  only proves the epoch it was read in, so "ends within 60 s" cannot be served by attaching evidence; the frontends wait
+  for the next epoch instead (`sendEvidenceRule` of `@zkb/data`), confirmed or not. Receipt gas: first send of an epoch
+  190,940 in one transaction against 221,825 for confirm plus send; a send in a confirmed epoch 151,264 against 150,673
+  (`docs/hardened-build-contract.md`, "Gate evidence in a router send"). The traffic bot relays ERC-20 test tokens
+  straight to the mediator, so it keeps confirm-then-send.
 - Size: M for the contracts and tests, M for `@zkb/data`, the dapp, the terminal and the traffic bot.
 
 **A3. Caps for a limited launch.** The contracts cannot be capped after deployment. Two on-chain options exist in the
