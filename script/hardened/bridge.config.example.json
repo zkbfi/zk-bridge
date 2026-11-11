@@ -30,7 +30,7 @@
       "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_AT_CHECKPOINT"
     },
     "gate": {
-      "mode": "REPLACE_WITH_Enforcing_FOR_ETHEREUM",
+      "mode": "REPLACE_WITH_SealOnly_FOR_ETHEREUM",
       "genesisTime": "REPLACE_WITH_GENESIS_TIME_OF_CHAIN_A_BEACON_CHAIN",
       "secondsPerSlot": "REPLACE_WITH_SECONDS_PER_SLOT_OF_CHAIN_A",
       "slotsPerEpoch": "REPLACE_WITH_SLOTS_PER_EPOCH_OF_CHAIN_A",
@@ -67,7 +67,7 @@
       "initialNextSyncCommitteeHash": "REPLACE_WITH_NEXT_COMMITTEE_HASH_AT_CHECKPOINT"
     },
     "gate": {
-      "mode": "REPLACE_WITH_DetectBeaconRootsAndRegistry_FOR_PULSECHAIN",
+      "mode": "REPLACE_WITH_SealOnlyWithRegistry_FOR_PULSECHAIN",
       "genesisTime": "REPLACE_WITH_GENESIS_TIME_OF_CHAIN_B_BEACON_CHAIN",
       "secondsPerSlot": "REPLACE_WITH_SECONDS_PER_SLOT_OF_CHAIN_B",
       "slotsPerEpoch": "REPLACE_WITH_SLOTS_PER_EPOCH_OF_CHAIN_B",

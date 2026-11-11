@@ -45,6 +45,14 @@ import {ForkShape} from "./ForkShape.sol";
 /// `seal()` with empty evidence closes the gate for good. The canaries and the EIP-4788 probe decide when the gate starts
 /// to enforce. They do not decide what it accepts.
 ///
+/// Two seal-only modes (decision of 2026-11-10, "no proof writing on the deposit"): `SealOnly` (Ethereum) and
+/// `SealOnlyWithRegistry` (PulseChain). `admit` reads the seal and nothing else: a send is admitted unless the gate is
+/// sealed. There is no epoch, no evidence, no probe and no canary on a send, and the gate applies this rule from the
+/// first call. `seal` is the same code as in the other modes: a proof of a shape outside the allowed set, by EIP-4788
+/// evidence, or (with a registry) empty evidence when the registry shows such a shape. `confirm` still runs its checks,
+/// and a confirmation only raises the floor of a seal proof (`SealEvidenceTooOld`); `admit` never reads it. The gap that
+/// remains: a send between the activation of an unsupported fork and the seal is admitted.
+///
 /// The runtime code of the gate avoids `MCOPY`, `TSTORE` and `TLOAD`, because PulseChain rejects them. The probe holds
 /// those opcodes on purpose, as a separate contract that the constructor deploys from raw bytes.
 contract BeaconForkGate is IDepositGate {
@@ -56,7 +64,12 @@ contract BeaconForkGate is IDepositGate {
         /// Execution canaries also switch it to enforcing.
         DetectBeaconRoots,
         /// @dev As `DetectBeaconRoots`, and the gate also refuses while the fork registry shows an unsupported version.
-        DetectBeaconRootsAndRegistry
+        DetectBeaconRootsAndRegistry,
+        /// @dev A send is admitted unless the gate is sealed. Seals by EIP-4788 evidence (Ethereum).
+        SealOnly,
+        /// @dev As `SealOnly`, and `seal("")` also seals when the fork registry shows a shape outside the allowed set
+        /// (PulseChain). A send does not read the registry.
+        SealOnlyWithRegistry
     }
 
     /// @notice The execution canaries, in the order the gate tries them.
@@ -193,7 +206,8 @@ contract BeaconForkGate is IDepositGate {
     address public immutable beaconRoots;
     /// @notice Whether the gate starts enforcing or starts in detection mode.
     GateMode public immutable mode;
-    /// @notice The fork observation registry. Zero except in `DetectBeaconRootsAndRegistry` mode.
+    /// @notice The fork observation registry. Zero except in `DetectBeaconRootsAndRegistry` and `SealOnlyWithRegistry`
+    /// mode.
     IForkRegistry public immutable forkRegistry;
     /// @notice The one probe contract for the four opcode canaries (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`). The
     /// first byte of the calldata picks the opcode.
@@ -213,14 +227,15 @@ contract BeaconForkGate is IDepositGate {
     GateState private _state;
 
     /// @param beaconRoots_ The EIP-4788 contract address.
-    /// @param mode_ `Enforcing`, `DetectBeaconRoots` or `DetectBeaconRootsAndRegistry`.
+    /// @param mode_ `Enforcing`, `DetectBeaconRoots`, `DetectBeaconRootsAndRegistry`, `SealOnly` or
+    /// `SealOnlyWithRegistry`.
     /// @param genesisTime_ Genesis time of the beacon chain.
     /// @param secondsPerSlot_ Seconds per slot.
     /// @param slotsPerEpoch_ Slots per epoch.
     /// @param genesisValidatorsRoot_ The `genesis_validators_root` of the beacon chain that the route follows. The
     /// deploy script checks it against the chain.
-    /// @param forkRegistry_ The fork observation registry. It must hold code in `DetectBeaconRootsAndRegistry` mode
-    /// and must be zero in every other mode.
+    /// @param forkRegistry_ The fork observation registry. It must hold code in `DetectBeaconRootsAndRegistry` and
+    /// `SealOnlyWithRegistry` mode and must be zero in every other mode.
     constructor(
         address beaconRoots_,
         GateMode mode_,
@@ -235,7 +250,8 @@ contract BeaconForkGate is IDepositGate {
         if (secondsPerSlot_ == 0) revert ZeroValue("secondsPerSlot");
         if (slotsPerEpoch_ == 0) revert ZeroValue("slotsPerEpoch");
         if (genesisValidatorsRoot_ == bytes32(0)) revert ZeroValue("genesisValidatorsRoot");
-        if ((mode_ == GateMode.DetectBeaconRootsAndRegistry) != (forkRegistry_ != address(0))) {
+        bool needsRegistry = mode_ == GateMode.DetectBeaconRootsAndRegistry || mode_ == GateMode.SealOnlyWithRegistry;
+        if (needsRegistry != (forkRegistry_ != address(0))) {
             revert ForkRegistryMismatch(mode_, forkRegistry_);
         }
         if (forkRegistry_ != address(0) && forkRegistry_.code.length == 0) revert ForkRegistryHasNoCode(forkRegistry_);
@@ -250,16 +266,23 @@ contract BeaconForkGate is IDepositGate {
         forkRegistry = IForkRegistry(forkRegistry_);
         opcodeProbe = _deployProbe(PROBE_RUNTIME);
 
-        if (mode_ == GateMode.Enforcing) _state.enforcing = true;
+        if (mode_ == GateMode.Enforcing || mode_ == GateMode.SealOnly || mode_ == GateMode.SealOnlyWithRegistry) {
+            _state.enforcing = true;
+        }
     }
 
     // ------------------------------------------------------------------ entry points
 
     /// @inheritdoc IDepositGate
-    /// @dev Step 0 refuses a sealed gate. Step 1 asks the registry (registry mode only). Step 2 detects in detection
-    /// mode: the beacon roots probe, then the execution canaries. Step 3 returns when the epoch is confirmed.
-    /// Step 4 decodes the evidence and confirms. Empty evidence in an unconfirmed epoch reverts.
+    /// @dev The seal-only modes read the seal and return. In the other modes: step 0 refuses a sealed gate. Step 1 asks
+    /// the registry (registry mode only). Step 2 detects in detection mode: the beacon roots probe, then the execution
+    /// canaries. Step 3 returns when the epoch is confirmed. Step 4 decodes the evidence and confirms. Empty evidence
+    /// in an unconfirmed epoch reverts.
     function admit(bytes calldata evidence) external override {
+        if (mode >= GateMode.SealOnly) {
+            if (_state.isSealed) revert GateSealed();
+            return;
+        }
         GateState memory state = _state;
         if (state.isSealed) revert GateSealed();
         _requireObservedShapeAllowed();
@@ -316,7 +339,8 @@ contract BeaconForkGate is IDepositGate {
 
     // ------------------------------------------------------------------ views
 
-    /// @notice Whether the gate applies its rules. True from deployment in `Enforcing` mode, and after detection.
+    /// @notice Whether the gate applies its rules. True from deployment in `Enforcing` and the seal-only modes, and
+    /// after detection.
     function enforcing() external view returns (bool) {
         return _state.enforcing;
     }
