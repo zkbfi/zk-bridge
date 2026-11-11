@@ -345,6 +345,15 @@ export const buildBackendSpec = (): OpenApiDocument => {
         get: get("Fork proof", "The fork proof record of one source block (`<stateRoot>.json`), exactly as captured.", [path("chainId", "Source chain id.", { type: "integer" }), path("file", "`<stateRoot>.json`.", { type: "string", pattern: "^0x[0-9a-fA-F]{64}\\.json$" })], json(open("The record."), "The record."), { "400": errorResponse("Not a chain id or a state root file."), "404": errorResponse("No record for this state.") }),
       },
       "/evidence/{messageId}": { get: get("Delivery evidence", "The archived evidence of a delivery, as JSON.", [messageId], json(open("The evidence."), "The evidence."), { "400": errorResponse("Not a message identifier."), "404": errorResponse("No evidence for this message.") }) },
+      "/fork-observations/{chainId}/latest": {
+        get: get(
+          "Latest fork observation proof of a chain",
+          "The newest proof of the fork observation program for the chain's ForkRegistry (seal module). Anyone may post it with `observe(proof, publicValues)`; the registry refuses it once its light client's head is no longer `startHeadSlot`.",
+          [path("chainId", "The chain of the registry.", { type: "integer" })],
+          json(ref("LatestForkObservation"), "The observation proof."),
+          { "404": errorResponse("Not a chain id, or no observation proof for this chain.") },
+        ),
+      },
       "/proofs/latest/{direction}": {
         get: get(
           "Latest valid proof of a direction",
@@ -370,6 +379,27 @@ export const buildBackendSpec = (): OpenApiDocument => {
             lastJobs: { type: "object", additionalProperties: true },
           },
           additionalProperties: true,
+        },
+        LatestForkObservation: {
+          type: "object",
+          required: ["chainId", "registry", "lightClient", "programKey", "startHeadSlot", "observedVersion", "shape", "shapeAllowed", "observedAttestedSlot", "foldSteps", "publicValues", "proof", "provedAt", "postedTransaction"],
+          properties: {
+            chainId: { type: "integer" },
+            registry: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+            lightClient: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+            programKey: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" },
+            startHeadSlot: { type: "integer" },
+            observedVersion: { type: "string", pattern: "^0x[0-9a-fA-F]{8}$" },
+            shape: { type: "integer", description: "5, 6, 7, 255 (progressive), or a plain depth from 8 to 31." },
+            shapeAllowed: { type: "boolean" },
+            observedAttestedSlot: { type: "integer" },
+            foldSteps: { type: "integer" },
+            publicValues: { type: "string", description: "256 bytes, 0x hex." },
+            proof: { type: "string" },
+            provedAt: { type: "integer", description: "Milliseconds since 1970." },
+            postedTransaction: { type: ["string", "null"], description: "The backend's own observe transaction, or null." },
+          },
+          additionalProperties: false,
         },
         LatestProof: {
           type: "object",

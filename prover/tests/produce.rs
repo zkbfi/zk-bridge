@@ -791,3 +791,65 @@ fn a_run_ends_with_one_timing_summary() {
         Production::Proof(_)
     ));
 }
+
+/// Claim: a fork observation from the stored head of a lagging light client folds to the newest final header and observes
+/// the newest signed update: the package names the chain's fork version, a shape the gate allows, an attested slot past the
+/// newest final header, the stored head as its start, and carries the `observe` calldata of the oracle's proof. A head
+/// that the beacon chain does not hold stops the run before any proof.
+/// Why it matters: this is the whole path the backend runs for a PulseChain registry, without a GPU and without a chain.
+#[test]
+fn a_fork_observation_folds_from_the_stored_head_and_observes_the_newest_update() {
+    use zk_bridge_prover::contracts::ForkRegistryContract;
+    use zk_bridge_prover::fork_observation::{produce_observation, ObservationRequest};
+    use zk_bridge_prover::light_client::decode_fork_observation;
+    use zk_bridge_prover::stored::StoredState;
+    let (chain, checkpoint) = lagging_chain();
+    let source = chain.source();
+    let prover = OracleProver::new(oracle_signer());
+    let stored = StoredState {
+        head: head_at(&checkpoint),
+        genesis_validators_root: checkpoint.genesis_validators_root,
+        head_committee_hash: checkpoint.committee_hash,
+        program_key: B256::repeat_byte(0x11),
+    };
+    let request = ObservationRequest {
+        route: "pulsechain_to_ethereum".into(),
+        backend: ProverBackend::Oracle,
+        program_key: PROGRAM_KEY,
+        chain_id: 369,
+        registry: alloy_primitives::Address::repeat_byte(0x44),
+        light_client: alloy_primitives::Address::repeat_byte(0x55),
+        stored,
+        now_unix_seconds: 1_800_000_000,
+    };
+    let (logger, _) = Logger::in_memory();
+    let package = produce_observation(&source, &prover, &request, &logger).expect("an observation");
+    assert_eq!(package.start_head_slot, checkpoint.slot);
+    assert!(
+        package.fold_steps >= 1,
+        "the head lags, so the fold carries steps"
+    );
+    assert!(
+        [5u8, 6, 7].contains(&package.shape),
+        "shape {}",
+        package.shape
+    );
+    assert!(package.observed_attested_slot > checkpoint.slot);
+    let values = hex::decode(&package.public_values).unwrap();
+    let output = decode_fork_observation(&values).unwrap();
+    assert_eq!(output.previousHeaderRoot, checkpoint.header_root);
+    assert_eq!(
+        format!("{:#x}", output.observedVersion),
+        package.observed_version
+    );
+    let call = ForkRegistryContract::observeCall::abi_decode(
+        &hex::decode(&package.observe_calldata).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(call.publicValues.as_ref(), values.as_slice());
+
+    let mut elsewhere = request.clone();
+    elsewhere.stored.head.root = B256::repeat_byte(0x77);
+    let error = produce_observation(&source, &prover, &elsewhere, &logger).unwrap_err();
+    assert!(matches!(error, Error::Beacon(_)), "{error}");
+}

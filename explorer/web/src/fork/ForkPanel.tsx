@@ -2,13 +2,13 @@
  * The Forks section of Explore: per route, the next fork of the source chain with its countdown, when sends pause and
  * resume, and the head of the light client that has to follow it; per chain, the state of the deposit gate
  * (`BeaconForkGate`: mode, sealed) and what the `ForkRegistry` last observed (version, shape, slot). Anyone may press
- * "Seal the gate" when the call would succeed (it is simulated first, every five minutes). Posting a fork observation needs a proof
- * of the observation program from the prover service, which offers none yet: the last observation is shown read-only.
+ * "Seal the gate" when the call would succeed, and "Post the fork observation" when the backend's newest observation proof
+ * would add a newer slot to the registry (each simulated first, every five minutes).
  */
 import { useState } from "react";
 import { getAddress } from "viem";
-import type { SealOffer } from "@zk-bridge/shared";
-import { planGateSeal } from "@terminal/tx/gate-step";
+import type { ObservationOffer, SealOffer } from "@zk-bridge/shared";
+import { planForkObservation, planGateSeal } from "@terminal/tx/gate-step";
 import type { ChainConfig, PairConfig } from "@terminal/model/types";
 import { TransactionDialog } from "../actions/TransactionDialog";
 import { useServices } from "../app/services";
@@ -16,8 +16,8 @@ import type { WebStep } from "../tx/bridge-steps";
 import { CopyValue } from "../ui/CopyValue";
 import { useWallet } from "../wallet/wallet-port";
 import { RouteIcons, XGroup, KV } from "../explore/parts";
-import { gateLine, nextForkLine, observationLine, pauseLine, routeStatusOf, scheduleLine } from "./fork-model";
-import { useForkChainState, useForkCutover, useSealOffer } from "./use-fork";
+import { gateLine, nextForkLine, observationLine, observeLine, pauseLine, routeStatusOf, scheduleLine } from "./fork-model";
+import { useForkChainState, useForkCutover, useObservationOffer, useSealOffer } from "./use-fork";
 
 /** One route: its status word, the next fork of the source chain, the pause, and the light client head. */
 const RouteBlock = ({ source, destination, names }: { readonly source: ChainConfig; readonly destination: ChainConfig; readonly names: (chainId: number) => string }) => {
@@ -58,11 +58,13 @@ const ChainBlock = ({ chain }: { readonly chain: ChainConfig }) => {
   const [steps, setSteps] = useState<readonly WebStep[] | null>(null);
   const gate = state?.gate ?? null;
   const offer = useSealOffer(chain.chainId, wallet.account, gate !== null && !gate.sealed);
+  const registry = state?.observation?.registry ?? null;
+  const observeOffer = useObservationOffer(chain.chainId, gate !== null && gate.sealed ? null : registry, wallet.account);
   if (state === undefined || (gate === null && state.observation === null)) return null;
   const observation = state.observation;
-  const sealStep = (ready: Extract<SealOffer, { readonly kind: "ready" }>): readonly WebStep[] => [
-    { plan: planGateSeal(chain, ready), disclosure: { feesApplyTo: "this-transaction", deliveryCall: null, destinationNativeSymbol: null, destinationChainId: null, amountToken: null, delivery: null } },
-  ];
+  const disclosure = { feesApplyTo: "this-transaction", deliveryCall: null, destinationNativeSymbol: null, destinationChainId: null, amountToken: null, delivery: null } as const;
+  const sealStep = (ready: Extract<SealOffer, { readonly kind: "ready" }>): readonly WebStep[] => [{ plan: planGateSeal(chain, ready), disclosure }];
+  const observeStep = (ready: Extract<ObservationOffer, { readonly kind: "ready" }>): readonly WebStep[] => [{ plan: planForkObservation(chain, ready), disclosure }];
   return (
     <section className="zb-xfork" data-testid={`fork-chain-${chain.chainId}`}>
       <h4 className="zb-xfork-h">{chain.name}</h4>
@@ -93,7 +95,19 @@ const ChainBlock = ({ chain }: { readonly chain: ChainConfig }) => {
           <p className="zb-small">The call simulated without a revert ({offer.via === "registry" ? "the registry shows a shape the gate does not allow" : "the beacon state has a shape the gate does not allow"}). Sealing closes the gate for good.</p>
         </div>
       ) : null}
-      {observation !== null ? <p className="zb-small" data-testid="fork-observe-note">Posting an observation needs a proof of the observation program. The prover service offers none yet, so this page shows the last one and cannot post a new one.</p> : null}
+      {observeOffer !== undefined && observeOffer.kind === "ready" ? (
+        <div className="zb-xactions">
+          <button type="button" className="zb-pill" data-testid="fork-observe" onClick={() => setSteps(observeStep(observeOffer))}>
+            Post the fork observation
+          </button>
+          <p className="zb-small">{observeLine(observeOffer.observation)}</p>
+        </div>
+      ) : null}
+      {observeOffer !== undefined && observeOffer.kind === "unavailable" ? (
+        <p className="zb-small" data-testid="fork-observe-note">
+          No fork observation to post: {observeOffer.reason}.
+        </p>
+      ) : null}
       {steps === null ? null : <TransactionDialog steps={steps} onClose={() => setSteps(null)} />}
     </section>
   );

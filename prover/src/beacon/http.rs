@@ -69,7 +69,10 @@ use super::branch_store::{
 };
 use super::handoff_archive::{ask_archive, is_handoff_of, ArchiveAnswer, ArchiveClient};
 use super::state_store::{StateStore, StoredState};
-use super::{HashEvidence, HistoricalEvidence, RootsEvidence, SourceBlock, StoredHead, UpdatePlan};
+use super::{
+    HashEvidence, HistoricalEvidence, ObservationPlan, RootsEvidence, SourceBlock, StoredHead,
+    UpdatePlan,
+};
 use crate::chain::checked_raw_header;
 use crate::error::{Error, Result};
 use crate::fork_schedule::{ForkSchedule, CHAIN_SPEC_PATH, FORK_SCHEDULE_PATH};
@@ -1805,6 +1808,48 @@ impl HttpBeaconSource {
             input,
             latest_finalized_slot,
         }))
+    }
+
+    /// What a fork observation from `head` is built from (see [`ObservationPlan`]).
+    ///
+    /// The fold is the one [`Self::plan_update`] builds. When it cannot be built (a node lacks a period, or the newest
+    /// update is of a state that the light-client program refuses), the plan carries no steps and says why: an observation
+    /// signed in the head's own period still works then.
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the head is not on this beacon chain, or when the node gives no newest update, no fork
+    /// schedule or no store at the head.
+    pub fn plan_observation(&self, head: &StoredHead) -> Result<ObservationPlan> {
+        let header = self.head_header(head)?;
+        let latest = self.latest_update()?;
+        let schedule = self.fork_schedule()?;
+        let latest_step = FoldStep {
+            fork_version: schedule.signing_version(latest.signature_slot),
+            update: latest.clone(),
+        };
+        let mut fold_error = None;
+        if latest.finalized_header.beacon.slot > header.slot {
+            match self.catch_up(&header, head.next_committee_hash, latest) {
+                Ok(input) => {
+                    return Ok(ObservationPlan {
+                        chain: self.chain,
+                        store: input.store,
+                        steps: input.steps,
+                        latest: latest_step,
+                        fold_error: None,
+                    })
+                }
+                Err(error) => fold_error = Some(error.to_string()),
+            }
+        }
+        let store = self.store_at_head(&header, head.next_committee_hash)?;
+        Ok(ObservationPlan {
+            chain: self.chain,
+            store,
+            steps: Vec::new(),
+            latest: latest_step,
+            fold_error,
+        })
     }
 
     /// The beacon part of the message proof for a source block, anchored at a header that the light client stores.

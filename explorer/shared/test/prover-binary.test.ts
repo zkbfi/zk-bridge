@@ -285,6 +285,50 @@ describe("fork-proof", () => {
   });
 });
 
+describe("fork-observation", () => {
+  const registry = "0x4444444444444444444444444444444444444444" as const;
+  const observation = {
+    schemaVersion: 1,
+    route: "pulsechain_to_ethereum",
+    chainId: 369,
+    registry,
+    lightClient: "0x5555555555555555555555555555555555555555",
+    programKey: word(0x66),
+    startHeadSlot: 100,
+    observedVersion: "0x0000036a",
+    shape: 5,
+    observedAttestedSlot: 900,
+    foldSteps: 3,
+    publicValues: `0x${"00".repeat(256)}`,
+    proof: "0x1234",
+    observeCalldata: "0xabcd",
+    backend: "remote",
+    createdAt: "2026-11-11T00:00:00Z",
+  };
+  const timingLine = "ts=1 level=info event=prove_timing total_ms=1000 worker_total_ms=900";
+
+  it("runs fork-observation on the route with the registry and the proving backend, and gives the package and the timing", async () => {
+    const { binary, seen } = await setup({ code: 0, stdout: `${JSON.stringify(observation)}\n`, stderr: timingLine }, { secret: true });
+    const answer = await binary.forkObservation({ direction: "second-to-first", registry });
+    expect(answer.observation).toEqual(observation);
+    expect(answer.timing).toMatchObject({ total_ms: 1000, worker_total_ms: 900 });
+    expect(seen[0]!.spec.args.slice(2)).toEqual(["fork-observation", "--route", "pulsechain_to_ethereum", "--registry", registry]);
+    expect(seen[0]!.configText).toContain('backend = "remote"');
+    expect(seen[0]!.configText).not.toContain("webhook_url");
+  });
+
+  it("needs a proving backend, throws the command error, and refuses another output", async () => {
+    const none = await setup({ code: 0 }, { backend: null });
+    await expect(none.binary.forkObservation({ direction: "second-to-first", registry })).rejects.toThrow(/no proving backend/);
+    const failed = await setup({ code: 1, stderr: "the observation program refuses every fold" });
+    await expect(failed.binary.forkObservation({ direction: "second-to-first", registry })).rejects.toThrow(/refuses every fold/);
+    const other = await setup({ code: 0, stdout: JSON.stringify({ ...observation, shape: "five" }) });
+    await expect(other.binary.forkObservation({ direction: "second-to-first", registry })).rejects.toThrow(/unexpected package/);
+    const quiet = await setup({ code: 0, stdout: JSON.stringify(observation) });
+    expect((await quiet.binary.forkObservation({ direction: "second-to-first", registry })).timing).toBeNull();
+  });
+});
+
 describe("evidence", () => {
   const evidence = evidenceFor();
 

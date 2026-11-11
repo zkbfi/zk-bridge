@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import type { Pair } from "@zk-bridge/shared";
-import { createProverBinary, type BackendSection, type CommandExecutor, type ForkProofProver, type HandoffProver, type ProverBinary } from "@zk-bridge/shared/prover";
+import { createProverBinary, type BackendSection, type CommandExecutor, type ForkObservationProver, type ForkProofProver, type HandoffProver, type ProverBinary } from "@zk-bridge/shared/prover";
 import { forkProofArchiveBases, handoffArchiveBases, type BackendConfig, type BackendSecrets } from "../config.ts";
 import type { Logger } from "../logger.ts";
 
@@ -26,6 +26,11 @@ export interface ProverFactories {
   readonly proverForJob: (jobId: string) => ProverBinary;
   /** A wrapper without a proving backend, for `verify`, `evidence`, `handoff-update` and `fork-proof`. */
   readonly utilityProver: ProverBinary & HandoffProver & ForkProofProver;
+  /**
+   * The wrapper for `fork-observation`: the same remote endpoints and keys as a proving job, and no webhook (the package
+   * comes back on standard output).
+   */
+  readonly observationProver: ForkObservationProver;
 }
 
 /** Builds the prover wrappers from the configuration. */
@@ -59,5 +64,6 @@ export function createProverFactories(input: ProverFactoryInput): ProverFactorie
         baseEnvironment: { PATH: input.path, [config.webhookBearerVariable]: input.secrets.webhookBearer },
       }),
     utilityProver: createProverBinary({ ...common, backend: null, proverSecret: null, baseEnvironment: { PATH: input.path } }),
+    observationProver: createProverBinary({ ...common, backend, proverSecret: input.secrets.proverKeys, baseEnvironment: { PATH: input.path } }),
   };
 }

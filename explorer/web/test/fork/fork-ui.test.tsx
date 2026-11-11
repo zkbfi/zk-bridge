@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CutoverFacts, SealOffer } from "@zk-bridge/shared";
+import type { CutoverFacts, LatestForkObservation, ObservationOffer, SealOffer } from "@zk-bridge/shared";
 import { FIXTURE_NOW, FIXTURE_PAIR } from "@terminal/data/fixtures";
 import { Shell } from "../../src/app/Shell";
 import type { Services } from "../../src/app/services";
@@ -41,6 +41,7 @@ const portOf = (over: Partial<ForkPort> = {}): ForkPort => ({
   facts: async () => null,
   chainState: async () => ({ gate: null, observation: null }),
   sealOffer: async () => ({ kind: "unavailable", reason: "none" }),
+  observeOffer: async () => ({ kind: "unavailable", reason: "the backend holds no observation proof for this chain" }),
   ...over,
 });
 
@@ -179,7 +180,7 @@ describe("the Forks section of Explore", () => {
     expect(within(chain).getByTestId("fork-observation")).toHaveTextContent("version 0x90000075, shape 6 (allowed), slot 77");
     expect(within(chain).getByRole("button", { name: `Copy the ${SOURCE.name} gate address` })).toHaveTextContent(GATE);
     expect(within(chain).getByRole("button", { name: `Copy the ${SOURCE.name} fork registry address` })).toHaveTextContent(REGISTRY);
-    expect(within(chain).getByTestId("fork-observe-note")).toHaveTextContent("The prover service offers none yet");
+    expect(await within(chain).findByTestId("fork-observe-note")).toHaveTextContent("No fork observation to post: the backend holds no observation proof for this chain.");
   });
 
   it("shows a paused route with the head of the light client", async () => {
@@ -244,5 +245,55 @@ describe("the Forks section of Explore", () => {
     const chain = await screen.findByTestId(`fork-chain-${SOURCE.chainId}`);
     expect(within(chain).queryByTestId("fork-observation")).toBeNull();
     expect(within(chain).queryByTestId("fork-observe-note")).toBeNull();
+  });
+});
+
+const proven: LatestForkObservation = {
+  chainId: SOURCE.chainId,
+  registry: REGISTRY,
+  lightClient: GATE,
+  programKey: `0x${"66".repeat(32)}`,
+  startHeadSlot: 100,
+  observedVersion: "0x90000076",
+  shape: 8,
+  shapeAllowed: false,
+  observedAttestedSlot: 900,
+  foldSteps: 3,
+  publicValues: `0x${"00".repeat(256)}`,
+  proof: "0x1234",
+  provedAt: 1,
+  postedTransaction: null,
+};
+const observeReady: ObservationOffer = { kind: "ready", call: { to: REGISTRY, data: "0xabcd" }, gas: 280_000n, observation: proven };
+
+describe("Post the fork observation", () => {
+  it("is offered when the backend's proof simulated and adds a newer slot, says what it does with the numbers, and opens the review", async () => {
+    const observeOffer = vi.fn(async () => observeReady);
+    renderPanel(portOf({ chainState: async () => state(), observeOffer }));
+    const button = await screen.findByTestId("fork-observe", {}, { timeout: 5000 });
+    expect(observeOffer).toHaveBeenCalledWith(SOURCE.chainId, REGISTRY, expect.any(String));
+    expect(button).toHaveTextContent("Post the fork observation");
+    const chain = screen.getByTestId(`fork-chain-${SOURCE.chainId}`);
+    expect(chain).toHaveTextContent("The backend proved fork version 0x90000076 at slot 900, state shape 8 (not allowed by the gate). Posting it records that in the registry, and then anyone can seal the gate. The call simulated without a revert.");
+    await userEvent.click(button);
+    expect(await screen.findByText(`Post the ${SOURCE.name} fork observation`)).toBeInTheDocument();
+  });
+
+  it("says an allowed shape changes only the registry", async () => {
+    renderPanel(portOf({ chainState: async () => state(), observeOffer: async () => ({ ...observeReady, observation: { ...proven, shape: 6, shapeAllowed: true } }) }));
+    const chain = await screen.findByTestId(`fork-chain-${SOURCE.chainId}`);
+    await within(chain).findByTestId("fork-observe");
+    expect(chain).toHaveTextContent("state shape 6 (allowed by the gate). Posting it records that in the registry. The call");
+  });
+
+  it("is not asked without a wallet account, or once the gate is sealed", async () => {
+    const observeOffer = vi.fn(async () => observeReady);
+    const first = renderPanel(portOf({ chainState: async () => state(), observeOffer }), disconnectedWallet());
+    await screen.findByTestId(`fork-chain-${SOURCE.chainId}`);
+    first.unmount();
+    renderPanel(portOf({ chainState: async () => state({ sealed: true }), observeOffer }));
+    await waitFor(() => expect(screen.getAllByTestId("fork-sealed")).toHaveLength(2));
+    expect(observeOffer).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("fork-observe")).toBeNull();
   });
 });

@@ -74,8 +74,42 @@ and the logger removes every value read this way from each line. The account pay
 100,000 gas, once per route); keep a little native coin on it on both chains. Run it with `--modules requests,seal` or
 add `"seal"` to `modules`.
 
-On PulseChain a seal needs an observation in the fork registry first (a proof of the observation program), and nothing
-posts observations yet (`docs/audit/known-issues.md` 1.5, "Not built"; 1.23).
+### Fork observations (PulseChain)
+
+PulseChain has no beacon roots, so its gate (`SealOnlyWithRegistry`) can only seal from its `ForkRegistry`, and the
+registry only learns of a fork from a proof of the fork observation program. On a chain whose pair side names a
+`fork_registry` (and has a beacon endpoint), the module proves and posts those observations itself (`src/seal/observe-watch.ts`):
+
+- **When.** Once per epoch it reads the beacon node's fork schedule (`/eth/v1/config/fork_schedule`, genesis, spec) and
+  the registry's `latestObserved()`. A proof is asked for only when the version the chain runs now is not the version of
+  the registry's newest observation: once to seed an empty registry, then once per fork. The shape comes with the
+  version, so an unchanged version never asks for a proof (`observationNeed` of `@zkb/data`).
+- **How.** `zk-bridge-prover fork-observation --route <the chain's outgoing route> --registry <address>` with the same
+  remote endpoints and keys as a proving job (`remote.endpoint` or `remote.endpoints`), and no webhook: the package comes
+  back on standard output. The prover reads the registry's light client (a light client of PulseChain on PulseChain),
+  folds from its head to the newest final header, and observes the newest signed update (its fork version and the shape
+  of its attested state). The GPU time is written to `job_timings` under the direction whose source is the chain
+  (`observation-<id>`), so it counts toward that direction's `limits.gpuBudgetUsdPerDirectionPerDay`, the
+  `/billing` breakdown and `/benchmarks`.
+- **Bounds.** At most `seal.observation.maxProofsPerVersionPerDay` (default 4) tries for one version in 24 hours,
+  `seal.observation.retryMinutes` (default 60) apart. A seed waits while the direction's GPU budget is spent; a new fork
+  version goes past it (`gpu_budget_bypassed`), because that proof is what lets the gate seal.
+- **Posting.** `observe(proof, publicValues)` is simulated from the seal signer and sent through the same port as a seal.
+  A proof the registry refuses (its light client moved) is kept and tried again at the next epoch before any new proof.
+  A recorded shape the gate does not allow wakes the seal check of that chain at once, which then seals from the registry.
+- **Logs and alerts.** `observation_not_needed` (when the reason changes), `observation_check_failed`,
+  `observation_proving`, `observation_proved`, `observation_prove_failed`, `observation_refused`, `observation_posted`,
+  `observation_reverted`, `observation_send_failed`. A new fork version, its outcome, and a refused or failed post also
+  write an `alert` line. A seed is logged only.
+- **Public route.** `GET /fork-observations/:chainId/latest` serves the newest proof of a chain: `chainId`, `registry`,
+  `lightClient`, `programKey`, `startHeadSlot`, `observedVersion`, `shape`, `shapeAllowed`, `observedAttestedSlot`,
+  `foldSteps`, `publicValues`, `proof`, `provedAt` and `postedTransaction` (null until the backend's own `observe`
+  succeeded); 404 when there is none. The dapp's Explore page uses it for "Post the fork observation".
+- **Switch.** `"seal": { ..., "observation": { "enabled": false } }` turns it off.
+
+Cost: one observation proves a fold of one update per sync committee period since the registry's light client head
+(about 22.75 hours each on PulseChain), plus the observation. Nothing updates that light client today, so the fold grows by
+one update a day; a fold has at most 64 updates (`docs/audit/known-issues.md` 1.23).
 
 ## Secrets
 

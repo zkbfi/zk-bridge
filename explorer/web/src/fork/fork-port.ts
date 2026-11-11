@@ -1,11 +1,16 @@
 /**
- * What the fork surfaces read: the cutover facts of a route, the gate and registry state of a chain, and the offer of the
- * seal call. A live page reads the chains and the beacon nodes of Settings; the sample page reads nothing. Every function
- * is the shared implementation of `@zk-bridge/shared` (`readCutoverFacts`, `readForkGateState`, `offerSeal`).
+ * What the fork surfaces read: the cutover facts of a route, the gate and registry state of a chain, the offer of the
+ * seal call, and the offer of the backend's newest fork observation proof. A live page reads the chains, the beacon nodes
+ * and the backend of Settings; the sample page reads nothing. Every function is the shared implementation of
+ * `@zk-bridge/shared` (`readCutoverFacts`, `readForkGateState`, `offerSeal`, `offerObservation`).
  */
 import type { Address } from "viem";
+import { createBackendClient } from "@zk-bridge/shared/backend-client";
+import { postJsonResponse } from "@zk-bridge/shared/msgboard-http";
 import {
   createBeaconProofSource,
+  fetchJsonResponse,
+  offerObservation,
   fallbackBeaconSource,
   NO_BEACON_ENDPOINT_TEXT,
   offerSeal,
@@ -17,6 +22,8 @@ import {
   type ForkObservation,
   type ForkScheduleStore,
   type GateChainClient,
+  type JsonFetcher,
+  type ObservationOffer,
   type SealOffer,
 } from "@zk-bridge/shared";
 import { cutoverRouteOf } from "@terminal/app/fork-cutover";
@@ -35,6 +42,11 @@ export type ForkPort = {
   chainState(chainId: number): Promise<ForkChainState>;
   /** Whether `seal(evidence)` would succeed now on the gate of a chain, from this account. */
   sealOffer(chainId: number, account: Address): Promise<SealOffer>;
+  /**
+   * Whether `observe(proof, publicValues)` of the backend's newest observation proof of a chain would succeed now on its
+   * registry and add a newer slot, from this account.
+   */
+  observeOffer(chainId: number, registry: Address, account: Address): Promise<ObservationOffer>;
 };
 
 /** The sample page: it reads no chain. */
@@ -42,6 +54,7 @@ export const fixtureForkPort: ForkPort = {
   facts: async () => null,
   chainState: async () => ({ gate: null, observation: null }),
   sealOffer: async () => ({ kind: "unavailable", reason: "the sample page reads no chain" }),
+  observeOffer: async () => ({ kind: "unavailable", reason: "the sample page reads no chain" }),
 };
 
 const attempt = async <T>(read: () => Promise<T>): Promise<T | null> => {
@@ -63,6 +76,8 @@ export const createForkPort = (input: {
   readonly connection: Pick<ConnectionRuntime, "resolved" | "chainAccess">;
   /** Where the last fork schedule of each chain is kept, for when the beacon node does not answer. Absent: only the bundled copy. */
   readonly scheduleStore?: ForkScheduleStore | undefined;
+  /** How the backend is read. Default: the page's JSON fetch. */
+  readonly fetchJson?: JsonFetcher;
 }): ForkPort => {
   const { pair, connection } = input;
   // The flow client of a live page is a viem public client; its type names only what the flow needs.
@@ -90,6 +105,18 @@ export const createForkPort = (input: {
       const sources = beaconUrlsFor(connection.resolved(), chainId).map((url) => createBeaconProofSource({ url }));
       const beacon = fallbackBeaconSource(sources, { noneText: `${NO_BEACON_ENDPOINT_TEXT} (Settings, Beacon endpoints)` });
       return offerSeal({ client: clientFor(chainId), gate: chain.contracts.gate, account, beacon });
+    },
+    observeOffer: async (chainId, registry, account) => {
+      const backend = connection.resolved().backendUrl;
+      if (backend === null) return { kind: "unavailable", reason: "no backend is set (Settings, Backend), so no observation proof can be read" };
+      const client = createBackendClient({ baseUrl: backend.value, fetchJson: input.fetchJson ?? fetchJsonResponse, postJson: postJsonResponse });
+      let observation;
+      try {
+        observation = await client.latestForkObservation(chainId);
+      } catch (error) {
+        return { kind: "unavailable", reason: `the backend did not give an observation proof (${(error as Error).message})` };
+      }
+      return offerObservation({ client: clientFor(chainId), registry, observation, account });
     },
   };
 };

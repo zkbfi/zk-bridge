@@ -33,9 +33,10 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-pub use lc_core::abi::LightClientOutput;
+pub use lc_core::abi::{ForkObservation, LightClientOutput};
 pub use lc_core::ancestry::AncestryPath;
 pub use lc_core::layout::SLOTS_PER_HISTORICAL_ROOT;
+pub use lc_core::observation::Observation;
 pub use lc_core::ssz_state::ForkData;
 pub use lc_core::types::BeaconBlockHeader as BeaconHeader;
 pub use lc_core::types::{LightClientStore, LightClientUpdate, SyncAggregate};
@@ -230,6 +231,38 @@ pub fn guest_input_bytes(input: &UpdateInput) -> Vec<u8> {
         store: input.store.clone(),
         steps: input.steps.clone(),
     })
+}
+
+/// The input bytes of the fork observation guest: the chain, the store, the fold steps and the observation.
+///
+/// Calls `lc_core::wire::encode_observation_input`, the encoding that the guest decodes.
+pub fn observation_guest_input_bytes(
+    chain: ChainKind,
+    store: &LightClientStore,
+    steps: &[FoldStep],
+    observation: &Observation,
+) -> Vec<u8> {
+    lc_core::wire::encode_observation_input(&lc_core::wire::ObservationGuestInput {
+        chain: chain.selector(),
+        store: store.clone(),
+        steps: steps.to_vec(),
+        observation: observation.clone(),
+    })
+}
+
+/// Decodes the public values of the fork observation program (256 bytes).
+///
+/// # Errors
+/// `Error::Malformed` when the bytes are not an encoded `ForkObservation` of exactly 256 bytes.
+pub fn decode_fork_observation(public_values: &[u8]) -> Result<ForkObservation> {
+    if public_values.len() != 256 {
+        return Err(Error::Malformed(format!(
+            "fork observation public values have {} bytes, expected 256",
+            public_values.len()
+        )));
+    }
+    ForkObservation::abi_decode(public_values)
+        .map_err(|error| Error::Malformed(format!("fork observation public values: {error}")))
 }
 
 /// Parses the `data` object of a beacon API light-client update or finality update.

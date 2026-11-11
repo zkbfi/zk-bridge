@@ -2,7 +2,7 @@
  * The words of the fork section of Explore, from the shared verdict and the reads of the gate and the registry. Pure: the
  * numbers come from `@zk-bridge/shared`, this file only lays them out.
  */
-import { formatDuration, isSealOnlyMode, utcText, type ForkCutoverVerdict, type ForkGateState, type ForkObservation } from "@zk-bridge/shared";
+import { formatDuration, isSealOnlyMode, utcText, type ForkCutoverVerdict, type ForkGateState, type ForkObservation, type LatestForkObservation } from "@zk-bridge/shared";
 
 /**
  * The one word that a route shows: `open`, `paused`, `blocked` (no beacon node answered and no copy of the fork schedule is
@@ -61,3 +61,7 @@ export const observationLine = (observation: ForkObservation): string =>
   observation.observed
     ? `version ${observation.version}, shape ${observation.shape} (${observation.shapeAllowed ? "allowed" : "not allowed"}), slot ${observation.slot}`
     : "nothing observed yet";
+
+/** What posting the backend's observation proof does, in one line with its numbers. */
+export const observeLine = (observation: LatestForkObservation): string =>
+  `The backend proved fork version ${observation.observedVersion} at slot ${observation.observedAttestedSlot}, state shape ${observation.shape} (${observation.shapeAllowed ? "allowed" : "not allowed"} by the gate). Posting it records that in the registry${observation.shapeAllowed ? "" : ", and then anyone can seal the gate"}. The call simulated without a revert.`;

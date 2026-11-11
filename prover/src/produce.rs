@@ -204,16 +204,26 @@ fn require_start_at_head(output: &LightClientOutput, request: &ProduceRequest) -
 /// The public values must equal the native ones. The proof must have the shape of its backend. A real proof must verify
 /// under the program key with the crate `sp1-verifier`, whatever backend made it.
 fn check_proof(request: &ProduceRequest, proof: &Proof, expected_values: &[u8]) -> Result<()> {
+    check_backend_proof(request.backend, request.program_key, proof, expected_values)
+}
+
+/// The checks of [`check_proof`] for any program: the native public values, the shape of the backend's proof, and for a
+/// real proof the Groth16 verification under `program_key`. The fork observation producer uses it too.
+///
+/// # Errors
+/// `Error::Prover` when a check fails.
+pub(crate) fn check_backend_proof(
+    backend: ProverBackend,
+    program_key: B256,
+    proof: &Proof,
+    expected_values: &[u8],
+) -> Result<()> {
     require_native_values(&proof.public_values, expected_values)?;
-    if request.backend == ProverBackend::Oracle {
+    if backend == ProverBackend::Oracle {
         return require_oracle_shape(&proof.proof_bytes);
     }
     require_groth16_shape(&proof.proof_bytes)?;
-    verify_groth16(
-        request.program_key,
-        &proof.public_values,
-        &proof.proof_bytes,
-    )
+    verify_groth16(program_key, &proof.public_values, &proof.proof_bytes)
 }
 
 fn require_oracle_shape(proof_bytes: &[u8]) -> Result<()> {

@@ -7,4 +7,6 @@ export {
   type EvidencePackage,
   type Prerequisite,
   verifyResultSchema,
+  forkObservationPackageSchema,
+  type ForkObservationPackage,
 } from "@zkb/data";

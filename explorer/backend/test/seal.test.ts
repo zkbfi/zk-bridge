@@ -91,9 +91,11 @@ describe("createSealWatch", () => {
 describe("the seal module", () => {
   const sealConfig = () => makeConfig({ seal: { signer: { kind: "private-key", key: "env:ZKB_SEAL_KEY" } } });
 
-  it("adds no routes, and does nothing without a seal section or a signer", async () => {
+  it("does nothing without a seal section or a signer", async () => {
     const { context, log } = makeBackend({ enabled: ["seal"] });
-    register({} as never, context);
+    const routes: string[] = [];
+    register({ get: (path: string) => routes.push(path) } as never, context);
+    expect(routes).toEqual(["/fork-observations/:chainId/latest"]);
     const stop = await start(context);
     await stop();
     expect(log.lines.join("\n")).toContain("seal_off");

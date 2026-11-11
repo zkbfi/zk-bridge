@@ -609,6 +609,21 @@ export {
   offerSeal,
 } from "./fork-cutover-check.js";
 
+// Fork observations for a ForkRegistry: the prover package, the backend's public view, when to prove, the observe offer
+export {
+  forkObservationPackageSchema,
+  type ForkObservationPackage,
+  latestForkObservationSchema,
+  type LatestForkObservation,
+  publicForkObservation,
+  activeForkVersion,
+  type ObservationNeed,
+  observationNeed,
+  observeCalldata,
+  type ObservationOffer,
+  offerObservation,
+} from "./fork-observation.js";
+
 // Chain metadata: native coin tickers and block explorers
 export { type ExplorerInfo, type ChainMetadata, CHAIN_METADATA, chainNameOf, nativeSymbolOfChain, explorerLinks } from "./chain-metadata.js";
 

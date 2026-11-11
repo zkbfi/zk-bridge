@@ -18,11 +18,13 @@ use crate::checkpoint::build_checkpoint_with_state_urls;
 use crate::config::{
     Config, DestinationConfig, HandoffTarget, ProverBackend, ProverConfig, RouteConfig,
 };
+use crate::contracts::ForkRegistryContract;
 use crate::deployment::{
     build_sections, deployment_json, drafts_from_broadcast, write_private_file, Existing,
 };
 use crate::error::{Error, Result};
 use crate::evidence::{build_evidence, EvidenceRequest};
+use crate::fork_observation::{produce_observation, ObservationRequest};
 use crate::handoff::{Handoff, PackageDestination};
 use crate::light_client::ChainKind;
 use crate::logging::Logger;
@@ -112,6 +114,14 @@ pub enum Command {
     /// never asked. Run it once the block is final, while the nodes still keep its state. Exit code 1 when the block is not
     /// final yet ("not final yet") or no source gives the proof.
     ForkProof(ForkProofArguments),
+    /// Prove one fork observation for the `ForkRegistry` of the source chain of a route, and print it as one JSON object.
+    ///
+    /// The registry is on the source chain and reads a light client of that chain's beacon chain (also on the source
+    /// chain). The observation starts from that light client's head, folds toward the newest final header, and observes the
+    /// newest signed update: the fork version its committee signed under and the shape of its attested state. The proof
+    /// comes from the backend of the `[prover]` section. The object holds the calldata of `ForkRegistry.observe`; the
+    /// command sends nothing. Exit code 0 with a proof, 1 on an error.
+    ForkObservation(ForkObservationArguments),
     /// Write the deployment file that the explorer reads (`chain_a` and `chain_b` sections), and print a summary.
     ///
     /// The addresses come from `--chain-a` and `--chain-b` pairs, from Foundry broadcast files, or from both (a pair
@@ -141,6 +151,17 @@ pub struct DeploymentFileArguments {
     /// A `key=value` pair for the section `chain_b`. The keys are those of `--chain-a`.
     #[arg(long)]
     pub chain_b: Vec<String>,
+}
+
+/// The arguments of `fork-observation`.
+#[derive(Debug, Args)]
+pub struct ForkObservationArguments {
+    /// The route whose SOURCE chain is observed. It may be left out when the file has exactly one route.
+    #[arg(long)]
+    pub route: Option<String>,
+    /// The `ForkRegistry` on the source chain.
+    #[arg(long)]
+    pub registry: String,
 }
 
 /// The arguments of `handoff-update`.
@@ -973,6 +994,90 @@ fn run_fork_proof(
     Ok(0)
 }
 
+/// Reads the registry and its light client on the source chain, proves one observation and prints its package.
+///
+/// # Errors
+/// `Error::Usage` for a bad address. `Error::Config` when the registry's light client tracks another beacon chain or the
+/// backend cannot be built. The errors of [`produce_observation`].
+fn run_fork_observation(
+    config: &Config,
+    arguments: &ForkObservationArguments,
+    lookup: &dyn Fn(&str) -> Option<String>,
+    out: &mut dyn std::io::Write,
+) -> Result<i32> {
+    let logger = Logger::standard();
+    let (name, route) = config.route(arguments.route.as_deref())?;
+    let source = &route.source;
+    let registry = Address::from_str(&arguments.registry)
+        .map_err(|error| Error::Usage(format!("--registry: {error}")))?;
+    let kind = source.chain_kind()?;
+    let rpc_url = source.execution_url()?;
+    let chain = connect("source", source.chain_id, rpc_url)?;
+    let light_client = chain.view(registry, ForkRegistryContract::lightClientCall {})?;
+    let program_key = chain.view(
+        registry,
+        ForkRegistryContract::observationProgramVKeyCall {},
+    )?;
+    let stored = read_stored_state(&chain, light_client)?;
+    if stored.genesis_validators_root != kind.spec().genesis_validators_root {
+        return Err(Error::Config(format!(
+            "the light client {light_client:#x} of the registry tracks the beacon chain with genesis validators root {:#x}, not {}",
+            stored.genesis_validators_root,
+            kind.name()
+        )));
+    }
+    let prover_config = config.prover_config()?;
+    let prover = build_prover(prover_config, lookup)?;
+    let request = ObservationRequest {
+        route: name.to_string(),
+        backend: prover_config.backend,
+        program_key,
+        chain_id: source.chain_id,
+        registry,
+        light_client,
+        stored,
+        now_unix_seconds: now_unix_seconds(),
+    };
+    logger.info(
+        "observation_started",
+        &[
+            ("route", name.to_string()),
+            ("backend", prover.name().to_string()),
+            ("start_head_slot", stored.head.slot.to_string()),
+        ],
+    );
+    let state_cache = source
+        .state_cache_dir
+        .clone()
+        .map(|directory| (directory, source.chain_id));
+    let beacon = full_beacon_source(
+        kind,
+        &source.beacon_url,
+        Some(rpc_url),
+        source.branch_store_dir.as_deref(),
+        &source.state_urls,
+        state_cache.as_ref(),
+        &source.handoff_urls,
+        Some((source.chain_id, &source.handoff_archive_urls)),
+    );
+    let package = produce_observation(&beacon, prover.as_ref(), &request, &logger)?;
+    writeln!(out, "{}", package.to_json_line()?)
+        .map_err(|error| Error::Usage(format!("cannot write the observation: {error}")))?;
+    logger.info(
+        "observation_proved",
+        &[
+            ("observed_version", package.observed_version.clone()),
+            ("shape", package.shape.to_string()),
+            (
+                "observed_attested_slot",
+                package.observed_attested_slot.to_string(),
+            ),
+            ("fold_steps", package.fold_steps.to_string()),
+        ],
+    );
+    Ok(0)
+}
+
 /// Writes the deployment file and prints a summary of it.
 ///
 /// # Errors
@@ -1073,6 +1178,9 @@ pub fn run(
         Command::OpeningProof(opening) => run_opening_proof(&config, opening, out),
         Command::HandoffUpdate(handoff) => run_handoff_update(&config, handoff, out),
         Command::ForkProof(fork) => run_fork_proof(&config, fork, out),
+        Command::ForkObservation(observation) => {
+            run_fork_observation(&config, observation, lookup, out)
+        }
         Command::DeploymentFile(_) => unreachable!("deployment-file returned above"),
         Command::Verify(_) => unreachable!("verify returned above"),
     }
@@ -1153,6 +1261,46 @@ mod tests {
                 "{flag}"
             );
         }
+    }
+
+    /// Claim: `fork-observation` needs `--registry`, takes an optional route, and takes no key; a registry that is not an
+    /// address is a usage error before any network call.
+    /// Why it matters: the command proves and prints only; a key flag would make it a sender, and a bad address must not
+    /// cost a beacon read.
+    #[test]
+    fn fork_observation_takes_a_registry_and_no_key() {
+        assert!(Cli::try_parse_from(arguments(&["fork-observation"])).is_err());
+        let parsed = Cli::try_parse_from(arguments(&[
+            "fork-observation",
+            "--route",
+            "pulsechain_to_ethereum",
+            "--registry",
+            "0x0f094a965f280599b41f57a5182955f4afad063f",
+        ]))
+        .unwrap();
+        let Command::ForkObservation(observation) = parsed.command else {
+            panic!("fork-observation parses to fork-observation")
+        };
+        assert_eq!(observation.route.as_deref(), Some("pulsechain_to_ethereum"));
+        assert!(Cli::try_parse_from(arguments(&[
+            "fork-observation",
+            "--registry",
+            "0x01",
+            "--private-key",
+            "x"
+        ]))
+        .is_err());
+        let error = run_fork_observation(
+            &config(),
+            &ForkObservationArguments {
+                route: None,
+                registry: "not an address".into(),
+            },
+            &|_| None,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::Usage(_)), "{error}");
     }
 
     /// Claim: a request for help or for the version prints its text and gives exit code 0, and a wrong flag is a usage error.

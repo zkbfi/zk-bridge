@@ -5,7 +5,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import type { Address } from "viem";
-import { decideForkCutover, forkCutoverText, type ForkCutoverText, type ForkCutoverVerdict, type SealOffer } from "@zk-bridge/shared";
+import { decideForkCutover, forkCutoverText, type ForkCutoverText, type ForkCutoverVerdict, type ObservationOffer, type SealOffer } from "@zk-bridge/shared";
 import { useServices } from "../app/services";
 import type { ForkChainState } from "./fork-port";
 
@@ -68,6 +68,22 @@ export const useSealOffer = (chainId: number, account: Address | null, enabled: 
     queryKey: ["fork-seal", chainId, account],
     enabled: enabled && account !== null,
     queryFn: () => forks.sealOffer(chainId, account as Address),
+    refetchInterval: SEAL_REFRESH_MILLISECONDS,
+    staleTime: SEAL_REFRESH_MILLISECONDS,
+    retry: false,
+  }).data;
+};
+
+/**
+ * Whether the backend's newest observation proof of a chain can be posted to its registry now, from the account. Undefined
+ * without an account or a registry, and while loading. Asked as often as the seal call.
+ */
+export const useObservationOffer = (chainId: number, registry: Address | null, account: Address | null): ObservationOffer | undefined => {
+  const { forks } = useServices();
+  return useQuery({
+    queryKey: ["fork-observe", chainId, registry, account],
+    enabled: registry !== null && account !== null,
+    queryFn: () => forks.observeOffer(chainId, registry as Address, account as Address),
     refetchInterval: SEAL_REFRESH_MILLISECONDS,
     staleTime: SEAL_REFRESH_MILLISECONDS,
     retry: false,

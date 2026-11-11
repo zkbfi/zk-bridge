@@ -7,7 +7,7 @@
  *
  * Pure: nothing here reads a chain, signs or sends, and nothing imports the terminal library.
  */
-import { chainNameOf, forkCutoverText, gateConfirmWindow, GateEvidenceError, type GateCheckAnswer, type GateConfirmation, type SealOffer } from '@zk-bridge/shared'
+import { chainNameOf, forkCutoverText, gateConfirmWindow, GateEvidenceError, type GateCheckAnswer, type GateConfirmation, type ObservationOffer, type SealOffer } from '@zk-bridge/shared'
 import { getAddress, type Hex } from 'viem'
 import type { ChainConfig } from '../model/types'
 import type { PrepareClient } from './prepare'
@@ -166,6 +166,39 @@ export function planGateSeal(chain: ChainConfig, offer: Extract<SealOffer, { rea
         ? `The fork registry shows a state shape that the gate does not allow, so empty evidence seals the gate. The simulation used ${offer.gas} gas.`
         : `The evidence is a beacon state of a shape that the gate does not allow, checked against the beacon root on chain. The simulation used ${offer.gas} gas.`,
       `A sealed ${chain.name} gate admits no send, for good. Withdrawals are not affected. It sends no ${chain.nativeSymbol}.`,
+    ],
+  }
+}
+
+/**
+ * The planned transaction of a fork observation, for the review: `observe(proof, publicValues)` on the fork registry, no
+ * value. Anyone may send it. It records the fork version and the state shape that the proof shows; a shape the gate does
+ * not allow then lets anyone seal the gate.
+ *
+ * @param chain The chain of the registry.
+ * @param offer An observation offer that simulated without a revert.
+ */
+export function planForkObservation(chain: ChainConfig, offer: Extract<ObservationOffer, { readonly kind: 'ready' }>): PlannedTransaction {
+  const observed = offer.observation
+  const shape = observed.shapeAllowed ? 'the gate allows it' : 'the gate does not allow it'
+  return {
+    title: `Post the ${chain.name} fork observation`,
+    chain,
+    to: getAddress(offer.call.to),
+    contractLabel: `${chain.name} fork registry (ForkRegistry)`,
+    functionSignature: 'observe(bytes,bytes)',
+    functionName: 'observe',
+    data: offer.call.data,
+    value: 0n,
+    arguments: [
+      { name: 'proof', type: 'bytes', value: observed.proof },
+      { name: 'publicValues', type: 'bytes', value: observed.publicValues },
+    ],
+    notes: [
+      `The proof shows the ${chain.name} sync committee signing under fork version ${observed.observedVersion} at slot ${observed.observedAttestedSlot}, over a state of shape ${observed.shape} (${shape}). The registry checks it against its light client at slot ${observed.startHeadSlot}. The simulation used ${offer.gas} gas.`,
+      observed.shapeAllowed
+        ? `The registry records the version; sends through the gate go on as before. It sends no ${chain.nativeSymbol}.`
+        : `After it, anyone can seal the ${chain.name} gate with empty evidence, which stops every send for good. Withdrawals are not affected. It sends no ${chain.nativeSymbol}.`,
     ],
   }
 }
