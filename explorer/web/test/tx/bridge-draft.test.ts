@@ -279,7 +279,7 @@ describe("the native coin carries a tip by default (owner: \"why would there be 
     expect(draft.delivery!.director.settings & 2n).toBe(0n);
     expect(draft.delivery?.description.nowUnits).toBe(10n ** 15n);
     const [step] = draft.steps;
-    expect(step!.plan).toMatchObject({ to: FIXTURE_PAIR.first.contracts.deliveryRouter, value: 10n ** 18n, functionSignature: "relayTokensAndCall(address,bytes,uint256)" });
+    expect(step!.plan).toMatchObject({ to: FIXTURE_PAIR.first.contracts.deliveryRouter, value: 10n ** 18n, functionSignature: "relayTokensAndCall(address,bytes,uint256,bytes)" });
     const call = decodeFunctionData({ abi: deliveryRouterAbi, data: step!.plan.data });
     expect(getAddress(call.args![0] as string)).toBe(deliveryRouter);
     expect(decodeFeeDirector(call.args![1] as `0x${string}`)).toEqual(draft.delivery!.director);

@@ -9,8 +9,8 @@ import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
 import { createTransactionFlow, type FlowChainClient, type FlowState, type TransactionFlow } from '../../src/flow/transaction-flow'
 import { signerFromPrivateKeyText } from '../../src/signing/key-sources'
 import { GATE_WAIT_LIMIT } from '../../src/tx/gate-step'
-import { planApproval, planRelay, planSendMessage } from '../../src/tx/plan'
-import { confirmAnswer, GATE, VALID_UNTIL } from '../support/gate-fixture'
+import { planApproval, planRelay, planSendMessage, planWrapAndRelay } from '../../src/tx/plan'
+import { confirmAnswer, EVIDENCE, evidenceAnswer, GATE, VALID_UNTIL } from '../support/gate-fixture'
 
 // The first public Anvil development key. It is a published test value.
 const TEST_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
@@ -385,5 +385,48 @@ describe('a confirmation that fails', () => {
     const again = await until(flow, (current) => current.phase === 'review')
     expect(again.steps.map((step) => step.plan.title)).toEqual(['Confirm this epoch on the gate (epoch 360336)', relayPlan.title])
     expect(gate.asked).toHaveLength(2)
+  })
+})
+
+describe('a send through the router carries its own gate evidence', () => {
+  const wrapPlan = planWrapAndRelay({ chain, receiver, value: 10n ** 18n })
+  const headerNotInCurrentEpoch = () => {
+    const data = encodeErrorResult({ abi: beaconForkGateAbi, errorName: 'HeaderNotInCurrentEpoch', args: [360_335n, 360_336n] })
+    return Object.assign(new Error('Execution reverted with reason: custom error.'), { cause: { data } })
+  }
+
+  test('puts the evidence into the one send: no confirmation step', async () => {
+    const gate = scriptedGate(evidenceAnswer())
+    const { flow, sent, log } = setup({ gate: gate.check })
+    flow.start([{ plan: wrapPlan, skippable: false }])
+    const state = await until(flow, (current) => current.phase === 'review')
+    expect(gate.asked).toEqual([{ chainId: chain.chainId, gate: GATE, account: signer.address, carriesEvidence: true }])
+    expect(state.steps).toHaveLength(1)
+    expect(state.steps[0]?.plan.arguments.at(-1)?.value).toBe(EVIDENCE)
+    expect(state.prepared?.plan.data).toBe(state.steps[0]!.plan.data)
+    expect(state.prepared?.plan.data.includes(EVIDENCE.slice(2))).toBe(true)
+    expect(log).toEqual(['estimate send'])
+    flow.confirm()
+    await until(flow, (current) => current.phase === 'finished')
+    expect(sent).toHaveLength(1)
+  })
+
+  test('sends empty evidence in a confirmed epoch, and asks again when the evidence names the epoch before', async () => {
+    const gate = scriptedGate(evidenceAnswer(), CONFIRMED)
+    const { flow } = setup({ gate: gate.check, script: { estimateErrors: [headerNotInCurrentEpoch()] } })
+    flow.start([{ plan: wrapPlan, skippable: false }])
+    const state = await until(flow, (current) => current.phase === 'review')
+    expect(gate.asked).toHaveLength(2)
+    expect(state.prepared?.plan.data).toBe(wrapPlan.data)
+    expect(state.steps[0]?.plan.arguments.at(-1)?.value).toBe('0x')
+  })
+
+  test('waits for the next epoch when the epoch ends within the safety window', async () => {
+    const gate = scriptedGate({ kind: 'late', epoch: 360_335n, secondsLeft: 20, waitSeconds: 32 }, evidenceAnswer({ epoch: 360_336n }))
+    const { flow, sleeps } = setup({ gate: gate.check })
+    flow.start([{ plan: wrapPlan, skippable: false }])
+    const state = await until(flow, (current) => current.phase === 'review')
+    expect(sleeps).toEqual([32_000])
+    expect(state.steps[0]?.plan.arguments.at(-1)?.meaning).toContain('epoch 360336')
   })
 })

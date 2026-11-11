@@ -42,7 +42,7 @@ contract DeliveryRouterWrapTest is MediatorFixture {
     /// the mediator pays the receiver only, and this router has no fallback option.
     function test_wrapAndRelayTokensToAReceiverNamesNoOtherAddress() public {
         vm.prank(alice);
-        routerA.wrapAndRelayTokens{value: 1 ether}(bob);
+        routerA.wrapAndRelayTokens{value: 1 ether}(bob, "");
         bytes memory expected = abi.encodeWithSelector(
             TokenMediator.deployAndHandleBridgedTokens.selector,
             address(weth),
@@ -62,7 +62,7 @@ contract DeliveryRouterWrapTest is MediatorFixture {
     /// defaults": a plain relay has no callback, so there is no gas number to state.
     function test_wrapAndRelayTokensCarriesNoGasNumber() public {
         vm.prank(alice);
-        routerA.wrapAndRelayTokens{value: 1 ether}(bob);
+        routerA.wrapAndRelayTokens{value: 1 ether}(bob, "");
         assertEq(ambA.messageAt(0).gasLimit, 0, "no gas is asked of the bridge");
         vm.prank(alice);
         (bool ok,) = address(routerA).call{value: 1 ether}(
@@ -78,13 +78,13 @@ contract DeliveryRouterWrapTest is MediatorFixture {
     function test_relayTokensAndCallPassesTheCallbackGas() public {
         RecordingReceiver receiver = new RecordingReceiver();
         vm.startPrank(alice);
-        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), hex"7777", 123_456);
+        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), hex"7777", 123_456, "");
         uint256 before = alice.balance;
         vm.expectRevert(TokenMediator.ZeroCallbackGas.selector);
-        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), hex"7777", 0);
+        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), hex"7777", 0, "");
         assertEq(alice.balance, before, "the caller keeps the coin");
         vm.expectRevert(DeliveryRouter.EmptyData.selector);
-        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), "", 123_456);
+        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), "", 123_456, "");
         vm.stopPrank();
         assertEq(ambA.sentCount(), 1, "one message");
         bytes memory expected = abi.encodeWithSelector(
@@ -107,7 +107,7 @@ contract DeliveryRouterWrapTest is MediatorFixture {
     /// @dev Bridges `value` of the wrapped token to the copy on chain B, owned by bob.
     function _bobHoldsTheCopy(uint256 value) internal returns (address copy) {
         vm.prank(alice);
-        routerA.wrapAndRelayTokens{value: value}(bob);
+        routerA.wrapAndRelayTokens{value: value}(bob, "");
         _deliverAtoB(_lastIndexA());
         copy = _copyOf(address(weth));
         vm.prank(bob);
@@ -162,7 +162,7 @@ contract DeliveryRouterWrapTest is MediatorFixture {
     function test_relayTokensAndCallWrapsAndCallsTheReceiverOnTheOtherChain() public {
         RecordingReceiver receiver = new RecordingReceiver();
         vm.prank(alice);
-        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), hex"7777", TEST_CALLBACK_GAS);
+        routerA.relayTokensAndCall{value: 1 ether}(address(receiver), hex"7777", TEST_CALLBACK_GAS, "");
         _deliverAtoB(0);
         assertEq(receiver.calls(), 1);
         assertEq(receiver.lastData(), hex"7777");
@@ -190,7 +190,7 @@ contract DeliveryRouterWrapTest is MediatorFixture {
         bytes memory terms =
             abi.encode(DeliveryRouter.FeeDirector(carol, routerB.MULTIPLIER_OF_TOTAL(), 0, 0.01 ether, 0));
         vm.prank(alice);
-        routerA.relayTokensAndCall{value: 2 ether}(address(routerB), terms, TEST_CALLBACK_GAS);
+        routerA.relayTokensAndCall{value: 2 ether}(address(routerB), terms, TEST_CALLBACK_GAS, "");
         assertEq(weth.balanceOf(address(mediatorA)), 2 ether, "the wrapped token is locked on chain A");
         assertEq(address(routerA).balance, 0, "the router on chain A keeps no coin");
 
@@ -211,7 +211,7 @@ contract DeliveryRouterWrapTest is MediatorFixture {
         DeliveryRouter routerB = _routerOnB();
         bytes memory terms = abi.encode(DeliveryRouter.FeeDirector(carol, routerB.FIXED_FEE(), 0.05 ether, 0, 0));
         vm.prank(alice);
-        routerA.relayTokensAndCall{value: 1 ether}(address(routerB), terms, TEST_CALLBACK_GAS);
+        routerA.relayTokensAndCall{value: 1 ether}(address(routerB), terms, TEST_CALLBACK_GAS, "");
         MessageBridge.MessageProof memory proof = ambB.proofOf(ambA, _lastIndexA());
         vm.prank(bob, bob);
         routerB.executeMessage(proof);
@@ -228,7 +228,7 @@ contract DeliveryRouterWrapTest is MediatorFixture {
         bytes memory terms =
             abi.encode(DeliveryRouter.FeeDirector(carol, routerB.MULTIPLIER_OF_TOTAL(), 0, 0.01 ether, 0));
         vm.prank(alice);
-        routerA.relayTokensAndCall{value: 2 ether}(address(routerB), terms, TEST_CALLBACK_GAS);
+        routerA.relayTokensAndCall{value: 2 ether}(address(routerB), terms, TEST_CALLBACK_GAS, "");
         (bool ok,) = _deliverAtoB(_lastIndexA());
         assertTrue(ok);
 
@@ -240,7 +240,7 @@ contract DeliveryRouterWrapTest is MediatorFixture {
     function test_relayTokensAndCallNeedsData() public {
         vm.prank(alice);
         vm.expectRevert(DeliveryRouter.EmptyData.selector);
-        routerA.relayTokensAndCall{value: 1 ether}(bob, "", TEST_CALLBACK_GAS);
+        routerA.relayTokensAndCall{value: 1 ether}(bob, "", TEST_CALLBACK_GAS, "");
     }
 
     /// Claim: a zero receiver is refused on every entry, so the wrapped token never reaches the zero address on the
@@ -250,9 +250,9 @@ contract DeliveryRouterWrapTest is MediatorFixture {
         uint256 before = alice.balance;
         vm.startPrank(alice);
         vm.expectRevert(refusal);
-        routerA.wrapAndRelayTokens{value: 1 ether}(address(0));
+        routerA.wrapAndRelayTokens{value: 1 ether}(address(0), "");
         vm.expectRevert(refusal);
-        routerA.relayTokensAndCall{value: 1 ether}(address(0), hex"01", TEST_CALLBACK_GAS);
+        routerA.relayTokensAndCall{value: 1 ether}(address(0), hex"01", TEST_CALLBACK_GAS, "");
         vm.stopPrank();
         assertEq(alice.balance, before);
         assertEq(ambA.sentCount(), 0, "no message");
@@ -263,9 +263,9 @@ contract DeliveryRouterWrapTest is MediatorFixture {
         bytes memory refusal = abi.encodeWithSelector(DeliveryRouter.InvalidReceiver.selector, address(routerA));
         vm.startPrank(alice);
         vm.expectRevert(refusal);
-        routerA.wrapAndRelayTokens{value: 1 ether}(address(routerA));
+        routerA.wrapAndRelayTokens{value: 1 ether}(address(routerA), "");
         vm.expectRevert(refusal);
-        routerA.relayTokensAndCall{value: 1 ether}(address(routerA), hex"01", TEST_CALLBACK_GAS);
+        routerA.relayTokensAndCall{value: 1 ether}(address(routerA), hex"01", TEST_CALLBACK_GAS, "");
         vm.stopPrank();
         assertEq(ambA.sentCount(), 0);
     }
@@ -281,9 +281,9 @@ contract DeliveryRouterWrapTest is MediatorFixture {
         vm.startPrank(alice);
         routerA.wrapAndRelayTokens{value: 1 ether}();
         assertEq(weth.allowance(address(routerA), address(mediatorA)), 0, "after wrapAndRelayTokens()");
-        routerA.wrapAndRelayTokens{value: 2 ether}(bob);
+        routerA.wrapAndRelayTokens{value: 2 ether}(bob, "");
         assertEq(weth.allowance(address(routerA), address(mediatorA)), 0, "after wrapAndRelayTokens(receiver)");
-        routerA.relayTokensAndCall{value: 4 ether}(address(receiver), hex"7777", TEST_CALLBACK_GAS);
+        routerA.relayTokensAndCall{value: 4 ether}(address(receiver), hex"7777", TEST_CALLBACK_GAS, "");
         assertEq(
             weth.allowance(address(routerA), address(mediatorA)), 0, "after relayTokensAndCall(receiver, data, gas)"
         );

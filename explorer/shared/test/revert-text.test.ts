@@ -1,7 +1,7 @@
 import { encodeAbiParameters, encodeErrorResult, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
 import { beaconForkGateAbi, bridgedTokenAbi, messageBridgeAbi } from "../src/index.js";
-import { BRIDGE_ERROR_ABI, decodeRevert, isForkNotConfirmed, revertDataOf, revertText } from "../src/revert-text.js";
+import { BRIDGE_ERROR_ABI, decodeRevert, isForkNotConfirmed, isGateEpochPassed, revertDataOf, revertText } from "../src/revert-text.js";
 
 const SEPOLIA = { chainName: "Sepolia" };
 
@@ -17,12 +17,19 @@ describe("revert text", () => {
     expect(data.slice(0, 10)).toBe("0xe58a03ef");
     expect(revertText(reverted(data), SEPOLIA)).toBe("The Sepolia deposit gate needs epoch 360335 confirmed first. A send in this epoch reverts until one transaction confirms it.");
     expect(isForkNotConfirmed(reverted(data))).toBe(true);
+    expect(isGateEpochPassed(reverted(data))).toBe(true);
+  });
+
+  it("counts a send whose evidence names the epoch before as an epoch that passed, and nothing else", () => {
+    expect(isGateEpochPassed(reverted(encodeErrorResult({ abi: beaconForkGateAbi, errorName: "HeaderNotInCurrentEpoch", args: [4n, 5n] })))).toBe(true);
+    expect(isGateEpochPassed(reverted(encodeErrorResult({ abi: beaconForkGateAbi, errorName: "GateSealed" })))).toBe(false);
+    expect(isGateEpochPassed(new Error("no data"))).toBe(false);
   });
 
   it("names a sealed gate and a confirmation of a past epoch", () => {
     expect(revertText(reverted(encodeErrorResult({ abi: beaconForkGateAbi, errorName: "GateSealed" })), SEPOLIA)).toBe("The Sepolia deposit gate is sealed. It admits no send.");
     expect(revertText(reverted(encodeErrorResult({ abi: beaconForkGateAbi, errorName: "HeaderNotInCurrentEpoch", args: [4n, 5n] })), SEPOLIA)).toBe(
-      "The confirmation names a beacon header of epoch 4, and the chain is in epoch 5 now. A new confirmation is needed.",
+      "The gate evidence names a beacon header of epoch 4, and the chain is in epoch 5 now. Evidence of the current epoch is needed.",
     );
   });
 

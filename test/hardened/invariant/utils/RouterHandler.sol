@@ -648,13 +648,13 @@ contract RouterHandler is RouterWorld {
             }
         }
         if (form == 1) {
-            try router.wrapAndRelayTokens{value: plan.amount}(receiver) {
+            try router.wrapAndRelayTokens{value: plan.amount}(receiver, "") {
                 return true;
             } catch {
                 return _refused("wrapAndRelayTokens with a receiver reverted");
             }
         }
-        try router.relayTokensAndCall{value: plan.amount}(receiver, abi.encodePacked(receiver), TEST_CALLBACK_GAS) {
+        try router.relayTokensAndCall{value: plan.amount}(receiver, abi.encodePacked(receiver), TEST_CALLBACK_GAS, "") {
             return true;
         } catch {
             return _refused("relayTokensAndCall of the delivery router reverted");

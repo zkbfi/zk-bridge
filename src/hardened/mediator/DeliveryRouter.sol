@@ -30,6 +30,8 @@ import {ExactGasCall} from "./ExactGasCall.sol";
 /// (`contracts/helpers/WETHOmnibridgeRouter.sol`) without its owner, its `claimTokens` and its destination role. They
 /// wrap the coin and relay the wrapped token with `relayTokens` or `relayTokensAndCall` of the mediator. The mediator
 /// pays the receiver only, and a release that the receiver cannot take is final. This router has no fallback option.
+/// A send with a receiver also takes gate evidence: when it is not empty, the router gives it to the deposit gate of the
+/// bridge before it sends, so the first send of an epoch confirms the epoch in the same transaction (`_admit`).
 /// A relay with a call passes the gas of the callback on to the mediator. A receiver that is the zero address or this
 /// router is refused. The router sends nothing that it holds: the wrap and the relay run in one call. There is no second
 /// router for the unwrap: the `UNWRAP` flag and the 20 byte legacy data of `onTokenBridged` do it, so the bridge needs one contract on each chain. The router holds no standing approval: each
@@ -275,13 +277,16 @@ contract DeliveryRouter is ReentrancyGuard {
         failedDeliveryAddress = failedDeliveryAddress_;
     }
 
-    /// @notice Wraps the coin and relays it to the caller on the other chain.
+    /// @notice Wraps the coin and relays it to the caller on the other chain. It carries no gate evidence, so it
+    /// needs an epoch that the gate already confirmed.
     function wrapAndRelayTokens() external payable {
         _wrapAndRelay(msg.sender, "", 0);
     }
 
     /// @notice Wraps the coin and relays it to `receiver` on the other chain.
-    function wrapAndRelayTokens(address receiver) external payable {
+    /// @param gateEvidence Evidence for the deposit gate of the bridge, or empty. See `_admit`.
+    function wrapAndRelayTokens(address receiver, bytes calldata gateEvidence) external payable {
+        _admit(gateEvidence);
         _wrapAndRelay(receiver, "", 0);
     }
 
@@ -289,8 +294,13 @@ contract DeliveryRouter is ReentrancyGuard {
     /// `callbackGas`. Name a `DeliveryRouter` on the other chain as the receiver, with its terms as data, to pay a tip or
     /// to get the native coin back there.
     /// @param callbackGas The gas of the callback on the other chain. The mediator refuses zero.
-    function relayTokensAndCall(address receiver, bytes calldata data, uint256 callbackGas) external payable {
+    /// @param gateEvidence Evidence for the deposit gate of the bridge, or empty. See `_admit`.
+    function relayTokensAndCall(address receiver, bytes calldata data, uint256 callbackGas, bytes calldata gateEvidence)
+        external
+        payable
+    {
         if (data.length == 0) revert EmptyData();
+        _admit(gateEvidence);
         _wrapAndRelay(receiver, data, callbackGas);
     }
 
@@ -362,6 +372,17 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @notice Accepts the native coin from the wrapped token only, when it unwraps.
     receive() external payable {
         if (msg.sender != address(wNative)) revert NotWrappedTokenSender(msg.sender);
+    }
+
+    /// @dev Gate evidence in the send. Empty evidence does nothing: the bridge asks the gate with no evidence, which
+    /// passes in a confirmed epoch and reverts with `ForkNotConfirmed` otherwise. Non-empty evidence goes to the gate of
+    /// the bridge first, with `admit`: in a confirmed epoch the gate returns and reads nothing of it, otherwise it
+    /// confirms the current epoch with it or reverts. The send that follows in the same call is then in a confirmed
+    /// epoch. The gate is read at call time through the mediator (`bridgeContract`) and the bridge (`depositGate`),
+    /// both immutable, so the router stores nothing and a send with no evidence pays nothing for it.
+    function _admit(bytes calldata gateEvidence) private {
+        if (gateEvidence.length == 0) return;
+        MessageBridge(address(bridge.bridgeContract())).depositGate().admit(gateEvidence);
     }
 
     /// @dev Wraps the coin and relays the wrapped token. The approval is for the amount of this call only, and the mediator
