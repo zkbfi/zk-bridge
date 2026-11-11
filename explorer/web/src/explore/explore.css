@@ -251,6 +251,6 @@ a.zb-kv.zb-xkv { color: inherit; text-decoration: none; }
 .zb-xfork-h { margin: 0 0 6px; font-size: var(--zb-step-0); }
 .zb-xrow-static { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .zb-xrow-static .zb-xstatus { margin-left: auto; }
-.zb-xstatus[data-status="paused"] { border-color: var(--zb-accent); color: var(--zb-accent-text); }
+.zb-xstatus[data-status="paused"], .zb-xstatus[data-status="blocked"] { border-color: var(--zb-accent); color: var(--zb-accent-text); }
 .zb-xfork .zb-xactions { margin-top: 8px; }
 .zb-xfork .zb-xactions .zb-small { margin-top: 6px; }

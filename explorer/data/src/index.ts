@@ -553,6 +553,7 @@ export {
   GateEvidenceError,
   type GateChainClient,
   GATE_MODES,
+  isSealOnlyMode,
   type GateMode,
   type GateStatus,
   readGateStatus,
@@ -571,10 +572,6 @@ export {
   type GatePaused,
   type GateCheckAnswer,
   ensureGateConfirmed,
-  type SendEvidence,
-  type SendEvidenceRule,
-  sendEvidenceRule,
-  ensureSendEvidence,
   EVIDENCE_BLOCK_LAG,
   GATE_SAFETY_SECONDS,
   GATE_BLOCK_SECONDS,
@@ -586,6 +583,14 @@ export {
 
 // The fork cutover: the beacon fork schedule, the destination light client's head, the fork state of a gate, the seal offer
 export { FORK_SOURCE_TIMEOUT_MILLISECONDS, fetchSourceForks } from "./fork-cutover-source.js";
+export {
+  type ForkScheduleStore,
+  type ForkScheduleText,
+  forkScheduleKey,
+  createForkScheduleStore,
+  memoryForkScheduleText,
+  layeredForkScheduleStore,
+} from "./fork-schedule-store.js";
 export {
   readLightClientHead,
   type CutoverRoute,

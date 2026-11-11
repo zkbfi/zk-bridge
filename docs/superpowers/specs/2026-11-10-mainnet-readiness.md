@@ -125,7 +125,21 @@ router's source entry points). This reverses the user decision of 2026-10-24 ("A
   unsupported shape and records no successor. A sealed route keeps paying out; a new route is a separate deployment that
   the old one does not know. Rule: no contract ever holds a successor or redirect pointer that a seal, or anyone, can
   set; which route users take is chosen off chain (signed releases, docs).
-- **Status 2026-11-10 (branch `feat/router-gate-evidence`, not merged, not deployed).** Built test-first. The router's
+- **Status 2026-11-10, seal-only gate (branch `feat/seal-only-gate`, not merged, not deployed).** Built test-first. The
+  router change below is reverted (`git revert -m 1 33f79395`): the router's entries are again the ones deployed on
+  testnet. `BeaconForkGate` gets two modes, appended to the enum: `SealOnly` (3, Ethereum and Sepolia) and
+  `SealOnlyWithRegistry` (4, PulseChain and 943, whose seal can only come from the fork registry, since PulseChain has no
+  beacon roots); `admit` reads the seal and returns, `seal` is unchanged, layers 1 to 3 unchanged. Receipt gas: a router
+  `relayTokensAndCall` 150,124 (151,264 on main), `wrapAndRelayTokens(receiver)` 147,240 (148,205), a mediator
+  `relayTokens` 103,072 (103,758), the same in every epoch; `admit` inside a send 2,336; `seal` 66,874 on a synthetic
+  depth 8 proof. The backend module `seal` checks each gate once per epoch with `offerSeal` (the dapp's "Seal the gate"
+  code) and sends a seal that simulated, from a signer configured as the runner's. The cutover lead is 12 hours (at
+  least three epochs); without a beacon node the cutover decides from the newer of the copy each surface saved and the
+  copy bundled at release (`pnpm --filter @zkb/core run fork-schedules`), and refuses sends only when no copy is at most
+  7 days old. Details: `docs/hardened-build-contract.md`, "Seal-only gate (2026-11-10)"; `docs/audit/known-issues.md`
+  1.5, 1.23. Open: on PulseChain nothing posts registry observations yet, so its auto-seal waits for a hand-posted
+  observation.
+- **Status 2026-11-10, reverted (branch `feat/router-gate-evidence`, merged as `33f79395`, reverted on `feat/seal-only-gate`).** Built test-first. The router's
   entries are `wrapAndRelayTokens()` (no evidence), `wrapAndRelayTokens(address,bytes)` and
   `relayTokensAndCall(address,bytes,uint256,bytes)`; the old receiver forms are removed, so the dapp and the terminal
   need the new router deployed (layer 3 alone) before their release. The router reaches the gate at call time through

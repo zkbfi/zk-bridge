@@ -29,7 +29,13 @@ const factsFor = (secondsAway: number, head: bigint | null = 3_000n): CutoverFac
   },
 });
 
-const unreachable: CutoverFacts = { destinationChainId: DESTINATION.chainId, lightClientHead: 3_000n, source: { kind: "unreachable", reason: "no answer" } };
+const unreachable: CutoverFacts = { destinationChainId: DESTINATION.chainId, lightClientHead: 3_000n, source: { kind: "unreachable", reason: "no answer", newestCopyAt: null } };
+
+/** The facts of a fork `secondsAway`, decided from the copy the page saved an hour ago: the beacon node did not answer. */
+const fromCopy = (secondsAway: number): CutoverFacts => {
+  const facts = factsFor(secondsAway);
+  return { ...facts, source: { ...(facts.source as Extract<CutoverFacts["source"], { kind: "known" }>), copy: { origin: "cache", fetchedAt: NOW - 3600, liveFailure: "no answer" } } };
+};
 
 const portOf = (over: Partial<ForkPort> = {}): ForkPort => ({
   facts: async () => null,
@@ -60,11 +66,16 @@ describe("the Bridge button before a fork", () => {
   });
 
   it("counts down to the pause before the window and keeps the button as it was", async () => {
-    open(factsFor(3 * 3600));
+    open(factsFor(14 * 3600));
     const line = await screen.findByTestId("fork-cutover-line");
     expect(within(line).getByTestId("fork-cutover-countdown")).toHaveTextContent("Sends pause in 2h 00m");
-    expect(line).toHaveTextContent("1 h before the Fulu fork (epoch 100)");
+    expect(line).toHaveTextContent("12 h before the Fulu fork (epoch 100)");
     expect(screen.queryByRole("button", { name: /sends paused/ })).toBeNull();
+  });
+
+  it("is disabled 12 hours before the fork", async () => {
+    open(factsFor(12 * 3600 - 60));
+    expect(await screen.findByRole("button", { name: /Ethereum sends paused for the Fulu fork/ })).toBeDisabled();
   });
 
   it("says nothing of a fork more than a week away", async () => {
@@ -73,12 +84,31 @@ describe("the Bridge button before a fork", () => {
     await waitFor(() => expect(screen.queryByTestId("fork-cutover-line")).toBeNull());
   });
 
-  it("warns, and still offers the send, when the beacon node did not answer", async () => {
+  it("is disabled, and says why, when the beacon node did not answer and no copy of the schedule can be used", async () => {
     open(unreachable);
+    const button = await screen.findByRole("button", { name: /Ethereum sends wait for the fork schedule/ });
+    expect(button).toBeDisabled();
+    expect(screen.getByText(/Sends from Ethereum wait: Ethereum's beacon node did not answer, and no copy of its fork schedule is at hand/)).toBeInTheDocument();
+    expect(screen.queryByTestId("fork-cutover-line")).toBeNull();
+  });
+
+  it("decides from the saved copy when the beacon node did not answer, and says so", async () => {
+    open(fromCopy(8 * 86_400));
     const line = await screen.findByTestId("fork-cutover-line");
-    expect(line).toHaveAttribute("data-kind", "unknown");
-    expect(line).toHaveTextContent("Ethereum's beacon node did not answer, so the next fork of Ethereum is not known. Sends are offered");
-    expect(screen.queryByRole("button", { name: /sends paused/ })).toBeNull();
+    expect(within(line).getByTestId("fork-schedule-note")).toHaveTextContent("Ethereum's beacon node did not answer, so this uses the fork schedule saved by this app at");
+    expect(within(line).queryByTestId("fork-cutover-countdown")).toBeNull();
+    expect(screen.queryByRole("button", { name: /sends paused|sends wait/ })).toBeNull();
+  });
+
+  it("names the copy under the countdown, and on the button of a pause decided from it", async () => {
+    const first = open(fromCopy(14 * 3600));
+    const line = await screen.findByTestId("fork-cutover-line");
+    expect(within(line).getByTestId("fork-cutover-countdown")).toHaveTextContent("Sends pause in 2h 00m");
+    expect(within(line).getByTestId("fork-schedule-note")).toBeInTheDocument();
+    first.unmount();
+    open(fromCopy(600));
+    await screen.findByRole("button", { name: /Ethereum sends paused for the Fulu fork/ });
+    expect(screen.getByText(/Sends from Ethereum are paused since .* this uses the fork schedule saved by this app/)).toBeInTheDocument();
   });
 
   it("shows nothing when no facts are read", async () => {
@@ -97,13 +127,13 @@ describe("ForkCutoverLine and forkPauseOf with no view", () => {
 
   it("render nothing for a light client head that could not be read before the fork is near", () => {
     const verdict = { kind: "open", next: null, pausesAt: null, secondsToPause: null } as const;
-    const { container } = render(<ForkCutoverLine view={{ sourceChainId: 1, destinationChainId: 2, verdict, text: { headline: null, countdown: null, sendable: true }, nowSeconds: 0 }} />);
+    const { container } = render(<ForkCutoverLine view={{ sourceChainId: 1, destinationChainId: 2, verdict, text: { headline: null, countdown: null, sendable: true, scheduleNote: null }, nowSeconds: 0 }} />);
     expect(container).toBeEmptyDOMElement();
     const open = { kind: "open", next: { version: "0x01000000", name: "Altair", epoch: 5, slot: 160, time: 100 }, pausesAt: null, secondsToPause: null } as const;
-    const { container: second } = render(<ForkCutoverLine view={{ sourceChainId: 1, destinationChainId: 2, verdict: open, text: { headline: "x", countdown: null, sendable: true }, nowSeconds: 0 }} />);
+    const { container: second } = render(<ForkCutoverLine view={{ sourceChainId: 1, destinationChainId: 2, verdict: open, text: { headline: "x", countdown: null, sendable: true, scheduleNote: null }, nowSeconds: 0 }} />);
     expect(second).toBeEmptyDOMElement();
     const paused = { kind: "paused", destinationChainId: 2, fork: open.next, pausedSince: 1, lightClientHead: null, leadSeconds: 3600 } as const;
-    expect(forkPauseOf({ sourceChainId: 1, destinationChainId: 2, verdict: paused, text: { headline: null, countdown: null, sendable: false }, nowSeconds: 0 }, "Ethereum")).toBeNull();
+    expect(forkPauseOf({ sourceChainId: 1, destinationChainId: 2, verdict: paused, text: { headline: null, countdown: null, sendable: false, scheduleNote: null }, nowSeconds: 0 }, "Ethereum")).toBeNull();
   });
 });
 
@@ -111,7 +141,7 @@ describe("the clock of the fork hooks", () => {
   it("moves with its tick, and decides the verdict again from the facts it holds", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const elapsed = { seconds: 0 };
-    const wrapper = walletWrapper({ wallet: connectedWallet(), services: { forks: portOf({ facts: async () => factsFor(3_700) }), now: () => NOW + elapsed.seconds } });
+    const wrapper = walletWrapper({ wallet: connectedWallet(), services: { forks: portOf({ facts: async () => factsFor(43_300) }), now: () => NOW + elapsed.seconds } });
     const { result } = renderHook(() => ({ clock: useClockSeconds(1_000), view: useForkCutover(SOURCE.chainId, 1_000) }), { wrapper });
     await vi.waitFor(() => expect(result.current.view?.verdict.kind).toBe("open"));
     elapsed.seconds = 150;
@@ -138,11 +168,12 @@ describe("the Forks section of Explore", () => {
   });
 
   it("shows each route with its next fork, its pause and the head of the light client, and each chain's gate and registry in full", async () => {
-    renderPanel(portOf({ facts: async (chainId) => factsFor(chainId === SOURCE.chainId ? 3 * 3600 : 8 * 86_400), chainState: async () => state() }));
+    renderPanel(portOf({ facts: async (chainId) => factsFor(chainId === SOURCE.chainId ? 14 * 3600 : 8 * 86_400), chainState: async () => state() }));
     const route = await screen.findByTestId(`fork-route-${SOURCE.chainId}`);
     expect(route).toHaveAttribute("data-status", "open");
-    expect(within(route).getByTestId("fork-next")).toHaveTextContent(/^Fulu, epoch 100, .* UTC, in 3h 00m$/);
+    expect(within(route).getByTestId("fork-next")).toHaveTextContent(/^Fulu, epoch 100, .* UTC, in 14h 00m$/);
     expect(within(route).getByTestId("fork-pause")).toHaveTextContent(/^at .* UTC, in 2h 00m$/);
+    expect(within(route).getByTestId("fork-schedule")).toHaveTextContent("from the beacon node");
     const chain = await screen.findByTestId(`fork-chain-${SOURCE.chainId}`);
     expect(within(chain).getByTestId("fork-gate")).toHaveTextContent("not sealed, mode enforcing, enforcing");
     expect(within(chain).getByTestId("fork-observation")).toHaveTextContent("version 0x90000075, shape 6 (allowed), slot 77");

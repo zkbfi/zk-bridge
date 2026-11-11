@@ -10,6 +10,7 @@ import type { ModuleHealth } from "./health.ts";
 import type { Logger } from "./logger.ts";
 import type { ProofNeedReader } from "./requests/proof-need.ts";
 import type { Storage } from "./storage.ts";
+import type { Signer } from "../../bots/src/signing/open-signer.ts";
 
 /** What every module receives. */
 export type BackendModuleContext = {
@@ -46,6 +47,8 @@ export type BackendModuleContext = {
   readonly grindEngine?: PreflightResult;
   /** Reads the light client on a side. Default (absent): viem over the side's RPC endpoint. A test replaces it. */
   readonly readLightClientOf?: (side: PairSide) => Promise<LightClientFacts>;
+  /** Opens the signer of `seal.signer` for the `seal` module. Absent without a `seal` section. */
+  readonly openSealSigner?: () => Promise<Signer>;
 };
 
 /** The two functions every module exports, plus an optional health report. */

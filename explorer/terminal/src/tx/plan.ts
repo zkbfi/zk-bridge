@@ -199,11 +199,7 @@ export interface WrapAndRelayInput {
   readonly value: bigint
 }
 
-/**
- * Plans `wrapAndRelayTokens(receiver, gateEvidence)` on the delivery router. The coin travels as the call value. The plan
- * carries empty gate evidence; right before the estimate the flow asks the gate and puts in the evidence the epoch needs
- * (`withGateEvidence` of `./gate-step`).
- */
+/** Plans `wrapAndRelayTokens(receiver)` on the delivery router. The coin travels as the call value. */
 export function planWrapAndRelay(input: WrapAndRelayInput): PlannedTransaction {
   const { chain, receiver, value } = input
   const router = chain.contracts.deliveryRouter
@@ -215,14 +211,11 @@ export function planWrapAndRelay(input: WrapAndRelayInput): PlannedTransaction {
     chain,
     to: router,
     contractLabel: 'DeliveryRouter',
-    functionSignature: 'wrapAndRelayTokens(address,bytes)',
+    functionSignature: 'wrapAndRelayTokens(address)',
     functionName: 'wrapAndRelayTokens',
-    data: encodeFunctionData({ abi: deliveryRouterAbi, functionName: 'wrapAndRelayTokens', args: [receiver, '0x'] }),
+    data: encodeFunctionData({ abi: deliveryRouterAbi, functionName: 'wrapAndRelayTokens', args: [receiver] }),
     value,
-    arguments: [
-      { name: 'receiver', type: 'address', value: getAddress(receiver) },
-      { name: 'gateEvidence', type: 'bytes', value: '0x' },
-    ],
+    arguments: [{ name: 'receiver', type: 'address', value: getAddress(receiver) }],
     notes: [`The transaction sends ${value.toString()} wei of ${chain.nativeSymbol}. The router wraps it, then relays it.`],
   }
 }

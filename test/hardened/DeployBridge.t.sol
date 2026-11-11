@@ -1924,4 +1924,71 @@ contract DeployBridgeTest is Test {
         );
         script.verifyRegistry(wrong, gateB);
     }
+
+    // ================================================================ seal-only modes
+
+    /// @dev The valid configuration with the seal-only modes: `SealOnly` on chain A (Ethereum), `SealOnlyWithRegistry`
+    /// on chain B (PulseChain).
+    function _sealOnlyJson() internal view returns (string memory) {
+        return vm.replace(
+            vm.replace(_validJson(), '"mode":"Enforcing"', '"mode":"SealOnly"'),
+            '"mode":"DetectBeaconRootsAndRegistry"',
+            '"mode":"SealOnlyWithRegistry"'
+        );
+    }
+
+    /// Claim: the seal-only modes parse, plan and deploy. `SealOnlyWithRegistry` gets the own-chain light client and the
+    /// registry, as the registry detection mode did, and `SealOnly` gets none. Shows: the parsed modes; the plan of chain
+    /// B has a registry and chain A none; both chains deploy at their predictions and `deployChain` reads every
+    /// contract back (the gate is enforcing from deployment, not sealed); `verifyRegistry` passes on chain B; a lower
+    /// case name reverts `UnknownGateMode`. Matters: the shipped configuration uses these modes, and PulseChain can
+    /// seal only through its registry.
+    function test_sealOnly_configParsesPlansAndDeploys() public {
+        DeployBridge.BridgeConfig memory config = script.parseConfig(_sealOnlyJson());
+        assertEq(uint8(config.chainA.gate.mode), uint8(BeaconForkGate.GateMode.SealOnly));
+        assertEq(uint8(config.chainB.gate.mode), uint8(BeaconForkGate.GateMode.SealOnlyWithRegistry));
+        assertEq(config.chainB.observation.observationProgramVKey, keccak256("fork observation program"));
+
+        DeployBridge.Plan memory plan = script.predictAddresses(config);
+        assertEq(plan.chainA.registry, address(0), "Ethereum has no registry");
+        assertEq(plan.chainB.registry, vm.computeCreateAddress(deployer, NONCE_B + 2), "PulseChain has a registry");
+
+        (DeployBridge.ChainDeployment memory deploymentA, DeployBridge.ChainDeployment memory deploymentB) =
+            _deployments(config, plan);
+        _etchBeaconRoots();
+        vm.chainId(1);
+        vm.setNonce(deployer, uint64(NONCE_A));
+        DeployBridge.ChainAddresses memory actualA = script.deployChain(deploymentA);
+        vm.chainId(369);
+        vm.setNonce(deployer, uint64(NONCE_B));
+        DeployBridge.ChainAddresses memory actualB = script.deployChain(deploymentB);
+        _assertSameAddresses(plan.chainA, actualA);
+        _assertSameAddresses(plan.chainB, actualB);
+        assertEq(uint8(BeaconForkGate(actualA.gate).mode()), uint8(BeaconForkGate.GateMode.SealOnly));
+        assertEq(uint8(BeaconForkGate(actualB.gate).mode()), uint8(BeaconForkGate.GateMode.SealOnlyWithRegistry));
+        assertEq(address(BeaconForkGate(actualB.gate).forkRegistry()), plan.chainB.registry);
+        script.verifyRegistry(deploymentB, actualB.gate);
+
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.UnknownGateMode.selector, "sealOnly"));
+        script.parseConfig(vm.replace(_sealOnlyJson(), '"mode":"SealOnly"', '"mode":"sealOnly"'));
+    }
+
+    /// Claim: a `SealOnly` gate needs the beacon roots contract on its chain, and `SealOnlyWithRegistry` does not.
+    /// Shows: chain A in `SealOnly` with no code at the beacon roots address reverts `BeaconRootsHaveNoCode`, and passes
+    /// once the code is there; chain B in `SealOnlyWithRegistry` passes with no code. Matters: without the contract a
+    /// `SealOnly` gate could never be sealed, so a fork that the route cannot follow would leave it open for good.
+    function test_sealOnly_environmentGuardsBeaconRootsForSealOnly() public {
+        DeployBridge.BridgeConfig memory config = script.parseConfig(_sealOnlyJson());
+        vm.chainId(1);
+        vm.setNonce(deployer, uint64(NONCE_A));
+        vm.expectRevert(abi.encodeWithSelector(DeployBridge.BeaconRootsHaveNoCode.selector, uint64(1), BEACON_ROOTS));
+        script.assertChainEnvironment(config.chainA, deployer);
+        _etchBeaconRoots();
+        script.assertChainEnvironment(config.chainA, deployer);
+
+        vm.etch(BEACON_ROOTS, "");
+        vm.chainId(369);
+        vm.setNonce(deployer, uint64(NONCE_B));
+        script.assertChainEnvironment(config.chainB, deployer);
+    }
 }

@@ -44,15 +44,17 @@ The bridge uses no validators. A deliverer holds no trusted role: anyone can del
 
 ## The deposit gate
 
-The bridge refuses to take a send that it cannot deliver. A gate contract on each chain does this check.
+A gate contract on each chain can close the route for new sends after a fork that the route cannot follow.
 
 The gate protects against forks. A fork changes the rules of the source chain. A proof program that does not know the new rules cannot deliver sends from the fork. Tokens sent into such a route would stay locked.
 
-On Ethereum, the gate checks the shape of the beacon state in the current epoch. The first sender in each epoch confirms it with evidence: a proof of the fork version, and a proof of the chain's genesis validators root at the position that shape gives it. The gate keeps no list of fork names. Any version passes when its state has a shape that the proof program can read. Later senders in the same epoch send without it. A send fails when nobody confirmed the epoch. A send of the native coin goes through the delivery router, which hands the evidence to the gate in the same transaction; a token transfer confirms first, in a transaction of its own.
+The gate admits every send until it is sealed. A send carries no proof and pays the same small cost every time: the gate reads one value.
 
-On PulseChain, the chain has no beacon roots contract today. The gate runs in a detection mode. It admits sends, and it probes for the contract. It also probes for new opcodes and precompiles. When a probe fires, the gate refuses new sends. The gate switches itself to enforcing mode when the beacon roots contract appears. No key does this.
+Anyone can seal a gate with proof that the state has a shape outside the allowed set. On Ethereum the proof is the fork version and its position in the beacon state, checked against a beacon block root that the chain itself keeps. On PulseChain, which keeps no beacon block roots, the proof comes from the fork registry: a zero-knowledge proof that the sync committee signed under the new version, with the shape of the new state. A new fork name alone does not seal the gate, because the gate keeps no list of fork names; any version passes when its state has a shape that the proof program can read. The zkb.fi backend checks each gate once per epoch and sends the seal as soon as one would succeed. A sealed gate refuses all later sends. Withdrawals of delivered messages still work.
 
-Anyone can seal a gate with proof that the state has a shape outside the allowed set. A new fork name alone does not seal it. A sealed gate refuses all later sends. Withdrawals of delivered messages still work.
+Between the start of such a fork and the seal, a send still passes the gate and would stay locked. The app pauses sends 12 hours before every scheduled fork, so only a send made outside the app can land there.
+
+The gates of the testnet run (deployed 2026-10-26) work the older way: on Ethereum the first sender in each epoch confirms the shape with evidence before sending; on PulseChain the gate runs in a detection mode and probes for the beacon roots contract and for new opcodes. The app handles both and shows the mode of each gate on Explore.
 
 ## Fork handling in plain words
 
@@ -61,8 +63,8 @@ A fork can break a route. The bridge does not hide this.
 - The gate stops new sends into a route that cannot follow the fork.
 - Sends made shortly before a fork can stay locked, and the bridge has no way to refund them. Avoid sending large amounts around a known fork.
 - After a breaking fork, the operators deploy a new route beside the old one. The old route pays what it can still prove.
-- The app reads the fork schedule of the source chain from its beacon node. From one hour (and at least three epochs) before the next scheduled fork, the Bridge button is disabled and says when the pause started and what ends it. Sends resume once the light client on the other chain has a finalized head past the first slot of the fork. Before the pause, the page counts down to it, such as "Sends pause in 1h 59m".
-- When the beacon node of the source chain cannot be reached, the page says so under the button and still offers the send. A send just before a fork would be stranded; check the beacon endpoint in Settings.
+- The app reads the fork schedule of the source chain from its beacon node. From 12 hours (and at least three epochs) before every scheduled fork, the Bridge button is disabled and says when the pause started and what ends it. Sends resume once the light client on the other chain has a finalized head past the first slot of the fork. Before the pause, the page counts down to it, such as "Sends pause in 1h 59m".
+- When the beacon node of the source chain cannot be reached, the app uses the last fork schedule it saved in this browser, or the one that came with this release, whichever is newer, and says which one under the button. When neither is at most 7 days old, the Bridge button is disabled until a beacon node answers; check the beacon endpoint in Settings.
 - A direct contract call in the paused window is not refused by any contract and can still strand funds.
 
 ## The deposit lock

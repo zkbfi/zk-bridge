@@ -1,8 +1,9 @@
 import { mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { serve } from "@hono/node-server";
-import { redactError } from "@zk-bridge/shared/config";
+import { createForkScheduleStore, layeredForkScheduleStore, memoryForkScheduleText } from "@zk-bridge/shared";
+import { fileForkScheduleText, redactError } from "@zk-bridge/shared/config";
 import { createLogger } from "../../backend/src/logger.ts";
 import { createAlerter } from "./alerts.ts";
 import { buildChecks } from "./checks/index.ts";
@@ -73,6 +74,11 @@ export async function main(argv: readonly string[], environment: Readonly<Record
       memory: new Map(),
       apiKey: config.runpod === undefined ? undefined : resolveReference(config.runpod.apiKey, environment),
       requestTimeoutMilliseconds: config.timeoutSeconds * 1000,
+      // The last fork schedule of each chain: in memory, and in a file next to the database so that a restart keeps it.
+      forkSchedules: layeredForkScheduleStore([
+        createForkScheduleStore(memoryForkScheduleText()),
+        createForkScheduleStore(fileForkScheduleText(join(dirname(config.databasePath), "fork-schedules"))),
+      ]),
     };
     const checks = buildChecks(deps);
     mkdirSync(dirname(config.databasePath), { recursive: true });

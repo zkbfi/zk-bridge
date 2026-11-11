@@ -434,7 +434,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
     /// wrap ends at zero because the mediator takes all of it.
     function test_theAllowanceFromTheRouterToTheMediatorIsZeroAfterAWrap() public {
         uint256 sentBefore = ambA.sentCount();
-        router.wrapAndRelayTokens{value: 1 ether}(bob, "");
+        router.wrapAndRelayTokens{value: 1 ether}(bob);
         assertEq(ambA.sentCount(), sentBefore + 1);
         assertEq(weth.allowance(address(router), address(mediatorA)), 0);
         assertEq(weth.balanceOf(address(router)), 0);

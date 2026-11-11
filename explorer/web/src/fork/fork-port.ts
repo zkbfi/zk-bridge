@@ -15,6 +15,7 @@ import {
   type CutoverFacts,
   type ForkGateState,
   type ForkObservation,
+  type ForkScheduleStore,
   type GateChainClient,
   type SealOffer,
 } from "@zk-bridge/shared";
@@ -57,14 +58,25 @@ const attempt = async <T>(read: () => Promise<T>): Promise<T | null> => {
  * @param input.pair The pair.
  * @param input.connection The live connections: the flow clients and the beacon endpoints in force.
  */
-export const createForkPort = (input: { readonly pair: PairConfig; readonly connection: Pick<ConnectionRuntime, "resolved" | "chainAccess"> }): ForkPort => {
+export const createForkPort = (input: {
+  readonly pair: PairConfig;
+  readonly connection: Pick<ConnectionRuntime, "resolved" | "chainAccess">;
+  /** Where the last fork schedule of each chain is kept, for when the beacon node does not answer. Absent: only the bundled copy. */
+  readonly scheduleStore?: ForkScheduleStore | undefined;
+}): ForkPort => {
   const { pair, connection } = input;
   // The flow client of a live page is a viem public client; its type names only what the flow needs.
   const clientFor = (chainId: number) => connection.chainAccess.flowClient(chainId) as unknown as GateChainClient;
   const chainOf = (chainId: number) => (pair.first.chainId === chainId ? pair.first : pair.second);
   return {
     facts: (sourceChainId) =>
-      readCutoverFacts({ sourceChainId, routeOf: cutoverRouteOf(pair), clientFor, beaconUrlsFor: (chainId) => beaconUrlsFor(connection.resolved(), chainId) }),
+      readCutoverFacts({
+        sourceChainId,
+        routeOf: cutoverRouteOf(pair),
+        clientFor,
+        beaconUrlsFor: (chainId) => beaconUrlsFor(connection.resolved(), chainId),
+        scheduleStore: input.scheduleStore,
+      }),
     chainState: async (chainId) => {
       const chain = chainOf(chainId);
       const gate = chain.contracts.gate === null ? null : await attempt(() => readForkGateState({ client: clientFor(chainId), gate: chain.contracts.gate as Address }));

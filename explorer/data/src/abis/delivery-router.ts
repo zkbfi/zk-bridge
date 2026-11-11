@@ -441,11 +441,6 @@ export const deliveryRouterAbi = [
         "name": "callbackGas",
         "type": "uint256",
         "internalType": "uint256"
-      },
-      {
-        "name": "gateEvidence",
-        "type": "bytes",
-        "internalType": "bytes"
       }
     ],
     "outputs": [],
@@ -505,11 +500,6 @@ export const deliveryRouterAbi = [
         "name": "receiver",
         "type": "address",
         "internalType": "address"
-      },
-      {
-        "name": "gateEvidence",
-        "type": "bytes",
-        "internalType": "bytes"
       }
     ],
     "outputs": [],

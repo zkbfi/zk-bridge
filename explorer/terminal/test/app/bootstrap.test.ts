@@ -67,6 +67,15 @@ describe('buildServices with fixture data', () => {
     expect(await services.readTextFile('/some/file')).toBe('text')
   })
 
+  test('keeps the fork schedule copies in the configuration directory', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'zkb-terminal-'))
+    const { services } = await buildServices(machineWith({ EXPLORER_DATA: 'fixture', EXPLORER_CONFIG_DIR: directory }))
+    const copy = { forks: [{ version: '0x90000070', epoch: 50, name: 'Altair' }], clock: { genesisTime: 1_000_000, secondsPerSlot: 12, slotsPerEpoch: 32 }, fetchedAt: 1_700_000_000 }
+    await services.forkSchedules!.save(1, copy)
+    expect(await Bun.file(join(directory, 'fork-schedules', 'zkb.fork-schedule.1.json')).json()).toEqual(copy)
+    await rm(directory, { recursive: true, force: true })
+  })
+
   test('reads the token prices from the environment, and refuses a malformed setting', async () => {
     const price = '0x3333333333333333333333333333333333333333'
     const { services } = await buildServices(

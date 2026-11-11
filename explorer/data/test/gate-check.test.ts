@@ -81,18 +81,6 @@ describe("createGateCheck", () => {
     await expect(withGlobalFetch({ chainId: 1, gate: GATE, account: ACCOUNT })).resolves.toMatchObject({ kind: "not-needed" });
   });
 
-  it("asks for the send's evidence when the send carries it, with the program's clock or the default one", async () => {
-    const client = openGateClient();
-    const now = vi.fn(() => 1_762_500_000_000);
-    const check = createGateCheck({ clientFor: () => client, beaconUrlsFor: () => ["https://beacon.example"], now });
-    await expect(check({ chainId: 1, gate: GATE, account: ACCOUNT, carriesEvidence: true })).resolves.toEqual({ kind: "not-needed", reason: "not-enforcing", epoch: expect.any(BigInt) });
-    expect(now).toHaveBeenCalled();
-    const defaultClock = createGateCheck({ clientFor: () => client, beaconUrlsFor: () => [] });
-    await expect(defaultClock({ chainId: 1, gate: GATE, account: ACCOUNT, carriesEvidence: true })).resolves.toMatchObject({ kind: "not-needed", reason: "not-enforcing" });
-    // A send straight to the mediator still asks for the confirmation step.
-    await expect(defaultClock({ chainId: 1, gate: GATE, account: ACCOUNT, carriesEvidence: false })).resolves.toMatchObject({ kind: "not-needed", reason: "not-enforcing" });
-  });
-
   it("tells a chain with no beacon endpoint in the program's words once the gate needs one", async () => {
     const client = openGateClient();
     const enforcing: GateChainClient = {

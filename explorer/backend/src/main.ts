@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { serve } from "@hono/node-server";
-import { redactError } from "@zk-bridge/shared/config";
+import { redactError, type CommandRunner } from "@zk-bridge/shared/config";
 import type { Pair } from "@zk-bridge/shared";
 import { endpointKeyVariables, executeCommand, type CommandExecutor } from "@zk-bridge/shared/prover";
 import { grindPreflight, type PreflightResult } from "@zk-bridge/shared/msgboard";
@@ -22,6 +22,11 @@ import { createIdleTimeoutSync } from "./idle-timeout.ts";
 import { createProverPing } from "./watch/ping.ts";
 import { watchedDirections } from "./watch/module.ts";
 import * as webhook from "./webhook/module.ts";
+import * as seal from "./seal/module.ts";
+import { asBotLogger } from "./seal/module.ts";
+import { spawnRunner } from "@zk-bridge/shared/config";
+import { createSecretVault } from "../../bots/src/runtime/secrets.ts";
+import { openSigner } from "../../bots/src/signing/open-signer.ts";
 
 /** The modules by name. A later task replaces the stub behind a name. */
 export const MODULES: ModuleTable = {
@@ -29,6 +34,7 @@ export const MODULES: ModuleTable = {
   webhook,
   "msgboard-indexer": msgboardIndexer,
   archive,
+  seal,
 };
 
 /** The prover reads the source chain of each direction from a beacon endpoint, so a request run needs both. */
@@ -71,6 +77,8 @@ export interface StartBackendInput {
   readonly write?: (line: string) => void;
   /** The test of the grind engine. Default: {@link grindPreflight}. A test replaces it. */
   readonly preflight?: () => Promise<PreflightResult>;
+  /** Runs the 1Password command for a secret reference of the seal signer. Default: a child process. A test replaces it. */
+  readonly run?: CommandRunner;
 }
 
 /**
@@ -82,12 +90,16 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
   const { config } = input;
   const secrets = readSecrets(config, input.environment);
   const now = input.now ?? Date.now;
+  // The secrets of the seal signer, read by reference as the runner reads its own (environment or 1Password, no store).
+  const vault = createSecretVault({ store: null, environment: input.environment, run: input.run ?? spawnRunner });
   const logger: Logger = createLogger({
     write: input.write ?? ((line) => process.stderr.write(`${line}\n`)),
     now,
     // The endpoints can carry keys, so every secret part of each one is removed from every line.
-    knownSecrets: () => [...secrets.proverKeys.map((key) => key.value), secrets.webhookBearer, ...endpointSecrets(config, input.pair)],
+    knownSecrets: () => [...secrets.proverKeys.map((key) => key.value), secrets.webhookBearer, ...endpointSecrets(config, input.pair), ...vault.knownSecrets()],
   });
+  if (input.enabled.includes("seal") && config.seal === undefined) throw new BackendConfigError("the seal module needs a seal section with a signer");
+  const sealSettings = config.seal;
   if (input.enabled.includes("requests")) {
     requireBeaconUrls(config, input.pair);
     requireIndexerUrl(config);
@@ -134,6 +146,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     pingProver,
     ...(billing === undefined ? {} : { billing }),
     ...(idleSync === undefined ? {} : { endpointIdleTimeoutSeconds: () => idleSync.endpointIdleTimeoutSeconds() }),
+    ...(sealSettings === undefined ? {} : { openSealSigner: () => openSigner({ settings: sealSettings.signer, vault, logger: asBotLogger(logger) }) }),
   };
   const app = createApp({ context, modules: MODULES, enabled: input.enabled });
   // In the background: a slow or failing RunPod never delays start-up.

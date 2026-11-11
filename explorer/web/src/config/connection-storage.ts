@@ -9,12 +9,23 @@
  * and change the storage, so the settings live in memory for the visit only. On any origin, a URL with a key-like
  * segment is never written, because the storage is clear text.
  */
-import { EMPTY_CONNECTION_SETTINGS, ENDPOINT_KEYS, normalizeEndpoint, parseConnectionUrl, type ConnectionSettings } from "@zk-bridge/shared";
+import { EMPTY_CONNECTION_SETTINGS, ENDPOINT_KEYS, normalizeEndpoint, parseConnectionUrl, type ConnectionSettings, type ForkScheduleText } from "@zk-bridge/shared";
 import { findSecretLikeValues } from "./secret-scan";
 import { originIsShared, type OriginLocation } from "./shared-origin";
 
 /** The part of `Storage` that the connection settings use. */
 export type ConnectionStorage = Pick<Storage, "getItem" | "setItem">;
+
+/**
+ * The fork schedule copies of the page in its storage (`localStorage`), one key per chain. No storage: reads find nothing and
+ * writes are dropped. The store of `@zk-bridge/shared` swallows what the storage throws (a private window, a full quota).
+ *
+ * @param storage The storage of the page, or null.
+ */
+export const storageForkScheduleText = (storage: ConnectionStorage | null): ForkScheduleText => ({
+  read: (key) => storage?.getItem(key) ?? null,
+  write: (key, text) => storage?.setItem(key, text),
+});
 
 /** The key of the settings. */
 export const CONNECTION_STORAGE_KEY = "zk-bridge-explorer.connections";

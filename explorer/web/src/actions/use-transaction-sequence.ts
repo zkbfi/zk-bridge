@@ -23,7 +23,7 @@ export type UseTransactionSequence = {
  */
 export const useTransactionSequence = (steps: readonly WebStep[]): UseTransactionSequence => {
   const wallet = useWallet();
-  const { chainAccess, connection, pair } = useServices();
+  const { chainAccess, connection, pair, forkSchedules } = useServices();
   const walletReference = useRef(wallet);
   walletReference.current = wallet;
   const [sequence] = useState<TransactionSequence>(() => {
@@ -36,7 +36,7 @@ export const useTransactionSequence = (steps: readonly WebStep[]): UseTransactio
         ? undefined
         : createGateCheck({
             // Before the gate: a send is refused when the route is paused before a fork of the source chain (known-issues 1.5).
-            cutover: forkCutoverCheckFor({ pair, connection, chainAccess })!,
+            cutover: forkCutoverCheckFor({ pair, connection, chainAccess, scheduleStore: forkSchedules })!,
             // The flow client of a live page is a viem public client; its type names only what the flow needs.
             clientFor: (chainId) => chainAccess.flowClient(chainId) as unknown as GateChainClient,
             beaconUrlsFor: (chainId) => beaconUrlsFor(connection.resolved(), chainId),

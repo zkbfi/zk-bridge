@@ -70,17 +70,17 @@ function useScroll(total: number, rows: number) {
 
 /** The review of a sequence of transactions: shows each in full and sends only after an explicit yes. */
 export function ReviewModal(props: { readonly title: string; readonly steps: readonly FlowStep[]; readonly onClose: () => void }) {
-  const { chainAccess, connection, pair } = useServices()
+  const { chainAccess, connection, pair, forkSchedules } = useServices()
   const session = useSession()
   const terminal = useTerminalDimensions()
   const { signer } = session
   const flow = useMemo(
     () => {
       if (signer === null) return null
-      const checkGate = terminalGateCheck({ pair, connection, chainAccess })
+      const checkGate = terminalGateCheck({ pair, connection, chainAccess, scheduleStore: forkSchedules })
       return createTransactionFlow({ signer, clientFor: (chainId) => chainAccess.flowClient(chainId), ...(checkGate === undefined ? {} : { checkGate }) })
     },
-    [signer, chainAccess, connection, pair],
+    [signer, chainAccess, connection, pair, forkSchedules],
   )
   const state = useSyncExternalStore(
     (listener) => flow?.subscribe(listener) ?? (() => undefined),

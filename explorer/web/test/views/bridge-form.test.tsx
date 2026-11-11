@@ -278,7 +278,7 @@ describe("the bridge form: the tip before any signature", () => {
     await userEvent.click(review);
     const steps = (onReview as ReturnType<typeof vi.fn>).mock.calls[0]![0] as readonly WebStep[];
     expect(steps).toHaveLength(1);
-    expect(steps[0]!.plan).toMatchObject({ functionName: "relayTokensAndCall", functionSignature: "relayTokensAndCall(address,bytes,uint256,bytes)", to: FIXTURE_PAIR.first.contracts.deliveryRouter });
+    expect(steps[0]!.plan).toMatchObject({ functionName: "relayTokensAndCall", functionSignature: "relayTokensAndCall(address,bytes,uint256)", to: FIXTURE_PAIR.first.contracts.deliveryRouter });
     expect(steps[0]!.disclosure.delivery?.token.symbol).toBe("zETH");
   });
 

@@ -64,7 +64,7 @@ How far above today's gas price you let the deliverer pay: Low (up to 2 ×), Nor
 
 ## Gate
 
-A contract that checks the fork version of the source chain. It refuses a send that the route cannot deliver. The page Safety explains the gate.
+A contract on the source chain that closes the route for new sends once someone proves a fork that the route cannot follow (the seal). Until then it admits every send. The page Safety explains the gate.
 
 ## Hard fee cap
 

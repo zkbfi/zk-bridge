@@ -32,8 +32,8 @@ import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 /// | Contract                | Offset, no registry | Offset, registry gate | Condition                          |
 /// |-------------------------|---------------------|-----------------------|------------------------------------|
 /// | light client            | n                   | n                     | always                             |
-/// | [own-chain light client]| -                   | n + 1                 | gate mode `DetectBeaconRootsAndRegistry` |
-/// | [fork registry]         | -                   | n + 2                 | gate mode `DetectBeaconRootsAndRegistry` |
+/// | [own-chain light client]| -                   | n + 1                 | gate mode with a registry          |
+/// | [fork registry]         | -                   | n + 2                 | gate mode with a registry          |
 /// | deposit gate            | n + 1               | n + 3                 | always                             |
 /// | `ReceiptProofLib`       | n + 2               | n + 4                 | always                             |
 /// | `OpeningProofLib`       | n + 3               | n + 5                 | always                             |
@@ -82,7 +82,8 @@ contract DeployBridge is LinkedCode {
     }
 
     /// @notice The own-chain light client and the fork registry of a chain whose gate mode is
-    /// `DetectBeaconRootsAndRegistry`. It describes the beacon chain of THIS chain. All fields are zero in other modes.
+    /// `DetectBeaconRootsAndRegistry` or `SealOnlyWithRegistry`. It describes the beacon chain of THIS chain. All fields
+    /// are zero in other modes.
     /// Both contracts use the verifier of the chain. The light client of this chain follows the same light-client
     /// program as the other light client, so `lightClientProgramVKey` is that key.
     struct ObservationConfig {
@@ -197,14 +198,15 @@ contract DeployBridge is LinkedCode {
     error ObservationMismatch(string field);
     /// @notice The clock of a light client differs from the clock of the gate of the chain that it tracks.
     error ClockMismatch(string field);
-    /// @notice The gate mode is not one of the three names.
+    /// @notice The gate mode is not one of the five names.
     error UnknownGateMode(string mode);
     /// @notice The `genesis_validators_root` of a gate differs from the one that the light client of the other chain (or
     /// the own-chain light client of a registry gate) holds for the same beacon chain.
     error GateRootMismatch(string field);
     /// @notice The configured Capella era differs from the era of the Capella fork epoch.
     error CapellaEraMismatch(uint64 chainId, uint64 configured, uint64 derived);
-    /// @notice A gate in `Enforcing` mode needs the beacon roots contract, and it holds no code on its chain.
+    /// @notice A gate in `Enforcing` or `SealOnly` mode needs the beacon roots contract, and it holds no code on its
+    /// chain.
     error BeaconRootsHaveNoCode(uint64 chainId, address beaconRoots);
     /// @notice A deployed contract is not at its predicted address.
     error AddressNotAsPredicted(string name, address predicted, address actual);
@@ -351,7 +353,7 @@ contract DeployBridge is LinkedCode {
         uint256 nonce = vm.getNonce(deployer);
         if (nonce != chain.deployerNonce) revert DeployerNonceMismatch(chain.chainId, chain.deployerNonce, nonce);
         _requireVerifierPin(chain);
-        if (chain.gate.mode == BeaconForkGate.GateMode.Enforcing && BEACON_ROOTS.code.length == 0) {
+        if (_needsBeaconRoots(chain.gate.mode) && BEACON_ROOTS.code.length == 0) {
             revert BeaconRootsHaveNoCode(chain.chainId, BEACON_ROOTS);
         }
         if (chain.flowLimiter != address(0) && chain.flowLimiter.code.length == 0) {
@@ -445,7 +447,7 @@ contract DeployBridge is LinkedCode {
     /// @param gate The deployed deposit gate.
     function verifyRegistry(ChainDeployment memory deployment, address gate) public view {
         address registry = address(BeaconForkGate(gate).forkRegistry());
-        if (deployment.chain.gate.mode != BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) {
+        if (!_hasRegistry(deployment.chain)) {
             if (registry != address(0)) revert DeploymentMismatch("gate.forkRegistry must be empty");
             return;
         }
@@ -514,9 +516,27 @@ contract DeployBridge is LinkedCode {
         }
     }
 
-    /// @dev A chain whose gate runs in `DetectBeaconRootsAndRegistry` mode gets an own-chain light client and a registry.
+    /// @dev A chain whose gate runs in `DetectBeaconRootsAndRegistry` or `SealOnlyWithRegistry` mode gets an own-chain
+    /// light client and a registry.
     function _hasRegistry(ChainConfig memory chain) private pure returns (bool) {
-        return chain.gate.mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry;
+        return _isRegistryMode(chain.gate.mode);
+    }
+
+    function _isRegistryMode(BeaconForkGate.GateMode mode) private pure returns (bool) {
+        return mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry
+            || mode == BeaconForkGate.GateMode.SealOnlyWithRegistry;
+    }
+
+    /// @dev A gate that applies its rules from deployment: `Enforcing` and the two seal-only modes.
+    function _enforcesFromDeployment(BeaconForkGate.GateMode mode) private pure returns (bool) {
+        return mode == BeaconForkGate.GateMode.Enforcing || mode == BeaconForkGate.GateMode.SealOnly
+            || mode == BeaconForkGate.GateMode.SealOnlyWithRegistry;
+    }
+
+    /// @dev A gate whose only proofs are EIP-4788 evidence: `Enforcing` needs it for every epoch, `SealOnly` for its
+    /// seal. Without the beacon roots contract the first refuses every send and the second can never seal.
+    function _needsBeaconRoots(BeaconForkGate.GateMode mode) private pure returns (bool) {
+        return mode == BeaconForkGate.GateMode.Enforcing || mode == BeaconForkGate.GateMode.SealOnly;
     }
 
     function _logChain(string memory label, ChainConfig memory chain, ChainAddresses memory plan) private pure {
@@ -720,7 +740,7 @@ contract DeployBridge is LinkedCode {
         BeaconForkGate deployed = BeaconForkGate(gate);
         if (deployed.beaconRoots() != BEACON_ROOTS) revert DeploymentMismatch("gate.beaconRoots");
         if (deployed.mode() != expected.mode) revert DeploymentMismatch("gate.mode");
-        if (deployed.enforcing() != (expected.mode == BeaconForkGate.GateMode.Enforcing)) {
+        if (deployed.enforcing() != _enforcesFromDeployment(expected.mode)) {
             revert DeploymentMismatch("gate.enforcing");
         }
         if (deployed.isSealed()) revert DeploymentMismatch("gate.isSealed");
@@ -845,7 +865,7 @@ contract DeployBridge is LinkedCode {
             _readBytes32(json, string.concat(client, ".initialNextSyncCommitteeHash"));
         _requireCapellaEra(chain);
         chain.gate = _readGate(json, string.concat(prefix, ".gate"));
-        if (chain.gate.mode == BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) {
+        if (_isRegistryMode(chain.gate.mode)) {
             chain.observation = _readObservation(json, string.concat(prefix, ".observation"));
         }
     }
@@ -873,7 +893,7 @@ contract DeployBridge is LinkedCode {
     /// @dev The own-chain settings of a registry chain must describe the beacon chain that the OTHER chain's light
     /// client tracks: the same genesis validators root and period length. The relationship is asserted, not assumed.
     function _requireObservationMatchesOtherChain(ChainConfig memory chain, ChainConfig memory other) private pure {
-        if (chain.gate.mode != BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) return;
+        if (!_isRegistryMode(chain.gate.mode)) return;
         if (chain.observation.genesisValidatorsRoot != other.lightClient.genesisValidatorsRoot) {
             revert ObservationMismatch("genesisValidatorsRoot differs from the other chain's light client");
         }
@@ -909,7 +929,7 @@ contract DeployBridge is LinkedCode {
         if (chain.gate.genesisValidatorsRoot != other.lightClient.genesisValidatorsRoot) {
             revert GateRootMismatch("gate.genesisValidatorsRoot differs from the light client of the other chain");
         }
-        if (chain.gate.mode != BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry) return;
+        if (!_isRegistryMode(chain.gate.mode)) return;
         if (chain.gate.genesisValidatorsRoot != chain.observation.genesisValidatorsRoot) {
             revert GateRootMismatch("gate.genesisValidatorsRoot differs from the own-chain observation settings");
         }
@@ -938,6 +958,10 @@ contract DeployBridge is LinkedCode {
         if (keccak256(bytes(text)) == keccak256("DetectBeaconRoots")) return BeaconForkGate.GateMode.DetectBeaconRoots;
         if (keccak256(bytes(text)) == keccak256("DetectBeaconRootsAndRegistry")) {
             return BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry;
+        }
+        if (keccak256(bytes(text)) == keccak256("SealOnly")) return BeaconForkGate.GateMode.SealOnly;
+        if (keccak256(bytes(text)) == keccak256("SealOnlyWithRegistry")) {
+            return BeaconForkGate.GateMode.SealOnlyWithRegistry;
         }
         revert UnknownGateMode(text);
     }

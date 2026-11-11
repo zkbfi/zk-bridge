@@ -7,12 +7,23 @@ const open = { kind: "open", next: fork, pausesAt: null, secondsToPause: 10 } as
 
 describe("forkPauseOf", () => {
   it("names the chain and the fork on the button, and carries the line with the numbers", () => {
-    const view = { sourceChainId: 1, destinationChainId: 2, verdict: paused, text: { headline: "Sends resume after the fork.", countdown: null, sendable: false }, nowSeconds: 0 } as const;
+    const view = { sourceChainId: 1, destinationChainId: 2, verdict: paused, text: { headline: "Sends resume after the fork.", countdown: null, sendable: false, scheduleNote: null }, nowSeconds: 0 } as const;
     expect(forkPauseOf(view, "Ethereum")).toEqual({ label: "Ethereum sends paused for the Fulu fork", detail: "Sends resume after the fork." });
   });
 
+  it("adds the copy of the schedule that the pause was decided from", () => {
+    const view = { sourceChainId: 1, destinationChainId: 2, verdict: paused, text: { headline: "Paused.", countdown: null, sendable: false, scheduleNote: "From a copy." }, nowSeconds: 0 } as const;
+    expect(forkPauseOf(view, "Ethereum")).toEqual({ label: "Ethereum sends paused for the Fulu fork", detail: "Paused. From a copy." });
+  });
+
+  it("names the wait for a fork schedule on the button when no schedule can be used", () => {
+    const blocked = { kind: "blocked", reason: "no-fork-schedule", detail: "x", newestCopyAt: null } as const;
+    const view = { sourceChainId: 1, destinationChainId: 2, verdict: blocked, text: { headline: "Sends wait.", countdown: null, sendable: false, scheduleNote: null }, nowSeconds: 0 } as const;
+    expect(forkPauseOf(view, "Ethereum")).toEqual({ label: "Ethereum sends wait for the fork schedule", detail: "Sends wait." });
+  });
+
   it("gives nothing while the route is not paused", () => {
-    const view = { sourceChainId: 1, destinationChainId: 2, verdict: open, text: { headline: "Soon.", countdown: "in 10s", sendable: true }, nowSeconds: 0 } as const;
+    const view = { sourceChainId: 1, destinationChainId: 2, verdict: open, text: { headline: "Soon.", countdown: "in 10s", sendable: true, scheduleNote: null }, nowSeconds: 0 } as const;
     expect(forkPauseOf(view, "Ethereum")).toBeNull();
   });
 });

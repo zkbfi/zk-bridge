@@ -85,7 +85,7 @@ export const revertText = (error: unknown, context: RevertContext): string | nul
     case "GateSealed":
       return `The ${context.chainName} deposit gate is sealed. It admits no send.`;
     case "HeaderNotInCurrentEpoch":
-      return `The gate evidence names a beacon header of epoch ${valueText(args[0])}, and the chain is in epoch ${valueText(args[1])} now. Evidence of the current epoch is needed.`;
+      return `The confirmation names a beacon header of epoch ${valueText(args[0])}, and the chain is in epoch ${valueText(args[1])} now. A new confirmation is needed.`;
     case "Error":
       return `The contract reverted: ${valueText(args[0])}.`;
     case "Panic":
@@ -99,13 +99,3 @@ export const revertText = (error: unknown, context: RevertContext): string | nul
 
 /** Whether an error is the gate's `ForkNotConfirmed(epoch)` revert. */
 export const isForkNotConfirmed = (error: unknown): boolean => decodeRevert(error)?.name === "ForkNotConfirmed";
-
-/**
- * Whether an error is a gate revert of an epoch that moved on between the gate check and the estimate: `ForkNotConfirmed`
- * (a send with empty evidence) or `HeaderNotInCurrentEpoch` (a send whose evidence names the epoch before). Asking the
- * gate again fixes either.
- */
-export const isGateEpochPassed = (error: unknown): boolean => {
-  const name = decodeRevert(error)?.name;
-  return name === "ForkNotConfirmed" || name === "HeaderNotInCurrentEpoch";
-};

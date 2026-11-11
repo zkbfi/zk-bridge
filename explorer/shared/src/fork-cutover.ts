@@ -2,6 +2,11 @@
 export {
   CUTOVER_LEAD_SECONDS,
   CUTOVER_LEAD_EPOCHS,
+  SCHEDULE_COPY_MAX_AGE_SECONDS,
+  type ForkScheduleCopy,
+  type ScheduleCopyOrigin,
+  chooseSourceForks,
+  bundledForkSchedule,
   FORK_NAMES,
   type ForkCutoverClock,
   type ForkScheduleEntry,
@@ -20,6 +25,12 @@ export {
 } from "@zkb/core";
 export {
   fetchSourceForks,
+  type ForkScheduleStore,
+  type ForkScheduleText,
+  forkScheduleKey,
+  createForkScheduleStore,
+  memoryForkScheduleText,
+  layeredForkScheduleStore,
   readLightClientHead,
   type CutoverRoute,
   type ForkCutoverCheck,

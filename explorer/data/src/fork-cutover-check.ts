@@ -4,9 +4,23 @@
  * call. One implementation for the dapp, the terminal and the status service.
  */
 import { encodeFunctionData, zeroAddress, type Address, type Hex, type PublicClient } from "viem";
-import { compactMultiproofDescriptor, decideForkCutover, encodeForkEvidence, forkEvidenceFromMultiproof, forkProofGindices, isAllowedShape, normalizeAddress, type ForkCutoverVerdict, type SourceForks } from "@zkb/core";
+import {
+  bundledForkSchedule,
+  chooseSourceForks,
+  compactMultiproofDescriptor,
+  decideForkCutover,
+  encodeForkEvidence,
+  forkEvidenceFromMultiproof,
+  forkProofGindices,
+  isAllowedShape,
+  normalizeAddress,
+  type ForkCutoverVerdict,
+  type ForkScheduleCopy,
+  type SourceForks,
+} from "@zkb/core";
 import { beaconForkGateAbi, beaconLightClientAbi, forkRegistryAbi } from "./abis/index.js";
 import { fetchSourceForks } from "./fork-cutover-source.js";
+import type { ForkScheduleStore } from "./fork-schedule-store.js";
 import { GATE_MODES, readEvidenceHeader, readGateStatus, type BeaconProofSource, type GateChainClient, type GateMode } from "./gate-evidence.js";
 
 /** The finalized head slot that a light client stores, or null when it cannot be read. */
@@ -24,7 +38,10 @@ export type CutoverRoute = { readonly destinationChainId: number; readonly light
 /** The question a program asks before a send from a chain: is the route open, paused or unknown? */
 export type ForkCutoverCheck = (sourceChainId: number) => Promise<ForkCutoverVerdict>;
 
-/** What the decision reads from the chains: the source's beacon schedule and the destination light client's head. */
+/**
+ * What the decision reads from the chains: the source's fork schedule (from its beacon node, or a copy when the node did not
+ * answer: `source.copy` says which) and the destination light client's head.
+ */
 export type CutoverFacts = { readonly destinationChainId: number; readonly source: SourceForks; readonly lightClientHead: bigint | null };
 
 /** Where the cutover facts are read from. */
@@ -37,21 +54,40 @@ export type CutoverReaders = {
   readonly beaconUrlsFor: (chainId: number) => readonly string[];
   /** The `fetch` to use. Default: the global one. */
   readonly fetch?: typeof fetch;
+  /** Where this program keeps the last schedule it fetched of each chain. Absent: it keeps none. */
+  readonly scheduleStore?: ForkScheduleStore | undefined;
+  /** The schedule of a chain bundled with the release. Default: `bundledForkSchedule` of `@zkb/core`. */
+  readonly bundled?: (chainId: number) => ForkScheduleCopy | null;
+  /** The clock in seconds since 1970. Default: the system clock. */
+  readonly nowSeconds?: () => number;
 };
 
+const systemSeconds = (): number => Math.floor(Date.now() / 1000);
+
 /**
- * Reads what the decision needs for a send from a chain: the beacon node's fork schedule and the light client head. A program
- * that shows a countdown keeps these and decides again at each tick with `decideForkCutover`.
+ * Reads what the decision needs for a send from a chain: the fork schedule and the light client head. The schedule comes from
+ * the beacon node, which is then saved to the store; when the node does not answer, from the newer of the saved copy and the
+ * bundled copy while it is at most seven days old (`chooseSourceForks` of `@zkb/core`). A program that shows a countdown
+ * keeps these and decides again at each tick with `decideForkCutover`.
  *
  * @returns The facts, or null when the chain has no route.
  */
 export async function readCutoverFacts(input: CutoverReaders & { readonly sourceChainId: number }): Promise<CutoverFacts | null> {
   const route = input.routeOf(input.sourceChainId);
   if (route === null) return null;
-  const [source, lightClientHead] = await Promise.all([
-    fetchSourceForks({ urls: input.beaconUrlsFor(input.sourceChainId), ...(input.fetch === undefined ? {} : { fetch: input.fetch }) }),
+  const chainId = input.sourceChainId;
+  const now = (input.nowSeconds ?? systemSeconds)();
+  const [live, lightClientHead] = await Promise.all([
+    fetchSourceForks({ urls: input.beaconUrlsFor(chainId), ...(input.fetch === undefined ? {} : { fetch: input.fetch }) }),
     readLightClientHead(input.clientFor(route.destinationChainId), route.lightClient),
   ]);
+  const store = input.scheduleStore;
+  if (live.kind === "known") {
+    await store?.save(chainId, { forks: live.forks, clock: live.clock, fetchedAt: now });
+    return { destinationChainId: route.destinationChainId, source: live, lightClientHead };
+  }
+  const cached = store === undefined ? null : await store.load(chainId);
+  const source = chooseSourceForks({ live, cached, bundled: (input.bundled ?? bundledForkSchedule)(chainId), nowSeconds: now });
   return { destinationChainId: route.destinationChainId, source, lightClientHead };
 }
 
@@ -60,8 +96,8 @@ export async function readCutoverFacts(input: CutoverReaders & { readonly source
  *
  * @param input.nowSeconds The clock in seconds since 1970. Default: the system clock.
  */
-export function createForkCutoverCheck(input: CutoverReaders & { readonly nowSeconds?: () => number }): ForkCutoverCheck {
-  const now = input.nowSeconds ?? (() => Math.floor(Date.now() / 1000));
+export function createForkCutoverCheck(input: CutoverReaders): ForkCutoverCheck {
+  const now = input.nowSeconds ?? systemSeconds;
   return async (sourceChainId) => {
     const facts = await readCutoverFacts({ ...input, sourceChainId });
     if (facts === null) return { kind: "open", next: null, pausesAt: null, secondsToPause: null };

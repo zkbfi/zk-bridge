@@ -50,6 +50,32 @@ The backend reads no endpoint from the environment.
 | `acceptOracleProof` | Local testing only. See below. Default `false`. |
 | `trustForwardedHeader`, `trustedProxyHops` | See "Callers and limits". |
 | `limits` | See "Callers and limits". |
+| `seal` | Optional; needed by the `seal` module. `{ signer, receiptTimeoutSeconds: 180 }`. See "Sealing a gate". |
+
+## Sealing a gate
+
+The `seal` module (`src/seal/`) watches the deposit gate of each chain of the pair once per epoch of that chain. It asks
+`offerSeal` of `@zkb/data`, the code of the dapp's "Seal the gate" button: `seal("")` when the gate's fork registry shows
+a state shape the gate does not allow (PulseChain), else beacon evidence of a state at a disallowed depth (Ethereum, from
+`beaconUrls`). Each is simulated from the module's signer, and only a call that simulated is sent, through the runner's
+transaction port (the simulated gas plus 30 percent, twice the base fee plus the chain's minimum priority fee, a wait of
+`receiptTimeoutSeconds` for the receipt). Two checks of a chain never overlap.
+
+Every finding is logged (`seal_not_needed` when the reason changes, `seal_check_failed`); a ready seal (`seal_ready`), its
+outcome (`seal_sent`, `seal_reverted`, `seal_send_failed`) and a sealed gate (`seal_gate_sealed`, once) also write an
+`alert` line at error level, which is the alert path of this service: ship the log to whatever pages you. The status
+service also turns its check `gate-<chainId>` down once a gate is sealed; list it in `alerts.checks` there to have it
+posted to the webhook.
+
+`seal.signer` is configured exactly as the runner's signer of `explorer/bots` (`signerSchema` there): `{ "kind":
+"private-key", "key": "env:ZKB_SEAL_KEY" }` reads the key from that environment variable, `"op://vault/item/field"`
+from 1Password, and `keystore`, `mnemonic`, `ledger` and `trezor` work as in the runner. The file never holds the secret,
+and the logger removes every value read this way from each line. The account pays the gas of a seal (about 70,000 to
+100,000 gas, once per route); keep a little native coin on it on both chains. Run it with `--modules requests,seal` or
+add `"seal"` to `modules`.
+
+On PulseChain a seal needs an observation in the fork registry first (a proof of the observation program), and nothing
+posts observations yet (`docs/audit/known-issues.md` 1.5, "Not built"; 1.23).
 
 ## Secrets
 
