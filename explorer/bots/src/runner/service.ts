@@ -203,6 +203,8 @@ async function runRunner(input: StartRunnerInput): Promise<void> {
       temporaryDirectory: join(context.config.stateDirectory, "tmp"),
       stateCacheDirectory: join(context.config.stateDirectory, "beacon-states"),
       proofCacheDirectory: proofCacheDirectoryOf(context),
+      // The fork proof of a source state that no node serves any more: the indexer's proof archive, checked by the prover.
+      forkProofArchiveUrls: [`${runnerConfig.indexerUrl.replace(/\/+$/, "")}/api/proofs/fork-proofs`],
       logger: directionLogger,
     });
     const prover = overrides.prover?.(direction) ?? binary;

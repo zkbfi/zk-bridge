@@ -348,6 +348,12 @@ publication.
   - `GET /api/proofs/handoffs/:chainId` returns `{ periods }` (ascending), and `GET /api/proofs/handoffs/:chainId/<period>.json`
     the handoff update of that sync-committee period exactly as stored (404 when none, 400 for another file name).
     The backend captures one per period and chain; the archive keeps them for good.
+  - `GET /api/proofs/fork-proofs/:chainId?fromSlot=&limit=` returns `{ entries: [{ slot, stateRoot, blockRoot,
+    executionBlockNumber }] }` ascending by slot (limit 100 by default, at most 500), and
+    `GET /api/proofs/fork-proofs/:chainId/<stateRoot>.json` the fork proof record of that source block exactly as stored
+    (404 when none, 400 for another file name). The backend saves one per source block that carries a message, while a
+    beacon node still serves the state; the archive keeps them for good (schema version 3). The migration only adds a
+    table in `proof_archive`, outside Ponder's schema, so a deploy needs no blue/green reindex.
   - `GET /api/proofs/summary`
 
   They show the same public fields as the IPFS tree (no source host, fetch time, job id or source) and answer 503 while

@@ -289,6 +289,13 @@ pub struct SourceConfig {
     /// the committees of a store whose head state no node serves. Nothing in a record is trusted.
     #[serde(default)]
     pub handoff_archive_urls: Vec<String>,
+    /// The fork proof archive (docs/proof-archive.md): base URLs that serve `<base>/<chain id>/<state root>.json`, the
+    /// fork proof record of each source block that carried a message, saved by the backend while a node served the state.
+    /// The `evidence` command asks them in order for the fork proof of a source state that it does not hold and no node
+    /// gives through the multiproof route, before it downloads the whole state. Nothing
+    /// in a record is trusted: it is checked against the state root of the source header.
+    #[serde(default)]
+    pub fork_proof_archive_urls: Vec<String>,
 }
 
 /// The destination side of a route: the chain with the light client that the proofs update.
@@ -702,6 +709,15 @@ fn validate_route(name: &str, route: &RouteConfig) -> Result<()> {
             "every source.handoff_archive_urls entry must start with http:// or https://".into(),
         ));
     }
+    if source
+        .fork_proof_archive_urls
+        .iter()
+        .any(|url| !is_http_url(url))
+    {
+        return Err(context(
+            "every source.fork_proof_archive_urls entry must start with http:// or https://".into(),
+        ));
+    }
     if !is_http_url(&destination.rpc_url) {
         return Err(context(
             "destination.rpc_url must start with http:// or https://".into(),
@@ -1049,6 +1065,11 @@ light_client = \"0x2222222222222222222222222222222222222222\"
                 "beacon_url = \"https://beacon.example.org\"\nhandoff_archive_urls = [\"archive.example.net\"]",
                 "every source.handoff_archive_urls entry must start with",
             ),
+            (
+                "beacon_url = \"https://beacon.example.org\"",
+                "beacon_url = \"https://beacon.example.org\"\nfork_proof_archive_urls = [\"archive.example.net\"]",
+                "every source.fork_proof_archive_urls entry must start with",
+            ),
         ];
         for (from, to, expected) in cases {
             let error = Config::load(&SAMPLE.replace(from, to), &no_environment)
@@ -1068,11 +1089,13 @@ light_client = \"0x2222222222222222222222222222222222222222\"
         let plain = Config::load(SAMPLE, &no_environment).unwrap();
         let (_, route) = plain.route(None).unwrap();
         assert!(
-            route.source.handoff_urls.is_empty() && route.source.handoff_archive_urls.is_empty()
+            route.source.handoff_urls.is_empty()
+                && route.source.handoff_archive_urls.is_empty()
+                && route.source.fork_proof_archive_urls.is_empty()
         );
         let with = SAMPLE.replace(
             "beacon_url = \"https://beacon.example.org\"",
-            "beacon_url = \"https://beacon.example.org\"\nhandoff_urls = [\"https://more.example.org\"]\nhandoff_archive_urls = [\"http://127.0.0.1:8787/archive/handoffs\"]",
+            "beacon_url = \"https://beacon.example.org\"\nhandoff_urls = [\"https://more.example.org\"]\nhandoff_archive_urls = [\"http://127.0.0.1:8787/archive/handoffs\"]\nfork_proof_archive_urls = [\"http://127.0.0.1:8787/archive/fork-proofs\"]",
         );
         let loaded = Config::load(&with, &no_environment).unwrap();
         let (_, route) = loaded.route(None).unwrap();
@@ -1083,6 +1106,10 @@ light_client = \"0x2222222222222222222222222222222222222222\"
         assert_eq!(
             route.source.handoff_archive_urls,
             vec!["http://127.0.0.1:8787/archive/handoffs".to_string()]
+        );
+        assert_eq!(
+            route.source.fork_proof_archive_urls,
+            vec!["http://127.0.0.1:8787/archive/fork-proofs".to_string()]
         );
     }
 

@@ -8,6 +8,7 @@ import type { CommandExecutor, CommandSpec } from "../src/prover/execute-command
 import { EXIT_UP_TO_DATE, ProverCommandError, ProverOutputError, createProverBinary, parseHandoffRecord } from "../src/prover/prover-binary.js";
 import { describeRoute, renderProverConfig } from "../src/prover/prover-config.js";
 import { evidenceFor, memoryLogger, word } from "./support/prover-builders.js";
+import { forkProofRecordFixture } from "./support/fork-proof-fixture.js";
 
 function section(chainId: number, seed: number) {
   const make = (offset: number) => `0x${(seed + offset).toString(16).padStart(2, "0").repeat(20)}`;
@@ -50,7 +51,7 @@ interface Seen {
   readonly configPath: string | null;
 }
 
-async function setup(answer: { code: number; stdout?: string; stderr?: string }, extra: { backend?: typeof remote | null; secret?: boolean; defaultDirectory?: boolean; handoff?: { webhookUrl: string; bearerVariable: string }; stateCacheDirectory?: string; proofCacheDirectory?: string; handoffArchiveUrls?: readonly string[] } = {}) {
+async function setup(answer: { code: number; stdout?: string; stderr?: string }, extra: { backend?: typeof remote | null; secret?: boolean; defaultDirectory?: boolean; handoff?: { webhookUrl: string; bearerVariable: string }; stateCacheDirectory?: string; proofCacheDirectory?: string; handoffArchiveUrls?: readonly string[]; forkProofArchiveUrls?: readonly string[] } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "prover-binary-"));
   scratch.push(directory);
   const seen: Seen[] = [];
@@ -78,6 +79,7 @@ async function setup(answer: { code: number; stdout?: string; stderr?: string },
     ...(extra.stateCacheDirectory === undefined ? {} : { stateCacheDirectory: extra.stateCacheDirectory }),
     ...(extra.proofCacheDirectory === undefined ? {} : { proofCacheDirectory: extra.proofCacheDirectory }),
     ...(extra.handoffArchiveUrls === undefined ? {} : { handoffArchiveUrls: extra.handoffArchiveUrls }),
+    ...(extra.forkProofArchiveUrls === undefined ? {} : { forkProofArchiveUrls: extra.forkProofArchiveUrls }),
     logger,
   });
   return { binary, seen, directory, events };
@@ -255,6 +257,31 @@ describe("handoff-update", () => {
     expect(() => parseHandoffRecord(JSON.stringify({ format: "zkb-handoff-update/1", update: null }))).toThrow(ProverOutputError);
     expect(() => parseHandoffRecord("null")).toThrow(ProverOutputError);
     expect(() => parseHandoffRecord(JSON.stringify({ format: "zkb-handoff-update/1", update: {}, chainId: 1, period: -1, attestedSlot: 1, finalizedSlot: 1, signatureSlot: 1 }))).toThrow(/numbers/);
+  });
+});
+
+describe("fork-proof", () => {
+  const fixture = forkProofRecordFixture({ chainId: 369 });
+  const transactionHash = word(9);
+
+  it("runs fork-proof on the route with the transaction, and gives the checked record with its text exactly", async () => {
+    const { binary, seen } = await setup({ code: 0, stdout: `${fixture.text}\n` }, { backend: null, forkProofArchiveUrls: ["http://127.0.0.1:8787/archive/fork-proofs"] });
+    const answer = await binary.forkProof({ direction: "second-to-first", transactionHash, chainId: 369 });
+    expect(answer).toMatchObject({ text: fixture.text, chainId: 369, stateRoot: fixture.stateRoot, slot: 5678, executionBlockNumber: 1234, shape: 6 });
+    expect(seen[0]!.spec.args.slice(2)).toEqual(["fork-proof", "--route", "pulsechain_to_ethereum", "--tx", transactionHash]);
+    expect(seen[0]!.configText).toContain('fork_proof_archive_urls = ["http://127.0.0.1:8787/archive/fork-proofs"]');
+  });
+
+  it("throws the command error with the tail of standard error", async () => {
+    const { binary } = await setup({ code: 1, stderr: "the beacon block is not final yet" }, { backend: null });
+    await expect(binary.forkProof({ direction: "second-to-first", transactionHash, chainId: 369 })).rejects.toThrow(/not final yet/);
+  });
+
+  it("refuses a record that fails the check, and output that is not one JSON line", async () => {
+    const other = await setup({ code: 0, stdout: `${fixture.text}\n` }, { backend: null });
+    await expect(other.binary.forkProof({ direction: "first-to-second", transactionHash, chainId: 1 })).rejects.toThrow(/fails the check: another chain/);
+    const twoLines = await setup({ code: 0, stdout: `${fixture.text}\n${fixture.text}\n` }, { backend: null });
+    await expect(twoLines.binary.forkProof({ direction: "second-to-first", transactionHash, chainId: 369 })).rejects.toThrow(ProverOutputError);
   });
 });
 

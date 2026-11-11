@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { keccak256, type Hex } from "viem";
 import { z } from "zod";
 import { decodeLightClientOutput, PROOF_DIRECTIONS, type ProofDirection } from "@zk-bridge/shared";
-import { proofCacheEntrySchema } from "@zk-bridge/shared/prover";
+import { checkForkProofRecord, proofCacheEntrySchema } from "@zk-bridge/shared/prover";
 
 /**
  * The rows of the proof archive as plain records: the shape of the read routes, of the export files (one JSON record a
@@ -182,6 +182,56 @@ export function handoffRecord(input: { readonly chainId: number; readonly period
       sha256: createHash("sha256").update(input.record).digest("hex"),
       attestedSlot,
       finalizedSlot,
+      storedAt: input.storedAt,
+      source: input.source,
+    },
+  };
+}
+
+/**
+ * The fork proof of one source beacon block: the `MessageProof.sourceFork` (the fork version and the genesis validators
+ * root, each proven under the state root of the block), saved while a beacon node still serves the state. `record` is the
+ * JSON text exactly as the backend stored it (canonical, sorted keys), so the bytes and the hash hold; `sha256` is the hex
+ * SHA-256 of that text. The other fields are read from the text. Several messages in one block share one record; the key
+ * is the chain and the state root. The data is public and untrusted: every holder checks it with `checkForkProofRecord`.
+ */
+export const forkProofRecordSchema = z.object({
+  chainId: z.number().int().positive().max(INTEGER_COLUMN),
+  stateRoot: z.string().regex(/^0x[0-9a-f]{64}$/),
+  slot: z.number().int().nonnegative(),
+  blockRoot: z.string().regex(/^0x[0-9a-f]{64}$/),
+  executionBlockNumber: z.number().int().nonnegative(),
+  executionBlockHash: z.string().regex(/^0x[0-9a-f]{64}$/),
+  shape: z.number().int().nonnegative().max(INTEGER_COLUMN),
+  record: z.string().min(1),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  storedAt: z.number().int().nullable().default(null),
+  source: z.string().min(1),
+});
+export type ForkProofArchiveRecord = z.infer<typeof forkProofRecordSchema>;
+
+/**
+ * Checks a fork proof text against the key it is stored under (the whole check of `checkForkProofRecord`: the shape and
+ * both branches against the state root) and builds its archive record. A text that fails is refused with the reason
+ * (never the text itself).
+ */
+export function forkProofArchiveRecord(input: { readonly chainId: number; readonly stateRoot: string; readonly record: string; readonly storedAt: number | null; readonly source: string }): { ok: true; record: ForkProofArchiveRecord } | { ok: false; reason: string } {
+  if (input.chainId < 1 || input.chainId > INTEGER_COLUMN) return { ok: false, reason: "the chain is out of range" };
+  const checked = checkForkProofRecord(input.record, { chainId: input.chainId, stateRoot: input.stateRoot });
+  if (!checked.ok) return { ok: false, reason: checked.reason };
+  const { chainId, slot, blockRoot, stateRoot, executionBlockNumber, executionBlockHash, shape } = checked.record;
+  return {
+    ok: true,
+    record: {
+      chainId,
+      stateRoot,
+      slot,
+      blockRoot,
+      executionBlockNumber,
+      executionBlockHash,
+      shape,
+      record: input.record,
+      sha256: createHash("sha256").update(input.record).digest("hex"),
       storedAt: input.storedAt,
       source: input.source,
     },

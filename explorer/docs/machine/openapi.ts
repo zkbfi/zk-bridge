@@ -205,6 +205,24 @@ export const buildIndexerSpec = (): OpenApiDocument => {
           { ...badRequest, ...notFound, ...archiveOff },
         ),
       },
+      "/api/proofs/fork-proofs/{chainId}": {
+        get: get(
+          "Archived fork proofs",
+          "The source blocks of a chain whose fork proof the archive holds, ascending by slot: slot, state root, block root and execution block number.",
+          [path("chainId", "Source chain id.", { type: "integer" }), query("fromSlot", "First slot to list.", { type: "string", pattern: "^\\d+$", default: "0" }), limit(500, 100)],
+          json(list("entries", open("One source block.")), "The entries."),
+          { ...badRequest, ...archiveOff },
+        ),
+      },
+      "/api/proofs/fork-proofs/{chainId}/{file}": {
+        get: get(
+          "Archived fork proof",
+          "The fork proof of one source block (`format` zkb-fork-proof/1): `fork.current_version` and `genesis_validators_root` proven under its state root, exactly as archived. A prover reads it at `<base>/<chainId>/<stateRoot>.json` when no node serves that state; it checks both branches against the state root, so the record needs no trust.",
+          [path("chainId", "Source chain id.", { type: "integer" }), path("file", "`<stateRoot>.json`.", { type: "string", pattern: "^0x[0-9a-fA-F]{64}\\.json$" })],
+          json(open("The record."), "The record."),
+          { ...badRequest, ...notFound, ...archiveOff },
+        ),
+      },
     },
     components: {
       schemas: {
@@ -316,12 +334,15 @@ export const buildBackendSpec = (): OpenApiDocument => {
           deprecated: true,
         },
       },
-      "/archive/proofs": { get: get("Archived proof rows", "The proofs the backend archived, and the handoff records of the last 7 days.", [], json(open("The rows."), "The rows.")) },
+      "/archive/proofs": { get: get("Archived proof rows", "The proofs the backend archived, and the handoff and fork proof records of the last 7 days.", [], json(open("The rows."), "The rows.")) },
       "/archive/handoffs/{chainId}": {
         get: get("Handoff periods", "The periods of a source chain whose committee handoff update this backend captured.", [path("chainId", "Source chain id.", { type: "integer" })], json(list("periods", { type: "integer" }), "The periods."), { "400": errorResponse("Not a chain id.") }),
       },
       "/archive/handoffs/{chainId}/{file}": {
         get: get("Handoff update", "The record of one period (`<period>.json`), exactly as captured.", [path("chainId", "Source chain id.", { type: "integer" }), path("file", "`<period>.json`.", { type: "string", pattern: "^\\d+\\.json$" })], json(open("The record."), "The record."), { "400": errorResponse("Not a chain id or a period file."), "404": errorResponse("No record for this period.") }),
+      },
+      "/archive/fork-proofs/{chainId}/{file}": {
+        get: get("Fork proof", "The fork proof record of one source block (`<stateRoot>.json`), exactly as captured.", [path("chainId", "Source chain id.", { type: "integer" }), path("file", "`<stateRoot>.json`.", { type: "string", pattern: "^0x[0-9a-fA-F]{64}\\.json$" })], json(open("The record."), "The record."), { "400": errorResponse("Not a chain id or a state root file."), "404": errorResponse("No record for this state.") }),
       },
       "/evidence/{messageId}": { get: get("Delivery evidence", "The archived evidence of a delivery, as JSON.", [messageId], json(open("The evidence."), "The evidence."), { "400": errorResponse("Not a message identifier."), "404": errorResponse("No evidence for this message.") }) },
       "/proofs/latest/{direction}": {

@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import { PROOF_DIRECTIONS } from "@zk-bridge/shared";
 import { proofArchive } from "../../proof-archive/runtime";
-import { publicEvidence, publicLightClientProof, publicStorageProof } from "../../proof-archive/public";
+import { publicEvidence, publicForkProofEntry, publicLightClientProof, publicStorageProof } from "../../proof-archive/public";
 import type { ProofArchive } from "../../proof-archive/store";
 
 /**
@@ -15,6 +15,11 @@ import type { ProofArchive } from "../../proof-archive/store";
  * - `GET /api/proofs/handoffs/:chainId`: `{ periods }`, the sync-committee periods that have a handoff update, ascending.
  * - `GET /api/proofs/handoffs/:chainId/<period>.json`: the handoff update of one period, the JSON text exactly as stored
  *   (404 when none). The same layout as `handoff-updates/<chain id>/<period>.json` in the IPFS tree.
+ * - `GET /api/proofs/fork-proofs/:chainId?fromSlot=&limit=`: `{ entries: [{ slot, stateRoot, blockRoot, executionBlockNumber }] }`,
+ *   the fork proofs of source blocks, ascending by slot from `fromSlot` (default 0), `limit` default 100, at most 500.
+ * - `GET /api/proofs/fork-proofs/:chainId/<stateRoot>.json`: the fork proof record of one source block, the JSON text
+ *   exactly as stored (404 when none, 400 for another file name). The same layout as `fork-proofs/<chain id>/<state root>.json`
+ *   in the IPFS tree, so a prover reads both with `<base>/<chain id>/<state root>.json`.
  * - `GET /api/proofs/summary`: row counts.
  *
  * 503 when the archive is off or its database cannot be reached.
@@ -24,6 +29,7 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const MESSAGE_ID = /^0x[0-9a-fA-F]{64}$/;
 const DECIMAL = /^\d{1,19}$/;
 const MAX_INTEGER = 2_147_483_647;
+const FORK_PROOF_FILE = /^(0x[0-9a-fA-F]{64})\.json$/;
 const HANDOFF_FILE = /^(\d{1,10})\.json$/;
 
 /** Registers the routes. `archive` is for a test; the default is the archive of the process. */
@@ -80,6 +86,30 @@ export const registerProofRoutes = (app: Hono, archive: () => Promise<ProofArchi
     if (target === null) return c.json(unavailable, 503);
     const found = await target.handoff(Number(chainId), Number(name[1]));
     if (found === null) return c.json({ error: "no archived handoff update for this period" }, 404);
+    return c.body(found.record, 200, { "content-type": "application/json" });
+  });
+
+  app.get("/api/proofs/fork-proofs/:chainId", async (c) => {
+    const chainId = c.req.param("chainId");
+    const fromSlot = c.req.query("fromSlot") ?? "0";
+    const limitText = c.req.query("limit") ?? "100";
+    if (!DECIMAL.test(chainId) || Number(chainId) > MAX_INTEGER || !DECIMAL.test(fromSlot) || !DECIMAL.test(limitText) || Number(limitText) < 1 || Number(limitText) > 500) {
+      return c.json({ error: "expected a chain id, fromSlot a slot and limit between 1 and 500" }, 400);
+    }
+    const target = await archive();
+    if (target === null) return c.json(unavailable, 503);
+    const entries = await target.forkProofs({ chainId: Number(chainId), fromSlot: BigInt(fromSlot), limit: Number(limitText) });
+    return c.json({ entries: entries.map(publicForkProofEntry) });
+  });
+
+  app.get("/api/proofs/fork-proofs/:chainId/:file", async (c) => {
+    const { chainId, file } = c.req.param();
+    const name = FORK_PROOF_FILE.exec(file);
+    if (!DECIMAL.test(chainId) || Number(chainId) > MAX_INTEGER || name === null) return c.json({ error: "expected a chain id and <state root>.json" }, 400);
+    const target = await archive();
+    if (target === null) return c.json(unavailable, 503);
+    const found = await target.forkProof(Number(chainId), name[1] as string);
+    if (found === null) return c.json({ error: "no archived fork proof for this state root" }, 404);
     return c.body(found.record, 200, { "content-type": "application/json" });
   });
 

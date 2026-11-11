@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Hex } from "viem";
 import { z } from "zod";
 import { PROOF_DIRECTIONS, tryDecodeProofMessage } from "@zk-bridge/shared";
-import { evidenceRecord, handoffRecord, lightClientRecord } from "./records";
+import { evidenceRecord, forkProofArchiveRecord, handoffRecord, lightClientRecord } from "./records";
 import { logArchive } from "./runtime";
 import { emptyTally, type ProofArchive, type UpsertTally } from "./store";
 
@@ -12,7 +12,8 @@ import { emptyTally, type ProofArchive, type UpsertTally } from "./store";
  * sent back for jobs (`webhook_proofs`, posted to the board or still held), and the delivery evidence of messages
  * (`evidence`). A held proof exists nowhere else, and the backend drops a held proof whose job ended and evidence whose
  * message was delivered, so the archive takes a copy of each. The backend also captures the handoff update of every
- * sync-committee period of each source chain (`handoff_updates`), which the archive keeps for good. Two ways in: the backend's private route
+ * sync-committee period of each source chain (`handoff_updates`), which the archive keeps for good, and the fork proof of each source block that carries a message (`fork_proofs`),
+ * likewise. Two ways in: the backend's private route
  * `GET /archive/proofs` (polled by the indexer) and a snapshot of its SQLite file (the export and import scripts).
  */
 
@@ -28,6 +29,8 @@ export const backendRowsSchema = z.object({
   evidence: z.array(z.object({ messageId: hex, direction, body: z.string(), storedAt: z.number() })).default([]),
   /** The handoff updates the backend stored in the last 7 days (older ones come in with the nightly snapshot). */
   handoffs: z.array(z.object({ chainId: z.number().int(), period: z.number().int(), record: z.string(), storedAt: z.number() })).default([]),
+  /** The fork proofs of source blocks the backend stored in the last 7 days (older ones come in with the nightly snapshot). */
+  forkProofs: z.array(z.object({ chainId: z.number().int(), stateRoot: z.string(), record: z.string(), storedAt: z.number() })).default([]),
 });
 export type BackendRows = z.infer<typeof backendRowsSchema>;
 
@@ -72,6 +75,17 @@ export async function ingestBackendRows(archive: ProofArchive, pairName: string,
     const outcome = await archive.putHandoff(checked.record);
     tally[outcome] += 1;
     if (outcome === "conflict") logArchive("warn", "proof_archive_conflict", { table: "handoff_updates", chainId: row.chainId, period: row.period });
+  }
+  for (const row of rows.forkProofs) {
+    const checked = forkProofArchiveRecord({ chainId: row.chainId, stateRoot: row.stateRoot, record: row.record, storedAt: row.storedAt, source: "backend" });
+    if (!checked.ok) {
+      tally.invalid += 1;
+      logArchive("warn", "proof_archive_fork_proof_refused", { chainId: row.chainId, stateRoot: row.stateRoot, reason: checked.reason });
+      continue;
+    }
+    const outcome = await archive.putForkProof(checked.record);
+    tally[outcome] += 1;
+    if (outcome === "conflict") logArchive("warn", "proof_archive_conflict", { table: "fork_proofs", chainId: row.chainId, stateRoot: row.stateRoot });
   }
   return tally;
 }
@@ -130,7 +144,16 @@ export function readBackendSnapshot(path: string): { rows: BackendRows; skipped:
           storedAt: row.stored_at,
         }))
       : [];
-    const parsed = backendRowsSchema.safeParse({ board, held, evidence, handoffs });
+    type ForkProof = { chain_id: number; state_root: string; record: string; stored_at: number };
+    const forkProofs = tableExists(database, "fork_proofs")
+      ? (database.prepare("SELECT chain_id, state_root, record, stored_at FROM fork_proofs ORDER BY chain_id, state_root").all() as ForkProof[]).map((row) => ({
+          chainId: row.chain_id,
+          stateRoot: row.state_root,
+          record: row.record,
+          storedAt: row.stored_at,
+        }))
+      : [];
+    const parsed = backendRowsSchema.safeParse({ board, held, evidence, handoffs, forkProofs });
     if (!parsed.success) throw new Error(`the backend file holds rows of an unknown shape: ${parsed.error.issues[0]?.path.join(".")}`);
     return { rows: parsed.data, skipped };
   } finally {

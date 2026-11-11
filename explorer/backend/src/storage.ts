@@ -103,6 +103,19 @@ CREATE TABLE IF NOT EXISTS handoff_updates (
   stored_at INTEGER NOT NULL,
   PRIMARY KEY (chain_id, period)
 );
+CREATE TABLE IF NOT EXISTS fork_proofs (
+  chain_id INTEGER NOT NULL,
+  state_root TEXT NOT NULL,
+  slot INTEGER NOT NULL,
+  block_root TEXT NOT NULL,
+  execution_block_number INTEGER NOT NULL,
+  execution_block_hash TEXT NOT NULL,
+  record TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  stored_at INTEGER NOT NULL,
+  PRIMARY KEY (chain_id, state_root)
+);
+CREATE INDEX IF NOT EXISTS fork_proofs_by_block ON fork_proofs (chain_id, execution_block_number);
 `;
 
 /**

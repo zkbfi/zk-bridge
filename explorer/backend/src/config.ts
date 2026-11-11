@@ -150,6 +150,25 @@ export const backendConfigSchema = z
       })
       .strict()
       .default({ enabled: true, backfillPeriods: 8, intervalSeconds: 600 }),
+    /**
+     * The archive module reads the sent messages of each direction from the chain indexer and, once a message's block is
+     * final, asks the prover for the fork proof of that block (`zk-bridge-prover fork-proof`), while a beacon node still
+     * serves its state. It keeps the record for good in `fork_proofs` and serves it to the prover, the indexer and the
+     * proof archive (`archive/fork-proofs.ts`). `intervalSeconds`: how often it looks, and the first wait after a failure.
+     */
+    forkProofCapture: z
+      .object({
+        enabled: z.boolean().default(true),
+        intervalSeconds: z.number().int().min(30).default(120),
+      })
+      .strict()
+      .default({ enabled: true, intervalSeconds: 120 }),
+    /**
+     * More base URLs of the fork proof archive (`<base>/<chainId>/<stateRoot>.json`), asked by the `evidence` command
+     * after this backend's own table and the chain indexer's (`<indexerUrl>/api/proofs/fork-proofs`), such as a published
+     * IPFS tree (`https://<gateway>/ipfs/<cid>/fork-proofs`). Nothing in a record is trusted: the prover checks it.
+     */
+    forkProofArchiveUrls: z.array(z.url({ protocol: /^https?$/ })).default([]),
     /** The msgboard node (`ws://`, `wss://`, `http://` or `https://`). Needed by the webhook and the msgboard indexer. It can carry a key. */
     msgboardUrl: z.string().regex(/^(wss?|https?):\/\/\S+$/, "must be a ws, wss, http or https address").optional(),
     /**
@@ -358,7 +377,7 @@ export function loadBackendPair(config: BackendConfig, deployment: unknown): Pai
  */
 export function endpointValues(config: BackendConfig, pair: Pair | null): string[] {
   const fromPair = (pair?.sides ?? []).flatMap((side) => [side.rpcUrl, side.beaconUrl ?? "", ...(side.stateUrls ?? []), ...(side.headerRpcUrls ?? []), ...(side.handoffUrls ?? [])]);
-  return [...Object.values(config.rpcUrls), ...Object.values(config.beaconUrls), ...Object.values(config.stateUrls).flat(), ...Object.values(config.headerRpcUrls).flat(), ...Object.values(config.handoffUrls).flat(), ...config.handoffArchiveUrls, config.msgboardUrl ?? "", ...remoteEndpoints(config).map((endpoint) => endpoint.url), config.indexerUrl ?? "", ...fromPair].filter((value) => value !== "");
+  return [...Object.values(config.rpcUrls), ...Object.values(config.beaconUrls), ...Object.values(config.stateUrls).flat(), ...Object.values(config.headerRpcUrls).flat(), ...Object.values(config.handoffUrls).flat(), ...config.handoffArchiveUrls, ...config.forkProofArchiveUrls, config.msgboardUrl ?? "", ...remoteEndpoints(config).map((endpoint) => endpoint.url), config.indexerUrl ?? "", ...fromPair].filter((value) => value !== "");
 }
 
 /** The shortest path segment that counts as a key. Shorter segments, such as `rpc` or `evm`, are plain words. */
@@ -382,8 +401,21 @@ export function endpointSecrets(config: BackendConfig, pair: Pair | null): strin
  * `handoffArchiveUrls`.
  */
 export function handoffArchiveBases(config: BackendConfig): string[] {
+  return archiveBases(config, "handoffs", config.handoffArchiveUrls);
+}
+
+/**
+ * The base URLs of the fork proof archive that a prover run by this backend asks, in order: this backend's own table
+ * (`GET /archive/fork-proofs/<chainId>/<stateRoot>.json`), the chain indexer's read route, then `forkProofArchiveUrls`.
+ */
+export function forkProofArchiveBases(config: BackendConfig): string[] {
+  return archiveBases(config, "fork-proofs", config.forkProofArchiveUrls);
+}
+
+/** This backend's own route `/archive/<name>` on its listen address (loopback for a wildcard), the indexer's, then `more`. */
+function archiveBases(config: BackendConfig, name: string, more: readonly string[]): string[] {
   const host = config.listen.host === "0.0.0.0" || config.listen.host === "::" ? "127.0.0.1" : config.listen.host;
-  const own = `http://${host.includes(":") ? `[${host}]` : host}:${config.listen.port}/archive/handoffs`;
-  const indexer = config.indexerUrl === undefined ? [] : [`${config.indexerUrl.replace(/\/+$/, "")}/api/proofs/handoffs`];
-  return [own, ...indexer, ...config.handoffArchiveUrls];
+  const own = `http://${host.includes(":") ? `[${host}]` : host}:${config.listen.port}/archive/${name}`;
+  const indexer = config.indexerUrl === undefined ? [] : [`${config.indexerUrl.replace(/\/+$/, "")}/api/proofs/${name}`];
+  return [own, ...indexer, ...more];
 }

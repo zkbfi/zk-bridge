@@ -14,6 +14,7 @@ import {
   type ProofPackage,
 } from "./packages.js";
 import { openingPackageSchema, type OpeningPackage } from "./opening-package.js";
+import { checkForkProofRecord, type ForkProofRecord } from "./fork-proof-record.js";
 import { parseProveTiming, type ProveTiming } from "./prove-timing.js";
 import { describeRoute, renderProverConfig, type BackendSection, type HandoffSection } from "./prover-config.js";
 
@@ -96,6 +97,16 @@ export interface HandoffRecord {
   readonly signatureSlot: number;
 }
 
+/** The `fork-proof` command, apart from {@link ProverBinary} like {@link OpeningProver}: only the fork proof capture uses it. */
+export interface ForkProofProver {
+  /**
+   * `fork-proof --route <route> --tx <hash>`: the fork proof record of the source block of `transactionHash`, on the
+   * SOURCE chain of the route of `direction`. @throws ProverCommandError when the block is not final yet or no source
+   * gives the proof. @throws ProverOutputError when the record fails {@link checkForkProofRecord}.
+   */
+  forkProof(request: DirectionRequest & { readonly transactionHash: Hex; readonly chainId: number }): Promise<ForkProofRecord>;
+}
+
 /** The `handoff-update` command, apart from {@link ProverBinary} like {@link OpeningProver}: only the handoff capture uses it. */
 export interface HandoffProver {
   /**
@@ -149,6 +160,8 @@ export interface ProverBinaryInput {
   readonly proofCacheDirectory?: string;
   /** The handoff archive the prover asks last for a missed period (`source.handoff_archive_urls`). */
   readonly handoffArchiveUrls?: readonly string[];
+  /** The fork proof archive the `evidence` command asks before it downloads a source state (`source.fork_proof_archive_urls`). */
+  readonly forkProofArchiveUrls?: readonly string[];
   readonly logger: LogSink;
 }
 
@@ -175,7 +188,7 @@ function parseSingleJsonLine(stdout: string, command: string): unknown {
  * of mode 0700, writes it with mode 0600, and removes the directory when the command ends. The proving key goes to
  * the child through the environment variable that the file names. No secret is ever an argument.
  */
-export function createProverBinary(input: ProverBinaryInput): ProverBinary & OpeningProver & HandoffProver {
+export function createProverBinary(input: ProverBinaryInput): ProverBinary & OpeningProver & HandoffProver & ForkProofProver {
   const environment: Record<string, string> = { ...input.baseEnvironment };
   const secrets: readonly ProverSecret[] = input.proverSecret === null ? [] : "variable" in input.proverSecret ? [input.proverSecret] : input.proverSecret;
   for (const secret of secrets) environment[secret.variable] = secret.value;
@@ -191,6 +204,7 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary & Ope
         ...(input.stateCacheDirectory === undefined ? {} : { stateCacheDirectory: input.stateCacheDirectory }),
         ...(input.proofCacheDirectory === undefined ? {} : { proofCacheDirectory: input.proofCacheDirectory }),
         ...(input.handoffArchiveUrls === undefined ? {} : { handoffArchiveUrls: input.handoffArchiveUrls }),
+        ...(input.forkProofArchiveUrls === undefined ? {} : { forkProofArchiveUrls: input.forkProofArchiveUrls }),
       };
       await writeFile(path, renderProverConfig(route, backend, input.handoff, options), { mode: 0o600 });
       return await use(path, route.name);
@@ -266,6 +280,17 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary & Ope
         const output = await run("handoff-update", ["--config", path, "handoff-update", "--route", route, "--period", String(request.period)]);
         if (output.code !== 0) throw new ProverCommandError("handoff-update", output.code, tailOf(output.stderr));
         return parseHandoffRecord(output.stdout);
+      });
+    },
+    async forkProof(request) {
+      return withConfigFile(request.direction, null, async (path, route) => {
+        const output = await run("fork-proof", ["--config", path, "fork-proof", "--route", route, "--tx", request.transactionHash]);
+        if (output.code !== 0) throw new ProverCommandError("fork-proof", output.code, tailOf(output.stderr));
+        // One JSON line; the check reads the same text that every holder will store and hash.
+        parseSingleJsonLine(output.stdout, "fork-proof");
+        const checked = checkForkProofRecord(output.stdout.trim(), { chainId: request.chainId });
+        if (!checked.ok) throw new ProverOutputError(`fork-proof printed a record that fails the check: ${checked.reason}`);
+        return checked.record;
       });
     },
     async verify(request) {

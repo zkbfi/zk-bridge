@@ -133,6 +133,59 @@ fn get_json_from(client: &dyn HttpGet, path: &str) -> Result<Option<Value>> {
     }
 }
 
+/// The name of a state client in messages: the node, or a state URL by its position.
+fn client_name(index: usize) -> String {
+    match index {
+        0 => "beacon_url".to_string(),
+        _ => format!("state_urls[{}]", index - 1),
+    }
+}
+
+/// The fork proof of the state under `state_root` from the compact multiproof route of one node, each shape in
+/// [`super::fork_archive::SHAPE_REQUEST_ORDER`] until one verifies. A node that does not serve the route (404, 501)
+/// is asked once only.
+///
+/// # Errors
+/// Why this node gave none, in a few words.
+fn multiproof_fork(
+    client: &dyn HttpGet,
+    state_root: &B256,
+    genesis_validators_root: &B256,
+) -> std::result::Result<lc_core::abi::ForkProof, String> {
+    use super::fork_archive::{fork_from_multiproof, multiproof_descriptor, SHAPE_REQUEST_ORDER};
+    let mut failures = Vec::new();
+    for shape in SHAPE_REQUEST_ORDER {
+        let descriptor = multiproof_descriptor(&[
+            shape.current_version_gindex,
+            shape.genesis_validators_root_gindex,
+        ]);
+        let path = format!(
+            "/eth/v0/beacon/proof/state/{state_root:#x}?format={}",
+            alloy_primitives::hex::encode_prefixed(&descriptor)
+        );
+        let answer = match get_json_from(client, &path) {
+            Ok(Some(answer)) => answer,
+            Ok(None) => return Err("not served".into()),
+            Err(error) => return Err(error.to_string()),
+        };
+        let leaves: Option<Vec<B256>> = answer["data"]["leaves"].as_array().and_then(|leaves| {
+            leaves
+                .iter()
+                .map(|leaf| leaf.as_str().and_then(|text| text.parse().ok()))
+                .collect()
+        });
+        let Some(leaves) = leaves else {
+            failures.push(format!("shape {}: an answer of another form", shape.shape));
+            continue;
+        };
+        match fork_from_multiproof(&shape, &leaves, state_root, genesis_validators_root) {
+            Ok(fork) => return Ok(fork),
+            Err(error) => failures.push(format!("shape {}: {error}", shape.shape)),
+        }
+    }
+    Err(failures.join(", "))
+}
+
 /// Logs that a state served one summary short was completed (see `repair_frozen_state`).
 pub fn log_repaired_state(slot: u64, missing_index: u64, state_root: B256) {
     Logger::standard().info(
@@ -444,6 +497,9 @@ pub struct HttpBeaconSource {
     /// The handoff archive (`source.handoff_archive_urls`), asked last, and the chain id its paths name.
     archive: Vec<ArchiveClient>,
     chain_id: u64,
+    /// The fork proof archive (`source.fork_proof_archive_urls`, see [`super::fork_archive`]), asked for the fork proof
+    /// of a source state after the multiproof route and before the whole state (see [`Self::source_fork`]).
+    fork_archive: Vec<ArchiveClient>,
 }
 
 /// What the branch store held for a state root, after the check.
@@ -474,6 +530,7 @@ impl HttpBeaconSource {
             handoff_clients: Vec::new(),
             archive: Vec::new(),
             chain_id: 0,
+            fork_archive: Vec::new(),
         }
     }
 
@@ -496,6 +553,15 @@ impl HttpBeaconSource {
     pub fn with_handoff_archive(mut self, chain_id: u64, archive: Vec<ArchiveClient>) -> Self {
         self.chain_id = chain_id;
         self.archive = archive;
+        self
+    }
+
+    /// The same source with the fork proof archive (`source.fork_proof_archive_urls`, see [`super::fork_archive`]), asked
+    /// for the fork proof of a source state before the whole state is downloaded, and the chain id its paths name. Every record is
+    /// checked against the state root with the genesis validators root of this chain before it is used.
+    pub fn with_fork_proof_archive(mut self, chain_id: u64, archive: Vec<ArchiveClient>) -> Self {
+        self.chain_id = chain_id;
+        self.fork_archive = archive;
         self
     }
 
@@ -801,6 +867,148 @@ impl HttpBeaconSource {
             .fork_schedule()?
             .fork_at_slot(StateView::slot_of_bytes(bytes)?)?;
         StateView::parse_with_fork(bytes, fork)
+    }
+
+    /// A verified state that needs no request: one in memory, or one in the state store (verified again).
+    fn known_state(&self, state_root: B256) -> Option<Arc<StateView>> {
+        let cached = self
+            .state_cache
+            .lock()
+            .expect("lock")
+            .iter()
+            .find(|(root, _)| *root == state_root)
+            .map(|(_, state)| state.clone());
+        cached.or_else(|| self.stored_state(state_root).map(Arc::new))
+    }
+
+    /// The fork proof of the state under `state_root` (`MessageProof.sourceFork`), from the cheapest source that has it:
+    ///
+    /// 1. a verified state in memory or in the state store, without a request;
+    /// 2. the compact multiproof route of Lodestar (`/eth/v0/beacon/proof/state`) on the node, then on each state URL: about
+    ///    1 KB, where a whole Ethereum mainnet state is hundreds of MB;
+    /// 3. the fork proof archive, in order: a record saved when the block was new (about 1 KB);
+    /// 4. the whole state (`/eth/v2/debug/beacon/states`) from the node, then from each state URL (see [`Self::state_for`]):
+    ///    the last resort, because it is hundreds of MB on Ethereum mainnet.
+    ///
+    /// A proof from 2 or 3 is checked against `state_root` with the genesis validators root of this chain, by the rule of
+    /// `ForkShape.judge`, before it is used: no node and no archive is trusted. A proof from 1 or 4 comes from a state that
+    /// hashed to `state_root`. The archive comes before the whole state because a checked record is as sound as the state
+    /// and costs a thousandth of the download.
+    ///
+    /// # Errors
+    /// `Error::Beacon` naming the state root and why each source gave none.
+    pub fn source_fork(&self, state_root: B256) -> Result<lc_core::abi::ForkProof> {
+        if let Some(state) = self.known_state(state_root) {
+            return Ok(state.fork_proof());
+        }
+        let genesis = self.chain.spec().genesis_validators_root;
+        let clients = std::iter::once(self.client.as_ref())
+            .chain(self.state_clients.iter().map(|client| client.as_ref()));
+        let mut reasons = Vec::new();
+        for (index, client) in clients.enumerate() {
+            match multiproof_fork(client, &state_root, &genesis) {
+                Ok(fork) => return Ok(fork),
+                Err(reason) => reasons.push(format!("{} multiproof: {reason}", client_name(index))),
+            }
+        }
+        for archive in &self.fork_archive {
+            match super::fork_archive::ask_fork_archive(
+                archive,
+                self.chain_id,
+                &state_root,
+                &genesis,
+            ) {
+                Ok(fork) => {
+                    Logger::standard().info(
+                        "fork_proof_from_archive",
+                        &[
+                            ("state_root", format!("{state_root:#x}")),
+                            ("archive", archive.host.clone()),
+                        ],
+                    );
+                    return Ok(fork);
+                }
+                Err(reason) => {
+                    reasons.push(format!("fork proof archive {}: {reason}", archive.host))
+                }
+            }
+        }
+        let state_error = match self.state_for(state_root) {
+            Ok(state) => return Ok(state.fork_proof()),
+            Err(error) => error,
+        };
+        reasons.push(format!("state: {state_error}"));
+        Err(Error::Beacon(format!(
+            "no source gave the fork proof of the state {state_root:#x}: {}",
+            reasons.join("; ")
+        )))
+    }
+
+    /// The record of the fork proof of the source header of the messages in `source` (see [`super::fork_archive`]), for
+    /// the backend to keep while a node still serves the state. The header is the one a message proof takes: the beacon
+    /// block of `source` before Gloas, and from Gloas on the first later block whose bid names `source` as its parent
+    /// block hash. The header must be final, so it is the canonical one. The fork proof comes from the node and the state
+    /// URLs only (see [`Self::source_fork`]; the source has no fork proof archive when it builds a record).
+    ///
+    /// # Errors
+    /// `Error::Beacon` when the header is not final yet (ask again later), when no block of the node holds `source`, or
+    /// when no source gives the fork proof.
+    pub fn fork_proof_record(&self, source: &SourceBlock, chain_id: u64) -> Result<Value> {
+        let source_slot = self.slot_for_timestamp(source.timestamp)?;
+        let finalized =
+            Self::require(self.header_by_id("finalized")?, "the finalized header")?.slot;
+        let not_final = || {
+            Error::Beacon(format!(
+                "the beacon block of execution block {} is not final yet (finalized slot {finalized}); ask again later",
+                source.number
+            ))
+        };
+        let header = if self.is_gloas_slot(source_slot)? {
+            let last = source_slot + MAX_SLOTS_AFTER_PAYLOAD;
+            let mut found = None;
+            for slot in source_slot + 1..=last.min(finalized) {
+                let Some(bytes) = self.get_ssz(&format!("/eth/v2/beacon/blocks/{slot}"))? else {
+                    continue;
+                };
+                let block = GloasBlockView::parse(&bytes)?;
+                if block.bid_parent_block_hash() == source.hash {
+                    found = Some(block.header());
+                    break;
+                }
+            }
+            match found {
+                Some(header) => header,
+                None if last > finalized => return Err(not_final()),
+                None => {
+                    return Err(Error::Beacon(format!(
+                        "no canonical block between slot {} and slot {last} has a bid that names the execution block {:#x} as its parent_block_hash",
+                        source_slot + 1,
+                        source.hash
+                    )))
+                }
+            }
+        } else {
+            if source_slot > finalized {
+                return Err(not_final());
+            }
+            let block = Self::require(
+                self.block_by_id(&source_slot.to_string())?,
+                &format!("the block at slot {source_slot}"),
+            )?;
+            if block.payload.block_hash != source.hash {
+                return Err(Error::Beacon(format!(
+                    "the beacon block at slot {source_slot} carries execution block {:#x}, not {:#x}",
+                    block.payload.block_hash, source.hash
+                )));
+            }
+            block.header
+        };
+        let genesis = self.chain.spec().genesis_validators_root;
+        let fork = self.source_fork(header.state_root)?;
+        let shape = super::fork_archive::verified_shape(&fork, &header.state_root, &genesis)?;
+        Ok(super::fork_archive::record_json(
+            chain_id, &header, source, &fork, shape, &genesis,
+        ))
     }
 
     /// The state from the state store, verified again. A stored state that fails is removed, and `None` sends the
@@ -1628,7 +1836,7 @@ impl HttpBeaconSource {
         }
         let ancestry_branch =
             self.ancestry_branch_for(&anchor, source_slot, header_root(&block.header))?;
-        let source_fork = self.state_for(block.header.state_root)?.fork_proof();
+        let source_fork = self.source_fork(block.header.state_root)?;
         Ok(BeaconPath {
             anchor_header: anchor,
             source_header: block.header,
@@ -1690,7 +1898,7 @@ impl HttpBeaconSource {
             let header = block.header();
             let ancestry_branch =
                 self.ancestry_branch_for(&anchor, header.slot, header_root(&header))?;
-            let source_fork = self.state_for(header.state_root)?.fork_proof();
+            let source_fork = self.source_fork(header.state_root)?;
             return Ok(BeaconPath {
                 anchor_header: anchor,
                 source_header: header,
@@ -1798,7 +2006,7 @@ impl HttpBeaconSource {
             self.block_by_id(&slot.to_string())?,
             &format!("the block at slot {slot}"),
         )?;
-        let fork = self.state_for(block.header.state_root)?.fork_proof();
+        let fork = self.source_fork(block.header.state_root)?;
         Ok(Some(HashEvidence {
             gindex: block_hash_gindex(self.chain, slot)?,
             header: block.header,
@@ -4984,5 +5192,466 @@ mod header_repair_tests {
                 kind_committee_hash(PERIOD + 1)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod fork_proof_tests {
+    //! Tests of the fork proof of a source state: the record that the backend keeps while a node serves the state, and
+    //! the order in which a message proof gets it (a known state, the multiproof route, the whole state, the archive).
+
+    use super::tests::{sepolia_fixtures, source_over_node, Node};
+    use super::*;
+    use crate::beacon::fork_archive::tests::leaves_of;
+    use crate::beacon::fork_archive::{fork_from_record, multiproof_descriptor};
+    use crate::rpc::HttpResponse;
+    use alloy_primitives::{hex, keccak256};
+    use lc_core::chain::{ForkName, ETHEREUM_MAINNET, SEPOLIA};
+    use lc_core::layout::OBSERVED_SHAPE_PROGRESSIVE;
+    use lc_testkit::block_bytes::{BlockBytes, PayloadFields};
+    use lc_testkit::state_bytes::StateBytes;
+    use lc_testkit::synthetic::committee_for;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const SEPOLIA_ID: u64 = 11_155_111;
+
+    /// A node over pages that counts the requests of each path prefix.
+    struct Counting {
+        pages: HashMap<String, Vec<u8>>,
+        multiproof_requests: Arc<AtomicUsize>,
+        state_requests: Arc<AtomicUsize>,
+    }
+
+    impl HttpGet for Counting {
+        fn get(&self, path_and_query: &str, accept: &str) -> Result<HttpResponse> {
+            if path_and_query.starts_with("/eth/v0/beacon/proof/state/") {
+                self.multiproof_requests.fetch_add(1, Ordering::SeqCst);
+            }
+            if path_and_query.starts_with("/eth/v2/debug/beacon/states/") {
+                self.state_requests.fetch_add(1, Ordering::SeqCst);
+            }
+            Node(self.pages.clone()).get(path_and_query, accept)
+        }
+    }
+
+    /// The real Sepolia Gloas world: the execution block X (slot 11441215), the real block B after it (slot 11441216)
+    /// whose bid names X, B's real state, the genesis, and a finalized header at `finalized_slot`. Returns the pages, X,
+    /// the real anchor head and the state root of B.
+    fn gloas_world(
+        finalized_slot: u64,
+    ) -> (HashMap<String, Vec<u8>>, SourceBlock, StoredHead, B256) {
+        let read = |name: &str| std::fs::read(sepolia_fixtures().join(name)).unwrap();
+        let json =
+            |name: &str| -> serde_json::Value { serde_json::from_slice(&read(name)).unwrap() };
+        let source_fixture = json("gloas_message_source.json");
+        let block_fixture = json("gloas_message_block.json");
+        let head_fixture = json("gloas_head_execution_header.json");
+        let anchor = beacon_header_from_json(&source_fixture["response"]["anchor_header"]).unwrap();
+        let state_root: B256 = source_fixture["response"]["source_header"]["state_root"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let timestamp = block_fixture["response"]["timestamp"].as_u64().unwrap();
+        let x_slot = (timestamp - 1_655_733_600) / 12;
+        let mut finalized = source_fixture["response"]["anchor_header"].clone();
+        finalized["slot"] = serde_json::json!(finalized_slot.to_string());
+        let pages = HashMap::from([
+            ("/eth/v1/beacon/genesis".to_string(), br#"{"data":{"genesis_time":"1655733600"}}"#.to_vec()),
+            (
+                "/eth/v1/beacon/headers/finalized".to_string(),
+                serde_json::json!({"data": {"header": {"message": finalized}}}).to_string().into_bytes(),
+            ),
+            (
+                format!("/eth/v1/beacon/headers/{}", anchor.slot),
+                serde_json::json!({"data": {"header": {"message": source_fixture["response"]["anchor_header"]}}})
+                    .to_string()
+                    .into_bytes(),
+            ),
+            (format!("/eth/v2/debug/beacon/states/{:#x}", anchor.state_root), read("gloas_anchor_state.ssz")),
+            (format!("/eth/v2/debug/beacon/states/{state_root:#x}"), read("gloas_head_state.ssz")),
+            (format!("/eth/v2/beacon/blocks/{}", x_slot + 1), read("gloas_head_block.ssz")),
+        ]);
+        let x = SourceBlock {
+            number: block_fixture["response"]["block_number"].as_u64().unwrap(),
+            hash: keccak256(hex::decode(head_fixture["raw_header"].as_str().unwrap()).unwrap()),
+            timestamp,
+        };
+        let head = StoredHead {
+            slot: anchor.slot,
+            root: header_root(&anchor),
+            next_committee_hash: B256::ZERO,
+        };
+        (pages, x, head, state_root)
+    }
+
+    fn archive_of(pages: Vec<(String, Vec<u8>)>) -> ArchiveClient {
+        ArchiveClient {
+            host: "archive.example.org".into(),
+            client: Box::new(Node(pages.into_iter().collect())),
+        }
+    }
+
+    /// Claim: for a REAL Sepolia Gloas message the record holds the fork proof of the state of B (the block whose bid names
+    /// X), with the progressive shape, B's root and slot and X's number and hash, and it checks against B's state root.
+    /// With B's state gone from every node, the message proof takes the fork proof from the archive and is the same proof.
+    /// Controls: a record with one flipped branch entry is refused and the error names the archive; with no archive, the
+    /// error names every source tried; a finalized slot before B gives "not final yet".
+    /// Why it matters: this is the case the owner asked for. A message must stay provable after the nodes pruned the state
+    /// of its block, and a wrong record must never reach a proof.
+    #[test]
+    fn a_saved_gloas_record_proves_the_message_once_the_state_is_gone() {
+        let (pages, x, head, state_root) = gloas_world(11_441_300);
+        let source = source_over_node(ChainKind::Sepolia, Node(pages.clone()));
+        let record = source.fork_proof_record(&x, SEPOLIA_ID).unwrap();
+        assert_eq!(record["shape"], 255);
+        assert_eq!(record["slot"], 11_441_216);
+        assert_eq!(record["stateRoot"], format!("{state_root:#x}"));
+        assert_eq!(record["executionBlockNumber"], x.number);
+        assert_eq!(record["executionBlockHash"], format!("{:#x}", x.hash));
+        let with_state = source.message_path(&x, &head).unwrap();
+        let from_record = fork_from_record(
+            &record,
+            SEPOLIA_ID,
+            &state_root,
+            &SEPOLIA.genesis_validators_root,
+        )
+        .unwrap();
+        assert_eq!(from_record, with_state.source_fork);
+
+        let mut pruned = pages.clone();
+        pruned.remove(&format!("/eth/v2/debug/beacon/states/{state_root:#x}"));
+        let archive_path = format!("/{SEPOLIA_ID}/{state_root:#x}.json");
+        let good = source_over_node(ChainKind::Sepolia, Node(pruned.clone()))
+            .with_fork_proof_archive(
+                SEPOLIA_ID,
+                vec![
+                    archive_of(vec![]),
+                    archive_of(vec![(
+                        archive_path.clone(),
+                        record.to_string().into_bytes(),
+                    )]),
+                ],
+            );
+        let path = good.message_path(&x, &head).unwrap();
+        assert_eq!(path.source_fork, with_state.source_fork);
+        assert_eq!(path.ancestry_branch, with_state.ancestry_branch);
+
+        let mut flipped = record.clone();
+        flipped["versionBranch"][2] = serde_json::json!(format!("{:#x}", B256::repeat_byte(1)));
+        let bad = source_over_node(ChainKind::Sepolia, Node(pruned.clone()))
+            .with_fork_proof_archive(
+                SEPOLIA_ID,
+                vec![archive_of(vec![(
+                    archive_path,
+                    flipped.to_string().into_bytes(),
+                )])],
+            );
+        let error = bad.message_path(&x, &head).unwrap_err().to_string();
+        assert!(
+            error.contains("fork proof archive archive.example.org: refused"),
+            "{error}"
+        );
+
+        let none = source_over_node(ChainKind::Sepolia, Node(pruned));
+        let error = none.message_path(&x, &head).unwrap_err().to_string();
+        assert!(
+            error.contains("no source gave the fork proof")
+                && error.contains("beacon_url multiproof: not served")
+                && error.contains("state: "),
+            "{error}"
+        );
+
+        let (early, x, _, _) = gloas_world(11_441_215);
+        let error = source_over_node(ChainKind::Sepolia, Node(early))
+            .fork_proof_record(&x, SEPOLIA_ID)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not final yet"), "{error}");
+        let (late, mut other, _, _) = gloas_world(11_441_300);
+        other.hash = B256::repeat_byte(7);
+        let error = source_over_node(ChainKind::Sepolia, Node(late))
+            .fork_proof_record(&other, SEPOLIA_ID)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("parent_block_hash"), "{error}");
+    }
+
+    /// Claim: a node that serves the compact multiproof route gives the fork proof without a request for the whole state,
+    /// and the proof equals the one from the state. A node whose route answers 404 is asked once, not once per shape; a
+    /// route answer of another form or of another tree moves on to the next shape, then to the whole state.
+    /// Why it matters: an Ethereum mainnet state is hundreds of MB; the multiproof is about 1 KB. A wrong answer must cost a request,
+    /// never a wrong proof.
+    #[test]
+    fn the_multiproof_route_is_asked_first_and_checked() {
+        let (pages, x, head, state_root) = gloas_world(11_441_300);
+        let expected = source_over_node(ChainKind::Sepolia, Node(pages.clone()))
+            .message_path(&x, &head)
+            .unwrap()
+            .source_fork;
+        let descriptor = |shape: &lc_core::layout::ObservedShape| {
+            hex::encode_prefixed(multiproof_descriptor(&[
+                shape.current_version_gindex,
+                shape.genesis_validators_root_gindex,
+            ]))
+        };
+        let route = format!(
+            "/eth/v0/beacon/proof/state/{state_root:#x}?format={}",
+            descriptor(&OBSERVED_SHAPE_PROGRESSIVE)
+        );
+        let leaves = leaves_of(
+            &expected,
+            &OBSERVED_SHAPE_PROGRESSIVE,
+            SEPOLIA.genesis_validators_root,
+        );
+        let answer = serde_json::json!({"data": {"leaves": leaves.iter().map(|leaf| format!("{leaf:#x}")).collect::<Vec<_>>()}});
+
+        let counted = |pages: HashMap<String, Vec<u8>>| {
+            let multiproof = Arc::new(AtomicUsize::new(0));
+            let states = Arc::new(AtomicUsize::new(0));
+            let node = Counting {
+                pages,
+                multiproof_requests: multiproof.clone(),
+                state_requests: states.clone(),
+            };
+            (
+                source_over_node(ChainKind::Sepolia, node),
+                multiproof,
+                states,
+            )
+        };
+        let mut served = pages.clone();
+        served.insert(route.clone(), answer.to_string().into_bytes());
+        let (source, multiproof, states) = counted(served);
+        assert_eq!(source.source_fork(state_root).unwrap(), expected);
+        assert_eq!(
+            (
+                multiproof.load(Ordering::SeqCst),
+                states.load(Ordering::SeqCst)
+            ),
+            (1, 0)
+        );
+
+        let (source, multiproof, states) = counted(pages.clone());
+        assert_eq!(source.source_fork(state_root).unwrap(), expected);
+        assert_eq!(
+            (
+                multiproof.load(Ordering::SeqCst),
+                states.load(Ordering::SeqCst)
+            ),
+            (1, 1),
+            "404 is asked once"
+        );
+
+        let mut wrong = pages.clone();
+        wrong.insert(route, br#"{"data":{"leaves":["0x01"]}}"#.to_vec());
+        for shape in &crate::beacon::fork_archive::SHAPE_REQUEST_ORDER[1..] {
+            let mut other_leaves = leaves.clone();
+            other_leaves[0] = B256::repeat_byte(9);
+            wrong.insert(
+                format!("/eth/v0/beacon/proof/state/{state_root:#x}?format={}", descriptor(shape)),
+                serde_json::json!({"data": {"leaves": other_leaves.iter().map(|leaf| format!("{leaf:#x}")).collect::<Vec<_>>()}})
+                    .to_string()
+                    .into_bytes(),
+            );
+        }
+        let (source, multiproof, states) = counted(wrong);
+        assert_eq!(source.source_fork(state_root).unwrap(), expected);
+        assert_eq!(
+            (
+                multiproof.load(Ordering::SeqCst),
+                states.load(Ordering::SeqCst)
+            ),
+            (4, 1)
+        );
+
+        // A state the source already holds needs no request at all.
+        assert_eq!(source.source_fork(state_root).unwrap(), expected);
+        assert_eq!(
+            (
+                multiproof.load(Ordering::SeqCst),
+                states.load(Ordering::SeqCst)
+            ),
+            (4, 1)
+        );
+    }
+
+    /// Claim: with a good archive record, the message proof takes the fork proof from the archive and never downloads the
+    /// whole state, though the node serves it; with a refused record it downloads the state and the proof is the same.
+    /// Why it matters: a checked record is as sound as the state, and on Ethereum mainnet the state is hundreds of MB.
+    #[test]
+    fn the_archive_is_asked_before_the_whole_state() {
+        let (pages, x, _, state_root) = gloas_world(11_441_300);
+        let record = source_over_node(ChainKind::Sepolia, Node(pages.clone()))
+            .fork_proof_record(&x, SEPOLIA_ID)
+            .unwrap();
+        let expected = fork_from_record(
+            &record,
+            SEPOLIA_ID,
+            &state_root,
+            &SEPOLIA.genesis_validators_root,
+        )
+        .unwrap();
+        let archive_path = format!("/{SEPOLIA_ID}/{state_root:#x}.json");
+        let with = |text: String| {
+            let states = Arc::new(AtomicUsize::new(0));
+            let node = Counting {
+                pages: pages.clone(),
+                multiproof_requests: Arc::new(AtomicUsize::new(0)),
+                state_requests: states.clone(),
+            };
+            let source = source_over_node(ChainKind::Sepolia, node).with_fork_proof_archive(
+                SEPOLIA_ID,
+                vec![archive_of(vec![(archive_path.clone(), text.into_bytes())])],
+            );
+            (
+                source.source_fork(state_root).unwrap(),
+                states.load(Ordering::SeqCst),
+            )
+        };
+        assert_eq!(with(record.to_string()), (expected.clone(), 0));
+        let mut flipped = record.clone();
+        flipped["versionBranch"][2] = serde_json::json!(format!("{:#x}", B256::repeat_byte(1)));
+        assert_eq!(with(flipped.to_string()), (expected, 1));
+    }
+
+    /// Claim: a node whose multiproof route fails with a server error is passed over with the status in the message.
+    /// Why it matters: an operator must see which node failed and how.
+    #[test]
+    fn a_failing_multiproof_route_is_named() {
+        struct ServerError;
+        impl HttpGet for ServerError {
+            fn get(&self, _path_and_query: &str, _accept: &str) -> Result<HttpResponse> {
+                Ok(HttpResponse {
+                    status: 500,
+                    body: b"{}".to_vec(),
+                })
+            }
+        }
+        let error = source_over_node(ChainKind::Sepolia, ServerError)
+            .source_fork(B256::repeat_byte(3))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("beacon_url multiproof: ")
+                && error.contains("/eth/v0/beacon/proof/state/"),
+            "{error}"
+        );
+        assert!(error.contains("status 500"), "{error}");
+    }
+
+    /// An Ethereum Capella world: a synthetic state at a Capella slot, the block of that slot naming it and carrying the
+    /// execution block `hash`, the genesis, and a finalized header `finalized_slot_offset` slots after the block. With
+    /// `own_chain` the state holds the genesis validators root of Ethereum, else the filler root of the synthetic state.
+    fn capella_world(
+        hash: B256,
+        finalized_slot_offset: i64,
+        own_chain: bool,
+    ) -> (HttpBeaconSource, SourceBlock, B256) {
+        let entry = ETHEREUM_MAINNET
+            .fork_schedule
+            .iter()
+            .find(|entry| entry.fork_name == ForkName::Capella)
+            .unwrap();
+        let slot = entry.epoch * ETHEREUM_MAINNET.slots_per_epoch + 7;
+        let period = ETHEREUM_MAINNET.period_at_slot(slot);
+        let current = committee_for(&ETHEREUM_MAINNET, period).committee.clone();
+        let next = committee_for(&ETHEREUM_MAINNET, period + 1)
+            .committee
+            .clone();
+        let mut bytes = StateBytes::new(ForkName::Capella, slot, current, next).to_ssz();
+        if own_chain {
+            // `genesis_time` (8 bytes), then `genesis_validators_root`.
+            bytes[8..40].copy_from_slice(ETHEREUM_MAINNET.genesis_validators_root.as_slice());
+        }
+        let state_root = StateView::parse(&bytes, ChainKind::Ethereum)
+            .unwrap()
+            .root();
+        let genesis = 1_606_824_023u64;
+        let timestamp = genesis + slot * 12;
+        let block = BlockBytes {
+            slot,
+            proposer_index: 9,
+            parent_root: B256::repeat_byte(2),
+            state_root,
+            sync_aggregate: SyncAggregate {
+                sync_committee_bits: [0; 64],
+                sync_committee_signature: [0; 96],
+            },
+            payload: PayloadFields {
+                parent_hash: B256::repeat_byte(3),
+                fee_recipient: Default::default(),
+                state_root: B256::repeat_byte(4),
+                receipts_root: B256::repeat_byte(5),
+                logs_bloom: vec![0; 256],
+                prev_randao: B256::repeat_byte(6),
+                block_number: 17_000_000,
+                gas_limit: 30_000_000,
+                gas_used: 1,
+                timestamp,
+                extra_data: Vec::new(),
+                base_fee_per_gas: Default::default(),
+                block_hash: keccak256(b"the execution block"),
+            },
+        };
+        let finalized = (slot as i64 + finalized_slot_offset) as u64;
+        let pages = HashMap::from([
+            ("/eth/v1/beacon/genesis".to_string(), format!(r#"{{"data":{{"genesis_time":"{genesis}"}}}}"#).into_bytes()),
+            (
+                "/eth/v1/beacon/headers/finalized".to_string(),
+                serde_json::json!({"data": {"header": {"message": {
+                    "slot": finalized.to_string(), "proposer_index": "1",
+                    "parent_root": format!("{:#x}", B256::ZERO), "state_root": format!("{:#x}", B256::ZERO),
+                    "body_root": format!("{:#x}", B256::ZERO)}}}})
+                .to_string()
+                .into_bytes(),
+            ),
+            (format!("/eth/v2/beacon/blocks/{slot}"), block.to_ssz()),
+            (format!("/eth/v2/debug/beacon/states/{state_root:#x}"), bytes),
+        ]);
+        let source = SourceBlock {
+            number: 17_000_000,
+            hash,
+            timestamp,
+        };
+        (
+            source_over_node(ChainKind::Ethereum, Node(pages)),
+            source,
+            state_root,
+        )
+    }
+
+    /// Claim: before Gloas the record holds the fork proof of the state of the beacon block at the slot of the execution
+    /// block, with a plain shape, and checks against that state root. A block that carries another execution block, and a
+    /// slot after the finalized one, are refused with their causes, and so is a state whose genesis validators root is not
+    /// the chain's.
+    /// Why it matters: the record must be of the header that the message proof takes, or it is no use later; and a record
+    /// that the bridge would refuse is never saved.
+    #[test]
+    fn a_record_before_gloas_is_of_the_block_at_the_slot() {
+        let hash = keccak256(b"the execution block");
+        let (source, block, state_root) = capella_world(hash, 64, true);
+        let record = source.fork_proof_record(&block, 1).unwrap();
+        assert_eq!(record["stateRoot"], format!("{state_root:#x}"));
+        let shape = record["shape"].as_u64().unwrap();
+        assert!((5..=7).contains(&shape), "{shape}");
+        fork_from_record(
+            &record,
+            1,
+            &state_root,
+            &ETHEREUM_MAINNET.genesis_validators_root,
+        )
+        .unwrap();
+
+        let (source, block, _) = capella_world(B256::repeat_byte(8), 64, true);
+        let error = source.fork_proof_record(&block, 1).unwrap_err().to_string();
+        assert!(error.contains("carries execution block"), "{error}");
+        let (source, block, _) = capella_world(hash, -1, true);
+        let error = source.fork_proof_record(&block, 1).unwrap_err().to_string();
+        assert!(error.contains("not final yet"), "{error}");
+        let (source, block, _) = capella_world(hash, 64, false);
+        let error = source.fork_proof_record(&block, 1).unwrap_err().to_string();
+        assert!(error.contains("does not prove an allowed shape"), "{error}");
     }
 }

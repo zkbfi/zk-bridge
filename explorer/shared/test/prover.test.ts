@@ -112,6 +112,14 @@ describe("the prover configuration file", () => {
     expect(() => renderProverConfig(describeRoute(pair, "second-to-first"), null, undefined, { handoffArchiveUrls: ['http://x/"'] })).toThrow(/cannot carry/);
   });
 
+  it("names the fork proof archive in the source section when it is set, and nothing otherwise", () => {
+    const text = renderProverConfig(describeRoute(pair, "second-to-first"), null, undefined, { forkProofArchiveUrls: ["http://127.0.0.1:8787/archive/fork-proofs", "https://gateway.example.org/ipfs/cid/fork-proofs"] });
+    const destinationAt = text.indexOf(".destination]");
+    expect(text.slice(0, destinationAt)).toContain('fork_proof_archive_urls = ["http://127.0.0.1:8787/archive/fork-proofs", "https://gateway.example.org/ipfs/cid/fork-proofs"]');
+    expect(renderProverConfig(describeRoute(pair, "second-to-first"), null)).not.toContain("fork_proof_archive_urls");
+    expect(() => renderProverConfig(describeRoute(pair, "second-to-first"), null, undefined, { forkProofArchiveUrls: ['http://x/"'] })).toThrow(/cannot carry/);
+  });
+
   it("names the proof cache in the destination section when it is set, and nothing otherwise", () => {
     const text = renderProverConfig(describeRoute(pair, "second-to-first"), null, undefined, { proofCacheDirectory: "/var/lib/bot/proof-cache" });
     const destination = text.slice(text.indexOf("[routes.pulsechain_to_ethereum.destination]"));

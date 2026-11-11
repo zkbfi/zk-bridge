@@ -1,5 +1,5 @@
 import { MIGRATION } from "./schema";
-import type { EvidenceRecord, HandoffRecord, LightClientProofRecord, StorageProofRecord } from "./records";
+import type { EvidenceRecord, ForkProofArchiveRecord, HandoffRecord, LightClientProofRecord, StorageProofRecord } from "./records";
 
 /** The SQL that the archive needs: a `pg` pool and PGlite both fit. */
 export interface SqlExecutor {
@@ -80,6 +80,25 @@ const HANDOFF: TableSpec = {
   meta: [column("stored_at", "storedAt", "bigint"), column("source", "source", "text")],
 };
 
+const FORK_PROOF: TableSpec = {
+  table: "proof_archive.fork_proofs",
+  key: [column("chain_id", "chainId", "integer"), column("state_root", "stateRoot", "text")],
+  compare: [
+    column("sha256", "sha256", "text"),
+    column("slot", "slot", "bigint"),
+    column("block_root", "blockRoot", "text"),
+    column("execution_block_number", "executionBlockNumber", "bigint"),
+    column("execution_block_hash", "executionBlockHash", "text"),
+    column("shape", "shape", "integer"),
+    column("record", "record", "text"),
+  ],
+  fill: [],
+  meta: [column("stored_at", "storedAt", "bigint"), column("source", "source", "text")],
+};
+
+/** What the public list of fork proofs shows of one record: where it is and what names it. */
+export type ForkProofEntry = { readonly slot: number; readonly stateRoot: string; readonly blockRoot: string; readonly executionBlockNumber: number };
+
 /** A value as a parameter: JSON for jsonb, a decimal string for bigint, lower case for hex keys. */
 function parameterOf(spec: Column, value: unknown): unknown {
   if (value === null || value === undefined) return null;
@@ -123,13 +142,19 @@ export interface ProofArchive {
   handoffPeriods(chainId: number): Promise<number[]>;
   /** The handoff update of one period, or null. */
   handoff(chainId: number, period: number): Promise<HandoffRecord | null>;
+  /** The fork proof of a source block. A different record text for the same chain and state root is a conflict; the first stays. */
+  putForkProof(record: ForkProofArchiveRecord): Promise<UpsertOutcome>;
+  /** The fork proofs of a chain from a slot on, ascending by slot (then state root), at most `limit`. */
+  forkProofs(input: { readonly chainId: number; readonly fromSlot: bigint; readonly limit: number }): Promise<ForkProofEntry[]>;
+  /** The fork proof of one state root of a chain, or null. */
+  forkProof(chainId: number, stateRoot: string): Promise<ForkProofArchiveRecord | null>;
   /** Row counts of each table. */
-  counts(): Promise<Record<"storageProofs" | "lightClientProofs" | "evidence" | "handoffUpdates" | "conflicts", number>>;
+  counts(): Promise<Record<"storageProofs" | "lightClientProofs" | "evidence" | "handoffUpdates" | "forkProofs" | "conflicts", number>>;
   /** Every row of a table, in key order, one page at a time. */
-  pages(table: "storage_proofs" | "light_client_proofs" | "message_evidence" | "handoff_updates" | "conflicts", pageSize?: number): AsyncGenerator<unknown[]>;
+  pages(table: "storage_proofs" | "light_client_proofs" | "message_evidence" | "handoff_updates" | "fork_proofs" | "conflicts", pageSize?: number): AsyncGenerator<unknown[]>;
 }
 
-const SPECS = { storage_proofs: STORAGE, light_client_proofs: LIGHT_CLIENT, message_evidence: EVIDENCE, handoff_updates: HANDOFF } as const;
+const SPECS = { storage_proofs: STORAGE, light_client_proofs: LIGHT_CLIENT, message_evidence: EVIDENCE, handoff_updates: HANDOFF, fork_proofs: FORK_PROOF } as const;
 
 /** Builds the archive over a database. Call `migrate` once before the rest. */
 export function createProofArchive(sql: SqlExecutor): ProofArchive {
@@ -207,6 +232,12 @@ export function createProofArchive(sql: SqlExecutor): ProofArchive {
       finalizedSlot: Number(row.finalizedSlot),
       storedAt: row.storedAt === null ? null : Number(row.storedAt),
     }),
+    fork_proofs: (row: Record<string, unknown>) => ({
+      ...row,
+      slot: Number(row.slot),
+      executionBlockNumber: Number(row.executionBlockNumber),
+      storedAt: row.storedAt === null ? null : Number(row.storedAt),
+    }),
   };
 
   return {
@@ -245,13 +276,26 @@ export function createProofArchive(sql: SqlExecutor): ProofArchive {
       const rows = await sql.query(`SELECT ${selectAll(HANDOFF)} FROM ${HANDOFF.table} WHERE chain_id = $1 AND period = $2`, [chainId, period]);
       return rows.rows.length === 0 ? null : (ofTable.handoff_updates(rows.rows[0] as Record<string, unknown>) as HandoffRecord);
     },
+    putForkProof: (record) => upsert(FORK_PROOF, record, record.source),
+    async forkProofs({ chainId, fromSlot, limit }) {
+      const rows = await sql.query<{ slot: string; stateRoot: string; blockRoot: string; executionBlockNumber: string }>(
+        `SELECT slot::text AS "slot", state_root AS "stateRoot", block_root AS "blockRoot", execution_block_number::text AS "executionBlockNumber" FROM ${FORK_PROOF.table} WHERE chain_id = $1 AND slot >= $2::bigint ORDER BY slot, state_root LIMIT $3`,
+        [chainId, fromSlot.toString(), limit],
+      );
+      return rows.rows.map((row) => ({ slot: Number(row.slot), stateRoot: row.stateRoot, blockRoot: row.blockRoot, executionBlockNumber: Number(row.executionBlockNumber) }));
+    },
+    async forkProof(chainId, stateRoot) {
+      const rows = await sql.query(`SELECT ${selectAll(FORK_PROOF)} FROM ${FORK_PROOF.table} WHERE chain_id = $1 AND state_root = $2`, [chainId, stateRoot.toLowerCase()]);
+      return rows.rows.length === 0 ? null : (ofTable.fork_proofs(rows.rows[0] as Record<string, unknown>) as ForkProofArchiveRecord);
+    },
     async counts() {
       const rows = await sql.query<Record<string, string>>(
         "SELECT (SELECT count(*) FROM proof_archive.storage_proofs)::text AS storage, (SELECT count(*) FROM proof_archive.light_client_proofs)::text AS light, " +
-          "(SELECT count(*) FROM proof_archive.message_evidence)::text AS evidence, (SELECT count(*) FROM proof_archive.handoff_updates)::text AS handoff, (SELECT count(*) FROM proof_archive.conflicts)::text AS conflicts",
+          "(SELECT count(*) FROM proof_archive.message_evidence)::text AS evidence, (SELECT count(*) FROM proof_archive.handoff_updates)::text AS handoff, " +
+          "(SELECT count(*) FROM proof_archive.fork_proofs)::text AS fork, (SELECT count(*) FROM proof_archive.conflicts)::text AS conflicts",
       );
       const row = rows.rows[0] as Record<string, string>;
-      return { storageProofs: Number(row.storage), lightClientProofs: Number(row.light), evidence: Number(row.evidence), handoffUpdates: Number(row.handoff), conflicts: Number(row.conflicts) };
+      return { storageProofs: Number(row.storage), lightClientProofs: Number(row.light), evidence: Number(row.evidence), handoffUpdates: Number(row.handoff), forkProofs: Number(row.fork), conflicts: Number(row.conflicts) };
     },
     async *pages(table, pageSize = 500) {
       const select =
