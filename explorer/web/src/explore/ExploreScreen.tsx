@@ -40,6 +40,7 @@ import { moveHighlight, type MoveKey } from "../search/search-model";
 import "./explore.css";
 import { ExploreWaits } from "../wait/WaitTimeline";
 import { ForkPanel } from "../fork/ForkPanel";
+import { RouteSection } from "../route/RouteSection";
 
 /** Props of {@link ExploreScreen}. */
 export type ExploreScreenProps = {
@@ -225,6 +226,7 @@ const ExploreTop = ({ route, onRoute }: ExploreScreenProps) => {
           <Numbers feed={data.feed} now={data.now} />
           <ExploreWaits pair={data.pair} />
           <LightClients data={data} />
+          <RouteSection focus={route.section === "route"} />
           <ForkPanel pair={data.pair} />
           <LatestTransfers feed={data.feed} pair={data.pair} now={data.now} />
           <Services pair={data.pair} />

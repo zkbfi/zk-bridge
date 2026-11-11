@@ -37,6 +37,8 @@ import { TokenPicker } from "./TokenPicker";
 import { routerWarningOf } from "../tx/tip-copy";
 import { ForkCutoverLine, forkPauseOf } from "../fork/ForkCutoverLine";
 import { useForkCutover } from "../fork/use-fork";
+import { RouteNotice } from "../route/RouteNotice";
+import "../route/route.css";
 
 /** Names every field a link filled beyond the route, the token and the amount. */
 const LinkedWarning = ({ fields }: { readonly fields: readonly string[] }) => (
@@ -865,6 +867,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
           </button>
           {verdict.detail === null ? null : <p className="zb-verdict">{verdict.detail}</p>}
           <ForkCutoverLine view={forkCutover} />
+          <RouteNotice />
           {hardOver && raisePercent !== null ? (
             <button type="button" className="zb-pill zb-pill-outline zb-raise" onClick={() => setHardCap(raisePercent)}>
               Raise cap to {raisePercent}%

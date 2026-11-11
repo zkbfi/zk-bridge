@@ -22,6 +22,9 @@ import { TokenIcon } from "../bridge/TokenIcon";
 import type { DetailDelivery, DetailToken, MessageDetail } from "../data/message-detail";
 import { feePercentText, feeSummaryText } from "../data/fee-summary";
 import { chainNamer } from "../explore/ExploreScreen";
+import type { RouteStep } from "@zk-bridge/shared";
+import { useBlockingStep, type BlockingView } from "../route/route-board";
+import { StepCard } from "../route/StepCard";
 import { durationText, statusWord } from "../explore/explore-model";
 import { appOf, calledFunction, messageSteps, payloadBytes, payloadSummary, stepCostText, type MessageApp, type MessageStep } from "../explore/message-model";
 import { KV, RouteIcons, shortHex, XBand, XGroup } from "../explore/parts";
@@ -252,29 +255,38 @@ const ProofDrawer = ({ proof, pair, href }: { readonly proof: NonNullable<Messag
   />
 );
 
-const trailOf = (steps: readonly MessageStep[], detail: MessageDetail, pair: PairConfig): TrailStep[] =>
-  steps.map((step, index) => ({
-    label: step.label,
-    done: step.done,
-    when: step.at === null ? (step.done ? "" : "waiting") : timeText(step.at),
-    ...(step.href === undefined ? {} : { href: step.href }),
-    ...(step.tone === undefined ? {} : { tone: step.tone }),
-    ...(step.detail === undefined
-      ? // The proof step (the third) opens a drawer once the indexer has its cost; else it only links to the proof.
-        index === 2 && detail.costs?.proof != null
-        ? { drawer: <ProofDrawer proof={detail.costs.proof} pair={pair} href={step.href} /> }
-        : {}
-      : {
-          drawer:
-            step.detail.kind === "block" ? (
-              <BlockDrawer detail={step.detail} />
-            ) : step.detail.kind === "tx" ? (
-              <TxDrawer detail={step.detail} cost={<CostCell text={stepCostText(detail.costs?.sent ?? null, pair)} />} />
-            ) : (
-              <DeliveryDrawer detail={detail} reverted={step.detail.reverted} pair={pair} />
-            ),
-        }),
-  }));
+/** The trail step that a route step holds up: the proof posted to the destination (a light client update) or the delivery (its layout rows, the delivery). */
+const waitingIndexOf = (step: RouteStep): number => (step.kind === "light-client-update" ? 2 : 3);
+
+const trailOf = (steps: readonly MessageStep[], detail: MessageDetail, pair: PairConfig, blocking: BlockingView | null): TrailStep[] =>
+  steps.map((step, index) => {
+    const base: TrailStep = {
+      label: step.label,
+      done: step.done,
+      when: step.at === null ? (step.done ? "" : "waiting") : timeText(step.at),
+      ...(step.href === undefined ? {} : { href: step.href }),
+      ...(step.tone === undefined ? {} : { tone: step.tone }),
+      ...(step.detail === undefined
+        ? // The proof step (the third) opens a drawer once the indexer has its cost; else it only links to the proof.
+          index === 2 && detail.costs?.proof != null
+          ? { drawer: <ProofDrawer proof={detail.costs.proof} pair={pair} href={step.href} /> }
+          : {}
+        : {
+            drawer:
+              step.detail.kind === "block" ? (
+                <BlockDrawer detail={step.detail} />
+              ) : step.detail.kind === "tx" ? (
+                <TxDrawer detail={step.detail} cost={<CostCell text={stepCostText(detail.costs?.sent ?? null, pair)} />} />
+              ) : (
+                <DeliveryDrawer detail={detail} reverted={step.detail.reverted} pair={pair} />
+              ),
+          }),
+    };
+    if (blocking === null || waitingIndexOf(blocking.step) !== index) return base;
+    // The step that holds this transfer up, with its button, under the stage it waits on.
+    const card = <StepCard step={blocking.step} pending={blocking.pending} steps={blocking.steps} placement="trail" />;
+    return { ...base, drawer: base.drawer === undefined ? card : <>{base.drawer}{card}</> };
+  });
 
 /** The payload: its size and, for a mediator call, what it asks; opens to the raw bytes. */
 const PayloadRow = ({ detail }: { readonly detail: MessageDetail }) => {
@@ -299,6 +311,8 @@ const PayloadRow = ({ detail }: { readonly detail: MessageDetail }) => {
 export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
   const { pair, explore: indexed } = useServices();
   const message = useMessage(messageId);
+  const loaded = message.data ?? null;
+  const blocking = useBlockingStep(loaded === null ? null : { messageId: loaded.id, direction: loaded.sourceChainId === pair.first.chainId ? "first-to-second" : "second-to-first", covered: loaded.coveredByHeadSlot !== null || loaded.deliveredAt !== null });
   const proofs = useQuery({ queryKey: ["explore", "proofs"], queryFn: () => indexed.proofs() }).data ?? [];
   const names = chainNamer(pair);
   if (message.error !== null && message.data === undefined) {
@@ -414,7 +428,7 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
           </>
         )}
         <XGroup title="Steps" />
-        <StepTrail steps={trailOf(steps, detail, pair)} initiallyOpen={reverted ? stopped : null} />
+        <StepTrail steps={trailOf(steps, detail, pair, blocking)} initiallyOpen={reverted ? stopped : blocking === null ? null : waitingIndexOf(blocking.step)} />
         {transfer === null ? null : (
           <>
             <XGroup title="The message itself" />

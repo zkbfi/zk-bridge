@@ -45,7 +45,10 @@ const explorePageOf = (parts: readonly string[]): ExplorePage | null => {
 };
 
 const formatExplore = (route: Extract<Route, { name: "explore" }>): string => {
-  if (route.page === undefined) return route.q === undefined || route.q === "" ? "#/explore" : `#/explore?${new URLSearchParams({ q: route.q }).toString()}`;
+  if (route.page === undefined) {
+    if (route.section !== undefined) return `#/explore?${new URLSearchParams({ section: route.section }).toString()}`;
+    return route.q === undefined || route.q === "" ? "#/explore" : `#/explore?${new URLSearchParams({ q: route.q }).toString()}`;
+  }
   const { kind, id, chainId } = route.page;
   if (kind === "costs") return "#/explore/costs";
   if (kind === "gate") return `#/explore/gate/${chainId ?? id}`;
@@ -63,7 +66,7 @@ export type Route =
   | { readonly name: "bridge"; readonly pairId: string; readonly dir: Direction; readonly form?: BridgeQuery }
   | { readonly name: "activity" }
   /** Explore: the top (with a search in `q`), or one page of it. */
-  | { readonly name: "explore"; readonly q?: string; readonly page?: ExplorePage }
+  | { readonly name: "explore"; readonly q?: string; readonly page?: ExplorePage; /** A section of the top page to scroll to: `route` is the Route section. */ readonly section?: "route" }
   /** The table of every pair, at `#/pairs`. It is never the landing page. */
   | { readonly name: "global" }
   | { readonly name: "pair"; readonly pairId: string; readonly token: Address | null; readonly view?: PairViewQuery }
@@ -135,7 +138,9 @@ export const parseRoute = (hash: string): Route => {
   if (head === "explore") {
     const page = explorePageOf(parts.slice(1));
     if (page !== null) return { name: "explore", page: page.kind === "browse" && query !== "" ? { ...page, query } : page };
-    const q = new URLSearchParams(query).get("q");
+    const params = new URLSearchParams(query);
+    if (params.get("section") === "route") return { name: "explore", section: "route" };
+    const q = params.get("q");
     return q === null || q.trim() === "" ? { name: "explore" } : { name: "explore", q };
   }
   if (head === "bridge" && first !== undefined) {
