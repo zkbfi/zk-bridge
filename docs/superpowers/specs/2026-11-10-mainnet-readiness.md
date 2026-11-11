@@ -121,6 +121,10 @@ router's source entry points). This reverses the user decision of 2026-10-24 ("A
   fork, and use a cached and bundled fork schedule when the beacon node cannot be reached. The router change of
   2026-11-10 (`gateEvidence` on router sends) is reverted. Gap accepted: a direct caller in the minutes between an
   unsupported fork's activation and the seal.
+  Owner: "but doesn't that give the sealer the power to direct the new address?" No: `seal` takes only a proof of an
+  unsupported shape and records no successor. A sealed route keeps paying out; a new route is a separate deployment that
+  the old one does not know. Rule: no contract ever holds a successor or redirect pointer that a seal, or anyone, can
+  set; which route users take is chosen off chain (signed releases, docs).
 - **Status 2026-11-10 (branch `feat/router-gate-evidence`, not merged, not deployed).** Built test-first. The router's
   entries are `wrapAndRelayTokens()` (no evidence), `wrapAndRelayTokens(address,bytes)` and
   `relayTokensAndCall(address,bytes,uint256,bytes)`; the old receiver forms are removed, so the dapp and the terminal
