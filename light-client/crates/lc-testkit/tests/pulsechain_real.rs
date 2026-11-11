@@ -5,11 +5,10 @@
 //! of the state. Nothing in this file is synthetic.
 
 use alloy_primitives::{Address, B256};
-use lc_core::abi::MessageProof;
-use lc_core::ancestry::{ancestry_leaf_gindex, message_block_hash_gindex_for_shape, verify_beacon_path};
+use lc_core::ancestry::ancestry_leaf_gindex;
 use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
 use lc_core::execution::{decode_execution_header, decode_receipt, Log};
-use lc_core::message::{extract_receipt, message_of_log, verify_message, MessageContext};
+use lc_core::message::{extract_receipt, message_of_log, MessageContext};
 use lc_core::ssz::is_valid_exact_branch;
 use lc_core::update::{
     advance_light_client_store, table_fork_version, verify_light_client_update,
@@ -17,6 +16,9 @@ use lc_core::update::{
 };
 use lc_core::Error;
 use lc_testkit::json::{hex_b256, load_response};
+use lc_testkit::lc_message::abi::MessageProof;
+use lc_testkit::lc_message::ancestry::{message_block_hash_gindex_for_shape, verify_beacon_path};
+use lc_testkit::lc_message::message::verify_message;
 use lc_testkit::pulsechain::{
     real_historical_message_proof, real_historical_paths, real_message_proof, real_update_and_store,
 };

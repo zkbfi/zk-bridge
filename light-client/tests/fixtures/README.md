@@ -105,7 +105,7 @@ Reason codes: `IndexMismatch`, `AnchorNotStored`, `DepositNotBeforeAnchor`, `Dep
 `MalformedEventData`, `MalformedMessage`, `MessageIdMismatch`, `MessageVersionInvalid`, `WrongSourceChain`,
 `WrongDestinationChain`, `UnknownDataType`, `UnsupportedFork`.
 
-The bridge checks in the same order as the Rust function (`lc_core::message::verify_message`): receipt index equals transaction
+The bridge checks in the same order as the Rust function (`lc_message::message::verify_message`): receipt index equals transaction
 index, anchor stored, path choice (source before anchor, then for the historical path `era >= capellaEra` and the index limit),
 ancestry branch (exact length), block hash branch (the leaf is `keccak256(executionHeaderRlp)`), header decode, receipt proof,
 transaction proof (same index; the hash of the proven transaction is the source transaction hash), receipt decode and status,

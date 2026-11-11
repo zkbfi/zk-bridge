@@ -128,6 +128,7 @@ WORKDIR /build
 # prover compiles come first. The ELFs and program-keys.json are not copied here: the prover build does not read them.
 COPY light-client/Cargo.toml light-client/Cargo.lock light-client/rust-toolchain.toml ./light-client/
 COPY light-client/crates ./light-client/crates
+COPY light-client/lc-message ./light-client/lc-message
 COPY prover/Cargo.toml prover/Cargo.lock prover/rust-toolchain.toml ./prover/
 WORKDIR /build/prover
 # Dependency-only build: stub targets stand in for the prover source, so this layer depends on the manifests only.

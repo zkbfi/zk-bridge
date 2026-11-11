@@ -2734,6 +2734,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lc-message"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "lc-core",
+]
+
+[[package]]
 name = "lc-testkit"
 version = "0.1.0"
 dependencies = [
@@ -7107,6 +7116,7 @@ dependencies = [
  "clap",
  "k256",
  "lc-core",
+ "lc-message",
  "lc-testkit",
  "serde",
  "serde_json",

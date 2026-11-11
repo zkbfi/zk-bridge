@@ -53,26 +53,14 @@ sol! {
         bytes32 bodyRoot;
     }
 
-    /// The fork proof of one beacon state (`BeaconProofVerifier.ForkProof`): `fork.current_version` and
-    /// `genesis_validators_root` under the same state root. The bridge judges it with `ForkShape.judge`; the Rust reference
-    /// is `ancestry::source_shape`.
-    #[derive(Debug, PartialEq, Eq)]
-    struct ForkProof {
-        bytes4 version;
-        bytes32[] versionBranch;
-        bytes32[] genesisValidatorsRootBranch;
-    }
-
     /// The evidence for one message: calldata of `executeMessage(MessageProof)`. No zero-knowledge proof is involved.
     /// `receiptIndex` and `transactionIndex` must be equal: the receipt and the transaction sit at one index.
-    /// `sourceFork` is the fork proof of the state of `sourceHeader`; its proven shape picks the block hash rule.
     #[derive(Debug, PartialEq, Eq)]
     struct MessageProof {
         BeaconBlockHeader anchorHeader;
         BeaconBlockHeader sourceHeader;
         bytes32[] ancestryBranch;
         bytes32[] blockHashBranch;
-        ForkProof sourceFork;
         bytes executionHeaderRlp;
         bytes[] receiptProof;
         uint256 receiptIndex;
@@ -198,11 +186,9 @@ mod tests {
     }
 
     /// Claim: the calldata of `executeMessage(MessageProof)` equals the output of
-    /// `cast calldata "executeMessage(((uint64,uint64,bytes32,bytes32,bytes32),(uint64,uint64,bytes32,bytes32,bytes32),bytes32[],bytes32[],(bytes4,bytes32[],bytes32[]),bytes,bytes[],uint256,bytes[],uint256,uint256))" ...`
-    /// (Foundry `cast` 1.8.5, 2026-11-10) for a sample proof with two branches, a fork proof (version `0x07000000`, one
-    /// version branch entry, two genesis validators root branch entries), a header blob, two receipt nodes and two
-    /// transaction nodes. The selector is `0x63f08d5e`. Why it matters: the bridge decodes these exact bytes, and the
-    /// fixtures hold them.
+    /// `cast calldata "executeMessage(((uint64,uint64,bytes32,bytes32,bytes32),(uint64,uint64,bytes32,bytes32,bytes32),bytes32[],bytes32[],bytes,bytes[],uint256,bytes[],uint256,uint256))" ...`
+    /// (Foundry, 2026-10-24) for a sample proof with two branches, a header blob, two receipt nodes and two transaction nodes.
+    /// Why it matters: the bridge decodes these exact bytes, and the fixtures hold them.
     #[test]
     fn message_calldata_matches_cast() {
         use alloy_sol_types::SolCall;
@@ -218,11 +204,6 @@ mod tests {
             sourceHeader: header(4, 5, 0x44),
             ancestryBranch: vec![B256::repeat_byte(0x77)],
             blockHashBranch: vec![B256::repeat_byte(0x88), B256::repeat_byte(0x99)],
-            sourceFork: ForkProof {
-                version: alloy_primitives::FixedBytes::from([0x07, 0, 0, 0]),
-                versionBranch: vec![B256::repeat_byte(0xaa)],
-                genesisValidatorsRootBranch: vec![B256::repeat_byte(0xbb), B256::repeat_byte(0xcc)],
-            },
             executionHeaderRlp: hex!("deadbeef").into(),
             receiptProof: vec![hex!("aabb").into(), hex!("ccddeeff00").into()],
             receiptIndex: alloy_primitives::U256::from(7u64),
@@ -231,7 +212,7 @@ mod tests {
             logIndex: alloy_primitives::U256::from(8u64),
         };
         let expected = hex!(
-            "63f08d5e00000000000000000000000000000000000000000000000000000000"
+            "a544280400000000000000000000000000000000000000000000000000000000"
             "0000002000000000000000000000000000000000000000000000000000000000"
             "0000000100000000000000000000000000000000000000000000000000000000"
             "0000000211111111111111111111111111111111111111111111111111111111"
@@ -243,28 +224,19 @@ mod tests {
             "4444444455555555555555555555555555555555555555555555555555555555"
             "5555555566666666666666666666666666666666666666666666666666666666"
             "6666666600000000000000000000000000000000000000000000000000000000"
-            "0000026000000000000000000000000000000000000000000000000000000000"
-            "000002a000000000000000000000000000000000000000000000000000000000"
-            "0000030000000000000000000000000000000000000000000000000000000000"
-            "0000040000000000000000000000000000000000000000000000000000000000"
-            "0000044000000000000000000000000000000000000000000000000000000000"
+            "0000024000000000000000000000000000000000000000000000000000000000"
+            "0000028000000000000000000000000000000000000000000000000000000000"
+            "000002e000000000000000000000000000000000000000000000000000000000"
+            "0000032000000000000000000000000000000000000000000000000000000000"
             "0000000700000000000000000000000000000000000000000000000000000000"
-            "0000052000000000000000000000000000000000000000000000000000000000"
+            "0000040000000000000000000000000000000000000000000000000000000000"
             "0000000700000000000000000000000000000000000000000000000000000000"
             "0000000800000000000000000000000000000000000000000000000000000000"
             "0000000177777777777777777777777777777777777777777777777777777777"
             "7777777700000000000000000000000000000000000000000000000000000000"
             "0000000288888888888888888888888888888888888888888888888888888888"
             "8888888899999999999999999999999999999999999999999999999999999999"
-            "9999999907000000000000000000000000000000000000000000000000000000"
-            "0000000000000000000000000000000000000000000000000000000000000000"
-            "0000006000000000000000000000000000000000000000000000000000000000"
-            "000000a000000000000000000000000000000000000000000000000000000000"
-            "00000001aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-            "aaaaaaaa00000000000000000000000000000000000000000000000000000000"
-            "00000002bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-            "bbbbbbbbcccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-            "cccccccc00000000000000000000000000000000000000000000000000000000"
+            "9999999900000000000000000000000000000000000000000000000000000000"
             "00000004deadbeef000000000000000000000000000000000000000000000000"
             "0000000000000000000000000000000000000000000000000000000000000000"
             "0000000200000000000000000000000000000000000000000000000000000000"
@@ -283,6 +255,6 @@ mod tests {
             "00000000"
         );
         assert_eq!(executeMessageCall { proof }.abi_encode(), expected.to_vec());
-        assert_eq!(executeMessageCall::SELECTOR, hex!("63f08d5e"));
+        assert_eq!(executeMessageCall::SELECTOR, hex!("a5442804"));
     }
 }

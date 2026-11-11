@@ -322,7 +322,7 @@ mod tests {
         );
         assert_eq!(
             MessageBridgeContract::executeMessageCall::SELECTOR,
-            lc_core::abi::executeMessageCall::SELECTOR
+            lc_message::abi::executeMessageCall::SELECTOR
         );
         assert_eq!(
             &MessageBridgeContract::openDepositsCall::SELECTOR[..],

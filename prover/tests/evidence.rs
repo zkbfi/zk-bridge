@@ -12,10 +12,11 @@ mod common;
 use alloy_primitives::{hex, keccak256, Address, Bytes, B256, U256};
 use alloy_sol_types::SolCall;
 use common::*;
-use lc_core::abi::executeMessageCall;
 use lc_core::json::{execution_header_from_json, receipts_from_json};
-use lc_core::message::{message_id_for, verify_message, MessageContext};
+use lc_core::message::{message_id_for, MessageContext};
 use lc_core::receipts::{build_indexed_trie, encode_execution_header, header_hash};
+use lc_message::abi::executeMessageCall;
+use lc_message::message::verify_message;
 use lc_testkit::synthetic::{message_log, synthetic_transaction, MessageFields};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -577,19 +578,17 @@ fn the_evidence_names_the_message_and_carries_the_execute_calldata() {
 #[test]
 fn an_executed_message_is_reported_with_its_status() {
     let world = world();
-    for (delivery, word) in [(DeliveryStatus::Succeeded, "succeeded")] {
-        let state = DestinationState {
-            delivery,
-            ..DestinationState::complete()
-        };
-        let evidence = build(&world, state, MESSAGE_LOG_INDEX).unwrap();
-        assert_eq!(evidence.delivery_status, delivery);
-        assert!(evidence.already_delivered, "{word}");
-        assert_eq!(
-            serde_json::to_value(&evidence).unwrap()["deliveryStatus"],
-            word
-        );
-    }
+    let state = DestinationState {
+        delivery: DeliveryStatus::Succeeded,
+        ..DestinationState::complete()
+    };
+    let evidence = build(&world, state, MESSAGE_LOG_INDEX).unwrap();
+    assert_eq!(evidence.delivery_status, DeliveryStatus::Succeeded);
+    assert!(evidence.already_delivered);
+    assert_eq!(
+        serde_json::to_value(&evidence).unwrap()["deliveryStatus"],
+        "succeeded"
+    );
 }
 
 /// Claim: when the bridge lacks a block hash row, the evidence lists a call for each stored header that can supply it, and
@@ -625,12 +624,12 @@ fn missing_block_hash_rows_become_layout_calls_that_fit_their_headers() {
             &header.bodyRoot,
         ));
         // The bridge takes the row only with a fork proof of a plain state under the state root of the header.
-        let fork = lc_core::abi::ForkProof {
+        let fork = lc_message::abi::ForkProof {
             version: fork.version,
             versionBranch: fork.versionBranch,
             genesisValidatorsRootBranch: fork.genesisValidatorsRootBranch,
         };
-        let shape = lc_core::ancestry::source_shape(
+        let shape = lc_message::ancestry::source_shape(
             &fork,
             &header.stateRoot,
             &ChainKind::Pulsechain.spec().genesis_validators_root,

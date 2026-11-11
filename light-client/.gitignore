@@ -1,2 +1,4 @@
 target/
 fetch-cache/
+# lc-message is a library outside this workspace; the prover lock pins its dependencies.
+/lc-message/Cargo.lock

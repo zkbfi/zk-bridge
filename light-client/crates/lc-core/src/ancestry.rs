@@ -13,122 +13,27 @@
 //!      `state.historical_summaries[era - capellaEra].block_summary_root` is the root of that era's `block_roots`.
 //!      Generalized index, built in this order (see [`historical_leaf_gindex`]): the field, the list data node, the
 //!      list position, `block_summary_root`, the position inside the era.
-//! 3. The fork proof of the source state (`MessageProof.sourceFork`, [`source_shape`]) proves the shape of the state
-//!    under `source.state_root`, by the rule of `ForkShape.judge`: one of [`ALLOWED_SHAPES`], with the genesis validators
-//!    root of the chain. The shape picks the rule of step 4. No fork slot is read for it: the chain schedule of the
-//!    [`ChainSpec`] plays no part in the rule, so a fork that the schedule does not know yet is followed as soon as its
-//!    first block is proven.
-//! 4. `source.body_root` commits to the execution block hash. A plain shape (before Gloas):
-//!    `execution_payload.block_hash`, one combined branch (body field 9, then payload field 12). The progressive shape
-//!    (Gloas on): the `parent_block_hash` of the bid of the source block (index 2856), and the source block is a block
-//!    AFTER the execution block (see [`crate::layout::message_block_hash_gindex_for_fork`] for the soundness argument).
-//!    The full `ExecutionPayloadHeader` is never hashed.
+//! 3. `source.body_root` commits to the execution block hash. Before Gloas: `execution_payload.block_hash`, one combined
+//!    branch (body field 9, then payload field 12). From Gloas on: the `parent_block_hash` of the bid of the source block
+//!    (index 2856), and the source block is a block AFTER the execution block (see
+//!    [`crate::layout::message_block_hash_gindex_for_fork`] for the soundness argument). The full
+//!    `ExecutionPayloadHeader` is never hashed.
 //!
 //! Every hash on this path is SHA-256, except the keccak256 of the execution header.
 //!
 //! Branches must have the exact length: padding is not accepted. A branch built for the other path has the wrong
 //! length or the wrong index, so the bridge refuses it.
 
-use crate::abi::{BeaconBlockHeader as AbiBeaconBlockHeader, ForkProof, MessageProof};
-use crate::chain::{ChainSpec, ForkName};
+use crate::abi::{BeaconBlockHeader as AbiBeaconBlockHeader, MessageProof};
+use crate::chain::ChainSpec;
 use crate::error::{Error, Result};
 use crate::layout::{
-    block_hash_gindex_for_fork, is_block_roots_position, is_historical_summaries_position, state_layout_for_fork,
-    ObservedShape, BLOCK_HASH_GINDEX_GLOAS, BLOCK_ROOTS_VECTOR_DEPTH, HISTORICAL_SUMMARIES_LIST_DEPTH,
-    OBSERVED_SHAPE_PLAIN_DEPTH_FIVE, OBSERVED_SHAPE_PLAIN_DEPTH_SEVEN, OBSERVED_SHAPE_PLAIN_DEPTH_SIX,
-    OBSERVED_SHAPE_PROGRESSIVE, SHAPE_PROGRESSIVE, SLOTS_PER_HISTORICAL_ROOT,
+    is_block_roots_position, is_historical_summaries_position, message_block_hash_gindex_for_fork,
+    state_layout_for_fork, BLOCK_ROOTS_VECTOR_DEPTH, HISTORICAL_SUMMARIES_LIST_DEPTH, SLOTS_PER_HISTORICAL_ROOT,
 };
-use crate::ssz::{is_valid_exact_branch, progressive_container_branch};
-use crate::ssz_state::{ForkData, ParsedState};
+use crate::ssz::is_valid_exact_branch;
 use crate::types::BeaconBlockHeader;
-use alloy_primitives::{keccak256, FixedBytes, B256};
-
-/// The state shapes that a message source may have, in the order in which `ForkShape.judge` tries them. It is the list
-/// `ForkShape.allowedShapes` of the contracts: plain depth 5, 6 and 7, then the progressive form. A Solidity test and a
-/// Rust test pin both lists to these values, so the deposit gate and the message verifier keep one list.
-pub const ALLOWED_SHAPES: [ObservedShape; 4] = [
-    OBSERVED_SHAPE_PLAIN_DEPTH_FIVE,
-    OBSERVED_SHAPE_PLAIN_DEPTH_SIX,
-    OBSERVED_SHAPE_PLAIN_DEPTH_SEVEN,
-    OBSERVED_SHAPE_PROGRESSIVE,
-];
-
-/// The version as a leaf: four bytes, right-padded to 32, as `ForkShape.judge` hashes `bytes32(version)`.
-fn version_leaf(version: FixedBytes<4>) -> B256 {
-    let mut leaf = [0u8; 32];
-    leaf[..4].copy_from_slice(version.as_slice());
-    B256::from(leaf)
-}
-
-/// The shape of the state under `state_root`, by the rule of `ForkShape.judge`: the first allowed shape for which the
-/// version branch proves `fork.version` at the version position of that shape and the genesis validators root branch
-/// proves `genesis_validators_root` at the root position of that shape. Both branches must have the exact length.
-///
-/// A prover cannot claim another shape than the state has: the genesis validators root position of each shape lies where
-/// the other shapes hold a fixed leaf or a hash (see `BeaconLayoutLib._provenShape`).
-///
-/// # Errors
-/// `InvalidForkShapeProof` when no allowed shape has both branches valid.
-pub fn source_shape(fork: &ForkProof, state_root: &B256, genesis_validators_root: &B256) -> Result<u8> {
-    let leaf = version_leaf(fork.version);
-    ALLOWED_SHAPES
-        .iter()
-        .find(|shape| {
-            is_valid_exact_branch(&leaf, &fork.versionBranch, shape.current_version_gindex, state_root)
-                && is_valid_exact_branch(
-                    genesis_validators_root,
-                    &fork.genesisValidatorsRootBranch,
-                    shape.genesis_validators_root_gindex,
-                    state_root,
-                )
-        })
-        .map(|shape| shape.shape)
-        .ok_or(Error::InvalidForkShapeProof)
-}
-
-/// The fork proof of a parsed state: the version branch (`Fork.previous_version`, the node over `Fork.epoch`, then the
-/// state levels) and the genesis validators root branch, for the shape of the state. The prover attaches it to a message
-/// whose source header names this state.
-pub fn fork_proof_of_state(state: &ParsedState) -> ForkProof {
-    fork_proof_of_fields(&state.field_roots, state.shape != crate::layout::ContainerShape::Plain, &state.fork)
-}
-
-/// The fork proof of a state given by its field roots: a plain container, or the progressive one of Gloas.
-///
-/// # Panics
-/// Panics when field 3 of `field_roots` is not the root of `fork`: the state does not hold that fork.
-pub fn fork_proof_of_fields(field_roots: &[B256], progressive: bool, fork: &ForkData) -> ForkProof {
-    let version_branch = match progressive {
-        true => crate::gate::progressive_fork_version_branch(field_roots, fork),
-        false => crate::gate::fork_version_branch(field_roots, fork),
-    };
-    let root_branch = match progressive {
-        true => progressive_container_branch(field_roots, STATE_FIELD_GENESIS_VALIDATORS_ROOT).1,
-        false => crate::ssz::branch_for_leaf(field_roots, STATE_FIELD_GENESIS_VALIDATORS_ROOT).1,
-    };
-    ForkProof {
-        version: FixedBytes::from(fork.current_version),
-        versionBranch: version_branch,
-        genesisValidatorsRootBranch: root_branch,
-    }
-}
-
-/// The position of `genesis_validators_root` among the `BeaconState` fields.
-const STATE_FIELD_GENESIS_VALIDATORS_ROOT: usize = 1;
-
-/// The execution block hash position of a message source of `shape` at `slot`: 2856 (the bid `parent_block_hash`) for
-/// the progressive shape; for a plain shape, the payload `block_hash` position that the validated layout of the slot
-/// holds, which this reference models by the fork of the slot. A plain state is never Gloas, so a slot that the schedule
-/// already counts as Gloas takes the Fulu position.
-///
-/// # Errors
-/// `UnsupportedFork` for a slot before Capella.
-pub fn message_block_hash_gindex_for_shape(spec: &ChainSpec, shape: u8, slot: u64) -> Result<u64> {
-    if shape == SHAPE_PROGRESSIVE {
-        return Ok(BLOCK_HASH_GINDEX_GLOAS);
-    }
-    block_hash_gindex_for_fork(spec.fork_at_slot(slot).min(ForkName::Fulu))
-}
+use alloy_primitives::{keccak256, B256};
 
 impl From<&AbiBeaconBlockHeader> for BeaconBlockHeader {
     fn from(header: &AbiBeaconBlockHeader) -> Self {
@@ -230,8 +135,7 @@ pub fn ancestry_leaf_gindex(spec: &ChainSpec, anchor_slot: u64, source_slot: u64
     let path = ancestry_path_for_slots(anchor_slot, source_slot)?;
     // A Gloas anchor has a progressive state: its `block_roots` is at 352 and its `historical_summaries` at 2950, and the
     // position rules take both. The anchor only proves the SOURCE HEADER. The execution block of the source comes from the
-    // source body, by the rule that the fork proof of the source state picks (`verify_beacon_path`). This reference models
-    // the validated layout row of the anchor by the fork of the anchor slot; the bridge reads its table.
+    // source body, and `verify_beacon_path` refuses a Gloas source there.
     let layout = state_layout_for_fork(spec.fork_at_slot(anchor_slot))?;
     if path == AncestryPath::Recent {
         return block_roots_leaf_gindex(layout.block_roots_gindex, source_slot);
@@ -246,13 +150,11 @@ pub fn ancestry_leaf_gindex(spec: &ChainSpec, anchor_slot: u64, source_slot: u64
 
 /// Verifies the beacon path and returns the execution block hash of the source block.
 ///
-/// `stored_anchor_root` is what `lightClient.headers(anchorHeader.slot)` returns. Zero means "not stored". The genesis
-/// validators root of the fork proof is the one of the chain (`spec.genesis_validators_root`), which the light client of
-/// the bridge holds. The order of the checks is the order of the bridge: anchor, ancestry, fork proof, block hash.
+/// `stored_anchor_root` is what `lightClient.headers(anchorHeader.slot)` returns. Zero means "not stored".
 ///
 /// # Errors
 /// `AnchorNotStored`, `DepositNotBeforeAnchor`, `UnsupportedFork`, `DepositBeforeCapella`, `HistoricalIndexOutOfRange`,
-/// `InvalidAncestryBranch`, `InvalidForkShapeProof`, `InvalidBlockHashBranch`.
+/// `InvalidAncestryBranch`, `InvalidBlockHashBranch`.
 pub fn verify_beacon_path(spec: &ChainSpec, proof: &MessageProof, stored_anchor_root: &B256) -> Result<B256> {
     let anchor = BeaconBlockHeader::from(&proof.anchorHeader);
     let source = BeaconBlockHeader::from(&proof.sourceHeader);
@@ -267,9 +169,8 @@ pub fn verify_beacon_path(spec: &ChainSpec, proof: &MessageProof, stored_anchor_
         return Err(Error::InvalidAncestryBranch);
     }
 
-    let shape = source_shape(&proof.sourceFork, &source.state_root, &spec.genesis_validators_root)?;
     let block_hash = keccak256(&proof.executionHeaderRlp);
-    let hash_gindex = message_block_hash_gindex_for_shape(spec, shape, source.slot)?;
+    let hash_gindex = message_block_hash_gindex_for_fork(spec.fork_at_slot(source.slot))?;
     if !is_valid_exact_branch(&block_hash, &proof.blockHashBranch, hash_gindex, &source.body_root) {
         return Err(Error::InvalidBlockHashBranch);
     }
@@ -375,93 +276,18 @@ mod tests {
         assert_eq!(gindex_depth(electra), 19);
     }
 
-    /// Claim: the index of the execution block of a message source follows the proven SHAPE of the source state, not the
-    /// fork schedule: the progressive shape reads 2856 (the bid `parent_block_hash`) also in a slot that the Ethereum
-    /// schedule (Gloas at `FAR_FUTURE_EPOCH`) counts as Fulu; a plain shape reads the payload position, 812 in a Fulu or a
-    /// Sepolia Gloas slot (a plain state is never Gloas) and 412 in a Capella slot. The layout function
-    /// `block_hash_gindex_for_fork` stays closed to Gloas. Why it matters: this is the rule the bridge applies, and the
-    /// schedule of a chain does not know a fork before it is scheduled.
+    /// Claim: the index of the execution block of a message source follows the fork of the SOURCE slot: 812 for Fulu, and
+    /// 2856 (the bid `parent_block_hash`) from Gloas on. The layout function `block_hash_gindex_for_fork` stays closed to
+    /// Gloas. Why it matters: a Gloas index in a Fulu slot, or the reverse, points at another node of the body.
     #[test]
-    fn the_source_shape_picks_the_block_hash_index() {
-        use crate::chain::{ETHEREUM_MAINNET, PULSECHAIN, SEPOLIA};
-        let fulu_slot = 411_392 * 32 + 5;
-        assert_eq!(message_block_hash_gindex_for_shape(&ETHEREUM_MAINNET, SHAPE_PROGRESSIVE, fulu_slot), Ok(2856));
-        assert_eq!(message_block_hash_gindex_for_shape(&ETHEREUM_MAINNET, 6, fulu_slot), Ok(812));
-        assert_eq!(message_block_hash_gindex_for_shape(&SEPOLIA, 6, 353_024 * 32 + 5), Ok(812));
-        assert_eq!(message_block_hash_gindex_for_shape(&SEPOLIA, SHAPE_PROGRESSIVE, 353_024 * 32 + 5), Ok(2856));
-        assert_eq!(message_block_hash_gindex_for_shape(&PULSECHAIN, 5, 10_872_000), Ok(412));
-        assert_eq!(
-            block_hash_gindex_for_fork(SEPOLIA.fork_at_slot(353_024 * 32)),
-            Err(Error::GloasPayloadNotFinalized)
-        );
-    }
-
-    /// Claim: `source_shape` follows `ForkShape.judge`. For each allowed shape, the honest proof of a state of that shape
-    /// gives the shape. The proof of one shape never passes for a state of another shape, a wrong genesis validators root
-    /// fails, an empty proof fails, and a valid proof of a plain depth 8 state (outside the list) fails. Why it matters:
-    /// the shape picks the rule, so a proof that claims another shape than the state has would open the other rule.
-    #[test]
-    fn the_source_shape_is_proven_and_only_the_allowed_shapes_pass() {
-        let root = B256::repeat_byte(0x5a);
-        let states: Vec<(u8, ParsedStateLike)> =
-            [5u8, 6, 7, SHAPE_PROGRESSIVE].iter().map(|shape| (*shape, state_of_shape(*shape, root))).collect();
-        for (shape, state) in &states {
-            assert_eq!(source_shape(&state.proof, &state.root, &root), Ok(*shape), "honest shape {shape}");
-            assert_eq!(
-                source_shape(&state.proof, &state.root, &B256::repeat_byte(0x5b)),
-                Err(Error::InvalidForkShapeProof),
-                "another chain, shape {shape}"
-            );
-            for (other, other_state) in &states {
-                if other == shape {
-                    continue;
-                }
-                assert_eq!(
-                    source_shape(&other_state.proof, &state.root, &root),
-                    Err(Error::InvalidForkShapeProof),
-                    "the proof of shape {other} on a state of shape {shape}"
-                );
-            }
-        }
-        let empty =
-            ForkProof { version: FixedBytes::ZERO, versionBranch: Vec::new(), genesisValidatorsRootBranch: Vec::new() };
-        assert_eq!(source_shape(&empty, &states[0].1.root, &root), Err(Error::InvalidForkShapeProof));
-        let deep = state_of_shape(8, root);
-        assert_eq!(deep.proof.versionBranch.len(), 10, "a valid depth 8 proof");
-        assert_eq!(source_shape(&deep.proof, &deep.root, &root), Err(Error::InvalidForkShapeProof));
-    }
-
-    /// Claim: the Rust list of allowed shapes is 5, 6, 7 and 255 in this order, the list of `ForkShape.allowedShapes`
-    /// (`test/hardened/ForkRuleFromProof.t.sol` pins the Solidity side to the same values). Why it matters: the deposit gate
-    /// and the message verifier must follow one list.
-    #[test]
-    fn the_allowed_shapes_are_the_list_of_the_contracts() {
-        let shapes: Vec<u8> = ALLOWED_SHAPES.iter().map(|shape| shape.shape).collect();
-        assert_eq!(shapes, vec![5, 6, 7, 255]);
-    }
-
-    /// A state and its fork proof.
-    struct ParsedStateLike {
-        root: B256,
-        proof: ForkProof,
-    }
-
-    /// A state of `shape` (a plain depth, or 255) with distinct field roots, `genesis_validators_root` = `root`, and a
-    /// `fork` field that holds the version `0x07000000` (progressive) or `0x06000000` (plain).
-    fn state_of_shape(shape: u8, root: B256) -> ParsedStateLike {
-        use crate::ssz::{merkleize, progressive_container_root};
-        let progressive = shape == SHAPE_PROGRESSIVE;
-        let count = if progressive { 46 } else { (1usize << shape) - 1 };
-        let fork = ForkData {
-            previous_version: [0x05, 0, 0, 0],
-            current_version: if progressive { [0x07, 0, 0, 0] } else { [0x06, 0, 0, 0] },
-            epoch: 364_032,
-        };
-        let mut fields: Vec<B256> = (0..count).map(|index| B256::with_last_byte(index as u8 ^ 0xa5)).collect();
-        fields[1] = root;
-        fields[3] = fork.hash_tree_root();
-        let state_root = if progressive { progressive_container_root(&fields) } else { merkleize(&fields) };
-        ParsedStateLike { root: state_root, proof: fork_proof_of_fields(&fields, progressive, &fork) }
+    fn a_gloas_source_reads_the_bid_parent_hash() {
+        use crate::chain::SEPOLIA;
+        use crate::layout::block_hash_gindex_for_fork;
+        let gloas = SEPOLIA.fork_at_slot(353_024 * 32 + 5);
+        let fulu = SEPOLIA.fork_at_slot(353_024 * 32 - 5);
+        assert_eq!(message_block_hash_gindex_for_fork(gloas), Ok(2856));
+        assert_eq!(message_block_hash_gindex_for_fork(fulu), Ok(812));
+        assert_eq!(block_hash_gindex_for_fork(gloas), Err(Error::GloasPayloadNotFinalized));
     }
 
     /// Claim: the leaf builders take only the positions that the bridge accepts, and refuse a neighbour of each. The

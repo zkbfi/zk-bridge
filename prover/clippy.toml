@@ -1,0 +1,14 @@
+# The message proof without the fork proof of the source state. `lc-core` keeps it unchanged only because every byte of
+# `lc-core` is an input of the guest program keys (`light-client/scripts/program-keys.sh`); the bridge no longer accepts
+# it. The replacements live in `lc-message` (`light-client/lc-message`).
+disallowed-types = [
+    { path = "lc_core::abi::MessageProof", reason = "no sourceFork; use lc_message::abi::MessageProof" },
+    { path = "lc_core::abi::executeMessageCall", reason = "old selector 0xa5442804; use lc_message::abi::executeMessageCall" },
+    { path = "lc_core::abi::BeaconBlockHeader", reason = "a field type of the old MessageProof; use lc_message::abi::BeaconBlockHeader" },
+]
+disallowed-methods = [
+    { path = "lc_core::message::verify_message", reason = "fork rule by schedule, no fork proof; use lc_message::message::verify_message" },
+    { path = "lc_core::ancestry::verify_beacon_path", reason = "fork rule by schedule, no fork proof; use lc_message::ancestry::verify_beacon_path" },
+    { path = "lc_core::layout::message_block_hash_gindex_for_fork", reason = "the schedule rule; use lc_message::ancestry::message_block_hash_gindex_for_shape" },
+    { path = "lc_core::error::Error::reason_code", reason = "names InvalidForkShapeProof as LightClientUpdateRejected; use lc_message::message::reason_code" },
+]

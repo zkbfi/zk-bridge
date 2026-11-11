@@ -4,19 +4,19 @@
 //! layer and token mediator"). This function does the same checks in the same order, so a Rust test and a Solidity test
 //! can run the same fixtures and must agree.
 //!
-//! Order: the receipt index equals the transaction index; beacon path (anchor stored, ancestry branch, fork proof of the
-//! source state, block hash branch); header decode; receipt proof; transaction proof; EIP-2718 receipt decode with a success check; log lookup;
+//! Order: the receipt index equals the transaction index; beacon path (anchor stored, ancestry branch, block hash
+//! branch); header decode; receipt proof; transaction proof; EIP-2718 receipt decode with a success check; log lookup;
 //! emitter and topics; event data; message decode; identifier, version, source chain, destination chain and data type.
 //! The delivery state (a message executes once) and the gas guard are bridge state and outside this function.
 //!
 //! The message encoding is the one of the OmniBridge Arbitrary Message Bridge, byte for byte (`AmbMessageCodec.sol`).
 
 use crate::abi::{MessageProof, USER_REQUEST_TOPIC};
-use crate::ancestry::{source_shape, verify_beacon_path};
+use crate::ancestry::verify_beacon_path;
 use crate::chain::ChainSpec;
+use crate::chain::ForkName;
 use crate::error::{Error, Result};
 use crate::execution::{decode_execution_anchor_fields, decode_execution_header, decode_receipt, Log};
-use crate::layout::SHAPE_PROGRESSIVE;
 use crate::mpt::extract_proven_value;
 use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use alloy_trie::proof::verify_proof;
@@ -272,14 +272,10 @@ pub fn require_acceptable_message(
 
 /// The receipts root and the transactions root of the execution header of the proof.
 ///
-/// A source whose state the fork proof shows to be progressive (Gloas on) reads them with the tolerant decoder, because an
-/// Amsterdam header has more items than the strict decoder knows. A plain source keeps the strict decoder, as before. The
-/// rule follows the same proof as the block hash rule of [`verify_beacon_path`], never the fork schedule, so a Gloas source
-/// on a chain whose schedule has no Gloas epoch yet is read as Gloas. The contract reads both items by position in every
-/// case (`ReceiptProofLib.headerRoot`).
+/// A source header at or after the Gloas fork reads them with the tolerant decoder, because an Amsterdam header has more
+/// items than the strict decoder knows. Every earlier fork keeps the strict decoder, as before.
 fn trie_roots(spec: &ChainSpec, proof: &MessageProof) -> Result<(B256, B256)> {
-    let shape = source_shape(&proof.sourceFork, &proof.sourceHeader.stateRoot, &spec.genesis_validators_root)?;
-    if shape == SHAPE_PROGRESSIVE {
+    if spec.fork_at_slot(proof.sourceHeader.slot) >= ForkName::Gloas {
         let fields = decode_execution_anchor_fields(&proof.executionHeaderRlp)?;
         return Ok((fields.receipts_root, fields.transactions_root));
     }

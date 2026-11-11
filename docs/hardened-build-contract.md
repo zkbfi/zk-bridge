@@ -193,7 +193,7 @@ Implements the Altair light-client sync protocol for both fork schedules:
 
 ### Withdrawal program: `verify_withdrawal(witness, expected_source_vault) -> WithdrawalOutput` (removed)
 
-No withdrawal program exists. The native reference check is now `lc_core::message::verify_message`, the twin of `MessageBridge.executeMessage`. The text below is the first design.
+No withdrawal program exists. The native reference check is now `lc_message::message::verify_message` (`light-client/lc-message`), the twin of `MessageBridge.executeMessage`. The text below is the first design.
 
 - Ancestry: the light client stores only one execution block per update, so the deposit block is proven against a finalized anchor. Path: the anchor's state root, then `state.block_roots` (the deposit slot must be within 8192 slots before the anchor), then the deposit beacon header, then its execution payload branch, then `keccak256(header_rlp) == deposit_block_hash`. Older deposits use the historical path through `historical_summaries`; see "Change: historical ancestry and folded updates".
 - The verifier argument of both contracts is a specific versioned SP1 verifier, never Succinct's ownable gateway. Decode the header for both Ethereum (Prague fields) and PulseChain (Shanghai fields).

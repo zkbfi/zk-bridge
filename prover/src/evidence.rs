@@ -863,7 +863,11 @@ mod tests {
                 body_root: B256::ZERO,
             },
             branch: Vec::new(),
-            fork: lc_testkit::pulsechain::missing_fork_proof(),
+            fork: lc_message::abi::ForkProof {
+                version: alloy_primitives::FixedBytes::ZERO,
+                versionBranch: Vec::new(),
+                genesisValidatorsRootBranch: Vec::new(),
+            },
         }
     }
 

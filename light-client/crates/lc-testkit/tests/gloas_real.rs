@@ -292,7 +292,7 @@ fn the_real_fork_version_branch_verifies_at_169() {
 /// The real message source: the real execution block X of the fixtures, the real beacon block B (the finalized header of the
 /// real update) whose bid names X as `parent_block_hash`, and a real later anchor A. The log is a REAL log of X (a transfer
 /// log of Sepolia, not a bridge message), so the proof reaches the log checks and stops there.
-fn real_message_proof() -> (lc_core::abi::MessageProof, B256, alloy_primitives::Address) {
+fn real_message_proof() -> (lc_testkit::lc_message::abi::MessageProof, B256, alloy_primitives::Address) {
     use alloy_primitives::{Address, Bytes};
     use lc_core::json::{beacon_header, hex_b256, hex_to_bytes};
     let fixture = load_response("sepolia/gloas_message_source.json");
@@ -301,13 +301,13 @@ fn real_message_proof() -> (lc_core::abi::MessageProof, B256, alloy_primitives::
     let anchor = beacon_header(&fixture["anchor_header"]);
     let source = beacon_header(&fixture["source_header"]);
     let index = alloy_primitives::U256::from(fixture["transaction_index"].as_u64().unwrap());
-    let proof = lc_core::abi::MessageProof {
+    let proof = lc_testkit::lc_message::abi::MessageProof {
         anchorHeader: (&anchor).into(),
         sourceHeader: (&source).into(),
         ancestryBranch: branch("ancestry_branch"),
         blockHashBranch: branch("block_hash_branch"),
         // The state of B is the real state of `gloas_head_state.ssz` (its root is the `state_root` of B).
-        sourceFork: lc_core::ancestry::fork_proof_of_state(&real_state()),
+        sourceFork: lc_testkit::lc_message::ancestry::fork_proof_of_state(&real_state()),
         executionHeaderRlp: Bytes::from(real_header_rlp()),
         receiptProof: nodes("receipt_proof"),
         receiptIndex: index,
@@ -327,9 +327,9 @@ fn real_message_proof() -> (lc_core::abi::MessageProof, B256, alloy_primitives::
 /// synthetic trees alone.
 #[test]
 fn the_real_source_state_proves_the_progressive_shape() {
-    use lc_core::ancestry::{fork_proof_of_state, source_shape};
     use lc_core::chain::ETHEREUM_MAINNET;
     use lc_core::layout::SHAPE_PROGRESSIVE;
+    use lc_testkit::lc_message::ancestry::{fork_proof_of_state, source_shape};
     let state = real_state();
     let proof = fork_proof_of_state(&state);
     let served = load_response("sepolia/gloas_fork_version.json");
@@ -364,8 +364,9 @@ fn the_real_source_state_proves_the_progressive_shape() {
 /// fork proof each fail with their own error.
 #[test]
 fn a_real_gloas_message_source_verifies_up_to_the_log() {
-    use lc_core::ancestry::verify_beacon_path;
-    use lc_core::message::{verify_message, MessageContext};
+    use lc_core::message::MessageContext;
+    use lc_testkit::lc_message::ancestry::verify_beacon_path;
+    use lc_testkit::lc_message::message::verify_message;
     let (proof, anchor_root, emitter) = real_message_proof();
     let x_hash = keccak256(real_header_rlp());
     assert_eq!(proof.blockHashBranch.len(), 11);

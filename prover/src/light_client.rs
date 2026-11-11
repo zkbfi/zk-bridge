@@ -6,14 +6,13 @@
 use crate::error::{Error, Result};
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolValue};
-use lc_core::abi::{executeMessageCall, BeaconBlockHeader as AbiHeader, ForkProof, MessageProof};
 use lc_core::chain::{
     ChainSpec, ForkName, ETHEREUM_MAINNET, PULSECHAIN, PULSECHAIN_TESTNET_V4, SEPOLIA,
 };
 use lc_core::execution::Log;
 use lc_core::json::{execution_header_from_json, receipts_from_json};
 use lc_core::message::{
-    decode_message, message_of_log, verify_message, MessageContext, MessageHeader, VerifiedMessage,
+    decode_message, message_of_log, MessageContext, MessageHeader, VerifiedMessage,
 };
 use lc_core::receipts::{build_indexed_trie, encode_execution_header, header_hash};
 use lc_core::ssz::{branch_for_leaf, u64_chunk};
@@ -26,6 +25,10 @@ use lc_core::types::{
 };
 use lc_core::update::FoldStep;
 use lc_core::wire::{encode_guest_input, ChainSelector, GuestInput};
+use lc_message::abi::{
+    executeMessageCall, BeaconBlockHeader as AbiHeader, ForkProof, MessageProof,
+};
+use lc_message::message::{reason_code, verify_message};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -273,7 +276,7 @@ pub fn to_layout_header(header: &BeaconBlockHeader) -> crate::contracts::LayoutH
     }
 }
 
-/// Converts a fork proof into the struct that `addBlockHashLayout` takes (the same fields as `lc_core::abi::ForkProof`).
+/// Converts a fork proof into the struct that `addBlockHashLayout` takes (the same fields as `lc_message::abi::ForkProof`).
 pub fn to_layout_fork_proof(fork: &ForkProof) -> crate::contracts::ForkProof {
     crate::contracts::ForkProof {
         version: fork.version,
@@ -579,7 +582,7 @@ pub struct BridgeContext {
 
 /// Runs the bridge check natively, in the bridge's order.
 ///
-/// Calls `lc_core::message::verify_message`. The evidence builder returns no evidence that this call refuses.
+/// Calls `lc_message::message::verify_message`. The evidence builder returns no evidence that this call refuses.
 ///
 /// # Errors
 /// `Error::VerificationRefused` with the reason code of the first failed rule.
@@ -595,7 +598,7 @@ pub fn verify_message_natively(
         stored_anchor_root: context.stored_anchor_root,
     };
     verify_message(proof, &context, chain.spec())
-        .map_err(|error| Error::VerificationRefused(format!("{} ({})", error, error.reason_code())))
+        .map_err(|error| Error::VerificationRefused(format!("{} ({})", error, reason_code(&error))))
 }
 
 /// The generalized index of `BeaconState.block_roots` for the fork at `slot`.
@@ -804,10 +807,10 @@ impl StateView {
     }
 
     /// The fork proof of this state: `fork.current_version` and `genesis_validators_root`, with the branches of its
-    /// shape (`lc_core::ancestry::fork_proof_of_state`). A message whose source header names this state carries it, and
+    /// shape (`lc_message::ancestry::fork_proof_of_state`). A message whose source header names this state carries it, and
     /// so does block hash layout evidence whose header names it.
     pub fn fork_proof(&self) -> ForkProof {
-        lc_core::ancestry::fork_proof_of_state(&self.state)
+        lc_message::ancestry::fork_proof_of_state(&self.state)
     }
 
     /// `state.latest_block_hash`, for a Gloas state. `None` for an earlier fork.
@@ -1532,7 +1535,11 @@ mod tests {
                 ancestry_branch: hex_branch(&entry["ancestry_branch"]),
                 block_hash_branch: hex_branch(&entry["block_hash_branch"]),
                 // The fixture holds no state of the source block, so no real fork proof exists for it.
-                source_fork: lc_testkit::pulsechain::missing_fork_proof(),
+                source_fork: lc_message::abi::ForkProof {
+                    version: alloy_primitives::FixedBytes::ZERO,
+                    versionBranch: Vec::new(),
+                    genesisValidatorsRootBranch: Vec::new(),
+                },
             }
         }
     }
