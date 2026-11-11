@@ -216,8 +216,10 @@ hosts, fetch times and backend job ids. The public tree on IPFS is built separat
   The prover's state store (`prover/src/beacon/http.rs`, `StoredState`) keeps the bytes as the node served them plus a
   `<slot>-<root>.summary` file with the missing entry (two 0x hashes, one per line); the runner's older copies hold the bytes
   with those 64 bytes appended (the **repaired form**, which hashes to the state root on its own). Both are the same state
-  under the same name. `mirror-add` compares states by their repaired form: the `.ssz` plus the entry of its `.summary` when
-  there is one. It checks that the `.summary` is two hashes and that `historical_summaries` is a whole list of 64-byte
+  under the same name. `mirror-add` compares copies of a state by their candidate forms: the `.ssz` as it is and, when a `.summary` is next to
+  it and fits, the `.ssz` with the entry appended. Two copies are the same state when any candidate of one equals any of the
+  other, so a `.summary` next to an already whole `.ssz` (the runner's repaired bytes, then the backend's summary, as in the
+  mirror of 2026-11-09) is redundant, not a conflict, and the files stay as they are. It checks that the `.summary` is two hashes and that `historical_summaries` is a whole list of 64-byte
   entries ending at the end of the file (it is the last field of a Capella to Deneb state, which is what PulseChain runs; the
   check reads its offset from the last 4 bytes of the fixed part). The same state in the other form is "identical". A
   different state under the name, or a `.summary` that does not fit its bytes, is a conflict. A state that is new to the

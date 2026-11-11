@@ -223,9 +223,6 @@ async function readState(directory: string, name: string): Promise<{ served: Buf
   return { served, summary: await readIfAny(join(directory, name.replace(/\.ssz$/, ".summary"))) };
 }
 
-/** The repaired form of a state read by {@link readState}: its bytes, with the entry of its summary appended when it has one. Throws for a summary that does not fit. */
-const repairedOf = ({ served, summary }: { served: Buffer; summary: Buffer | null }): Buffer => (summary === null ? served : repairedState(served, summary.toString("utf8")));
-
 /**
  * Copies the files of `from` into `<mirror>/<to>` once each: beacon states (`<chain id>/<slot>-<root>.ssz`, with a
  * `.summary` next to it for a state kept as the node served it) or snapshots (`<stamp>.sqlite`). Other names and links are
@@ -267,17 +264,28 @@ export async function addToMirror(mirror: string, from: string, to: string): Pro
   return result;
 }
 
-/** One beacon state into the mirror: compared in its repaired form, copied as it is when the mirror has none. */
+/**
+ * The forms one copy of a state can be taken for: its `.ssz` as it is and, when a `.summary` is next to it and fits, the
+ * `.ssz` with the entry appended. A summary next to an already whole `.ssz` (the runner's repaired bytes, then the
+ * backend's summary for the same name) only adds a candidate nobody holds.
+ */
+function candidates({ served, summary }: { served: Buffer; summary: Buffer | null }): Buffer[] {
+  if (summary === null) return [served];
+  try {
+    return [served, repairedState(served, summary.toString("utf8"))];
+  } catch {
+    // repairedState throws only for a summary or a state that does not fit.
+    return [served];
+  }
+}
+
+/** One beacon state into the mirror: the same state when any form of one copy equals any form of the other, copied as it is when the mirror has none. */
 async function addState(mirror: string, from: string, name: string): Promise<WriteOutcome> {
   const incoming = (await readState(from, name)) as { served: Buffer; summary: Buffer | null };
   const held = await readState(join(mirror, "beacon-states"), name);
-  try {
-    const repaired = repairedOf(incoming);
-    if (held !== null) return repairedOf(held).equals(repaired) ? "identical" : "conflict";
-  } catch {
-    // repairedState throws only for a summary or a state that does not fit.
-    return "conflict";
-  }
+  const forms = candidates(incoming);
+  if (incoming.summary !== null && forms.length === 1) return "conflict";
+  if (held !== null) return candidates(held).some((form) => forms.some((other) => form.equals(other))) ? "identical" : "conflict";
   // The summary first: a run that stops in between leaves a summary alone, which the next run finds again, never a state
   // that looks whole without its summary.
   if (incoming.summary !== null && (await writeOnce(mirror, `beacon-states/${name.replace(/\.ssz$/, ".summary")}`, incoming.summary)) === "conflict") return "conflict";
