@@ -1,7 +1,7 @@
 //! Fork proofs of source states, saved while a node still serves the state.
 //!
 //! Every message proof carries `MessageProof.sourceFork`: `fork.current_version` and `genesis_validators_root` proven
-//! under the state root of its source header (see `lc_core::ancestry::source_shape`). The prover builds it from the state
+//! under the state root of its source header (see `lc_message::ancestry::source_shape`). The prover builds it from the state
 //! of the source block. PulseChain beacon nodes prune old states, and an Ethereum mainnet state is hundreds of MB, so a message left
 //! unproven for long could become unprovable once no reachable node keeps that state. Owner, 2026-11-10: "yes, and save
 //! fork proofs in the watcher too".
@@ -24,9 +24,9 @@ use super::SourceBlock;
 use crate::error::{Error, Result};
 use crate::light_client::{header_root, BeaconHeader};
 use alloy_primitives::{hex, FixedBytes, B256};
-use lc_core::abi::ForkProof;
 use lc_core::layout::ObservedShape;
 use lc_core::ssz::hash_pair;
+use lc_message::abi::ForkProof;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
@@ -51,7 +51,7 @@ pub fn verified_shape(
     state_root: &B256,
     genesis_validators_root: &B256,
 ) -> Result<u8> {
-    lc_core::ancestry::source_shape(fork, state_root, genesis_validators_root).map_err(|_| {
+    lc_message::ancestry::source_shape(fork, state_root, genesis_validators_root).map_err(|_| {
         Error::Beacon(format!(
             "the fork proof does not prove an allowed shape under the state root {state_root:#x}"
         ))
@@ -323,9 +323,9 @@ pub fn fork_from_multiproof(
 pub(crate) mod tests {
     use super::*;
     use crate::rpc::{HttpGet, HttpResponse};
-    use lc_core::ancestry::fork_proof_of_fields;
     use lc_core::layout::{OBSERVED_SHAPE_PLAIN_DEPTH_FIVE, OBSERVED_SHAPE_PLAIN_DEPTH_SIX};
     use lc_core::ssz_state::ForkData;
+    use lc_message::ancestry::fork_proof_of_fields;
 
     /// The leaves of the compact multiproof of `gindices` over a tree known through the branches of those leaves. A test
     /// plays the Lodestar route with it.

@@ -1,0 +1,27 @@
+# The message verification of the bridge with the fork proof of the source state (`MessageProof.sourceFork`).
+#
+# It lives outside `crates/` on purpose: the SP1 guest programs compile `lc-core`, and the program keys
+# (`program-keys.json`) cover every file of `crates/` and `guests/` plus Cargo.toml, Cargo.lock and rust-toolchain.toml
+# (`scripts/program-keys.sh`). Code that only the bridge reference and the prover need stays out of those inputs, so it
+# can change without changing the guest programs and their keys.
+#
+# Two compilers read these sources: the prover depends on this crate, and `lc-testkit` compiles the same files as its
+# module `lc_testkit::lc_message` (see `crates/lc-testkit/src/lib.rs`), which runs the unit tests of these files in the
+# light-client workspace without adding a dependency to `lc-testkit/Cargo.toml` or Cargo.lock. The files therefore name
+# each other with `super::`, never `crate::`.
+[package]
+name = "lc-message"
+description = "Message proof verification of the hardened bridge, with the fork proof of the source state."
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+publish = false
+
+# Not a member of the light-client workspace: joining it would change the light-client Cargo.toml and Cargo.lock.
+[workspace]
+
+# The same exact versions as `light-client/Cargo.toml`.
+[dependencies]
+lc-core = { path = "../crates/lc-core" }
+alloy-primitives = { version = "=1.7.3", default-features = false, features = ["std"] }
+alloy-sol-types = { version = "=1.7.3", default-features = false, features = ["std"] }

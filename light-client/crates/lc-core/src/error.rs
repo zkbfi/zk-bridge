@@ -45,8 +45,8 @@ pub enum Error {
     /// the genesis validators root branch does not prove `genesis_validators_root` at the position that the finality branch length names,
     /// under the attested state root. The claimed layout is not the layout of the state.
     InvalidGenesisValidatorsRootBranch,
-    /// No allowed state shape is proven (fork observation or message source): no shape has the version branch length, or
-    /// no candidate has both a valid version branch and a valid genesis validators root branch under the state root.
+    /// The fork observation proved no allowed state shape: the version branch has a length that no shape has, or no shape
+    /// candidate has both a valid version branch and a valid genesis validators root branch under the attested state root.
     InvalidForkShapeProof,
     /// The current sync committee branch does not lead to the state root of the bootstrap header.
     InvalidCurrentSyncCommitteeBranch,
@@ -360,7 +360,6 @@ impl Error {
             Self::MessageVersionInvalid { .. } => "MessageVersionInvalid",
             Self::UnknownDataType { .. } => "UnknownDataType",
             Self::SignatureInNextPeriodWithoutCrossing => "SignatureInNextPeriodWithoutCrossing",
-            Self::InvalidForkShapeProof => "InvalidForkShapeProof",
             _ => "LightClientUpdateRejected",
         }
     }

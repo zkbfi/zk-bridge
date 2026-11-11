@@ -1,11 +1,11 @@
 //! Loaders for the real PulseChain fixtures derived by `derive-pulsechain-fixtures`.
 
 use crate::json::{beacon_header, branch, hex_b256, light_client_update, load_response, sync_committee};
+use crate::lc_message::abi::{ForkProof, MessageProof};
 use crate::receipts::{
     build_indexed_trie, encode_execution_header, execution_header_from_json, header_hash, receipts_from_json,
 };
 use alloy_primitives::{Bytes, B256, U256};
-use lc_core::abi::{ForkProof, MessageProof};
 use lc_core::types::{LightClientStore, LightClientUpdate};
 
 /// The branches of the real attested state that a beacon node does not serve. The derive tool reads them from the state.

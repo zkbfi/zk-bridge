@@ -5,11 +5,12 @@
 //! case it runs `verify_message` and asserts that the outcome equals the outcome the file declares.
 
 use crate::json::{hex_b256, hex_bytes};
+use crate::lc_message::abi::{executeMessageCall, MessageProof};
+use crate::lc_message::message::{reason_code, verify_message};
 use crate::message_blocks::{remote_chain_id, standard_receipts, ATTACKER, BRIDGE};
 use crate::synthetic::{build_message, MessageScenario};
 use alloy_primitives::{hex, Address, B256, U256};
 use alloy_sol_types::SolCall;
-use lc_core::abi::{executeMessageCall, MessageProof};
 use lc_core::ancestry::{ancestry_path_for_slots, historical_leaf_gindex, AncestryPath};
 use lc_core::chain::{ChainSpec, ForkName, ETHEREUM_MAINNET, FAR_FUTURE_EPOCH, PULSECHAIN, SEPOLIA};
 use lc_core::layout::{
@@ -17,7 +18,7 @@ use lc_core::layout::{
     ALLOWED_FINALITY_BRANCH_LENGTHS, BLOCK_ROOTS_VECTOR_DEPTH, EXECUTION_PAYLOAD_GINDEX, GLOAS_STATE_LAYOUT,
     HISTORICAL_SUMMARIES_LIST_DEPTH, SLOTS_PER_HISTORICAL_ROOT,
 };
-use lc_core::message::{verify_message, MessageContext, VerifiedMessage};
+use lc_core::message::{MessageContext, VerifiedMessage};
 use lc_core::ssz::gindex_depth;
 use serde_json::{json, Value};
 
@@ -221,7 +222,7 @@ fn render(case: Case) -> (String, Value) {
     let outcome = verify_message(&case.proof, &context, case.spec);
     let expected = match (&case.expected, &outcome) {
         (Expected::Accept, Ok(message)) => json!({ "result": "accept", "message": message_json(message) }),
-        (Expected::Reject(reason), Err(error)) if error.reason_code() == *reason => {
+        (Expected::Reject(reason), Err(error)) if reason_code(error) == *reason => {
             json!({ "result": "reject", "reason": reason })
         }
         (_, other) => panic!("case {} did not give the declared outcome: {other:?}", case.name),
@@ -932,7 +933,7 @@ pub fn check_fixture_with_verifier(fixture: &Value) {
     match (expected["result"].as_str(), outcome) {
         (Some("accept"), Ok(message)) => assert_eq!(message_json(&message), expected["message"], "{name}"),
         (Some("reject"), Err(error)) => {
-            assert_eq!(error.reason_code(), expected["reason"].as_str().expect("reason"), "{name}: {error}")
+            assert_eq!(reason_code(&error), expected["reason"].as_str().expect("reason"), "{name}: {error}")
         }
         (declared, other) => panic!("{name}: declared {declared:?} but the verifier returned {other:?}"),
     }

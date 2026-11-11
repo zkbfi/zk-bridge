@@ -5,6 +5,7 @@
 //! INDICES (for example `finalized_checkpoint` is field 20), not as generalized indices, so a mistake in
 //! `lc_core::layout` is not copied into the builder. The real-data tests are the independent check of both.
 
+use crate::lc_message::abi::MessageProof;
 use crate::receipts::{
     amsterdam_header_rlp, build_indexed_trie, encode_execution_header, encode_receipt, header_hash, prague_header,
     shanghai_header,
@@ -12,7 +13,7 @@ use crate::receipts::{
 use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use bls12_381::hash_to_curve::{ExpandMsgXmd, HashToCurve};
 use bls12_381::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
-use lc_core::abi::{MessageProof, USER_REQUEST_TOPIC};
+use lc_core::abi::USER_REQUEST_TOPIC;
 use lc_core::bls::BLS_DST;
 use lc_core::chain::{ChainSpec, ForkName, SYNC_COMMITTEE_SIZE};
 use lc_core::execution::Log;
@@ -1333,7 +1334,7 @@ pub fn assemble_message(
 ///
 /// # Panics
 /// Panics when the schedule of `spec` has no entry for `fork`.
-pub fn source_state(spec: &ChainSpec, fork: ForkName) -> (B256, lc_core::abi::ForkProof) {
+pub fn source_state(spec: &ChainSpec, fork: ForkName) -> (B256, crate::lc_message::abi::ForkProof) {
     let position = spec.fork_schedule.iter().position(|entry| entry.fork_name == fork).expect("a scheduled fork");
     let entry = spec.fork_schedule[position];
     let previous = spec.fork_schedule[position.saturating_sub(1)].fork_version;
@@ -1348,7 +1349,7 @@ pub fn source_state(spec: &ChainSpec, fork: ForkName) -> (B256, lc_core::abi::Fo
     let fields = state.field_roots();
     let progressive = fork >= ForkName::Gloas;
     let root = if progressive { progressive_container_root(&fields) } else { merkleize(&fields) };
-    (root, lc_core::ancestry::fork_proof_of_fields(&fields, progressive, &data))
+    (root, crate::lc_message::ancestry::fork_proof_of_fields(&fields, progressive, &data))
 }
 
 /// The position of `fork` among the `BeaconState` fields.

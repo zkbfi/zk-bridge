@@ -167,7 +167,7 @@ The command reads two execution chains, the beacon node of the source chain and 
 
 - The destination bridge names the source bridge, the source chain, its own chain and the light client as the file says. The command reads each relation from the bridge (`remoteBridge`, `remoteChainId`, `localChainId`, `lightClient`).
 - The log comes from the source bridge and is a `UserRequestForAffirmation` event. The message names the source chain and the destination chain of the route.
-- The evidence passes the bridge checks, which `lc-core` runs natively against the anchor root that the light client stores (`lc_core::message::verify_message`). The check proves the source transaction hash. It must equal the hash that you passed in `--tx`.
+- The evidence passes the bridge checks, which `lc-message` runs natively against the anchor root that the light client stores (`lc_message::message::verify_message`). The check proves the source transaction hash. It must equal the hash that you passed in `--tx`.
 - The message that the evidence proves equals the message in the log.
 
 The result is one JSON object. Long values are shortened here.

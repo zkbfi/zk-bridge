@@ -6,6 +6,7 @@ message check of `MessageBridge.executeMessage`, and the test support and fixtur
 | Path | Contents |
 |---|---|
 | `crates/lc-core` | The library. `update` (light-client update and fold of 1 to 64 updates), `message` and `ancestry` (bridge reference, recent and historical path), `ssz`, `layout`, `chain` (with `capella_era`, and the chains Ethereum mainnet, PulseChain, Sepolia and PulseChain testnet v4), `bls`, `mpt`, `execution`, `abi`, `wire`. |
+| `lc-message` | The message proof with the fork proof of the source state (`abi::MessageProof.sourceFork`), `ancestry::verify_beacon_path` and `message::verify_message`: the Rust reference of `MessageBridge.executeMessage`. Outside `crates/` and outside this workspace, so that it is no input of the guest program keys (`scripts/program-keys.sh`); `lc-testkit` compiles its files as `lc_testkit::lc_message`. The older `lc_core::message::verify_message` and `lc_core::abi::MessageProof` (no fork proof) stay in `lc-core` only to keep the program keys. |
 | `crates/lc-testkit` | Fixture loaders, synthetic builders, a real SSZ state parser, the integration tests in `tests/`, and two tools in `src/bin/`. |
 | `guests/` | SP1 guest source (not built here, see its README). |
 | `scripts/` | `fetch-fixtures.sh`, `check-crate-ages.sh`, `downgrade-young-crates.sh`. |

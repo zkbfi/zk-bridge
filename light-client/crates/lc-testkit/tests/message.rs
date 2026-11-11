@@ -7,13 +7,13 @@
 
 use alloy_primitives::{keccak256, Bytes, B256, U256};
 use alloy_sol_types::SolCall;
-use lc_core::abi::{executeMessageCall, MessageProof, USER_REQUEST_TOPIC};
+use lc_core::abi::USER_REQUEST_TOPIC;
 use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
 use lc_core::execution::Log;
-use lc_core::message::{
-    encode_message, message_id_for, verify_message, MessageContext, VerifiedMessage, DATA_TYPE_CONFIRM,
-};
+use lc_core::message::{encode_message, message_id_for, MessageContext, VerifiedMessage, DATA_TYPE_CONFIRM};
 use lc_core::Error;
+use lc_testkit::lc_message::abi::{executeMessageCall, MessageProof};
+use lc_testkit::lc_message::message::verify_message;
 use lc_testkit::message_blocks::{honest_fields, remote_chain_id, standard_receipts, ATTACKER, BRIDGE};
 use lc_testkit::synthetic::{
     build_message, message_log, raw_message_log, synthetic_transaction, MessageScenario, ReceiptSpec,

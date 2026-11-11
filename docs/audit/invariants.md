@@ -142,7 +142,7 @@ The anchor is a header the light client stored. Ancestry goes through `block_roo
 
 | Enforced | Tests |
 |---|---|
-| `lc-core/src/message.rs` `verify_message` mirrors `executeMessage`; 91 fixtures in `light-client/tests/fixtures/message/` | `LightClientFixtures.t.sol` `test_R2_04_rustFixturesAgreeWithSolidityBridge`, `test_R2_04_layoutSlotsAreThoseOfTheBridge`; Rust `fixtures_agree.rs` `every_fixture_gives_its_declared_outcome`, `fixture_files_on_disk_are_current`, `gindices_equal_hand_computed_values` |
+| `lc-message/src/message.rs` `verify_message` mirrors `executeMessage`; 91 fixtures in `light-client/tests/fixtures/message/` | `LightClientFixtures.t.sol` `test_R2_04_rustFixturesAgreeWithSolidityBridge`, `test_R2_04_layoutSlotsAreThoseOfTheBridge`; Rust `fixtures_agree.rs` `every_fixture_gives_its_declared_outcome`, `fixture_files_on_disk_are_current`, `gindices_equal_hand_computed_values` |
 
 ### C4. A layout row names only its field's own position, and ranges of different positions never overlap (HB-03, HB-04)
 

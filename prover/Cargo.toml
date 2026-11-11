@@ -79,6 +79,9 @@ sp1-cuda = ["sp1", "sp1-sdk/cuda"]
 # The light-client crates. Every call goes through src/light_client.rs.
 # `lc-core` holds the builders for message proofs, receipts, beacon states and ancestry.
 lc-core = { path = "../light-client/crates/lc-core", features = ["json"] }
+# `lc-message` holds the message proof with the fork proof of the source state (`MessageProof.sourceFork`) and
+# `verify_message`. Use it, never the earlier form without the fork proof that `lc-core` keeps for the guest program keys.
+lc-message = { path = "../light-client/lc-message" }
 # Synthetic beacon data for the signed beacon chain only (feature `signed-beacon`). The tests always use it.
 lc-testkit = { path = "../light-client/crates/lc-testkit", optional = true }
 

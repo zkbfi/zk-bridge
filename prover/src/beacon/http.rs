@@ -151,7 +151,7 @@ fn multiproof_fork(
     client: &dyn HttpGet,
     state_root: &B256,
     genesis_validators_root: &B256,
-) -> std::result::Result<lc_core::abi::ForkProof, String> {
+) -> std::result::Result<lc_message::abi::ForkProof, String> {
     use super::fork_archive::{fork_from_multiproof, multiproof_descriptor, SHAPE_REQUEST_ORDER};
     let mut failures = Vec::new();
     for shape in SHAPE_REQUEST_ORDER {
@@ -897,7 +897,7 @@ impl HttpBeaconSource {
     ///
     /// # Errors
     /// `Error::Beacon` naming the state root and why each source gave none.
-    pub fn source_fork(&self, state_root: B256) -> Result<lc_core::abi::ForkProof> {
+    pub fn source_fork(&self, state_root: B256) -> Result<lc_message::abi::ForkProof> {
         if let Some(state) = self.known_state(state_root) {
             return Ok(state.fork_proof());
         }
@@ -2383,7 +2383,7 @@ mod tests {
     fn real_gloas_evidence(
         path: &BeaconPath,
         receipts: &[serde_json::Value],
-    ) -> lc_core::abi::MessageProof {
+    ) -> lc_message::abi::MessageProof {
         let block_fixture: serde_json::Value = serde_json::from_slice(
             &std::fs::read(sepolia_fixtures().join("gloas_message_block.json")).unwrap(),
         )
@@ -2439,7 +2439,7 @@ mod tests {
                 local_chain_id: 943,
                 stored_anchor_root: stored.root,
             };
-            let reached_the_log = |proof: &lc_core::abi::MessageProof| {
+            let reached_the_log = |proof: &lc_message::abi::MessageProof| {
                 verify_message_natively(proof, &context, ChainKind::Sepolia)
                     .err()
                     .map(|error| error.to_string())

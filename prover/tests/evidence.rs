@@ -12,10 +12,11 @@ mod common;
 use alloy_primitives::{hex, keccak256, Address, Bytes, B256, U256};
 use alloy_sol_types::SolCall;
 use common::*;
-use lc_core::abi::executeMessageCall;
 use lc_core::json::{execution_header_from_json, receipts_from_json};
-use lc_core::message::{message_id_for, verify_message, MessageContext};
+use lc_core::message::{message_id_for, MessageContext};
 use lc_core::receipts::{build_indexed_trie, encode_execution_header, header_hash};
+use lc_message::abi::executeMessageCall;
+use lc_message::message::verify_message;
 use lc_testkit::synthetic::{message_log, synthetic_transaction, MessageFields};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -625,12 +626,12 @@ fn missing_block_hash_rows_become_layout_calls_that_fit_their_headers() {
             &header.bodyRoot,
         ));
         // The bridge takes the row only with a fork proof of a plain state under the state root of the header.
-        let fork = lc_core::abi::ForkProof {
+        let fork = lc_message::abi::ForkProof {
             version: fork.version,
             versionBranch: fork.versionBranch,
             genesisValidatorsRootBranch: fork.genesisValidatorsRootBranch,
         };
-        let shape = lc_core::ancestry::source_shape(
+        let shape = lc_message::ancestry::source_shape(
             &fork,
             &header.stateRoot,
             &ChainKind::Pulsechain.spec().genesis_validators_root,

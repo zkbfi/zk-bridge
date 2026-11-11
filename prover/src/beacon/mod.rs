@@ -74,7 +74,7 @@ pub struct HashEvidence {
     pub branch: Vec<B256>,
     /// The fork proof of the state of the header. The bridge refuses a header whose state it proves progressive (Gloas
     /// on), and every header without a proof of an allowed shape.
-    pub fork: lc_core::abi::ForkProof,
+    pub fork: lc_message::abi::ForkProof,
 }
 
 /// Evidence for `MessageBridge.addHistoricalSummariesLayout`.
