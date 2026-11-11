@@ -50,6 +50,7 @@ export const quietForks: ForkPort = {
   chainState: async () => ({ gate: null, observation: null }),
   sealOffer: async () => ({ kind: "unavailable", reason: "none" }),
   observeOffer: async () => ({ kind: "unavailable", reason: "none" }),
+  registryOf: async () => null,
 };
 
 /** Renders with the fake backend of a world. */

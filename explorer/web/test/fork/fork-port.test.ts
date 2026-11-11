@@ -49,6 +49,7 @@ describe("the sample page's fork port", () => {
     expect(await fixtureForkPort.chainState(1)).toEqual({ gate: null, observation: null });
     expect(await fixtureForkPort.sealOffer(1, "0x0000000000000000000000000000000000000001")).toMatchObject({ kind: "unavailable" });
     expect(await fixtureForkPort.observeOffer(1, REGISTRY, "0x0000000000000000000000000000000000000001")).toMatchObject({ kind: "unavailable" });
+    expect(await fixtureForkPort.registryOf(1)).toBeNull();
   });
 });
 
@@ -74,6 +75,22 @@ describe("createForkPort", () => {
     const state = await createForkPort({ pair: named, connection }).chainState(FIXTURE_PAIR.second.chainId);
     expect(state).toEqual({ gate: null, observation: null });
     expect(client.readContract).toHaveBeenCalledWith(expect.objectContaining({ functionName: "latestObserved", address: REGISTRY }));
+  });
+
+  it("finds the registry in the deployment or on the configured gate, and reads its light client from it", async () => {
+    const LIGHT = "0x3333333333333333333333333333333333333333";
+    const fromGate = connectionOf(reads({ lightClient: LIGHT }));
+    expect(await createForkPort({ pair: FIXTURE_PAIR, connection: fromGate.connection }).registryOf(FIXTURE_PAIR.first.chainId)).toEqual({ registry: REGISTRY, lightClient: LIGHT });
+    expect(fromGate.client.readContract).toHaveBeenCalledWith(expect.objectContaining({ functionName: "lightClient", address: REGISTRY }));
+    const named = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, contracts: { ...FIXTURE_PAIR.second.contracts, forkRegistry: REGISTRY as `0x${string}` } } };
+    const configured = connectionOf(reads({ lightClient: LIGHT, forkRegistry: "0x00000000000000000000000000000000000000e7" }));
+    expect(await createForkPort({ pair: named, connection: configured.connection }).registryOf(FIXTURE_PAIR.second.chainId)).toEqual({ registry: REGISTRY, lightClient: LIGHT });
+    const unread = connectionOf(reads({ lightClient: new Error("down") }));
+    expect(await createForkPort({ pair: named, connection: unread.connection }).registryOf(FIXTURE_PAIR.second.chainId)).toBeNull();
+    const none = connectionOf(reads({ forkRegistry: "0x0000000000000000000000000000000000000000" }));
+    expect(await createForkPort({ pair: FIXTURE_PAIR, connection: none.connection }).registryOf(FIXTURE_PAIR.first.chainId)).toBeNull();
+    const bare = { ...FIXTURE_PAIR, first: { ...FIXTURE_PAIR.first, contracts: { ...FIXTURE_PAIR.first.contracts, gate: null } } };
+    expect(await createForkPort({ pair: bare, connection: none.connection }).registryOf(FIXTURE_PAIR.first.chainId)).toBeNull();
   });
 
   it("reads no gate of a chain that has none", async () => {

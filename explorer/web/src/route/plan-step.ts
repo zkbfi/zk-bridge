@@ -33,6 +33,8 @@ export type PostInput = {
 const DISCLOSURE = { feesApplyTo: "this-transaction", deliveryCall: null, destinationNativeSymbol: null, destinationChainId: null, amountToken: null, delivery: null } as const;
 
 const blocked = (reason: string): PostPlan => ({ kind: "blocked", reason });
+const NO_REGISTRY = (name: string): string => `${name} has no fork registry in this deployment, or its light client could not be read.`;
+const OTHER_ROUTE = "The backend's proof is for another route or chain. Nothing was planned.";
 const NO_PROOF = "The backend holds no finished proof for this step now. Make the proof again.";
 
 /**
@@ -50,9 +52,10 @@ export const planStepPost = async (input: PostInput): Promise<PostPlan> => {
       return offer.kind === "ready" ? one(planGateSeal(chain, offer)) : blocked(offer.kind === "sealed" ? "The gate is sealed already." : `The seal call would not go through now: ${offer.reason}.`);
     }
     if (step.kind === "fork-observation") {
-      const registry = chain.contracts.forkRegistry ?? step.target;
-      if (registry === null) return blocked(`${chain.name} has no fork registry in this deployment.`);
-      const offer = await input.forks.observeOffer(step.chainId, registry as Address, input.account);
+      // The registry comes from the deployment or the configured gate, never from the backend's list.
+      const trusted = await input.forks.registryOf(step.chainId);
+      if (trusted === null) return blocked(NO_REGISTRY(chain.name));
+      const offer = await input.forks.observeOffer(step.chainId, trusted.registry, input.account);
       return offer.kind === "ready" ? one(planForkObservation(chain, offer)) : blocked(`The observation would not go through now: ${offer.reason}.`);
     }
     const proof = await input.backend.proof(step.kind, step.subject);
@@ -61,6 +64,8 @@ export const planStepPost = async (input: PostInput): Promise<PostPlan> => {
     if (proof.kind === "light-client-update") {
       const decoded = tryDecodeProofMessage(proof.payload as Hex);
       if (!decoded.ok) return blocked(`The proof could not be read: ${decoded.detail}.`);
+      // The light client the update goes to follows from the proof's pair and direction; both must be this step's.
+      if (decoded.message.pair !== pair.id || decoded.message.direction !== step.direction || proof.chainId !== step.chainId) return blocked(OTHER_ROUTE);
       // The contract refuses an update that does not start at its current head, so the head is read again from the chain.
       const head = await input.readLightClientHead(step.chainId).catch(() => null);
       if (head === null) return blocked("The page could not read the head of the light client. Check the RPC setting for the chain in Connections.");
@@ -68,12 +73,18 @@ export const planStepPost = async (input: PostInput): Promise<PostPlan> => {
       if (problem !== null) return { kind: "posted-elsewhere", reason: problem };
       return { kind: "ready", steps: [planProofUpdate(decoded.message, pair)] };
     }
-    if (proof.kind === "registry-light-client-update") return one(planRegistryUpdate(chain, proof));
+    if (proof.kind === "registry-light-client-update") {
+      const trusted = await input.forks.registryOf(step.chainId);
+      if (trusted === null) return blocked(NO_REGISTRY(chain.name));
+      return one(planRegistryUpdate(chain, proof, trusted.lightClient));
+    }
     if (proof.kind === "open-deposits") return one(planOpenDeposits(chain, proof));
     // What is left is the evidence of a layout step or a delivery: the proof has the kind of the step.
     const evidenceProof = proof as Extract<StepProof, { readonly kind: "layout-rows" | "deliver" }>;
     const delivery = planDelivery({ kind: "found", text: JSON.stringify(evidenceProof.evidence) }, pair, { messageId: step.messageId ?? step.subject, sourceTransactionHash: null });
     if (delivery.kind === "unavailable") return blocked(delivery.reason);
+    // Every call goes to the configured bridge of the evidence's destination; that chain must be this step's.
+    if (delivery.steps.some((row) => row.step.plan.chain.chainId !== step.chainId)) return blocked(OTHER_ROUTE);
     const rows = delivery.steps.filter((row) => (evidenceProof.kind === "layout-rows" ? row.role === "prerequisite" : row.role === "execute"));
     return rows.length === 0 ? blocked("The evidence holds no call for this step.") : { kind: "ready", steps: chosenDeliverySteps(rows, []) };
   } catch (error) {

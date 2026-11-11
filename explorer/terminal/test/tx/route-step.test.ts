@@ -49,7 +49,7 @@ const openProof = (over: Partial<Extract<StepProof, { kind: 'open-deposits' }>> 
 
 describe('planRegistryUpdate', () => {
   test('is update(bytes,bytes) on the registry light client, with the slots and the program key in the notes', () => {
-    const plan = planRegistryUpdate(chain, registryProof())
+    const plan = planRegistryUpdate(chain, registryProof(), registryLightClient)
     expect(plan).toMatchObject({
       title: 'Update the PulseChain fork registry light client',
       to: getAddress(registryLightClient),
@@ -63,6 +63,14 @@ describe('planRegistryUpdate', () => {
     expect(plan.notes[0]).toContain('slot 1000 to slot 1320')
     expect(plan.notes.join(' ')).toContain(`program key ${hash('a')}`)
     expect(plan.notes.at(-1)).toContain('sends no PLS')
+  })
+
+  test('sends to the light client read from the configured registry, and refuses a proof naming another light client or chain', () => {
+    const other = '0x00000000000000000000000000000000000000e7'
+    expect(() => planRegistryUpdate(chain, registryProof({ lightClient: other }), registryLightClient)).toThrow(PlanInputError)
+    expect(() => planRegistryUpdate(chain, registryProof({ lightClient: other }), registryLightClient)).toThrow(`names ${getAddress(other)}`)
+    expect(() => planRegistryUpdate(chain, registryProof({ chainId: 1 }), registryLightClient)).toThrow('another chain (1)')
+    expect(planRegistryUpdate(chain, registryProof({ lightClient: registryLightClient.toUpperCase().replace('0X', '0x') as never }), registryLightClient).to).toBe(getAddress(registryLightClient))
   })
 })
 

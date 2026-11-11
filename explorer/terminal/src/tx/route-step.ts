@@ -5,7 +5,7 @@
  * dialog shows the contract, the function and the arguments. Pure: nothing here reads a chain, signs or sends.
  */
 import { beaconLightClientAbi, displayArguments, messageBridgeAbi, type StepProof } from '@zk-bridge/shared'
-import { decodeFunctionData, encodeFunctionData, getAddress, toFunctionSignature, type AbiFunction, type Hex } from 'viem'
+import { decodeFunctionData, encodeFunctionData, getAddress, toFunctionSignature, type Address, type AbiFunction, type Hex } from 'viem'
 import type { ChainConfig } from '../model/types'
 import { PlanInputError, type PlannedTransaction } from './plan'
 
@@ -20,17 +20,25 @@ const functionOf = (abi: readonly unknown[], name: string): AbiFunction => (abi 
 /**
  * The planned transaction of an update of the fork registry's light client, for the review: `update(proof, publicValues)`
  * on that light client, no value. Anyone may send it; the light client checks the proof and that it starts at its head.
+ * The backend's answer never chooses where the call goes: it goes to `lightClient`, read on chain from the configured
+ * registry, and a proof that names another light client or chain is refused.
  *
  * @param chain The chain of the registry.
  * @param proof The backend's proof.
+ * @param lightClient The registry's light client, read with `lightClient()` from the registry of the deployment.
+ * @throws PlanInputError when the proof names another chain or another light client.
  */
-export function planRegistryUpdate(chain: ChainConfig, proof: RegistryUpdateProof): PlannedTransaction {
+export function planRegistryUpdate(chain: ChainConfig, proof: RegistryUpdateProof, lightClient: Address): PlannedTransaction {
+  if (proof.chainId !== chain.chainId) throw new PlanInputError(`The proof is for another chain (${proof.chainId}), not ${chain.name} (${chain.chainId}).`)
+  if (getAddress(proof.lightClient) !== getAddress(lightClient)) {
+    throw new PlanInputError(`The proof names ${getAddress(proof.lightClient)}, which is not the ${chain.name} fork registry's light client (${getAddress(lightClient)}).`)
+  }
   const item = functionOf(beaconLightClientAbi, 'update')
   const data: Hex = encodeFunctionData({ abi: beaconLightClientAbi, functionName: 'update', args: [proof.proof as Hex, proof.publicValues as Hex] })
   return {
     title: `Update the ${chain.name} fork registry light client`,
     chain,
-    to: getAddress(proof.lightClient),
+    to: getAddress(lightClient),
     contractLabel: `${chain.name} fork registry light client (BeaconLightClient)`,
     functionSignature: toFunctionSignature(item),
     functionName: 'update',

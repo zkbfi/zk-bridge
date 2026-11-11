@@ -12,12 +12,15 @@ const observeReady = { kind: "ready", call: { to: REGISTRY, data: "0xabcd" }, ga
 
 const names = (plan: PostPlan): string[] => (plan as Extract<PostPlan, { kind: "ready" }>).steps.map((step) => step.plan.functionName);
 
-const input = (step: PostInput["step"], over: Partial<{ proof: unknown; head: bigint | "fail"; seal: SealOffer; observe: ObservationOffer }> = {}): PostInput => ({
+const LIGHT_CLIENT = "0x00000000000000000000000000000000000000d9" as const;
+const ATTACKER = "0x00000000000000000000000000000000000000e7" as const;
+
+const input = (step: PostInput["step"], over: Partial<{ proof: unknown; head: bigint | "fail"; seal: SealOffer; observe: ObservationOffer; registry: { registry: `0x${string}`; lightClient: `0x${string}` } | null }> = {}): PostInput => ({
   step,
   pair: FIXTURE_PAIR,
   account: FIXTURE_ACCOUNT,
   backend: { request: vi.fn(), proof: async () => (over.proof === undefined ? null : over.proof) } as unknown as StepBackend,
-  forks: { facts: async () => null, chainState: async () => ({ gate: null, observation: null }), sealOffer: async () => over.seal ?? sealReady, observeOffer: async () => over.observe ?? observeReady },
+  forks: { facts: async () => null, chainState: async () => ({ gate: null, observation: null }), sealOffer: async () => over.seal ?? sealReady, observeOffer: async () => over.observe ?? observeReady, registryOf: async () => (over.registry === undefined ? { registry: REGISTRY, lightClient: LIGHT_CLIENT } : over.registry) },
   readLightClientHead: async () => {
     if (over.head === "fail") throw new Error("down");
     return over.head ?? HEAD;
@@ -33,12 +36,20 @@ describe("planStepPost", () => {
     expect(await planStepPost(input(stepOf("seal"), { seal: { kind: "sealed" } }))).toEqual({ kind: "blocked", reason: "The gate is sealed already." });
   });
 
-  it("plans a fork observation from the offer on the registry of the chain, or the step's target", async () => {
-    const withRegistry = { ...FIXTURE_PAIR, second: { ...FIXTURE_PAIR.second, contracts: { ...FIXTURE_PAIR.second.contracts, forkRegistry: REGISTRY } } };
-    expect(await planStepPost({ ...input(stepOf("fork-observation")), pair: withRegistry })).toMatchObject({ kind: "ready" });
-    expect(await planStepPost(input(stepOf("fork-observation", { target: REGISTRY })))).toMatchObject({ kind: "ready" });
-    expect(await planStepPost(input(stepOf("fork-observation")))).toEqual({ kind: "blocked", reason: "PulseChain has no fork registry in this deployment." });
-    expect(await planStepPost(input(stepOf("fork-observation", { target: REGISTRY }), { observe: { kind: "unavailable", reason: "no newer slot" } }))).toEqual({ kind: "blocked", reason: "The observation would not go through now: no newer slot." });
+  it("plans a fork observation on the registry from trusted sources only, never the step's target", async () => {
+    const observeOffer = vi.fn(async () => observeReady);
+    const base = input(stepOf("fork-observation", { target: ATTACKER }));
+    expect(await planStepPost({ ...base, forks: { ...base.forks, observeOffer } })).toMatchObject({ kind: "ready" });
+    expect(observeOffer).toHaveBeenCalledWith(FIXTURE_PAIR.second.chainId, REGISTRY, FIXTURE_ACCOUNT);
+    expect(await planStepPost(input(stepOf("fork-observation", { target: REGISTRY }), { registry: null }))).toEqual({ kind: "blocked", reason: "PulseChain has no fork registry in this deployment, or its light client could not be read." });
+    expect(await planStepPost(input(stepOf("fork-observation"), { observe: { kind: "unavailable", reason: "no newer slot" } }))).toEqual({ kind: "blocked", reason: "The observation would not go through now: no newer slot." });
+  });
+
+  it("sends a seal to the configured gate, whatever the step's target", async () => {
+    const sealOffer = vi.fn(async () => sealReady);
+    const base = input(stepOf("seal", { target: ATTACKER }));
+    await planStepPost({ ...base, forks: { ...base.forks, sealOffer } });
+    expect(sealOffer).toHaveBeenCalledWith(FIXTURE_PAIR.first.chainId, FIXTURE_ACCOUNT);
   });
 
   it("says when the backend holds no proof, or one of another kind", async () => {
@@ -48,10 +59,18 @@ describe("planStepPost", () => {
     expect(await planStepPost(input(stepOf("open-deposits"), { proof: { kind: "fork-observation" } }))).toEqual(none);
   });
 
-  it("plans a light client update when the head is where the proof starts", async () => {
+  it("plans a light client update when the head is where the proof starts, to the configured light client", async () => {
     const plan = await planStepPost(input(stepOf("light-client-update"), { proof: lightClientProof() }));
     expect(plan).toMatchObject({ kind: "ready" });
     expect((plan as Extract<PostPlan, { kind: "ready" }>).steps).toHaveLength(1);
+    expect((plan as Extract<PostPlan, { kind: "ready" }>).steps[0]!.plan.to.toLowerCase()).toBe(FIXTURE_PAIR.second.contracts.lightClient.toLowerCase());
+  });
+
+  it("refuses a light client proof of another direction, pair or chain", async () => {
+    const other = { kind: "blocked", reason: "The backend's proof is for another route or chain. Nothing was planned." };
+    expect(await planStepPost(input(stepOf("light-client-update"), { proof: lightClientProof({ direction: "second-to-first" }) }))).toEqual(other);
+    expect(await planStepPost(input(stepOf("light-client-update"), { proof: { ...lightClientProof(), chainId: FIXTURE_PAIR.first.chainId } }))).toEqual(other);
+    expect(await planStepPost(input(stepOf("light-client-update"), { proof: lightClientProof({ pair: "sepolia-pls943" }) }))).toEqual(other);
   });
 
   it("treats a head that moved as posted by someone else, and says when the head cannot be read or the proof is not a proof", async () => {
@@ -66,6 +85,10 @@ describe("planStepPost", () => {
   it("plans the update of the registry light client and the opening of deposits, and refuses a bad opening", async () => {
     const registry = await planStepPost(input(stepOf("registry-light-client-update"), { proof: registryProof() }));
     expect(names(registry)[0]).toBe("update");
+    expect((registry as Extract<PostPlan, { kind: "ready" }>).steps[0]!.plan.to.toLowerCase()).toBe(LIGHT_CLIENT);
+    expect(await planStepPost(input(stepOf("registry-light-client-update"), { proof: { ...registryProof(), lightClient: ATTACKER } }))).toMatchObject({ kind: "blocked", reason: expect.stringContaining("which is not the PulseChain fork registry's light client") });
+    expect(await planStepPost(input(stepOf("registry-light-client-update"), { proof: registryProof(), registry: null }))).toMatchObject({ kind: "blocked", reason: expect.stringContaining("has no fork registry") });
+    expect(await planStepPost(input(stepOf("open-deposits"), { proof: { ...openingProof(), bridge: ATTACKER } }))).toMatchObject({ kind: "blocked", reason: expect.stringContaining("which is not the PulseChain message bridge") });
     const open = await planStepPost(input(stepOf("open-deposits"), { proof: openingProof() }));
     expect(names(open)[0]).toBe("openDeposits");
     expect(await planStepPost(input(stepOf("open-deposits"), { proof: openingProof("0x12345678") }))).toMatchObject({ kind: "blocked", reason: expect.stringContaining("The transaction could not be planned: The opening proof calldata is not a call to openDeposits") });
@@ -81,6 +104,12 @@ describe("planStepPost", () => {
     expect(other).toEqual({ kind: "blocked", reason: "The evidence is for a different message." });
     const noRows = await planStepPost(input(stepOf("layout-rows", { messageId: EVIDENCE_MESSAGE }), { proof: { kind: "layout-rows", subject: EVIDENCE_MESSAGE, evidence: evidenceOf({ prerequisites: [] }) } }));
     expect(noRows).toEqual({ kind: "blocked", reason: "The evidence holds no call for this step." });
+    // The calls go to the configured bridge of the evidence's destination chain, which must be the step's chain.
+    expect((deliver as Extract<PostPlan, { kind: "ready" }>).steps[0]!.plan.to.toLowerCase()).toBe(FIXTURE_PAIR.second.contracts.messageBridge.toLowerCase());
+    const elsewhere = await planStepPost(input(stepOf("deliver", { messageId: EVIDENCE_MESSAGE, chainId: FIXTURE_PAIR.first.chainId }), { proof: proof("deliver") }));
+    expect(elsewhere).toEqual({ kind: "blocked", reason: "The backend's proof is for another route or chain. Nothing was planned." });
+    const attacked = await planStepPost(input(stepOf("layout-rows", { messageId: EVIDENCE_MESSAGE }), { proof: { kind: "layout-rows", subject: EVIDENCE_MESSAGE, evidence: evidenceOf({ prerequisites: [{ function: "addBlockHashLayout", reason: "row", to: ATTACKER, data: "0x01" }] }) } }));
+    expect(attacked).toMatchObject({ kind: "blocked" });
     const bySubject = await planStepPost(input(stepOf("deliver", { messageId: null, subject: EVIDENCE_MESSAGE }), { proof: proof("deliver") }));
     expect(bySubject).toMatchObject({ kind: "ready" });
   });

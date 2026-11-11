@@ -287,7 +287,8 @@ describe("the other kinds", () => {
   it("posts the opening of deposits and the update of the registry light client from the finished proof", async () => {
     const world = newWorld();
     world.steps = [stepOf("open-deposits", { constraints: { proofReady: true } }), stepOf("registry-light-client-update", { constraints: { proofReady: true } })];
-    renderWorld(<RouteSection />, world, { wallet: connectedWallet() });
+    const registryOf = async () => ({ registry: "0x00000000000000000000000000000000000000f1" as const, lightClient: "0x00000000000000000000000000000000000000d9" as const });
+    renderWorld(<RouteSection />, world, { wallet: connectedWallet(), services: { forks: { ...quietForks, registryOf } } });
     const open = await card("open-deposits:first-to-second");
     world.proof = openingProof();
     await userEvent.click(within(open).getByTestId("route-post"));
@@ -303,7 +304,7 @@ describe("the other kinds", () => {
     const world = newWorld();
     world.steps = [stepOf("fork-observation", { target: "0x00000000000000000000000000000000000000f1", constraints: { proofReady: true } })];
     const observeOffer = vi.fn(async () => ({ kind: "unavailable", reason: "no newer slot" }) as never);
-    renderWorld(<RouteSection />, world, { wallet: connectedWallet(), services: { forks: { ...quietForks, observeOffer } } });
+    renderWorld(<RouteSection />, world, { wallet: connectedWallet(), services: { forks: { ...quietForks, observeOffer, registryOf: async () => ({ registry: "0x00000000000000000000000000000000000000f1", lightClient: "0x00000000000000000000000000000000000000d9" }) } } });
     await userEvent.click(await screen.findByTestId("route-post"));
     expect(await screen.findByTestId("route-post-note")).toHaveTextContent("The observation would not go through now: no newer slot.");
     expect(observeOffer).toHaveBeenCalled();
