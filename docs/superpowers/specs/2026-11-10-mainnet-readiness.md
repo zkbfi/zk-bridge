@@ -170,6 +170,11 @@ help a lot in this regard, prevent bridges when we are near a fork for example".
   Docker build: `light-client/program-keys.source-hash` no longer matches the sources, so `scripts/program-keys.sh`
   rebuilds both guests and compares them with `program-keys.json`. Run it before the merge. Cost: about 20,000 gas per
   delivery, and the prover reads the post-state of each source block (`known-issues.md` 1.22).
+  Status 2026-11-10 (branch `feat/save-fork-proofs`): owner, "yes, and save fork proofs in the watcher too". The backend
+  saves the fork proof of each source block that carries a message once the block is final (`zk-bridge-prover
+  fork-proof`, about 1 KB), the proof archive keeps and publishes it, and `evidence` falls back to it, checked against the
+  source state root, when no node serves the state. The prover asks the Lodestar multiproof route before it downloads a
+  state. Residual 1.22 (a) reduced; mainnet needs a beacon endpoint with that route for the capture to stay cheap.
 - **D3.** Replaced by the owner's assumption above: no deploy date counts as safe, so the deployment waits for nothing.
   The two fixes go into the layer 1 and 2 freeze with D1.
 - Size: M for the two fixes and their tests.

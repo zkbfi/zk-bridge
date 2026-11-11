@@ -35,6 +35,13 @@ What is hard to get again:
   routes and prune the states the prover builds those updates from. So the backend captures, for every period of each
   source chain, one complete prover-ready update (a "handoff record"), and the archive keeps it for good. The record is
   untrusted data: the zk proof checks the committee signatures.
+- **Fork proofs of source blocks.** To prove a message, the prover needs the fork version and the genesis validators root
+  of the chain, each proven under the state root of the block the message sits in (`MessageProof.sourceFork`). That proof
+  is built from the beacon state of the block. PulseChain nodes prune old states, and an Ethereum mainnet state is hundreds of MB,
+  so the proof cannot be made again later. The backend saves one record per source block that carries a message while a
+  node still serves the state, and the archive keeps it for good. Several messages in one block share one record. A
+  record is public chain data and untrusted: every holder checks it (`checkForkProofRecord`, the same rule the bridge
+  runs on chain).
 
 ## Design
 
@@ -65,11 +72,16 @@ drops it.
 | `light_client_proofs` | pair, direction, start slot, new slot, `keccak256(proof)` | The proof bytes and public values. Also the fields derived from the public values: roots, execution block hash and number. When known: the program key, the whole proof message (`payload`), the posting chain, transaction and block, the msgboard message hash, and the backend job id. A second distinct proof of the same slots is its own row. |
 | `message_evidence` | message id, `sha256(body)` | The evidence JSON exactly as the backend stored it (text, so the hash holds), with pair, direction and the backend's `stored_at`. |
 | `handoff_updates` | chain id, period | The handoff update of one sync-committee period of a source chain, as the JSON text the backend stored (`record`, text, so the bytes and the hash hold). Also `sha256` of that text, `attested_slot` and `finalized_slot` (read from it), the backend's `stored_at`, the source and `ingested_at`. Schema version 2. |
+| `fork_proofs` | chain id, state root | The fork proof of one source beacon block, as the JSON text the backend stored (`record`, text, so the bytes and the hash hold). Also `sha256` of that text, and `slot`, `block_root`, `execution_block_number`, `execution_block_hash` and `shape` (read from it), the backend's `stored_at`, the source and `ingested_at`. An index on (chain id, slot). Schema version 3. |
 | `conflicts` | id (one row per distinct incoming value) | Table, key, column, the archived value and the refused value, and the source. |
 | `schema_version` | version | Migrations applied. |
 
 The handoff updates are about 60 KB a record, one per period per chain: about 2 a day on testnet, about 45 MB a year in
-total.
+total. A fork proof record is about 1 KB, one per source block that carries a message.
+
+**Schema version 3 is additive.** The migration only creates `proof_archive.fork_proofs` and its index (`IF NOT EXISTS`),
+in `proof_archive`, which is outside Ponder's schema. A deploy that brings it needs no blue/green reindex: the new indexer
+build runs the migration at start and the old tables are untouched.
 
 **Left out of the backend tables:**
 
@@ -107,6 +119,18 @@ total.
      `next_sync_committee` object. A record that fails is refused: it is logged (`proof_archive_handoff_refused`, with the
      chain, period and reason, never the text) and counted as `invalid`, like an invalid light client proof.
    - A different record for the same chain and period is a conflict (recorded in `conflicts`, the first stays).
+5. **Fork proofs, from the backend** (`backend-rows.ts`). The same two ways in.
+   - Live: `GET /archive/proofs` has a field `forkProofs: [{ chainId, stateRoot, record, storedAt }]` with the rows stored
+     in the last 7 days. A backend without the field counts as none.
+   - Nightly: `ingest-backend` reads the table `fork_proofs` of the snapshot (all rows). A snapshot without the table
+     counts as none.
+   - Each record is checked before it goes in, with `checkForkProofRecord(record, { chainId, stateRoot })` of
+     `@zk-bridge/shared/prover`: it parses; `format` is exactly `zkb-fork-proof/1`; `chainId` and `stateRoot` equal the
+     row's; the hashes are lower-case `0x` hex; and both branches prove the version and the genesis validators root under
+     the state root at the shape the record names. A record that fails is refused: it is logged
+     (`proof_archive_fork_proof_refused`, with the chain, state root and reason, never the text) and counted as
+     `invalid`.
+   - A different record text for the same chain and state root is a conflict (recorded in `conflicts`, the first stays).
 
 ### Read routes (indexer, public under `/api/*`)
 
@@ -119,8 +143,15 @@ total.
   answers 404 when there is none and 400 for a file name that is not `<period>.json`. A prover reads
   `<base>/<chainId>/<period>.json`, with base `.../api/proofs/handoffs` or `.../ipfs/<cid>/handoff-updates`: the layout
   is the same in both.
+- `GET /api/proofs/fork-proofs/:chainId?fromSlot=&limit=` returns `{ entries: [{ slot, stateRoot, blockRoot,
+  executionBlockNumber }] }`, ascending by slot from `fromSlot` (default 0). `limit` is 100 by default and at most 500.
+  It answers 400 for a parameter that is not a number in range.
+- `GET /api/proofs/fork-proofs/:chainId/<stateRoot>.json` returns the record JSON exactly as stored
+  (`application/json`). It answers 404 when there is none and 400 for a file name that is not `0x` and 64 hex digits
+  followed by `.json` (upper case is looked up in lower case). A prover reads `<base>/<chainId>/<stateRoot>.json`, with
+  base `.../api/proofs/fork-proofs` or `.../ipfs/<cid>/fork-proofs`: the layout is the same in both.
 - `GET /api/proofs/summary` returns row counts (`storageProofs`, `lightClientProofs`, `evidence`, `handoffUpdates`,
-  `conflicts`).
+  `forkProofs`, `conflicts`).
 
 Every route answers 503 when the archive is off: no `DATABASE_URL`, `PROOF_ARCHIVE=off`, or the database cannot be
 reached.
@@ -169,6 +200,7 @@ hosts, fetch times and backend job ids. The public tree on IPFS is built separat
 | `light-client-proofs/<pair>/<direction>/<start>-<new>-<proof hash>.<sha256>.json` | one light client proof record | for good |
 | `evidence/<pair>/<direction>/<message id>-<body sha256>.<sha256>.json` | one evidence record | for good |
 | `handoff-updates/<chain id>/<period>.<sha256>.json` | one handoff update record (the archive row; its `record` field is the update text) | for good |
+| `fork-proofs/<chain id>/<state root>.<sha256>.json` | one fork proof record (the archive row; its `record` field is the record text) | for good |
 | `conflicts/conflict.<sha256>.json` | one conflict the archive recorded | for good |
 | `beacon-states/<chain>/<slot>-<root>.ssz` and `.summary` | the verified beacon states of the runner and the backend | 30 days |
 | `snapshots/<stamp>.sqlite` | the backend's database, one each night | 30 days |
@@ -298,7 +330,7 @@ ansible-playbook proofs.yml -e action=publish -e dry_run=true
 `deploy/operator/pull-proofs.sh` every day at 04:45 UTC, in the local time zone. Over the `zkbfi-app` ssh alias it
 copies the mirror into `~/zkb-backups/proofs/mirror`:
 
-- `storage-proofs/`, `light-client-proofs/`, `evidence/`, `handoff-updates/`, `conflicts/`: rsync `--ignore-existing`. A file that is here is
+- `storage-proofs/`, `light-client-proofs/`, `evidence/`, `handoff-updates/`, `fork-proofs/`, `conflicts/`: rsync `--ignore-existing`. A file that is here is
   never fetched again, and nothing here is deleted, even when the server no longer has it; such records are logged.
 - `beacon-states/`, `snapshots/`, `manifests/`: rsync `--ignore-existing --delete`, so the Mac follows the server's
   window; the deletions are counted in the log.
@@ -334,6 +366,7 @@ Measured on testnet (Sepolia and PulseChain testnet v4), 2026-11-02: beacon stat
 | Proofs and evidence, testnet | about 5 MB | about 150 MB | about 1.8 GB (never deleted) |
 | SQLite snapshots | one `backend.sqlite` | 30 of them | 30 of them |
 | Handoff updates, testnet | about 120 KB (2 records of about 60 KB) | about 3.6 MB | about 45 MB (never deleted; one record per period per chain, about 2 a day on testnet) |
+| Fork proofs, testnet | about 1 KB a record, one per source block that carries a message | a few MB at most | a few MB to tens of MB (never deleted) |
 | Manifests | a few MB (one line per file) | 30 of them | 30 of them |
 | **Mirror, testnet** | | **about 4.7 GB** plus 30 snapshots | about 6.5 GB |
 | **Mirror, mainnet** (about double) | | **about 9.5 GB** | about 13 GB |
@@ -356,10 +389,14 @@ of evidence of the archive, and the beacon states of the mirror's window (30 day
 - `handoff-updates/<chain id>/<period>.json`: exactly the record text (compact JSON, sorted keys). It holds only hex,
   numbers and fixed key names. The sanitizer checks that it is a valid handoff update for the chain and period in its
   path and scans everything but the fixed `format` tag.
+- `fork-proofs/<chain id>/<state root>.json`: exactly the record text (canonical JSON, sorted keys). It holds only hex,
+  numbers and fixed key names. The sanitizer checks the whole record (`checkForkProofRecord`, branches included) for the
+  chain and state root in its path and scans the text as usual.
 - `beacon-states/<chain>/<slot>-<root>.ssz|.summary`
 - `README.txt`, which says how to check each kind. For the handoff updates it says what they are and that a prover reads
   them at `<tree>/handoff-updates/<chain id>/<period>.json`; the proof verifies the committee signatures, so nobody has
-  to trust the file.
+  to trust the file. For the fork proofs it says that a prover reads them at
+  `<tree>/fork-proofs/<chain id>/<state root>.json` and checks the two branches against the state root.
 - `manifest.json`, without the host name.
 
 What is left out: no source host, no fetch time, no job id, no source, and nothing from jobs, requests or timings.
