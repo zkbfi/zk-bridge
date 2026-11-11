@@ -3,9 +3,10 @@ import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, beaconVariableName, headerRpcVariab
 import { SINGLE_ENDPOINT_LABEL, endpointKeyVariables, remoteEndpointListSchema, type ProverSecret, type RemoteEndpoint } from "@zk-bridge/shared/prover";
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
 import { DEFAULT_WARMUP, holdIntervalFor } from "./watch/warmup.ts";
+import { signerSchema } from "../../bots/src/config/bot-config.ts";
 
 /** The modules that the backend can run, in the order that the example file lists them. */
-export const MODULE_NAMES = ["requests", "webhook", "msgboard-indexer", "archive"] as const;
+export const MODULE_NAMES = ["requests", "webhook", "msgboard-indexer", "archive", "seal"] as const;
 
 /** The name of one module. */
 export type ModuleName = (typeof MODULE_NAMES)[number];
@@ -169,6 +170,20 @@ export const backendConfigSchema = z
      * IPFS tree (`https://<gateway>/ipfs/<cid>/fork-proofs`). Nothing in a record is trusted: the prover checks it.
      */
     forkProofArchiveUrls: z.array(z.url({ protocol: /^https?$/ })).default([]),
+    /**
+     * The `seal` module: the auto-seal of the deposit gates (`seal/module.ts`). `signer` is configured as the runner's signer
+     * of `explorer/bots` (README there, "Signer"): a key or a mnemonic by reference (`env:NAME`, `op://...`), a keystore
+     * file, or a hardware wallet. The file never holds the secret. The account pays the gas of a seal (about 70,000 to
+     * 100,000 gas, once).
+     */
+    seal: z
+      .object({
+        signer: signerSchema,
+        /** The longest wait for the receipt of a seal. */
+        receiptTimeoutSeconds: positiveInteger.default(180),
+      })
+      .strict()
+      .optional(),
     /** The msgboard node (`ws://`, `wss://`, `http://` or `https://`). Needed by the webhook and the msgboard indexer. It can carry a key. */
     msgboardUrl: z.string().regex(/^(wss?|https?):\/\/\S+$/, "must be a ws, wss, http or https address").optional(),
     /**
