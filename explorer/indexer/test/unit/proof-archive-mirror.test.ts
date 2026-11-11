@@ -55,6 +55,25 @@ function stateBytes(slot: number, genesis = GENESIS, tail = "x"): Buffer {
   head.writeBigUInt64LE(BigInt(slot), 40);
   return Buffer.concat([head, Buffer.from(tail)]);
 }
+const SUMMARY_A = `0x${"11".repeat(32)}`;
+const SUMMARY_B = `0x${"22".repeat(32)}`;
+const summaryText = (a = SUMMARY_A, b = SUMMARY_B) => `${a}\n${b}\n`;
+const entryBytes = (a = SUMMARY_A, b = SUMMARY_B) => Buffer.from(`${a}${b}`.replaceAll("0x", ""), "hex");
+/**
+ * A state shaped like a Capella one as far as the mirror looks: genesis time, slot, a fixed part that ends with the
+ * offset of historical_summaries, some other variable bytes, and `entries` summary entries (64 bytes each) at the end.
+ */
+function servedState(slot: number, entries: number, other = "variable"): Buffer {
+  const first = 8 + 32 + 8 + 16 + 112 + 8192 * 32 * 2;
+  const fixed = first + 8;
+  const bytes = Buffer.alloc(fixed + other.length + entries * 64, 7);
+  bytes.writeBigUInt64LE(BigInt(GENESIS), 0);
+  bytes.writeBigUInt64LE(BigInt(slot), 40);
+  bytes.writeUInt32LE(fixed, first);
+  bytes.writeUInt32LE(fixed + other.length, first + 4);
+  bytes.write(other, fixed);
+  return bytes;
+}
 const stateName = (slot: number, root = ROOT_A) => `${String(slot).padStart(12, "0")}-${root}`;
 
 async function put(root: string, path: string, bytes: string | Buffer): Promise<void> {
@@ -204,14 +223,14 @@ describe("addToMirror", () => {
   it("copies well-named beacon states and snapshots once, skips everything else, and reports a clash", async () => {
     const from = join(directory, "runner");
     await put(from, `943/${stateName(10)}.ssz`, stateBytes(10));
-    await put(from, `943/${stateName(10)}.summary`, "0x01\n0x02\n");
     await put(from, `pulsechain/${stateName(11)}.ssz`, "x");
     await put(from, "943/junk.ssz", "x");
+    await put(from, `943/${stateName(13)}.summary`, summaryText());
     await symlink("/etc/hosts", join(from, "943", `${stateName(12)}.ssz`));
     await chmod(join(from, "943", `${stateName(10)}.ssz`), 0o600);
-    expect(await addToMirror(mirror, from, "beacon-states")).toEqual({ added: 2, identical: 0, skipped: 2, conflicts: [] });
+    expect(await addToMirror(mirror, from, "beacon-states")).toEqual({ added: 1, identical: 0, skipped: 3, conflicts: [] });
     expect((await stat(join(mirror, "beacon-states", "943", `${stateName(10)}.ssz`))).mode & 0o777).toBe(0o644);
-    expect(await addToMirror(mirror, from, "beacon-states")).toMatchObject({ added: 0, identical: 2 });
+    expect(await addToMirror(mirror, from, "beacon-states")).toMatchObject({ added: 0, identical: 1 });
     const other = join(directory, "backend");
     await put(other, `943/${stateName(10)}.ssz`, stateBytes(10, GENESIS, "other"));
     expect((await addToMirror(mirror, other, "beacon-states")).conflicts).toEqual([`beacon-states/943/${stateName(10)}.ssz`]);
@@ -220,8 +239,113 @@ describe("addToMirror", () => {
     await put(snapshots, "20261102T033000Z.sqlite", "db");
     await put(snapshots, "backend.sqlite", "db");
     expect(await addToMirror(mirror, snapshots, "snapshots")).toMatchObject({ added: 1, skipped: 1 });
+    expect(await addToMirror(mirror, snapshots, "snapshots")).toMatchObject({ added: 0, identical: 1 });
+    await put(snapshots, "20261102T033000Z.sqlite", "changed");
+    expect((await addToMirror(mirror, snapshots, "snapshots")).conflicts).toEqual(["snapshots/20261102T033000Z.sqlite"]);
     expect(await addToMirror(mirror, join(directory, "none"), "snapshots")).toMatchObject({ added: 0, skipped: 0 });
     await expect(addToMirror(mirror, snapshots, "storage-proofs")).rejects.toThrow("cannot add files to storage-proofs");
+  });
+});
+
+describe("a beacon state in its two forms", () => {
+  const entry = `943/${stateName(10)}`;
+  const served = servedState(10, 3);
+  const repaired = Buffer.concat([served, entryBytes()]);
+
+  it("copies a state that is new, with its summary, byte for byte (the bytes that root hashed into its trust list)", async () => {
+    const from = join(directory, "backend");
+    await put(from, `${entry}.ssz`, served);
+    await put(from, `${entry}.summary`, summaryText());
+    expect(await addToMirror(mirror, from, "beacon-states")).toEqual({ added: 1, identical: 0, skipped: 0, conflicts: [] });
+    expect(await readFile(join(mirror, "beacon-states", `${entry}.ssz`))).toEqual(served);
+    expect(await readFile(join(mirror, "beacon-states", `${entry}.summary`), "utf8")).toBe(summaryText());
+    expect(await addToMirror(mirror, from, "beacon-states")).toMatchObject({ added: 0, identical: 1, conflicts: [] });
+  });
+
+  it("takes the same state in the other form as identical, whichever form the mirror holds", async () => {
+    const runner = join(directory, "runner");
+    const backend = join(directory, "backend");
+    await put(runner, `${entry}.ssz`, repaired);
+    await put(backend, `${entry}.ssz`, served);
+    await put(backend, `${entry}.summary`, summaryText());
+    expect(await addToMirror(mirror, runner, "beacon-states")).toMatchObject({ added: 1 });
+    expect(await addToMirror(mirror, backend, "beacon-states")).toEqual({ added: 0, identical: 1, skipped: 0, conflicts: [] });
+    // The first form stays: the repaired bytes, with no summary next to them.
+    expect(await listFiles(join(mirror, "beacon-states"))).toEqual([`${entry}.ssz`]);
+    expect(await readFile(join(mirror, "beacon-states", `${entry}.ssz`))).toEqual(repaired);
+    // And the other way round: the bytes with their summary stay, and the repaired form of the runner is the same state.
+    await addToMirror(join(directory, "second"), backend, "beacon-states");
+    expect(await addToMirror(join(directory, "second"), runner, "beacon-states")).toMatchObject({ added: 0, identical: 1 });
+    expect(await listFiles(join(directory, "second", "beacon-states"))).toEqual([`${entry}.ssz`, `${entry}.summary`]);
+    // A mirror from before this rule holds the bytes with their summary file.
+    await put(directory, "old/beacon-states/" + `${entry}.ssz`, served);
+    await put(directory, "old/beacon-states/" + `${entry}.summary`, summaryText());
+    expect(await addToMirror(join(directory, "old"), runner, "beacon-states")).toMatchObject({ added: 0, identical: 1 });
+    expect(await addToMirror(join(directory, "old"), backend, "beacon-states")).toMatchObject({ added: 0, identical: 1 });
+  });
+
+  it("reports another state under the same name, another summary, and a summary that does not fit, as conflicts", async () => {
+    const runner = join(directory, "runner");
+    await put(runner, `${entry}.ssz`, repaired);
+    await addToMirror(mirror, runner, "beacon-states");
+    const other = join(directory, "other");
+    await put(other, `${entry}.ssz`, served);
+    await put(other, `${entry}.summary`, summaryText(SUMMARY_B, SUMMARY_A));
+    expect((await addToMirror(mirror, other, "beacon-states")).conflicts).toEqual([`beacon-states/${entry}.ssz`]);
+    await put(other, `${entry}.ssz`, servedState(10, 3, "different"));
+    await put(other, `${entry}.summary`, summaryText());
+    expect((await addToMirror(mirror, other, "beacon-states")).conflicts).toEqual([`beacon-states/${entry}.ssz`]);
+    for (const [bytes, text] of [
+      [served, "0x01\n0x02\n"],
+      [served, `${summaryText()}extra\n`],
+      [served.subarray(0, 100), summaryText()],
+      [servedState(10, 3).fill(0xff, 524468, 524472), summaryText()],
+      [Buffer.concat([served, Buffer.from("odd")]), summaryText()],
+    ] as const) {
+      const bad = join(directory, `bad-${text.length}-${bytes.length}`);
+      await put(bad, `${entry}.ssz`, bytes);
+      await put(bad, `${entry}.summary`, text);
+      expect(await addToMirror(join(directory, "empty-mirror"), bad, "beacon-states")).toMatchObject({ added: 0, conflicts: [`beacon-states/${entry}.ssz`] });
+    }
+    // A summary left alone in the mirror (a run that stopped) with other content: the state is not written next to it.
+    await put(directory, "stopped/beacon-states/" + `${entry}.summary`, summaryText(SUMMARY_B, SUMMARY_A));
+    const backend = join(directory, "backend");
+    await put(backend, `${entry}.ssz`, served);
+    await put(backend, `${entry}.summary`, summaryText());
+    expect((await addToMirror(join(directory, "stopped"), backend, "beacon-states")).conflicts).toEqual([`beacon-states/${entry}.ssz`]);
+    expect(await listFiles(join(directory, "stopped", "beacon-states"))).toEqual([`${entry}.summary`]);
+    // The first offset must lie inside the file and the list offset must not start before the fixed part.
+    const wild = join(directory, "wild");
+    const wildState = servedState(10, 3);
+    wildState.writeUInt32LE(0xffffff, 524468 - 4);
+    await put(wild, `${entry}.ssz`, wildState);
+    await put(wild, `${entry}.summary`, summaryText());
+    expect((await addToMirror(join(directory, "empty-mirror"), wild, "beacon-states")).conflicts).toHaveLength(1);
+  });
+
+  it("does not swallow other errors, and skips a summary with no state", async () => {
+    const from = join(directory, "from");
+    await put(from, `${entry}.summary`, summaryText());
+    expect(await addToMirror(mirror, from, "beacon-states")).toMatchObject({ added: 0, skipped: 1 });
+    await put(from, `${entry}.ssz`, served);
+    await mkdir(join(mirror, "beacon-states", "943", `${stateName(10)}.ssz`), { recursive: true });
+    await expect(addToMirror(mirror, from, "beacon-states")).rejects.toThrow();
+    const odd = join(directory, "odd");
+    await put(odd, `${entry}.ssz`, served);
+    await mkdir(join(odd, "943", `${stateName(10)}.summary`), { recursive: true });
+    await expect(addToMirror(join(directory, "fresh"), odd, "beacon-states")).rejects.toThrow();
+  });
+
+  it("does not report a held summary as missing when the mirror holds the state", async () => {
+    const slot = slotAt(daysBefore(1));
+    const name = `11155111/${stateName(slot)}`;
+    await put(mirror, `beacon-states/${name}.ssz`, Buffer.concat([servedState(slot, 3), entryBytes()]));
+    const held = join(directory, "held");
+    await put(held, `${name}.ssz`, servedState(slot, 3));
+    await put(held, `${name}.summary`, summaryText());
+    await put(held, `11155111/${stateName(slot + 1)}.summary`, summaryText());
+    const result = await pruneMirror(mirror, { days: 30, now: NOW, held: [held] });
+    expect(result.heldMissing).toEqual([`11155111/${stateName(slot + 1)}.summary`]);
   });
 });
 

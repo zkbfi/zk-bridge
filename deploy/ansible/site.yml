@@ -1,6 +1,6 @@
 ---
 # The full ordered deploy of one release to the app server:
-#   build -> caddy -> preflight -> indexer (green, verify, switch, soak, finish) -> backend (drain, switch) -> bots -> keep-alive
+#   build -> caddy -> preflight -> indexer (green, verify, switch, soak, finish) -> backend (drain, switch) -> bots -> remove retired keep-alive units
 # Each step is also a playbook of its own, with its own rollback; read the header of each. The hosted sites (sites.yml)
 # are separate: they run on your machine and name what they publish.
 #
@@ -35,5 +35,11 @@
 - name: Move the bots
   ansible.builtin.import_playbook: bots.yml
 
-# The keep-alive timer is retired: the backend's watcher keeps both light clients alive (docs/testnet-run.md).
-# keepalive.yml stays for reference and must not run in a full deploy, or it would enable the timer again.
+# The keep-alive timer is retired: the backend's watcher keeps both light clients alive (docs/testnet-run.md). A
+# deploy removes the old units from a server that still has them.
+- name: Remove the retired keep-alive units
+  hosts: zkbfi
+  gather_facts: false
+  tasks:
+    - name: Remove the retired keep-alive units
+      ansible.builtin.include_tasks: tasks/retire_keepalive.yml

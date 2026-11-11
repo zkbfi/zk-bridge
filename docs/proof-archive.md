@@ -202,7 +202,7 @@ hosts, fetch times and backend job ids. The public tree on IPFS is built separat
 | `handoff-updates/<chain id>/<period>.<sha256>.json` | one handoff update record (the archive row; its `record` field is the update text) | for good |
 | `fork-proofs/<chain id>/<state root>.<sha256>.json` | one fork proof record (the archive row; its `record` field is the record text) | for good |
 | `conflicts/conflict.<sha256>.json` | one conflict the archive recorded | for good |
-| `beacon-states/<chain>/<slot>-<root>.ssz` and `.summary` | the verified beacon states of the runner and the backend | 30 days |
+| `beacon-states/<chain>/<slot>-<root>.ssz` (and `.summary`) | the verified beacon states of the runner and the backend, as a service held them (see "One beacon state, two forms") | 30 days |
 | `snapshots/<stamp>.sqlite` | the backend's database, one each night | 30 days |
 | `manifests/<stamp>.json` | sha256 and size of every other file present, one each night | 30 days |
 
@@ -212,6 +212,24 @@ hosts, fetch times and backend job ids. The public tree on IPFS is built separat
   tree merges them too. Nothing in the mirror is ever rewritten. A name that comes again with other content (a beacon
   state, a snapshot, a damaged record) is a **conflict**: the file is left as it is, the run logs `ERROR`, finishes
   everything else (manifest, hook, publication) and then exits 1.
+- **One beacon state, two forms.** A PulseChain node serves an old state one `historical_summaries` entry (64 bytes) short.
+  The prover's state store (`prover/src/beacon/http.rs`, `StoredState`) keeps the bytes as the node served them plus a
+  `<slot>-<root>.summary` file with the missing entry (two 0x hashes, one per line); the runner's older copies hold the bytes
+  with those 64 bytes appended (the **repaired form**, which hashes to the state root on its own). Both are the same state
+  under the same name. `mirror-add` compares states by their repaired form: the `.ssz` plus the entry of its `.summary` when
+  there is one. It checks that the `.summary` is two hashes and that `historical_summaries` is a whole list of 64-byte
+  entries ending at the end of the file (it is the last field of a Capella to Deneb state, which is what PulseChain runs; the
+  check reads its offset from the last 4 bytes of the fixed part). The same state in the other form is "identical". A
+  different state under the name, or a `.summary` that does not fit its bytes, is a conflict. A state that is new to the
+  mirror is copied **as the service held it**, the `.ssz` and its `.summary` byte for byte, and the first form to arrive
+  stays (the runner's copies are added first). It is not rewritten into the repaired form because the trust list holds the
+  hashes of the services' own files, and an import checks the mirror's files against it: a form that no service held would
+  have no line. A service that gets the state back takes either form: the prover reads bytes alone as a repaired state, and
+  bytes with a `.summary` as the short form. The nightly runs of 2026-11-09 to 11-11 failed because the two forms of two
+  PulseChain states were compared byte by byte.
+- **Logs.** The CLI runs through `systemd-run`, and journald files what it prints under the transient run unit. `proofs.sh`
+  catches the CLI's log lines in a file and writes them again itself, so the names of a conflict or of a missing state show
+  in `journalctl -u zk-bridge-proofs-export`, in order, before the script's own `ERROR` line.
 - **Owners and modes.** The mirror belongs to `zkb_indexer`, the archive CLI's user, which writes and prunes there. The
   top directory is 0750 (root and the archive user only), the directories in it 0755, every file 0644. Root only
   creates and hands over the top directory (in its own 0711 parent; a top directory that is a link is refused). The
@@ -271,7 +289,7 @@ proofs.sh publish [--dry-run]         # the public tree to IPFS (below)
 2. The cache and the snapshot's proofs go into the archive (`ingest-cache`, `ingest-backend`; conflicts there are
    recorded in the archive and are a warning).
 3. `mirror-write`: every archive row becomes a record file, unless it is there already.
-4. `mirror-add`: the beacon states of both services, then the snapshot.
+4. `mirror-add`: the beacon states of both services (compared in their repaired form, see "One beacon state, two forms"), then the snapshot.
 5. `mirror-prune`: the window, and the check that every state the services hold is in the mirror.
 6. `mirror-manifest`: `manifests/<stamp>.json`, with the commit, the host, the window and the newest IPFS publication.
 7. The off-site hook, then the publication when it is on.

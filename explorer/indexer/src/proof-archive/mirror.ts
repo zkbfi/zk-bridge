@@ -184,17 +184,79 @@ export function importMirror(archive: ProofArchive, mirror: string): Promise<Rec
 /** What {@link addToMirror} did. */
 export type MirrorAdd = { added: number; identical: number; skipped: number; readonly conflicts: string[] };
 
+/** The sidecar of a state that the prover kept as the node served it: the missing summary entry, two 0x hashes on two lines. */
+const SUMMARY_TEXT = /^(0x[0-9a-f]{64})\n(0x[0-9a-f]{64})\n?$/;
+/** Where an SSZ BeaconState (Capella to Deneb) keeps its first variable-size offset: after genesis_time, genesis_validators_root, slot, fork, latest_block_header, block_roots and state_roots. It equals the size of the fixed part. */
+const FIRST_OFFSET_POSITION = 8 + 32 + 8 + 16 + 112 + 8192 * 32 * 2;
+
 /**
- * Copies the files of `from` into `<mirror>/<to>` once each: beacon states (`<chain id>/<slot>-<root>.ssz|.summary`) or
- * snapshots (`<stamp>.sqlite`). Other names and links are skipped. A file that exists with other content is a conflict.
+ * The state with the `historical_summaries` entry a node left out appended: the form that hashes to its own state root.
+ * The prover (prover/src/beacon/http.rs, `StoredState`) stores the bytes as the node served them plus the entry in a
+ * `.summary` file; the runner's older copies and the mirror hold the bytes with the 64 bytes appended. That is the same
+ * bytes as long as `historical_summaries` is the last variable-size field (Capella to Deneb, which is what PulseChain runs),
+ * so the check is that the list, from its offset (the last 4 bytes of the fixed part) to the end, is a whole number of
+ * 64-byte entries. Throws when the sidecar is not two hashes or the bytes do not fit.
+ */
+export function repairedState(served: Buffer, summaryText: string): Buffer {
+  const match = SUMMARY_TEXT.exec(summaryText);
+  if (match === null) throw new Error("the summary is not two 0x hashes on two lines");
+  if (served.length < FIRST_OFFSET_POSITION + 4) throw new Error("the state is too short to hold its offsets");
+  const fixedSize = served.readUInt32LE(FIRST_OFFSET_POSITION);
+  if (fixedSize < FIRST_OFFSET_POSITION + 8 || fixedSize > served.length) throw new Error("the state's first offset is outside the file");
+  const summaries = served.readUInt32LE(fixedSize - 4);
+  if (summaries < fixedSize || summaries > served.length || (served.length - summaries) % 64 !== 0) {
+    throw new Error("the state's historical_summaries is not a whole list ending at the end of the file");
+  }
+  return Buffer.concat([served, Buffer.from(`${match[1]}${match[2]}`.replaceAll("0x", ""), "hex")]);
+}
+
+const readIfAny = (path: string): Promise<Buffer | null> =>
+  readFile(path).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  });
+
+/** The beacon state `name` (`<chain>/<slot>-<root>.ssz`) of `directory` as its files hold it: the bytes and the `.summary` next to them, if any. Null without the `.ssz`. */
+async function readState(directory: string, name: string): Promise<{ served: Buffer; summary: Buffer | null } | null> {
+  const served = await readIfAny(join(directory, name));
+  if (served === null) return null;
+  return { served, summary: await readIfAny(join(directory, name.replace(/\.ssz$/, ".summary"))) };
+}
+
+/** The repaired form of a state read by {@link readState}: its bytes, with the entry of its summary appended when it has one. Throws for a summary that does not fit. */
+const repairedOf = ({ served, summary }: { served: Buffer; summary: Buffer | null }): Buffer => (summary === null ? served : repairedState(served, summary.toString("utf8")));
+
+/**
+ * Copies the files of `from` into `<mirror>/<to>` once each: beacon states (`<chain id>/<slot>-<root>.ssz`, with a
+ * `.summary` next to it for a state kept as the node served it) or snapshots (`<stamp>.sqlite`). Other names and links are
+ * skipped. A snapshot that exists with other content is a conflict.
+ *
+ * A beacon state is compared in its repaired form (see {@link repairedState}), so the same state in its two forms, the bytes
+ * the node served with a `.summary` or the bytes with the entry appended, is "identical". A state that is new to the mirror
+ * is copied as it is: the `.ssz` and its `.summary` if it has one, byte for byte. Root hashed exactly those bytes into its
+ * trust list (proofs.sh, `trust_tree`), and an import checks the mirror's files against that list, so the mirror must not
+ * keep a form that no service ever held. The first form to arrive stays. A state with other content under the name, or
+ * with a summary that does not fit its bytes, is a conflict.
  */
 export async function addToMirror(mirror: string, from: string, to: string): Promise<MirrorAdd> {
   const names = to === "beacon-states" ? BEACON_FILE : to === "snapshots" ? SNAPSHOT_FILE : null;
   if (names === null) throw new Error(`cannot add files to ${to}`);
   const result: MirrorAdd = { added: 0, identical: 0, skipped: 0, conflicts: [] };
-  for (const name of await filesIfAny(from)) {
-    if (!names.test(name)) {
+  const files = await filesIfAny(from);
+  const present = new Set(files);
+  for (const name of files) {
+    const match = names.exec(name);
+    // A summary goes with its state; one without a state has nothing to belong to.
+    if (match === null || (match[3] === "summary" && !present.has(name.replace(/\.summary$/, ".ssz")))) {
       result.skipped += 1;
+      continue;
+    }
+    if (match[3] === "summary") continue;
+    if (to === "beacon-states") {
+      const outcome = await addState(mirror, from, name);
+      if (outcome === "written") result.added += 1;
+      else if (outcome === "identical") result.identical += 1;
+      else result.conflicts.push(`${to}/${name}`);
       continue;
     }
     const outcome = await writeOnce(mirror, `${to}/${name}`, await readFile(join(from, name)));
@@ -203,6 +265,23 @@ export async function addToMirror(mirror: string, from: string, to: string): Pro
     else result.conflicts.push(`${to}/${name}`);
   }
   return result;
+}
+
+/** One beacon state into the mirror: compared in its repaired form, copied as it is when the mirror has none. */
+async function addState(mirror: string, from: string, name: string): Promise<WriteOutcome> {
+  const incoming = (await readState(from, name)) as { served: Buffer; summary: Buffer | null };
+  const held = await readState(join(mirror, "beacon-states"), name);
+  try {
+    const repaired = repairedOf(incoming);
+    if (held !== null) return repairedOf(held).equals(repaired) ? "identical" : "conflict";
+  } catch {
+    // repairedState throws only for a summary or a state that does not fit.
+    return "conflict";
+  }
+  // The summary first: a run that stops in between leaves a summary alone, which the next run finds again, never a state
+  // that looks whole without its summary.
+  if (incoming.summary !== null && (await writeOnce(mirror, `beacon-states/${name.replace(/\.ssz$/, ".summary")}`, incoming.summary)) === "conflict") return "conflict";
+  return writeOnce(mirror, `beacon-states/${name}`, incoming.served);
 }
 
 /**
@@ -307,7 +386,9 @@ export async function pruneMirror(mirror: string, input: { readonly days: number
   const missing = new Set<string>();
   for (const directory of input.held) {
     for (const name of await filesIfAny(directory)) {
-      if (!BEACON_FILE.test(name) || present.has(name)) continue;
+      // A summary the mirror lacks is no loss when it holds the state: the first form to arrive stays (see addToMirror).
+      const state = name.replace(/\.summary$/, ".ssz");
+      if (!BEACON_FILE.test(name) || present.has(name) || present.has(state)) continue;
       if (expired.has(name)) result.heldExpired += 1;
       else missing.add(name);
     }

@@ -6,7 +6,7 @@
 #   ansible-playbook preflight.yml
 #
 # Checks: free disk, the Caddy upstream files and a valid Caddyfile that imports them, no drain left on, a live indexer
-# and backend, no leftover green or check unit, no keep-alive march, no publisher proof in progress, the jobs in flight.
+# and backend, no leftover green or check unit, no publisher proof in progress, the jobs in flight.
 - name: Check that the app server is ready for a deploy
   hosts: zkbfi
   gather_facts: false
@@ -87,7 +87,6 @@
              + (['the live backend does not answer /health'] if zkb_pf_http.results[1].status | default(0) != 200 else [])
              + (['zk-bridge-indexer-pre is running from an earlier attempt'] if zkb_pf_stats.results[0].stat.exists else [])
              + (['zk-bridge-backend-pre is running from an earlier attempt'] if zkb_pf_stats.results[1].stat.exists else [])
-             + (['a keep-alive march is running'] if ansible_facts.services[zkb_keepalive_service].state | default('') == 'running' else [])
              + (['the publisher is proving'] if zkb_publisher_proving else [])
              + (['the jobs in flight could not be read'] if zkb_pf_jobs.rc | default(99) == 99 else []) }}
       vars:

@@ -1,0 +1,31 @@
+---
+# Removes the keep-alive units of the old design from the server (the backend's watcher keeps the light clients alive
+# since 2026-11-06). Safe to run when they are already gone: it only acts on a unit file that exists. The retired unit
+# names are listed here because nothing else in the repository defines them any more.
+- name: Look for the retired keep-alive unit files
+  ansible.builtin.stat:
+    path: "{{ zkb_unit_dir }}/{{ item }}"
+  loop: "{{ zkb_retired_keepalive_units }}"
+  register: zkb_retired_keepalive_stats
+
+- name: Stop and disable the retired units that are installed
+  ansible.builtin.systemd_service:
+    name: "{{ item.item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ zkb_retired_keepalive_stats.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.stat.exists
+
+- name: Remove the retired unit files
+  ansible.builtin.file:
+    path: "{{ zkb_unit_dir }}/{{ item }}"
+    state: absent
+  loop: "{{ zkb_retired_keepalive_units }}"
+  register: zkb_retired_keepalive_removed
+
+- name: Reload systemd when a unit file went
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: zkb_retired_keepalive_removed is changed

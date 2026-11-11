@@ -68,7 +68,6 @@
           - "green ({{ zkb_green_indexer_unit }}): {{ 'running' if zkb_transient_stats.results[0].stat.exists else 'not running' }}, /ready {{ zkb_ready.results[1].status | default('?') }}"
           - "backend: {{ ansible_facts.services[zkb_backend_unit ~ '.service'].state | default('absent') }}; backend check instance: {{ 'running' if zkb_transient_stats.results[1].stat.exists else 'not running' }}"
           - "publisher: {{ ansible_facts.services[zkb_publisher_unit ~ '.service'].state | default('absent') }}; runner: {{ ansible_facts.services[zkb_runner_unit ~ '.service'].state | default('absent') }}; traffic: {{ ansible_facts.services[zkb_traffic_unit ~ '.service'].state | default('absent') }}"
-          - "keep-alive timer: {{ ansible_facts.services[zkb_keepalive_timer].state | default('absent') }}; march: {{ ansible_facts.services[zkb_keepalive_service].state | default('absent') }}"
           - "caddy: {{ ansible_facts.services['caddy.service'].state | default('absent') }}"
           - "caddy indexer upstream: {{ 'green first, blue fallback' if (zkb_upstream_files.results[0].content | default('') | b64decode) is search('Green') else 'blue only' }}"
           - "caddy backend routes: {{ 'DRAINING' if (zkb_upstream_files.results[1].content | default('') | b64decode) is search('DRAINING') else 'normal' }}"
