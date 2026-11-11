@@ -5,16 +5,10 @@
  * (`createGateCheck` of `@zk-bridge/shared`), and {@link decideGateStep} turns the answer into what to do: send, wait,
  * refuse, or insert the step `confirm(evidence)` before the send.
  *
- * A send through the delivery router carries its own gate evidence (decision D1): its last argument is `gateEvidence`
- * ({@link carriesGateEvidence}). For it the check answers with the evidence to put in the send, or none, and the program
- * re-encodes the send with it ({@link withGateEvidence}): one transaction, no confirmation step. The confirmation step
- * stays for a send straight to the token mediator (an ERC-20 relay), which takes no evidence.
- *
  * Pure: nothing here reads a chain, signs or sends, and nothing imports the terminal library.
  */
 import { chainNameOf, forkCutoverText, gateConfirmWindow, GateEvidenceError, type GateCheckAnswer, type GateConfirmation, type SealOffer } from '@zk-bridge/shared'
-import { decodeFunctionData, encodeFunctionData, getAddress, type Hex } from 'viem'
-import { deliveryRouterAbi } from './abis'
+import { getAddress, type Hex } from 'viem'
 import type { ChainConfig } from '../model/types'
 import type { PrepareClient } from './prepare'
 import type { PlannedTransaction } from './plan'
@@ -29,45 +23,6 @@ export const GATED_FUNCTIONS: readonly string[] = ['relayTokens', 'relayTokensAn
 export function passesGate(plan: PlannedTransaction): boolean {
   if (plan.chain.contracts.gate === null) return false
   return GATED_FUNCTIONS.includes(plan.functionName) || plan.functionName.startsWith('wrapAndRelayTokens')
-}
-
-/** The name of the last argument of a router send that carries gate evidence. */
-export const GATE_EVIDENCE_ARGUMENT = 'gateEvidence'
-
-/** Whether a planned send carries its own gate evidence: a send through the delivery router, whose last argument is `gateEvidence`. */
-export function carriesGateEvidence(plan: PlannedTransaction): boolean {
-  return plan.arguments.at(-1)?.name === GATE_EVIDENCE_ARGUMENT
-}
-
-/** The evidence that a send through the router carries, as {@link decideGateStep} returns it. */
-export interface SendGateEvidence {
-  /** `abi.encode(ForkEvidence)`. */
-  readonly data: Hex
-  readonly epoch: bigint
-  /** The first second of the next epoch: the send must be mined before it. */
-  readonly validUntil: bigint
-}
-
-/**
- * The router send with `evidence` as its gate evidence, or with empty evidence when there is none: the calldata encoded
- * again and the argument shown with what it does.
- *
- * @param plan A plan that {@link carriesGateEvidence}.
- * @param evidence The evidence of the gate check, or undefined for none.
- */
-export function withGateEvidence(plan: PlannedTransaction, evidence: SendGateEvidence | undefined): PlannedTransaction {
-  const data: Hex = evidence?.data ?? '0x'
-  const decoded = decodeFunctionData({ abi: deliveryRouterAbi, data: plan.data })
-  const args = [...(decoded.args as readonly unknown[]).slice(0, -1), data]
-  const meaning =
-    evidence === undefined
-      ? `None. The ${plan.chain.name} deposit gate admits this send without evidence.`
-      : `Fork evidence for epoch ${evidence.epoch}. The router gives it to the ${plan.chain.name} deposit gate, which confirms the epoch, then sends in the same transaction. It must be mined before ${utcTime(evidence.validUntil)} UTC.`
-  return {
-    ...plan,
-    data: encodeFunctionData({ abi: deliveryRouterAbi, functionName: decoded.functionName, args } as Parameters<typeof encodeFunctionData>[0]),
-    arguments: plan.arguments.map((argument) => (argument.name === GATE_EVIDENCE_ARGUMENT ? { ...argument, value: data, meaning } : argument)),
-  }
 }
 
 /** How many times in a row the gate check waits before it gives up: 10 waits of a slot, 2 minutes on Sepolia. */
@@ -96,8 +51,8 @@ export interface GateWait {
 
 /** What to do with the answer of the gate check. */
 export type GateDecision =
-  /** Prepare the send now. A send through the router carries `gateEvidence` when it is set, else empty evidence. */
-  | { readonly kind: 'send'; readonly gateEvidence?: SendGateEvidence }
+  /** Prepare the send now. */
+  | { readonly kind: 'send' }
   /** Stop with this message. Nothing is sent. */
   | { readonly kind: 'refuse'; readonly message: string }
   /** Wait `wait.seconds`, then ask the gate again. */
@@ -139,16 +94,6 @@ export function decideGateStep(answer: GateCheckAnswer, input: { readonly chain:
       return { kind: 'wait', wait: { chainName: chain.name, epoch: answer.epoch, seconds: answer.retryAfterSeconds } }
     case 'confirm':
       return decideConfirm(answer, input)
-    case 'evidence':
-      return { kind: 'send', gateEvidence: { data: answer.gateEvidence, epoch: answer.epoch, validUntil: answer.validUntil } }
-    case 'late':
-      if (waits >= GATE_WAIT_LIMIT) {
-        return {
-          kind: 'refuse',
-          message: `The ${chain.name} deposit gate still ends epoch ${answer.epoch} in ${answer.secondsLeft} seconds after ${GATE_WAIT_LIMIT} checks. Nothing was sent.`,
-        }
-      }
-      return { kind: 'wait', wait: { chainName: chain.name, epoch: answer.epoch, seconds: answer.waitSeconds, epochSecondsLeft: answer.secondsLeft } }
   }
 }
 

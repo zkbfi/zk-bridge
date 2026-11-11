@@ -8,16 +8,15 @@
  * The deposit gate: right before the estimate of a send on a chain with a gate, the flow asks the gate check (no cache:
  * an epoch lasts 6.4 minutes on Ethereum and Sepolia, and someone else may confirm meanwhile). When the epoch needs a
  * confirmation, the flow inserts the step `confirm(evidence)` before the send, with the gas of its simulation plus the
- * usual margin, and the review shows it like any other step. A send through the delivery router carries its own gate
- * evidence instead: the flow puts the evidence that the check returns (or none) into the send, so it stays one
- * transaction. When the beacon header of the epoch is not on chain yet, or too little of the epoch is left, it waits and
- * asks again. When the send's estimate still reverts with `ForkNotConfirmed` or `HeaderNotInCurrentEpoch` (the epoch
- * rolled over), it asks once more. The rules are those of the web page: `decideGateStep` of `../tx/gate-step`.
+ * usual margin, and the review shows it like any other step. When the beacon header of the epoch is not on chain yet, or
+ * too little of the epoch is left, it waits and asks again. When the send's estimate still reverts with
+ * `ForkNotConfirmed` (the epoch rolled over), it asks once more. The rules are those of the web page:
+ * `decideGateStep` of `../tx/gate-step`.
  */
 import type { Address } from 'viem'
-import { isGateEpochPassed, revertText, type GateCheck, type GateCheckAnswer } from '@zk-bridge/shared'
+import { isForkNotConfirmed, revertText, type GateCheck, type GateCheckAnswer } from '@zk-bridge/shared'
 import { assertSignedTransactionMatches, type Signer } from '../signing/signer'
-import { carriesGateEvidence, decideGateStep, gateErrorText, passesGate, withGateEvidence, withKnownGas, type GateConfirmMark, type GateDecision, type GateWait } from '../tx/gate-step'
+import { decideGateStep, gateErrorText, passesGate, withKnownGas, type GateConfirmMark, type GateWait } from '../tx/gate-step'
 import {
   prepareTransaction,
   sendSignedTransaction,
@@ -132,46 +131,38 @@ export function createTransactionFlow(dependencies: TransactionFlowDependencies)
   }
 
   /**
-   * Asks the gate before a send. Returns the send decision when the send may be prepared now; null when the flow went on
-   * in another way (a confirmation step inserted and prepared, a wait, an error, or a stale answer).
+   * Asks the gate before a send. Returns true when the send may be prepared now; false when the flow went on in another
+   * way (a confirmation step inserted and prepared, a wait, an error, or a stale answer).
    */
-  async function settleGate(step: FlowStep, mine: number, attempt: Attempt, checkGate: GateCheck): Promise<Extract<GateDecision, { kind: 'send' }> | null> {
+  async function settleGate(step: FlowStep, mine: number, attempt: Attempt, checkGate: GateCheck): Promise<boolean> {
     const chain = step.plan.chain
     let answer: GateCheckAnswer
     try {
-      answer = await checkGate({ chainId: chain.chainId, gate: chain.contracts.gate as Address, account: dependencies.signer.address, ...(carriesGateEvidence(step.plan) ? { carriesEvidence: true } : {}) })
+      answer = await checkGate({ chainId: chain.chainId, gate: chain.contracts.gate as Address, account: dependencies.signer.address })
     } catch (error) {
       if (mine === generation) update({ phase: 'error', error: gateErrorText(error, chain.name, BEACON_HINT) })
-      return null
+      return false
     }
-    if (mine !== generation) return null
+    if (mine !== generation) return false
     const decision = decideGateStep(answer, { chain, nowMilliseconds: now(), waits: attempt.waits })
     switch (decision.kind) {
       case 'send':
-        return decision
+        return true
       case 'refuse':
         update({ phase: 'error', error: decision.message })
-        return null
+        return false
       case 'wait':
         update({ phase: 'waiting', gateWait: decision.wait })
         await sleep(decision.wait.seconds * 1000)
         if (mine === generation) await prepareCurrent({ ...attempt, waits: attempt.waits + 1 })
-        return null
+        return false
       case 'confirm': {
         const confirmStep: FlowStep = { plan: decision.plan, skippable: false, gateConfirm: decision.mark }
         update({ steps: [...state.steps.slice(0, state.stepIndex), confirmStep, ...state.steps.slice(state.stepIndex)] })
         await prepareCurrent(attempt)
-        return null
+        return false
       }
     }
-  }
-
-  /** The step with the gate evidence of the decision, for a send that carries it; the step itself otherwise. */
-  function withEvidenceOf(step: FlowStep, decision: Extract<GateDecision, { kind: 'send' }>): FlowStep {
-    if (!carriesGateEvidence(step.plan)) return step
-    const carried: FlowStep = { ...step, plan: withGateEvidence(step.plan, decision.gateEvidence) }
-    update({ steps: state.steps.map((existing, index) => (index === state.stepIndex ? carried : existing)) })
-    return carried
   }
 
   async function prepareCurrent(attempt: Attempt = FIRST_ATTEMPT): Promise<void> {
@@ -183,19 +174,14 @@ export function createTransactionFlow(dependencies: TransactionFlowDependencies)
     const gated = checkGate !== undefined && step.gateConfirm === undefined && passesGate(step.plan)
     try {
       const client = dependencies.clientFor(step.plan.chain.chainId)
-      let ready = step
-      if (gated) {
-        const decision = await settleGate(step, mine, attempt, checkGate)
-        if (decision === null) return
-        ready = withEvidenceOf(step, decision)
-      }
-      const prepared = await prepareTransaction(ready.gateConfirm === undefined ? client : withKnownGas(client, ready.gateConfirm.gas), dependencies.signer.address, ready.plan)
+      if (gated && !(await settleGate(step, mine, attempt, checkGate))) return
+      const prepared = await prepareTransaction(step.gateConfirm === undefined ? client : withKnownGas(client, step.gateConfirm.gas), dependencies.signer.address, step.plan)
       if (mine !== generation) return
       update({ phase: 'review', prepared })
     } catch (error) {
       if (mine !== generation) return
       // The epoch rolled over between the check and the estimate, or the node had not seen the confirmation: ask once more.
-      if (gated && !attempt.redone && isGateEpochPassed(error)) return prepareCurrent({ redone: true, waits: 0 })
+      if (gated && !attempt.redone && isForkNotConfirmed(error)) return prepareCurrent({ redone: true, waits: 0 })
       update({ phase: 'error', error: `Could not prepare the transaction: ${revertText(error, { chainName: step.plan.chain.name }) ?? messageOf(error)}` })
     }
   }

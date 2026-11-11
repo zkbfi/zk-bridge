@@ -1,10 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { GATE_BLOCK_SECONDS, GATE_SAFETY_SECONDS, GateEvidenceError, type GateCheckAnswer, type GateConfirmation } from '@zk-bridge/shared'
-import { decodeFunctionData, getAddress } from 'viem'
-import { deliveryRouterAbi } from '../../src/tx/abis'
+import { getAddress } from 'viem'
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
-import { confirmAnswer, EVIDENCE, evidenceAnswer, GATE, VALID_UNTIL } from '../support/gate-fixture'
-import { carriesGateEvidence, decideGateStep, GATE_WAIT_LIMIT, gateErrorText, passesGate, planGateConfirm, planGateSeal, withGateEvidence, withKnownGas } from '../../src/tx/gate-step'
+import { confirmAnswer, EVIDENCE, GATE, VALID_UNTIL } from '../support/gate-fixture'
+import { decideGateStep, GATE_WAIT_LIMIT, gateErrorText, passesGate, planGateConfirm, planGateSeal, withKnownGas } from '../../src/tx/gate-step'
 import { planApproval, planRelay, planSendMessage, planWrapAndRelay, type PlannedTransaction } from '../../src/tx/plan'
 
 const chain = FIXTURE_PAIR.first
@@ -33,32 +32,6 @@ describe('passesGate', () => {
   })
 })
 
-describe('gate evidence in a router send', () => {
-  const wrap = planWrapAndRelay({ chain, receiver, value: 1n })
-
-  test('a router send carries it; a mediator relay, a message and a confirmation do not', () => {
-    expect(carriesGateEvidence(wrap)).toBe(true)
-    expect(carriesGateEvidence(planRelay({ chain, token: usdc, receiver, amount: 1n, mode: { kind: 'plain' } }))).toBe(false)
-    expect(carriesGateEvidence(planSendMessage({ chain, target: receiver, data: '0x' }))).toBe(false)
-    expect(carriesGateEvidence(planGateConfirm(chain, confirmAnswer()))).toBe(false)
-  })
-
-  test('puts the evidence into the calldata and the shown argument, and takes it out again', () => {
-    const carried = withGateEvidence(wrap, { data: evidence, epoch: 360_335n, validUntil: VALID_UNTIL })
-    expect(decodeFunctionData({ abi: deliveryRouterAbi, data: carried.data }).args).toEqual([getAddress(receiver), evidence])
-    expect(carried.arguments.at(-1)).toEqual({
-      name: 'gateEvidence',
-      type: 'bytes',
-      value: evidence,
-      meaning: 'Fork evidence for epoch 360335. The router gives it to the Ethereum deposit gate, which confirms the epoch, then sends in the same transaction. It must be mined before 08:00:00 UTC.',
-    })
-    expect(carried.arguments[0]).toEqual(wrap.arguments[0]!)
-    const emptied = withGateEvidence(carried, undefined)
-    expect(emptied.data).toBe(wrap.data)
-    expect(emptied.arguments.at(-1)).toEqual({ name: 'gateEvidence', type: 'bytes', value: '0x', meaning: 'None. The Ethereum deposit gate admits this send without evidence.' })
-  })
-})
-
 describe('planGateConfirm', () => {
   test('is confirm(bytes) on the gate with no value, and says the epoch and the deadline in numbers', () => {
     const plan = planGateConfirm(chain, confirmAnswer())
@@ -79,16 +52,6 @@ describe('decideGateStep', () => {
   test('sends when the gate needs nothing', () => {
     expect(decide({ kind: 'not-needed', reason: 'confirmed', epoch: 5n })).toEqual({ kind: 'send' })
     expect(decide({ kind: 'not-needed', reason: 'not-enforcing', epoch: 5n })).toEqual({ kind: 'send' })
-  })
-
-  test('sends a router send with the evidence of the check', () => {
-    expect(decide(evidenceAnswer())).toEqual({ kind: 'send', gateEvidence: { data: evidence, epoch: 360_335n, validUntil: VALID_UNTIL } })
-  })
-
-  test('waits out the end of an epoch for a router send, and gives up after the limit', () => {
-    const late = { kind: 'late', epoch: 360_335n, secondsLeft: 20, waitSeconds: 32 } as const
-    expect(decide(late)).toEqual({ kind: 'wait', wait: { chainName: 'Ethereum', epoch: 360_335n, seconds: 32, epochSecondsLeft: 20 } })
-    expect(decide(late, GATE_WAIT_LIMIT)).toEqual({ kind: 'refuse', message: `The Ethereum deposit gate still ends epoch 360335 in 20 seconds after ${GATE_WAIT_LIMIT} checks. Nothing was sent.` })
   })
 
   test('refuses on a sealed gate', () => {

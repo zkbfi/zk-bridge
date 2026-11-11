@@ -6,10 +6,9 @@
  * data becomes the encoded fee director. The page then adds the disclosure that the confirm dialog shows.
  *
  * The native coin goes through the delivery router of the source chain. With a tip it calls the router's payable
- * `relayTokensAndCall(receiver, data, callbackGas, gateEvidence)`: the router wraps the coin and relays the wrapped token
- * to the router of the other chain with the same fee terms as a token relay (native-route.ts). With No tip it calls
- * `wrapAndRelayTokens(receiver, gateEvidence)`, which carries no terms. Both carry the deposit gate's evidence as their
- * last argument: empty here, filled in by the transaction sequence right before the estimate (`withGateEvidence`).
+ * `relayTokensAndCall(receiver, data, callbackGas)`: the router wraps the coin and relays the wrapped token to the router
+ * of the other chain with the same fee terms as a token relay (native-route.ts). With No tip it calls
+ * `wrapAndRelayTokens(receiver)`, which carries no terms.
  */
 import { encodeFunctionData, getAddress, isAddress, type Address, type Hex } from "viem";
 import { deliveryRouterAbi, routerCallbackGas, type DeliveryCall } from "@zk-bridge/shared";
@@ -194,9 +193,8 @@ export const planBridgeSteps = (input: PlanBridgeInput): readonly WebStep[] => {
 };
 
 /**
- * The tipped send of the native coin: `relayTokensAndCall(router, terms, callbackGas, gateEvidence)` on the delivery
- * router of the source chain, with the coin as the value and empty gate evidence. It keeps the chain, the router, the
- * value and the gate evidence argument of the plain wrap step.
+ * The tipped send of the native coin: `relayTokensAndCall(router, terms, callbackGas)` on the delivery router of the
+ * source chain, with the coin as the value. It keeps the chain, the router and the value of the plain wrap step.
  */
 const planWrapAndRelayWithTip = (input: { wrap: PlannedTransaction; router: Address; data: Hex; callbackGas: bigint; explain: (argument: DisplayArgument) => DisplayArgument }): PlannedTransaction => {
   const { wrap, router, data, callbackGas, explain } = input;
@@ -204,14 +202,13 @@ const planWrapAndRelayWithTip = (input: { wrap: PlannedTransaction; router: Addr
   return {
     ...wrap,
     title: `Wrap ${symbol} and relay it to the router of the other chain`,
-    functionSignature: "relayTokensAndCall(address,bytes,uint256,bytes)",
+    functionSignature: "relayTokensAndCall(address,bytes,uint256)",
     functionName: "relayTokensAndCall",
-    data: encodeFunctionData({ abi: deliveryRouterAbi, functionName: "relayTokensAndCall", args: [router, data, callbackGas, "0x"] }),
+    data: encodeFunctionData({ abi: deliveryRouterAbi, functionName: "relayTokensAndCall", args: [router, data, callbackGas] }),
     arguments: [
       explain({ name: "receiver", type: "address", value: getAddress(router) }),
       { name: "data", type: "bytes", value: data, meaning: `${(data.length - 2) / 2} bytes` },
       { name: "callbackGas", type: "uint256", value: callbackGas.toString(), meaning: "the exact gas that onTokenBridged gets on the other chain" },
-      wrap.arguments.at(-1)!,
     ],
     notes: [`The transaction sends ${wrap.value.toString()} wei of ${symbol}. The router wraps it, then relays it with the fee terms to the router of the other chain, which pays the tip and sends the rest to the recipient.`],
   };

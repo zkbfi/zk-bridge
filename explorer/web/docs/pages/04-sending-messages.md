@@ -80,6 +80,4 @@ An executor cannot make the message fail by giving it too little gas. A delivery
 
 On an enforcing chain, the first send in each epoch needs a gate confirmation. The page Safety explains the gate.
 
-A send of the native coin carries the confirmation itself, so it stays one transaction. Before a token transfer or a message, the confirmation is a transaction of its own, sent first when the epoch needs one. When less than a minute of the epoch is left, the page waits for the next epoch (up to about 72 seconds) before a send of the native coin, and before a confirmation, so that the confirmation is for the epoch the send lands in.
-
 If a send fails with a gate error, wait one slot and try again.

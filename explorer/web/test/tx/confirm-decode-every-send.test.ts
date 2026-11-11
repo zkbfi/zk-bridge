@@ -3,8 +3,7 @@
  * Regression (2026-11-08, live dapp next.16): a 0.1 SepETH wrap on Sepolia through the DeliveryRouter
  * (`wrapAndRelayTokens(address)`) was refused with "The page cannot read this call from its bytes", because the review
  * decoded with an ABI list that held no router functions. The native coin with a tip goes to the same router as
- * `relayTokensAndCall(address,bytes,uint256,bytes)`, which must decode too. Since D1 (2026-11-10) both router sends
- * carry the gate evidence last: `wrapAndRelayTokens(address,bytes)` and `relayTokensAndCall(address,bytes,uint256,bytes)`.
+ * `relayTokensAndCall(address,bytes,uint256)`, which must decode too.
  */
 import { encodeFunctionData, erc20Abi, getAddress, parseAbi, type Address, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
@@ -69,22 +68,19 @@ const expectSendable = (step: WebStep, signature: string): void => {
 };
 
 describe("the owner's case: gate confirm, then 0.1 SepETH wrapped and relayed on Sepolia", () => {
-  it("decodes wrapAndRelayTokens(address,bytes) on the router and allows the send", async () => {
+  it("decodes wrapAndRelayTokens(address) on the router and allows the send", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 0n });
     const steps = planBridgeSteps({ values: values({ token: "first:native", amount: "0.1" }), tokens, context: { ...context, pair: SEPOLIA_PAIR }, delivery: null });
     expect(steps).toHaveLength(1);
     const wrap = steps[0]!;
     expect(wrap.plan.to).toBe(sepoliaRouter);
     expect(wrap.plan.value).toBe(10n ** 17n);
-    expect(wrap.plan.data.slice(0, 10)).toBe("0x3ace4765");
+    expect(wrap.plan.data.slice(0, 10)).toBe("0xf52cbf0e");
 
     const view = buildConfirmView(wrap);
     expect(view.blockedReason).toBeNull();
-    expect(view.functionSignature).toBe("wrapAndRelayTokens(address,bytes)");
-    expect(view.arguments).toEqual([
-      { name: "receiver", type: "address", value: owner },
-      { name: "gateEvidence", type: "bytes", value: "0x", meaning: "0 bytes" },
-    ]);
+    expect(view.functionSignature).toBe("wrapAndRelayTokens(address)");
+    expect(view.arguments).toEqual([{ name: "receiver", type: "address", value: owner }]);
     expect(view.valueText).toBe("0.1 SepETH");
     expect(view.contractText).toBe(`DeliveryRouter at ${sepoliaRouter}`);
   });
@@ -150,19 +146,19 @@ describe("every send the dapp can produce decodes in the review", () => {
     expect(buildConfirmView(relay!).delivery).not.toBeNull();
   });
 
-  it("relayTokensAndCall(address,bytes,uint256,bytes) on the router: the native coin with a tip, the default for SepETH", async () => {
+  it("relayTokensAndCall(address,bytes,uint256) on the router: the native coin with a tip, the default for SepETH", async () => {
     const { context, tokens } = await buildFixtureContext({ allowance: 0n });
     const draft = computeBridgeDraft(values({ token: "first:native", amount: "0.1" }), { ...DEFAULT_DELIVERY_OPTIONS, mode: "percentage" }, { pair: SEPOLIA_PAIR, tokens, context: { ...context, pair: SEPOLIA_PAIR }, report: buildDeliveryReport(369), priorityFeeWei: 10n ** 9n });
     expect(draft.status).toBe("ready");
     expect(draft.steps).toHaveLength(1);
     const relay = draft.steps[0]!;
     expect(relay.plan.to).toBe(sepoliaRouter);
-    expectSendable(relay, "relayTokensAndCall(address,bytes,uint256,bytes)");
+    expectSendable(relay, "relayTokensAndCall(address,bytes,uint256)");
     const view = buildConfirmView(relay);
     expect(view.delivery).not.toBeNull();
     expect(view.noRouterNotice).toBeNull();
     expect(view.valueText).toBe("0.1 SepETH");
-    expect(view.arguments.map((argument) => argument.name)).toEqual(["receiver", "data", "callbackGas", "gateEvidence"]);
+    expect(view.arguments.map((argument) => argument.name)).toEqual(["receiver", "data", "callbackGas"]);
     expect(getAddress(view.arguments[0]!.value)).toBe(getAddress(SEPOLIA_PAIR.second.contracts.deliveryRouter!));
     expect(view).toMatchObject({ amountText: "0.1 SepETH", destinationText: "to 0x8D43…4Bdd on PulseChain" });
   });
@@ -198,10 +194,10 @@ describe("every send the dapp can produce decodes in the review", () => {
     expectSendable(step, "approve(address,uint256)");
   });
 
-  it("wrapAndRelayTokens() and wrapAndRelayTokens(address,bytes) both decode", () => {
+  it("wrapAndRelayTokens() and wrapAndRelayTokens(address) both decode", () => {
     for (const [args, signature] of [
       [[], "wrapAndRelayTokens()"],
-      [[owner, "0x"], "wrapAndRelayTokens(address,bytes)"],
+      [[owner], "wrapAndRelayTokens(address)"],
     ] as const) {
       const step: WebStep = {
         plan: {
@@ -213,7 +209,7 @@ describe("every send the dapp can produce decodes in the review", () => {
           functionName: "wrapAndRelayTokens",
           data: encodeFunctionData({ abi: deliveryRouterAbi, functionName: "wrapAndRelayTokens", args: args as never }),
           value: 1n,
-          arguments: args.map((value, index) => (index === 0 ? { name: "receiver", type: "address", value } : { name: "gateEvidence", type: "bytes", value })),
+          arguments: args.map((value) => ({ name: "receiver", type: "address", value })),
           notes: [],
         },
         disclosure: noDisclosure,

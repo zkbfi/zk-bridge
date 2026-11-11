@@ -112,7 +112,7 @@ describe("planBridgeSteps without a delivery fee: calldata equals what the termi
     const expected = planWrapAndRelay({ chain: FIXTURE_PAIR.first, receiver, value: parseUnits("1.5", 18) });
     expect(step!.plan.data).toBe(expected.data);
     expect(step!.plan.value).toBe(parseUnits("1.5", 18));
-    expect(step!.plan.data).toBe(encodeFunctionData({ abi: deliveryRouterAbi, functionName: "wrapAndRelayTokens", args: [receiver, "0x"] }));
+    expect(step!.plan.data).toBe(encodeFunctionData({ abi: deliveryRouterAbi, functionName: "wrapAndRelayTokens", args: [receiver] }));
   });
 
   it("refuses an amount above the balance, with a sentence", async () => {
@@ -177,21 +177,20 @@ describe("planBridgeSteps with a tip", () => {
     expect(() => planBridgeSteps({ values: values(), tokens, context, delivery })).toThrow(/unwrapping works only for the wrapped native token/);
   });
 
-  it("sends the native coin with a tip through the source router's relayTokensAndCall(address,bytes,uint256,bytes), to the router of the other chain, with empty gate evidence until the gate check", async () => {
+  it("sends the native coin with a tip through the source router's relayTokensAndCall(address,bytes,uint256), to the router of the other chain", async () => {
     const { context, tokens } = await buildFixtureContext();
     const delivery = deliveryFor();
     const steps = planBridgeSteps({ values: values({ token: "first:native", amount: "2" }), tokens, context, delivery });
     expect(steps).toHaveLength(1);
     const [step] = steps;
-    expect(step!.plan).toMatchObject({ to: FIXTURE_PAIR.first.contracts.deliveryRouter, value: 2n * 10n ** 18n, functionName: "relayTokensAndCall", functionSignature: "relayTokensAndCall(address,bytes,uint256,bytes)", contractLabel: "DeliveryRouter" });
+    expect(step!.plan).toMatchObject({ to: FIXTURE_PAIR.first.contracts.deliveryRouter, value: 2n * 10n ** 18n, functionName: "relayTokensAndCall", functionSignature: "relayTokensAndCall(address,bytes,uint256)", contractLabel: "DeliveryRouter" });
     const call = decodeFunctionData({ abi: deliveryRouterAbi, data: step!.plan.data });
     expect(call.functionName).toBe("relayTokensAndCall");
-    const [routerArgument, data, callbackGas, gateEvidence] = call.args as unknown as readonly [string, `0x${string}`, bigint, `0x${string}`];
-    expect(gateEvidence).toBe("0x");
+    const [routerArgument, data, callbackGas] = call.args as readonly [string, `0x${string}`, bigint];
     expect(getAddress(routerArgument)).toBe(getAddress(deliveryRouter));
     expect(decodeFeeDirector(data)).toEqual(delivery.director);
     expect(callbackGas).toBe(routerCallbackGas({}));
-    expect(step!.plan.arguments.map((argument) => argument.name)).toEqual(["receiver", "data", "callbackGas", "gateEvidence"]);
+    expect(step!.plan.arguments.map((argument) => argument.name)).toEqual(["receiver", "data", "callbackGas"]);
     expect(step!.plan.arguments[0]!.meaning).toMatch(new RegExp(`pays the tip to its reward address, then sends the rest to ${receiver}`));
     expect(step!.disclosure).toMatchObject({ feesApplyTo: "this-transaction", delivery, amountToken: { symbol: "wrapped ETH", decimals: 18 } });
   });

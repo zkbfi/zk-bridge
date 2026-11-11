@@ -62,9 +62,9 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 - **Link.** [`docs/light-client-layout/test-plan.md`](../light-client-layout/test-plan.md) T4, T5; [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Fork gate by shape (2026-10-27)".
 
 ### 1.11 Gate false positives and liveness costs
-- **What.** On PulseChain an execution-only upgrade can fire a canary (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`, the BLS precompile, the beacon roots probe) and switch the gate to enforcing for good; sends then stop until a new route exists. On an enforcing gate, a send fails when no beacon block exists yet in the current epoch, and the first sender of each epoch pays about 40,000 to 43,000 gas to confirm. Since 2026-11-10 (D1) a send through the `DeliveryRouter` carries that evidence itself, in one transaction (receipt gas 190,940 against 221,825 for a confirm and a send, `test/hardened/RouterGateEvidence.t.sol`); a token relay straight to the mediator still confirms in a transaction of its own. The frontends wait for the next epoch when less than 60 s of the current one is left, so a send in that minute is delayed by up to 72 s rather than reverted.
+- **What.** On PulseChain an execution-only upgrade can fire a canary (`TSTORE`, `MCOPY`, `BLOBBASEFEE`, `CLZ`, the BLS precompile, the beacon roots probe) and switch the gate to enforcing for good; sends then stop until a new route exists. On an enforcing gate, a send fails when no beacon block exists yet in the current epoch, and the first sender of each epoch pays about 40,000 to 43,000 gas to confirm.
 - **Why accepted.** Both fail closed. No funds move; sends stop.
-- **Link.** [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Execution canaries in the gate", "Gate evidence: confirm, then send", "Gate evidence in a router send".
+- **Link.** [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Execution canaries in the gate", "Gate evidence: confirm, then send".
 
 ### 1.12 A corrupt committee can seal a gate (G-08)
 - **What.** The fork observation program accepts a committee signature over an attested header, not a finalized one. A dishonest two thirds can prove a fake disallowed shape and seal the PulseChain gate.

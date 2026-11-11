@@ -789,7 +789,7 @@ The contracts need no administrator, and the repository has no relayer. A statef
 3. **Open the bridges.** Call `openDeposits` on the `MessageBridge` of each chain. The call needs a proof that the remote light client stored a head: a block of the other chain whose hash the own light client stored, the state proof of the remote light client in that block (from `eth_getProof`), and the storage proof of one stored head. The server builds this proof: the delivery runner (`explorer/bots`, `runner.openDeposits`) does it on its own after each light-client update it posts or sees, while the bridge on its destination chain is closed, and sends the call from its signer. A bridge opens only when its own light client has stored a block of the other chain that came after the first update of the other light client. A chain needs about two epochs to finalize, so the first round of updates for one direction only prepares the second. Repeat steps 2 and 3 until both bridges report `depositsOpen()`.
 4. **Announce.** Tell users only after both bridges report open. A send before that reverts with `DepositsNotOpen()` and spends nothing but gas. This covers token relays too, because the mediator sends through the bridge.
 5. **Keep the light clients current.** Run step 2 on a schedule for each route. The own-chain light client of a chain with a registry gate is a route too: its source beacon chain and its destination chain are the same chain. A message needs a stored header after its slot.
-6. **Confirm the gate.** On a chain whose gate is enforcing, a send through the `DeliveryRouter` carries the evidence of an unconfirmed epoch itself (see "Gate evidence in a router send"). For a token relay straight to the mediator, the first sender of each epoch calls `BeaconForkGate.confirm(evidence)` before the send (see "Gate evidence: confirm, then send"). A keeper may confirm too. The server builds the evidence for its own sends.
+6. **Confirm the gate.** On a chain whose gate is enforcing, the first sender of each epoch calls `BeaconForkGate.confirm(evidence)` before the send (see "Gate evidence: confirm, then send"). A keeper may confirm too. The server builds the evidence for its own sends.
 7. **Deliver the messages.** For each `UserRequestForAffirmation` log on a source bridge (a token relay emits one, and so does any message from an application), run `evidence --tx <hash> --log-index <n>`. Send each call of `prerequisites` in order, and read the layout views again after each call. Then send `execute` to the destination bridge. Skip the message when `alreadyDelivered` is true. Delivery is final: a failed call to the target is not retried by the bridge. For a message that names a `DeliveryRouter` as the receiver of tokens, send the proof to `DeliveryRouter.executeMessage(proof)` instead. To send many in one transaction, put the block proof (`update` at the light client) and one such call for each message in a Multicall3 `aggregate3` with `allowFailure` set on each call, so the router can pay the fee to the reward address; the `execute.data` of the evidence holds the proof as the argument of `executeMessage`.
 8. **A release that the recipient cannot take is final.** The mediator tries the recipient once and emits `ReleaseFailed(token, recipient, value, messageId)` when the token or the flow limiter refuses. There is no claim and no retry. The tokens stay in the mediator, owed to nobody.
 
@@ -948,8 +948,8 @@ The bridge has one router contract on each chain: `DeliveryRouter`. The separate
 
 | OmniBridge | This bridge |
 |---|---|
-| `wrapAndRelayTokens()`, `wrapAndRelayTokens(address _receiver)` payable | `wrapAndRelayTokens()` and `wrapAndRelayTokens(address receiver, bytes gateEvidence)`, as entries of `DeliveryRouter`. The mediator itself handles only tokens. The router wraps the coin and calls `relayTokens` (no data) or `relayTokensAndCall` (data) of the mediator in one call. The mediator pays the receiver only; the router has no fallback option. A receiver of the zero address or of the router itself reverts with `InvalidReceiver`. `gateEvidence` is the deposit gate's evidence, or empty (decision D1, 2026-11-10: see "Gate evidence in a router send" below). The parameterless form carries none. |
-| `relayTokensAndCall(address, bytes)` payable | `relayTokensAndCall(address receiver, bytes data, uint256 callbackGas, bytes gateEvidence)`, with data that must not be empty (`EmptyData`) and the exact gas of the callback. Name a `DeliveryRouter` on the other chain as the receiver, with its terms as data, to pay a tip or to get the native coin back. |
+| `wrapAndRelayTokens()`, `wrapAndRelayTokens(address _receiver)` payable | Same, as entries of `DeliveryRouter`. The mediator itself handles only tokens. The router wraps the coin and calls `relayTokens` (no data) or `relayTokensAndCall` (data) of the mediator in one call. The mediator pays the receiver only; the router has no fallback option. Two new overloads, `wrapAndRelayTokens(address _receiver, uint256 gasLimit)` and `relayTokensAndCall(address _receiver, bytes _data, uint256 gasLimit)`, pass a gas limit to the mediator. A receiver of the zero address or of the router itself reverts with `InvalidReceiver`. |
+| `relayTokensAndCall(address, bytes)` payable | Same, with data that must not be empty (`EmptyData`). Name a `DeliveryRouter` on the other chain as the receiver, with its terms as data, to pay a tip or to get the native coin back. |
 | `onTokenBridged(address, uint256, bytes)` | The `onTokenBridged` of `DeliveryRouter`. It never reverts: it unwraps with `UNWRAP` or with the 20 byte data, and it hands off what it cannot deliver to `failedDeliveryAddress`. |
 | `claimTokens(address, address)` | Not included (owner function). `sweep(token)` of `DeliveryRouter` replaces it, and it pays `failedDeliveryAddress` only. |
 
@@ -1073,58 +1073,6 @@ Costs, measured with `forge test` (gas of the call, without the base cost and th
 Tooling (2026-11-01): `ensureGateConfirmed` and `buildGateEvidence` of `@zkb/data`, over the pure checks of `@zkb/core` (`checkConfirmEvidence`, a port of the checks of `confirm` and of `ForkShape.judge`), build the evidence from the parent beacon block root of the latest block and a compact multiproof of its state, and return the `confirm` call for any sender. The traffic bot uses them; the web app is to use them. See `explorer/data/README.md`, "Gate evidence", and `docs/testnet-run.md`, step 9. `test/hardened/GateEvidenceSepolia.t.sol` feeds evidence that they built for a real Sepolia epoch to the real gate.
 
 Tests: `test/hardened/BridgeWorld.t.sol` shows the whole pattern on an enforcing gate with the real `MessageBridge`. A send in an unconfirmed epoch is refused, the first poster confirms and sends, a second sender in the same epoch sends with no `confirm`, the next epoch is refused again, and a message from the epoch is delivered on the other chain. It also shows a multicall (the receiver sees the multicall as the sender). `test/hardened/BeaconForkGate.t.sol` holds the gate rules and the unit level version of the pattern.
-
-### Gate evidence in a router send (decision D1, 2026-11-10) (built)
-
-This reverses "A send carries no gate evidence" above for the router only. The owner: "keep the contracts simple. just
-check if the proof has already been provided and then make sure it is provided." Layers 1 and 2 do not change:
-`MessageBridge` still calls `depositGate.admit("")`, and the mediator has no evidence argument. The design and its
-reasons are in `docs/superpowers/specs/2026-11-10-mainnet-readiness.md`, A2.
-
-- Every send entry of `DeliveryRouter` that names a receiver takes `bytes gateEvidence` last:
-  `wrapAndRelayTokens(address receiver, bytes gateEvidence)` and
-  `relayTokensAndCall(address receiver, bytes data, uint256 callbackGas, bytes gateEvidence)`. The old
-  `wrapAndRelayTokens(address)` and `relayTokensAndCall(address,bytes,uint256)` are gone: one entry per send keeps the
-  router small and leaves no second path to keep in step. `wrapAndRelayTokens()` stays as the send with no evidence (it
-  relays to the caller).
-- When `gateEvidence` is not empty, the router calls `admit(gateEvidence)` on the gate before it wraps and relays. The
-  gate is read at call time: `MessageBridge(bridge.bridgeContract()).depositGate()`, both immutable, so the router
-  stores nothing new, the constructor and the deploy script do not change, and a send with empty evidence pays nothing
-  for the lookup. `admit` and not `confirm`: `admit` is the `IDepositGate` function, so the router needs no gate type;
-  in a confirmed epoch it returns without reading the evidence; otherwise it confirms the current epoch with the
-  evidence or reverts (`HeaderNotInCurrentEpoch`, `HeaderRootMismatch`, `ShapeNotAllowed`, `GateSealed`, ...); on a
-  detection-mode gate that has not detected it returns, where `confirm` would revert with `BeaconRootsAbsent`. The bridge's
-  own `admit("")` then finds the epoch confirmed. The bridge rejects a zero gate at construction, so the gate always
-  exists; a call to an AMB with no `depositGate` reverts the send.
-- Empty evidence: the router does not call the gate, and the bridge's `admit("")` passes in a confirmed epoch and
-  reverts with `ForkNotConfirmed` otherwise. A send never passes unproven.
-- A token relay straight to the mediator keeps confirm-then-send (the section above).
-- Frontends (`sendEvidenceRule` and `ensureSendEvidence` of `@zkb/data`): evidence when the epoch of the next block is
-  unconfirmed; empty when it is confirmed; a wait for the next epoch when it ends within 60 s (`GATE_SAFETY_SECONDS`),
-  confirmed or not, because a send that lands in the next epoch passes only with that epoch's evidence. The dapp and the
-  terminal re-encode the router send with the evidence right before its estimate (`withGateEvidence` of
-  `explorer/terminal/src/tx/gate-step.ts`).
-
-Gas, receipt level (each call its own transaction, refund subtracted; `test/hardened/RouterGateEvidence.t.sol`,
-`RouterGateEvidenceGasTest`, evidence of a depth 6 state over the model of the beacon roots contract):
-
-| Send | Before (confirm tx + send) | After |
-|---|---|---|
-| `relayTokensAndCall`, first send of an epoch | 71,152 + 150,673 = 221,825 (two transactions) | 190,940 (one transaction) |
-| `wrapAndRelayTokens(receiver, …)`, first send of an epoch | 71,152 + 147,789 = 218,941 (two transactions) | 187,883 (one transaction) |
-| `relayTokensAndCall`, confirmed epoch, empty evidence | 150,673 | 151,264 (+591: the empty `bytes` in calldata) |
-| `wrapAndRelayTokens(receiver, …)`, confirmed epoch, empty evidence | 147,789 | 148,205 (+416) |
-| `wrapAndRelayTokens(receiver, …)`, confirmed epoch, evidence attached | not possible | 156,554 (the evidence calldata and one gate read) |
-
-The "before" figures are the old router at `cf3c8f87` with the same test. On a real chain the evidence is larger (the
-Sepolia fixture's `confirm` simulated at 79,050 gas), so the first send of an epoch costs about that much over a send in
-a confirmed epoch, less the 21,000 of a second transaction.
-
-Tests: `test/hardened/RouterGateEvidence.t.sol`, over the real bridge, mediator and an `Enforcing` gate: a confirmed
-epoch ignores the evidence (bytes that do not decode pass); an unconfirmed epoch with evidence confirms and sends, with
-both entries; empty evidence in an unconfirmed epoch reverts `ForkNotConfirmed` with all three entries; bad evidence
-reverts; evidence read in one epoch and sent in the next reverts `HeaderNotInCurrentEpoch`; a disallowed shape reverts
-`ShapeNotAllowed`; a sealed gate refuses. A mutation that skips the gate call fails four of them.
 
 ### As built (2026-10-24)
 
