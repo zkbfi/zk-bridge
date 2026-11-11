@@ -36,6 +36,17 @@ block against its content address, root CID) and each download, and it serves ea
 `/ipfs/<cid>/` and fetches every asset its `index.html` names. A site that uses a root path such as `/assets/x.js`
 fails there, because a gateway serves it under a prefix.
 
+Before the build, refresh the fork schedules that the release bundles, and commit the result:
+
+```sh
+pnpm --dir explorer --filter @zkb/core run fork-schedules
+```
+
+It reads each chain's fork schedule and clock from its public beacon node and writes
+`explorer/core/src/bundled-fork-schedules.ts`. The dapp, the terminal and the status service fall back to it when no
+beacon node answers and their own saved copy is older; a copy older than 7 days is not used, so a release more than a
+week old relies on the copy each program saved (`docs/audit/known-issues.md` 1.5).
+
 Settings: `RELEASE_VERSION` (default `0.0.0-<short commit>`), `RELEASE_PREVIOUS_MANIFEST` (the last `version.json`, so the
 sequence goes up), `RELEASE_TERMINAL_TARGETS`, `RELEASE_REMOTE` (the release repository: the channel's published
 `releases-log.json` is fetched from it before the build, see "The release log"; `RELEASE_PREVIOUS_LOG` names a log file
