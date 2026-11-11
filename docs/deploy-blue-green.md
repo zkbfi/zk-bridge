@@ -85,7 +85,13 @@ One playbook at a time (the careful way), or `site.yml` for all of it in order.
 | Sites | `ansible-playbook sites.yml -e publish_next=<dir>` | See "Hosted sites". Runs on your machine. |
 
 Order matters: Caddy before the indexer (the upstream files must exist), the indexer before the backend, and the bots
-last. The first run on a fresh server starts with `caddy.yml`.
+last.
+
+**A release with new contract addresses (a redeploy): finish the indexer before the backend and the bots.** The backend
+and the runner read the indexer at `127.0.0.1:42069`, which stays blue (the old schema, the old addresses) until
+`action=finish`. On 2026-11-11 the watcher read blue for 80 minutes after the redeploy, saw no waiting message on the new
+contracts and proved nothing. For such a release: green, switch, then `action=finish` at once (the old pair's history has
+nothing to soak against), then the backend and the bots. The first run on a fresh server starts with `caddy.yml`.
 
 ### Indexer details
 
