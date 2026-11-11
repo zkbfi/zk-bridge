@@ -1118,8 +1118,10 @@ and `relayTokensAndCall(address,bytes,uint256)`, the ones of the router deployed
   disallowed shape, else beacon evidence of a state at a disallowed depth. Both are simulated from the module's signer
   and sent only when the simulation succeeds, through the runner's transaction port; the signer is configured as the
   runner's (`seal.signer`). It logs every finding and writes an `alert` line at error level for a ready seal, its
-  outcome and a sealed gate. On PulseChain the registry needs an observation proof first, which nothing posts yet (1.5,
-  "Not built").
+  outcome and a sealed gate. On PulseChain the registry needs an observation proof first; since 2026-11-11 the same
+  module proves it (`zk-bridge-prover fork-observation`, on the GPU of the proving jobs) when the beacon node runs a
+  version the registry does not hold, posts `observe`, and then seals (`explorer/backend/README.md`, "Fork
+  observations (PulseChain)"; known issue 1.23).
 - **Frontends.** `readGateStatus` names the modes `seal-only` and `seal-only-with-registry`; they never need a
   confirmation (`ensureGateConfirmed` answers `not-needed`, reason `seal-only`), so the dapp, the terminal and the
   traffic bot send with no `confirm`. The status check `gate-<chainId>` says "seal-only mode" and goes down when sealed.

@@ -44,6 +44,32 @@ describe("backend client", () => {
     expect(await none.client.latestProof("second-to-first")).toBeNull();
   });
 
+  it("latestForkObservation parses the observation, is null on 404 and refuses a malformed one", async () => {
+    const observation = {
+      chainId: 943,
+      registry: `0x${"44".repeat(20)}`,
+      lightClient: `0x${"55".repeat(20)}`,
+      programKey: `0x${"66".repeat(32)}`,
+      startHeadSlot: 100,
+      observedVersion: "0x90000071",
+      shape: 5,
+      shapeAllowed: true,
+      observedAttestedSlot: 900,
+      foldSteps: 3,
+      publicValues: `0x${"00".repeat(256)}`,
+      proof: "0x1234",
+      provedAt: 1_794_000_000_000,
+      postedTransaction: null,
+    };
+    const good = clientAnswering({ "/fork-observations/943/latest": { status: 200, body: observation } });
+    expect(await good.client.latestForkObservation(943)).toEqual(observation);
+    const none = clientAnswering({ "/fork-observations/943/latest": { status: 404, body: { error: "none" } } });
+    expect(await none.client.latestForkObservation(943)).toBeNull();
+    const bad = clientAnswering({ "/fork-observations/943/latest": { status: 200, body: { ...observation, publicValues: "0x00" } } });
+    await expect(bad.client.latestForkObservation(943)).rejects.toThrow(BackendClientError);
+    await expect(clientAnswering({}).client.latestForkObservation(943)).rejects.toThrow(/status 599/);
+  });
+
   it("requestProof posts the body, returns the ids, and returns a rate limit as a value", async () => {
     const accepted = clientAnswering({ "/requests": { status: 202, body: { requestId: "r1", jobId: "j1" } } });
     const request = { pair: "eth-pls", direction: "first-to-second", reason: "user" } as const;

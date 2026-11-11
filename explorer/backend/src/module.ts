@@ -1,7 +1,7 @@
 import type { Hono } from "hono";
 import type { Pair } from "@zk-bridge/shared";
 import type { PreflightResult } from "@zk-bridge/shared/msgboard";
-import type { ForkProofProver, HandoffProver, ProverBinary } from "@zk-bridge/shared/prover";
+import type { ForkObservationProver, ForkProofProver, HandoffProver, ProverBinary } from "@zk-bridge/shared/prover";
 import type { BillingReader } from "./billing.ts";
 import type { BackendConfig, ModuleName } from "./config.ts";
 import type { LightClientFacts } from "./keepalive/plan.ts";
@@ -47,6 +47,8 @@ export type BackendModuleContext = {
   readonly grindEngine?: PreflightResult;
   /** Reads the light client on a side. Default (absent): viem over the side's RPC endpoint. A test replaces it. */
   readonly readLightClientOf?: (side: PairSide) => Promise<LightClientFacts>;
+  /** The `fork-observation` command with the proving backend, for the fork observations of the `seal` module. Absent: none are proven. */
+  readonly observationProver?: ForkObservationProver;
   /** Opens the signer of `seal.signer` for the `seal` module. Absent without a `seal` section. */
   readonly openSealSigner?: () => Promise<Signer>;
 };

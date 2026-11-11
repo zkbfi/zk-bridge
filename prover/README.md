@@ -298,6 +298,35 @@ It prints one JSON record (`format` `zkb-fork-proof/1`, `src/beacon/fork_archive
 
 When none gives it, the error names every source by host and what it answered.
 
+## The `fork-observation` command
+
+Owner, 2026-11-11, on sealing PulseChain: "treat it the same ... gpu is available". The `ForkRegistry` of a chain learns
+which fork version (and state shape) the chain runs only from a proof of the fork observation program.
+
+```
+zk-bridge-prover --config prover.toml fork-observation --route <route> --registry <ForkRegistry address>
+```
+
+The registry is on the SOURCE chain of the route and reads a light client of that chain's beacon chain, also on the
+source chain (`registry.lightClient()`). The command (`src/fork_observation.rs`):
+
+1. reads that light client (head, committees, genesis validators root; another beacon chain is refused) and the
+   registry's `observationProgramVKey`;
+2. asks the beacon node for the fold from the head to the newest final header (`plan_observation`, the fold of `prove`)
+   and for the newest signed update; the observation is that update's attested header, aggregate, signature slot and
+   signing version, with the fork proof of the attested state (`source_fork`, the order above);
+3. runs the program natively with the longest prefix of the fold that it accepts (the whole fold first; fewer steps when a
+   step is of a state the light-client program refuses), and checks that the run starts where the light client stands;
+4. proves it on the `[prover]` backend (the remote GPU worker holds the observation ELF; `statementKind`
+   `forkObservation`), checks the proof (native public values, Groth16 under the registry's key) and prints one JSON line:
+   `chainId`, `registry`, `lightClient`, `programKey`, `startHeadSlot`, `observedVersion`, `shape`,
+   `observedAttestedSlot`, `foldSteps`, `publicValues`, `proof`, `observeCalldata`, `backend`, `createdAt`. It writes the
+   same `prove_step` and `prove_timing` lines as `prove`.
+
+It sends nothing: the backend's `seal` module simulates and sends `observe` (`explorer/backend/README.md`, "Fork
+observations (PulseChain)"). The registry refuses the proof once its light client's head moves, and an attested slot at
+or below that head. The fold has one update per sync committee period since the head, at most 64.
+
 ## The `deployment-file` command
 
 The explorer reads a deployment file with one section for each chain (`explorer/shared/src/pairs.ts`). The command writes it.

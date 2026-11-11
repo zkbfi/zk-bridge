@@ -4,6 +4,7 @@ import type { JsonFetcher, JsonResponse } from "./connection.js";
 import type { JsonRequestInit } from "./msgboard/board-http.js";
 import type { ProofDirection } from "./proof-message.js";
 import { evidencePackageSchema, type EvidencePackage } from "./prover/packages.js";
+import { latestForkObservationSchema, type LatestForkObservation } from "./fork-observation.js";
 import { benchmarksSchema, directionPipelineSchema, transferProgressSchema, type Benchmarks, type DirectionPipeline, type TransferProgress } from "./pipeline-views.js";
 
 /** Posts a JSON body and parses the JSON of the answer. The `postJsonResponse` of the msgboard code fits it. */
@@ -156,6 +157,13 @@ export function createBackendClient(input: { baseUrl: string; fetchJson: JsonFet
       if (response.status === 404) return null;
       if (response.status !== 200) refuseStatus(response, "a latest proof");
       return parseAnswer(latestProofSchema, response, "a latest proof");
+    },
+    /** The newest fork observation proof of a chain, or null when the backend holds none. */
+    async latestForkObservation(chainId: number): Promise<LatestForkObservation | null> {
+      const response = await get(`/fork-observations/${chainId}/latest`);
+      if (response.status === 404) return null;
+      if (response.status !== 200) refuseStatus(response, "a fork observation");
+      return parseAnswer(latestForkObservationSchema, response, "a fork observation");
     },
     /** The evidence for a message, or null when the archive holds none. */
     async evidence(messageId: Hex): Promise<EvidencePackage | null> {

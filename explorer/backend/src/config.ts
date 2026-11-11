@@ -181,6 +181,19 @@ export const backendConfigSchema = z
         signer: signerSchema,
         /** The longest wait for the receipt of a seal. */
         receiptTimeoutSeconds: positiveInteger.default(180),
+        /**
+         * The fork observations of a chain whose gate seals from a `ForkRegistry` (`seal/observe-watch.ts`): proven on the
+         * GPU of the proving jobs when the chain runs a fork version that the registry does not hold, then posted with
+         * this signer. `retryMinutes` spaces the tries for one version, `maxProofsPerVersionPerDay` caps them.
+         */
+        observation: z
+          .object({
+            enabled: z.boolean().default(true),
+            retryMinutes: positiveInteger.default(60),
+            maxProofsPerVersionPerDay: positiveInteger.max(24).default(4),
+          })
+          .strict()
+          .default({ enabled: true, retryMinutes: 60, maxProofsPerVersionPerDay: 4 }),
       })
       .strict()
       .optional(),

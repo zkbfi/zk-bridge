@@ -146,6 +146,19 @@ router's source entry points). This reverses the user decision of 2026-10-24 ("A
   7 days old. Details: `docs/hardened-build-contract.md`, "Seal-only gate (2026-11-10)"; `docs/audit/known-issues.md`
   1.5, 1.23. Open: on PulseChain nothing posts registry observations yet, so its auto-seal waits for a hand-posted
   observation.
+- **Status 2026-11-11, PulseChain auto-seal (branch `feat/pulsechain-auto-seal`, not merged, not deployed).** Built
+  test-first, program keys unchanged. The prover has a command `fork-observation --route <r> --registry <a>`: it reads
+  the registry's light client (PulseChain on PulseChain), folds from its head to the newest final header, observes the
+  newest signed update (version and shape from the fork proof of its attested state), runs the program natively with the
+  longest prefix of the fold it accepts, proves on the configured backend (the same RunPod endpoints; the worker image
+  already holds the observation ELF) and prints the `observe` calldata. The backend's `seal` module, on a side with a
+  `fork_registry`, compares once per epoch the version the beacon node runs now with the registry's newest observation
+  and proves only when they differ (once to seed, then once per fork), at most 4 tries per version a day, 60 minutes
+  apart; the GPU time goes into `job_timings` of the chain's direction (budget, billing, benchmarks); a seed respects the
+  budget, a new fork passes it (logged). It simulates and sends `observe` from the seal signer, alerts like the seal, and
+  a shape the gate does not allow wakes the seal check at once. `GET /fork-observations/:chainId/latest` serves the newest
+  proof, and Explore's "Post the fork observation" posts it. Open: nothing keeps the registry's light client fresh, so
+  the fold grows one update a day (limit 64); known issue 1.23.
 - **Status 2026-11-10, reverted (branch `feat/router-gate-evidence`, merged as `33f79395`, reverted on `feat/seal-only-gate`).** Built test-first. The router's
   entries are `wrapAndRelayTokens()` (no evidence), `wrapAndRelayTokens(address,bytes)` and
   `relayTokensAndCall(address,bytes,uint256,bytes)`; the old receiver forms are removed, so the dapp and the terminal

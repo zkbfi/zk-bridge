@@ -8,6 +8,7 @@
 //!
 //! - [`config`]: TOML configuration, environment overrides, validation.
 //! - [`produce`]: one run of the producer: fetch the updates, run the program natively, get the proof, check it.
+//! - [`fork_observation`]: one run of the fork observation producer, for the `ForkRegistry` of a chain.
 //! - [`handoff`]: the proof package, and its delivery to standard output and a webhook.
 //! - [`evidence`]: the message evidence builder: a message in, the calldata of `MessageBridge.executeMessage` out.
 //! - [`stored`]: what the destination light client stores, read with view calls and logs.
@@ -31,6 +32,7 @@ pub mod contracts;
 pub mod deployment;
 pub mod error;
 pub mod evidence;
+pub mod fork_observation;
 pub mod fork_schedule;
 pub mod handoff;
 pub mod light_client;

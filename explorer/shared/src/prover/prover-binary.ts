@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
+import { forkObservationPackageSchema, type ForkObservationPackage } from "@zkb/data";
 import type { Pair } from "../pairs.js";
 import type { ProofDirection } from "../proof-message.js";
 import type { LogSink } from "../log-sink.js";
@@ -107,6 +108,25 @@ export interface ForkProofProver {
   forkProof(request: DirectionRequest & { readonly transactionHash: Hex; readonly chainId: number }): Promise<ForkProofRecord>;
 }
 
+/** What one `fork-observation` run gave: the package and the prover's `prove_timing` fields (null from a prover that writes none). */
+export interface ObservationOutcome {
+  readonly observation: ForkObservationPackage;
+  readonly timing: ProveTiming | null;
+}
+
+/**
+ * The `fork-observation` command, apart from {@link ProverBinary} like {@link OpeningProver}: only the seal module of the
+ * backend proves observations. It needs the proving backend.
+ */
+export interface ForkObservationProver {
+  /**
+   * `fork-observation --route <route> --registry <address>`: one proof of the fork observation program for the
+   * `ForkRegistry` on the SOURCE chain of the route of `direction`, from the head of the registry's light client.
+   * @throws ProverCommandError when the prover refuses or a node fails. @throws ProverOutputError for another output.
+   */
+  forkObservation(request: DirectionRequest & { readonly registry: Address }): Promise<ObservationOutcome>;
+}
+
 /** The `handoff-update` command, apart from {@link ProverBinary} like {@link OpeningProver}: only the handoff capture uses it. */
 export interface HandoffProver {
   /**
@@ -188,7 +208,7 @@ function parseSingleJsonLine(stdout: string, command: string): unknown {
  * of mode 0700, writes it with mode 0600, and removes the directory when the command ends. The proving key goes to
  * the child through the environment variable that the file names. No secret is ever an argument.
  */
-export function createProverBinary(input: ProverBinaryInput): ProverBinary & OpeningProver & HandoffProver & ForkProofProver {
+export function createProverBinary(input: ProverBinaryInput): ProverBinary & OpeningProver & HandoffProver & ForkProofProver & ForkObservationProver {
   const environment: Record<string, string> = { ...input.baseEnvironment };
   const secrets: readonly ProverSecret[] = input.proverSecret === null ? [] : "variable" in input.proverSecret ? [input.proverSecret] : input.proverSecret;
   for (const secret of secrets) environment[secret.variable] = secret.value;
@@ -280,6 +300,18 @@ export function createProverBinary(input: ProverBinaryInput): ProverBinary & Ope
         const output = await run("handoff-update", ["--config", path, "handoff-update", "--route", route, "--period", String(request.period)]);
         if (output.code !== 0) throw new ProverCommandError("handoff-update", output.code, tailOf(output.stderr));
         return parseHandoffRecord(output.stdout);
+      });
+    },
+    async forkObservation(request) {
+      if (input.backend === null) throw new Error("this prover wrapper has no proving backend");
+      return withConfigFile(request.direction, input.backend, async (path, route) => {
+        const output = await run("fork-observation", ["--config", path, "fork-observation", "--route", route, "--registry", request.registry]);
+        if (output.code !== 0) throw new ProverCommandError("fork-observation", output.code, tailOf(output.stderr));
+        const parsed = forkObservationPackageSchema.safeParse(parseSingleJsonLine(output.stdout, "fork-observation"));
+        if (!parsed.success) throw new ProverOutputError(`fork-observation printed an unexpected package: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
+        const timing = parseProveTiming(output.stderr);
+        input.logger.info("observation_proved", { route, observedVersion: parsed.data.observedVersion, shape: parsed.data.shape, timingReported: timing !== null, ...timing });
+        return { observation: parsed.data, timing };
       });
     },
     async forkProof(request) {

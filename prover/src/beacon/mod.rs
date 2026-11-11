@@ -46,6 +46,23 @@ pub struct UpdatePlan {
     pub latest_finalized_slot: u64,
 }
 
+/// What a fork observation is built from: the store at the head of the registry's light client, the fold toward the newest
+/// final header (empty when the head is that header, or when the fold could not be built), and the newest signed update,
+/// whose attested header, aggregate and signing version make the observation. See [`crate::fork_observation`].
+#[derive(Clone, Debug)]
+pub struct ObservationPlan {
+    /// The chain of the beacon data.
+    pub chain: crate::light_client::ChainKind,
+    /// The store at the head of the light client.
+    pub store: crate::light_client::LightClientStore,
+    /// The fold from the head toward the newest final header: 0 to 64 steps.
+    pub steps: Vec<lc_core::update::FoldStep>,
+    /// The newest update the node gives, with the fork version of its signing domain (from the node's fork schedule).
+    pub latest: lc_core::update::FoldStep,
+    /// Why the fold could not be built, when it could not (the steps are then empty).
+    pub fold_error: Option<String>,
+}
+
 /// Evidence for `MessageBridge.addBlockRootsLayout`.
 #[derive(Clone, Debug)]
 pub struct RootsEvidence {

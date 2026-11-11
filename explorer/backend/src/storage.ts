@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
  * The `proofs` and `evidence` tables belong to the msgboard indexer and the archive module, the `warmup_` tables to the
  * warm-up of the remote prover (`watch/warmup-store.ts`), and `job_timings` to the timings of each proof
  * (`requests/timings.ts`): what the prover reported, and when the webhook stored and the board took the proof.
+ * `fork_observations` holds the fork observation proofs of the seal module (`seal/observations.ts`), one row per attempt.
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
@@ -116,6 +117,19 @@ CREATE TABLE IF NOT EXISTS fork_proofs (
   PRIMARY KEY (chain_id, state_root)
 );
 CREATE INDEX IF NOT EXISTS fork_proofs_by_block ON fork_proofs (chain_id, execution_block_number);
+CREATE TABLE IF NOT EXISTS fork_observations (
+  id TEXT PRIMARY KEY,
+  chain_id INTEGER NOT NULL,
+  version TEXT NOT NULL,
+  why TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  package TEXT,
+  posted_transaction TEXT,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS fork_observations_by_chain ON fork_observations (chain_id, started_at);
 `;
 
 /**

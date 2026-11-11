@@ -1,13 +1,31 @@
 /**
  * The `seal` module: per chain of the pair, once per epoch of that chain, the auto-seal of its deposit gate
- * ({@link createSealWatch}). It signs with the signer of `seal.signer`, configured as the runner's signer of
- * `explorer/bots` (a private key, a keystore, a mnemonic or a hardware wallet; secrets by reference, never in the file),
- * and sends through the runner's transaction port (exact gas with a buffer, the chain's minimum priority fee, a receipt
- * wait). Nothing is sent unless `offerSeal` simulated the call without a revert. It adds no routes.
+ * ({@link createSealWatch}), and on a chain whose deposit gate seals from a `ForkRegistry` (PulseChain), the fork
+ * observations that let it seal ({@link createObservationWatch}). It signs with the signer of `seal.signer`, configured as
+ * the runner's signer of `explorer/bots` (a private key, a keystore, a mnemonic or a hardware wallet; secrets by
+ * reference, never in the file), and sends through the runner's transaction port (exact gas with a buffer, the chain's
+ * minimum priority fee, a receipt wait). Nothing is sent unless it simulated without a revert. Its one route serves the
+ * newest observation proof of a chain: `GET /fork-observations/:chainId/latest`.
  */
 import type { Hono } from "hono";
-import { createPublicClient, http, type PublicClient } from "viem";
-import { createBeaconProofSource, epochSeconds, minimumPriorityFeeWei, offerSeal, type GateChainClient, type PairSide } from "@zk-bridge/shared";
+import { createPublicClient, http, type Address, type PublicClient } from "viem";
+import {
+  activeForkVersion,
+  createBeaconProofSource,
+  epochSeconds,
+  fetchSourceForks,
+  minimumPriorityFeeWei,
+  offerSeal,
+  readForkObservation,
+  type GateChainClient,
+  type PairSide,
+  type ProofDirection,
+} from "@zk-bridge/shared";
+import { figuresOf } from "../billing.ts";
+import { recentJobSeconds } from "../requests/jobs.ts";
+import { JOB_BUDGET_WINDOW_MILLISECONDS, gpuBudgetWait } from "../requests/rate-limit.ts";
+import { createObservationWatch, type BudgetState } from "./observe-watch.ts";
+import { latestObservationView } from "./observations.ts";
 import { createTransactionPort, sendTerms, type TransactionPort } from "../../../bots/src/chain/transactions.ts";
 import type { Signer } from "../../../bots/src/signing/open-signer.ts";
 import type { Logger as BotLogger } from "../../../bots/src/logging/logger.ts";
@@ -23,6 +41,8 @@ export type SealDependencies = {
   readonly port?: (side: PairSide, signer: Signer) => TransactionPort;
   /** Runs `check` every so often. Default: `setInterval`, unreferenced. Returns the function that stops it. */
   readonly every?: (milliseconds: number, check: () => void) => () => void;
+  /** The fetch of the beacon node's fork schedule. Default: the global fetch. */
+  readonly fetch?: typeof fetch;
 };
 
 const intervalTimer = (milliseconds: number, check: () => void): (() => void) => {
@@ -51,8 +71,30 @@ export function asBotLogger(logger: Logger): BotLogger {
   return adapted;
 }
 
-/** No routes. */
-export function register(_app: Hono, _context: BackendModuleContext): void {}
+/** `GET /fork-observations/:chainId/latest`: the newest observation proof of a chain, public fields only; 404 when none. */
+export function register(app: Hono, context: BackendModuleContext): void {
+  app.get("/fork-observations/:chainId/latest", (request) => {
+    const chainId = Number(request.req.param("chainId"));
+    const view = Number.isSafeInteger(chainId) && chainId > 0 ? latestObservationView(context.storage, chainId) : null;
+    if (view === null) return request.json({ error: "no fork observation proof for this chain" }, 404);
+    return request.json(view, 200);
+  });
+}
+
+/** The direction whose source is a side: its GPU budget pays for an observation of that side's chain. */
+function directionFrom(context: BackendModuleContext, side: PairSide): ProofDirection {
+  return side.chainId === context.pair.sides[0].chainId ? "first-to-second" : "second-to-first";
+}
+
+/** The GPU budget of a direction now, priced as the request service prices it. */
+async function budgetOf(context: BackendModuleContext, direction: ProofDirection): Promise<BudgetState> {
+  const now = context.now();
+  const fallback = context.config.watch.warmup.gpuUsdPerHour;
+  const usdPerHour = context.billing === undefined ? fallback : (figuresOf(await context.billing.read(), now).effectiveUsdPerHour ?? fallback);
+  const budgetUsd = context.config.limits.gpuBudgetUsdPerDirectionPerDay;
+  const spent = gpuBudgetWait({ jobs: recentJobSeconds(context.storage, direction, now - JOB_BUDGET_WINDOW_MILLISECONDS), usdPerHour, budgetUsd, now });
+  return spent === null ? null : { ...spent, budgetUsd };
+}
 
 /**
  * Starts one watch per side whose gate is configured: a check at once, then one per epoch of the chain.
@@ -73,25 +115,62 @@ export async function start(context: BackendModuleContext, dependencies: SealDep
     ((side: PairSide, chosen: Signer) =>
       createTransactionPort({ client: clientOf(side), signer: chosen, chainId: side.chainId, minimumPriorityFeeWei: minimumPriorityFeeWei(side.chainId), receiptTimeoutMilliseconds }));
   const every = dependencies.every ?? intervalTimer;
+  // The alert path of the backend is its log: an `alert` line at error level, which the operator's log shipping picks
+  // up. The status service also turns `gate-<chainId>` down once the gate is sealed (its webhook, when configured).
+  const alert = (text: string): void => logger.error("alert", { text });
   const stoppers: Array<() => void> = [];
+  const observing: number[] = [];
   for (const side of pair.sides) {
     const client = clientOf(side) as unknown as GateChainClient;
     const beacon = side.beaconUrl === null ? undefined : createBeaconProofSource({ url: side.beaconUrl });
+    const send = portSender(portOf(side, signer));
     const watch = createSealWatch({
       chainId: side.chainId,
       chainName: side.name,
       gate: side.contracts.gate,
       offer: () => offerSeal({ client, gate: side.contracts.gate, account: signer.address, ...(beacon === undefined ? {} : { beacon }) }),
-      send: portSender(portOf(side, signer)),
+      send,
       logger,
-      // The alert path of the backend is its log: an `alert` line at error level, which the operator's log shipping picks
-      // up. The status service also turns `gate-<chainId>` down once the gate is sealed (its webhook, when configured).
-      alert: (text) => logger.error("alert", { text }),
+      alert,
     });
     void watch.check();
-    stoppers.push(every(epochSeconds(side.chainId) * 1000, () => void watch.check()));
+    const period = epochSeconds(side.chainId) * 1000;
+    stoppers.push(every(period, () => void watch.check()));
+    const registry = side.contracts.forkRegistry;
+    if (registry === null || side.beaconUrl === null || context.observationProver === undefined || !config.seal.observation.enabled) continue;
+    const prover = context.observationProver;
+    const beaconUrl = side.beaconUrl;
+    const direction = directionFrom(context, side);
+    const observe = createObservationWatch({
+      chainId: side.chainId,
+      chainName: side.name,
+      registry,
+      direction,
+      storage: context.storage,
+      now: context.now,
+      logger,
+      alert,
+      limits: config.seal.observation,
+      readFacts: async () => {
+        const forks = await fetchSourceForks({ urls: [beaconUrl], ...(dependencies.fetch === undefined ? {} : { fetch: dependencies.fetch }) });
+        if (forks.kind !== "known") throw new Error(forks.reason);
+        const observed = await readForkObservation({ client, registry });
+        return { activeVersion: activeForkVersion(forks.forks, forks.clock, Math.floor(context.now() / 1000)), registry: observed };
+      },
+      budget: () => budgetOf(context, direction),
+      prove: () => prover.forkObservation({ direction, registry: registry as Address }),
+      simulate: (data) => client.estimateGas({ account: signer.address, to: registry, data }),
+      send,
+      // A shape outside the allowed set: the seal watch seals from the registry now, not at its next epoch.
+      onRecorded: ({ shapeAllowed }) => {
+        if (!shapeAllowed) void watch.check();
+      },
+    });
+    void observe.check();
+    stoppers.push(every(period, () => void observe.check()));
+    observing.push(side.chainId);
   }
-  logger.info("seal_started", { chains: pair.sides.map((side) => side.chainId), signer: signer.address });
+  logger.info("seal_started", { chains: pair.sides.map((side) => side.chainId), observing, signer: signer.address });
   return async () => {
     for (const stop of stoppers) stop();
   };

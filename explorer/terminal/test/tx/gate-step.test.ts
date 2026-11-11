@@ -3,7 +3,7 @@ import { GATE_BLOCK_SECONDS, GATE_SAFETY_SECONDS, GateEvidenceError, type GateCh
 import { getAddress } from 'viem'
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from '../../src/data/fixtures'
 import { confirmAnswer, EVIDENCE, GATE, VALID_UNTIL } from '../support/gate-fixture'
-import { decideGateStep, GATE_WAIT_LIMIT, gateErrorText, passesGate, planGateConfirm, planGateSeal, withKnownGas } from '../../src/tx/gate-step'
+import { decideGateStep, GATE_WAIT_LIMIT, gateErrorText, passesGate, planForkObservation, planGateConfirm, planGateSeal, withKnownGas } from '../../src/tx/gate-step'
 import { planApproval, planRelay, planSendMessage, planWrapAndRelay, type PlannedTransaction } from '../../src/tx/plan'
 
 const chain = FIXTURE_PAIR.first
@@ -154,5 +154,35 @@ describe('planGateSeal', () => {
     const viaBeacon = planGateSeal(chain, { kind: 'ready', call, evidence: '0xabcd', gas: 90_000n, via: 'beacon' })
     expect(viaBeacon.notes[0]).toContain('a beacon state of a shape that the gate does not allow')
     expect(viaBeacon.arguments[0]!.value).toBe('0xabcd')
+  })
+})
+
+describe('planForkObservation', () => {
+  const observation = {
+    chainId: 369,
+    registry: gate,
+    lightClient: gate,
+    programKey: `0x${'66'.repeat(32)}`,
+    startHeadSlot: 100,
+    observedVersion: '0x0000036b',
+    shape: 8,
+    shapeAllowed: false,
+    observedAttestedSlot: 900,
+    foldSteps: 3,
+    publicValues: `0x${'00'.repeat(256)}`,
+    proof: '0x1234',
+    provedAt: 1,
+    postedTransaction: null,
+  }
+  const call = { to: gate, data: '0xabcd' as const }
+  test('is observe(bytes,bytes) on the registry with no value, and says what the proof shows and what follows', () => {
+    const plan = planForkObservation(chain, { kind: 'ready', call, gas: 280_000n, observation })
+    expect(plan).toMatchObject({ title: 'Post the Ethereum fork observation', to: getAddress(gate), functionSignature: 'observe(bytes,bytes)', functionName: 'observe', value: 0n, data: '0xabcd' })
+    expect(plan.arguments.map((argument) => argument.name)).toEqual(['proof', 'publicValues'])
+    expect(plan.notes[0]).toBe('The proof shows the Ethereum sync committee signing under fork version 0x0000036b at slot 900, over a state of shape 8 (the gate does not allow it). The registry checks it against its light client at slot 100. The simulation used 280000 gas.')
+    expect(plan.notes[1]).toBe('After it, anyone can seal the Ethereum gate with empty evidence, which stops every send for good. Withdrawals are not affected. It sends no ETH.')
+    const allowed = planForkObservation(chain, { kind: 'ready', call, gas: 280_000n, observation: { ...observation, shape: 5, shapeAllowed: true } })
+    expect(allowed.notes[0]).toContain('shape 5 (the gate allows it)')
+    expect(allowed.notes[1]).toBe('The registry records the version; sends through the gate go on as before. It sends no ETH.')
   })
 })

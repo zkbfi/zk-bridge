@@ -22,6 +22,7 @@ export {
   utcText,
   type ForkCutoverText,
   forkCutoverText,
+  isAllowedShape,
 } from "@zkb/core";
 export {
   fetchSourceForks,
@@ -46,4 +47,15 @@ export {
   SIMULATION_ACCOUNT,
   type SealOffer,
   offerSeal,
+  forkObservationPackageSchema,
+  type ForkObservationPackage,
+  latestForkObservationSchema,
+  type LatestForkObservation,
+  publicForkObservation,
+  activeForkVersion,
+  type ObservationNeed,
+  observationNeed,
+  observeCalldata,
+  type ObservationOffer,
+  offerObservation,
 } from "@zkb/data";

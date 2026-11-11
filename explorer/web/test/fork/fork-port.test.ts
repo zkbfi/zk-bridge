@@ -48,6 +48,7 @@ describe("the sample page's fork port", () => {
     expect(await fixtureForkPort.facts(1)).toBeNull();
     expect(await fixtureForkPort.chainState(1)).toEqual({ gate: null, observation: null });
     expect(await fixtureForkPort.sealOffer(1, "0x0000000000000000000000000000000000000001")).toMatchObject({ kind: "unavailable" });
+    expect(await fixtureForkPort.observeOffer(1, REGISTRY, "0x0000000000000000000000000000000000000001")).toMatchObject({ kind: "unavailable" });
   });
 });
 
@@ -88,5 +89,51 @@ describe("createForkPort", () => {
     const offer = await createForkPort({ pair: FIXTURE_PAIR, connection }).sealOffer(FIXTURE_PAIR.first.chainId, "0x0000000000000000000000000000000000000001");
     expect(offer).toMatchObject({ kind: "ready", via: "registry", gas: 90_000n });
     expect(client.estimateGas).toHaveBeenCalledWith(expect.objectContaining({ to: GATE.toLowerCase() }));
+  });
+});
+
+describe("the observe offer of a live page", () => {
+  const ACCOUNT = "0x0000000000000000000000000000000000000001" as const;
+  const observation = {
+    chainId: FIXTURE_PAIR.first.chainId,
+    registry: REGISTRY,
+    lightClient: REGISTRY,
+    programKey: `0x${"66".repeat(32)}`,
+    startHeadSlot: 100,
+    observedVersion: "0x90000076",
+    shape: 8,
+    shapeAllowed: false,
+    observedAttestedSlot: 900,
+    foldSteps: 3,
+    publicValues: `0x${"00".repeat(256)}`,
+    proof: "0x1234",
+    provedAt: 1,
+    postedTransaction: null,
+  };
+  const withBackend = (client: unknown, backendUrl: { value: string } | null) =>
+    ({ resolved: () => ({ backendUrl }), chainAccess: { flowClient: () => client } }) as never;
+
+  it("reads the backend's newest proof and simulates observe() on the registry", async () => {
+    const client = { readContract: vi.fn(async () => ["0x90000075", 6, 12n]), estimateGas: vi.fn(async () => 280_000n) };
+    const fetchJson = vi.fn(async () => ({ status: 200, body: observation }));
+    const port = createForkPort({ pair: FIXTURE_PAIR, connection: withBackend(client, { value: "https://backend.example" }), fetchJson });
+    const offer = await port.observeOffer(FIXTURE_PAIR.first.chainId, REGISTRY, ACCOUNT);
+    expect(offer).toMatchObject({ kind: "ready", gas: 280_000n });
+    expect(fetchJson).toHaveBeenCalledWith(`https://backend.example/fork-observations/${FIXTURE_PAIR.first.chainId}/latest`);
+  });
+
+  it("offers nothing without a backend, or when the backend does not answer", async () => {
+    const client = { readContract: vi.fn(), estimateGas: vi.fn() };
+    const none = createForkPort({ pair: FIXTURE_PAIR, connection: withBackend(client, null) });
+    expect(await none.observeOffer(1, REGISTRY, ACCOUNT)).toMatchObject({ kind: "unavailable", reason: expect.stringContaining("no backend is set") });
+    const failing = createForkPort({ pair: FIXTURE_PAIR, connection: withBackend(client, { value: "https://backend.example" }), fetchJson: async () => ({ status: 500, body: null }) });
+    expect(await failing.observeOffer(1, REGISTRY, ACCOUNT)).toMatchObject({ kind: "unavailable", reason: expect.stringContaining("the backend did not give an observation proof") });
+  });
+
+  it("uses the page's fetch by default", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: "none" }), { status: 404 })));
+    const client = { readContract: vi.fn(), estimateGas: vi.fn() };
+    const port = createForkPort({ pair: FIXTURE_PAIR, connection: withBackend(client, { value: "https://backend.example" }) });
+    expect(await port.observeOffer(1, REGISTRY, ACCOUNT)).toMatchObject({ kind: "unavailable", reason: expect.stringContaining("holds no observation proof") });
   });
 });
