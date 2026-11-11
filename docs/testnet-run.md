@@ -61,8 +61,9 @@ With `ENDPOINTS=public`, the light-client routes of chain 943 print `INFO` and d
 
 **Current state (2026-11-06): the backend's watcher owns keep-alive.** It sees each finality and requests the proofs that
 the planner calls for (explorer/backend/README.md, "Proving on finality"). The systemd timer
-`zk-bridge-keepalive.timer` (and the cron variant) is retired: it is disabled on the app server, the status page no
-longer checks it, and the "Schedule on the app server" section below is kept as history and as a manual backstop only.
+`zk-bridge-keepalive.timer` (and the cron variant) is retired: the units and `crontab.example` are removed from the
+repository, `site.yml` removes the unit files from a server that still has them, and the "Schedule on the app server"
+section below is history.
 The march command (`zk-bridge-keepalive.mjs status|march`) still works for a manual check or a forced march.
 
 Owner: "we need to have setup scripts to march the contracts forward to handle this situation."
@@ -175,30 +176,14 @@ did not move. Each problem prints a line that starts with `ALERT light-client`. 
 `explorer/backend/src/keepalive/` (plan, reads, proof paths; tests in `explorer/backend/test/keepalive-*.test.ts`),
 the command `explorer/backend/bin/zk-bridge-keepalive.mjs status|march` (without arguments it prints its options).
 
-### Schedule on the app server (retired)
+### Schedule on the app server (removed)
 
-The timer is retired; see the note at the top of this section. What follows describes how it was installed.
-
-The backend proves on finality by itself (explorer/backend/README.md, "Proving on finality"): a message gets its proof
-seconds after the source chain finalizes it, and a keep-alive the planner calls for starts at the next finality. Check
-it with `journalctl -u zk-bridge-backend -g '"finality_seen"\|"proof_due"\|"job_started"\|"watch_transport"' --since -1h`.
-The timer below stays as the backstop.
-
-`deploy/app-server/keepalive/zk-bridge-keepalive.{service,timer}` run the status and then the march every three hours
-as the backend's user, with the backend's own settings (`--backend-config /etc/zk-bridge/backend/backend.json`):
-same endpoints, same keep-alive age. `deploy.sh` does not install them:
-
-```sh
-install -m 0644 /opt/zk-bridge/current/deploy/app-server/keepalive/zk-bridge-keepalive.{service,timer} /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now zk-bridge-keepalive.timer
-journalctl -u zk-bridge-keepalive -g 'ALERT light-client' --since -1d     # problems
-systemctl list-units --failed 'zk-bridge-keepalive*'                      # a run that exited non-zero
-```
-
-A run that exits non-zero leaves the unit failed; `OnFailure=` in the unit can point at a mail or webhook unit.
-`deploy/app-server/keepalive/crontab.example` does the same with cron and `flock`. At most one request per direction
-every three hours reaches the backend, and it pays for a proof only when the head is 12 hours old: about two proofs per
-direction per day, far below the daily backstop.
+There is no schedule: the backend proves on finality by itself (explorer/backend/README.md, "Proving on finality"). A
+message gets its proof seconds after the source chain finalizes it, and a keep-alive the planner calls for starts at the
+next finality. Check it with `journalctl -u zk-bridge-backend -g '"finality_seen"\|"proof_due"\|"job_started"\|"watch_transport"' --since -1h`.
+The three-hourly systemd timer and the cron variant that this section used to describe are gone from the repository;
+`site.yml` removes their unit files from a server that still has them. A forced march is still one command
+(`zk-bridge-keepalive.mjs march --execute`, above), run by hand.
 
 ### State on 2026-10-31
 

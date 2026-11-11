@@ -41,8 +41,11 @@ zkb_backend_unit: zk-bridge-backend
 zkb_publisher_unit: zk-bridge-publisher
 zkb_runner_unit: zk-bridge-runner
 zkb_traffic_unit: zk-bridge-traffic
-zkb_keepalive_service: zk-bridge-keepalive.service
-zkb_keepalive_timer: zk-bridge-keepalive.timer
+# The keep-alive units of the old design, retired 2026-11-06 (the backend's watcher keeps the light clients alive).
+# Only tasks/retire_keepalive.yml uses these names: it removes them from a server that still has them.
+zkb_retired_keepalive_units:
+  - zk-bridge-keepalive.timer
+  - zk-bridge-keepalive.service
 zkb_proofs_service: zk-bridge-proofs-export.service
 zkb_proofs_timer: zk-bridge-proofs-export.timer
 zkb_green_indexer_unit: zk-bridge-indexer-pre

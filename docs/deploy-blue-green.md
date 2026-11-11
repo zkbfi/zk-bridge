@@ -27,7 +27,6 @@ where running two would do harm.
 | Indexer (Ponder) | Yes | Each release has its own Postgres schema | The release's Ponder, transient unit `zk-bridge-indexer-pre`, port 42070 | Caddy upstream file, then reload | `indexer.yml` |
 | Backend | No | See below | The release, after a drain | Restart of `zk-bridge-backend` with `current` moved | `backend.yml` |
 | Publisher, runner | No | The runner signs with one wallet; the publisher posts proofs | The release, after the old one stopped cleanly | Restart of that unit | `bots.yml` |
-| Keep-alive timer | No | A oneshot that asks the backend for proofs | The next run, from the new `current` | Stopped during the backend switch | `keepalive.yml`, `backend.yml` |
 | Caddy | No | One process owns ports 80 and 443 | The new config, validated | `caddy reload` (the old config stays if the new one is bad) | `caddy.yml` |
 | Release sites, docs, design UI | Yes | Workers, channels, content addresses | `next.zkb.fi`, a new CID, an uploaded version | Promotion, DNSLink record, version deploy | `sites.yml` |
 
@@ -66,7 +65,7 @@ Do all of it before the build. Stop at the first thing that is wrong.
 3. If the commit changes a file under `/etc/zk-bridge` (a new setting, a new secret): put it on the server first, and
    check that blue still starts with it.
 4. `ansible-playbook preflight.yml` passes (free disk 10 GB, upstream files, a valid Caddyfile that imports them, a live
-   indexer and backend, no leftover green or check unit, no drain, no keep-alive march, no publisher proof in progress).
+   indexer and backend, no leftover green or check unit, no drain, no publisher proof in progress).
 5. You can watch the whole run and know the rollback for each step (table below).
 
 ## Run it
@@ -81,9 +80,8 @@ One playbook at a time (the careful way), or `site.yml` for all of it in order.
 | Indexer | `ansible-playbook indexer.yml -e commit=<hash>` | Green on 42070, wait for `/ready` (stall guard), compare 16 routes with blue, switch Caddy. Blue stays. |
 | Backend | `ansible-playbook backend.yml -e commit=<hash>` | Drain, wait for no job, copy the database, switch, check, rollback by itself on failure. |
 | Bots | `ansible-playbook bots.yml -e commit=<hash> [-e bots=runner]` | Publisher and runner, only those with a configuration; publisher not while proving. |
-| Keep-alive | `ansible-playbook keepalive.yml` | Installs and enables the service and the timer. |
 | Finish | `ansible-playbook indexer.yml -e commit=<hash> -e action=finish` | After the soak: the real unit takes the new schema. |
-| Everything | `ansible-playbook site.yml -e ref=<ref>` | build, caddy, preflight, indexer (green, switch, soak, finish), backend, bots, keep-alive. |
+| Everything | `ansible-playbook site.yml -e ref=<ref>` | build, caddy, preflight, indexer (green, switch, soak, finish), backend, bots, then removes the retired keep-alive units. |
 | Sites | `ansible-playbook sites.yml -e publish_next=<dir>` | See "Hosted sites". Runs on your machine. |
 
 Order matters: Caddy before the indexer (the upstream files must exist), the indexer before the backend, and the bots
@@ -115,13 +113,13 @@ last. The first run on a fresh server starts with `caddy.yml`.
 
 ### Backend details
 
-In order: refuse while a keep-alive march runs (it holds a job for up to 6 hours); stop the keep-alive timer; drain (Caddy
+In order: refuse when the backend is not running; drain (Caddy
 answers `POST /requests` with `503 {"error":"cannot-check","retryAfterSeconds":30}` and `Retry-After: 30`; every other route
 goes on); wait 15 s; `files/jobs_idle.py` reads `/health` until no job is `queued` or `proving` on three reads in a row (limit
 40 minutes, `zkb_drain_timeout`; if jobs remain, **nothing is restarted**, the routes are restored and the playbook fails);
 copy the database with `VACUUM INTO` into `/var/lib/zk-bridge-backend/backups/` (newest three kept);
 `ZKB_SERVICES=backend deploy.sh`; wait for `/health` 200 and for every module that ran before to run again. In a `rescue`, the
-previous release is put back. An `always` section restores normal routes and restarts the timer.
+previous release is put back. An `always` section restores normal routes.
 `-e action=check` starts the release on a scratch database (port 8788) and lists the modules that are not running on it and on
 the live backend: a module down on the check only is a reason to stop.
 
@@ -141,7 +139,6 @@ an `active` check.
 | Backend | The previous release directory (`deploy.sh` keeps five) and the database copies (keep the newest for 24 hours) | `ansible-playbook backend.yml -e commit=<previous>`: it drains the same way. The old release reads the same database (safe when checklist item 2 held). A database copy is for a damaged file only: restoring it loses every job and proof since. |
 | A drain left on (run killed) | | `ansible-playbook backend.yml -e action=undrain` (`status.yml` shows `DRAINING`) |
 | Bots | The previous release directory | `ansible-playbook bots.yml -e commit=<previous> -e bots=<name>` |
-| Keep-alive | Nothing to keep | `systemctl start zk-bridge-keepalive.timer` after the backend is back |
 | Caddy | `<file>.<n>.<date>~` next to each file Ansible replaced | Each play restores the previous file itself when validation or reload fails. By hand: put the backup back and `systemctl reload caddy`. |
 
 Ansible reads `-e action=...` as a variable named like its own keyword and prints a warning; it works. `-e step=...` is the

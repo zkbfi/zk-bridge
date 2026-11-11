@@ -2,14 +2,14 @@
 # Moves the backend to a release without losing a proof job. The prover is a child process of the backend, so a restart
 # kills the job in flight (the loss of 2026-10-31). The backend cannot run twice on the live database, so "green" here is
 # the release after a drain:
-#   1. refuse while a keep-alive march runs; stop the keep-alive timer
+#   1. refuse when the backend is not running
 #   2. drain: Caddy answers POST /requests with 503 + Retry-After; every other route goes on
 #   3. wait until /health shows no queued or proving job on three reads in a row (zkb_drain_timeout, 40 minutes);
 #      on timeout NOTHING is restarted, the drain is lifted and the playbook fails
 #   4. back up the SQLite database (VACUUM INTO, newest three kept)
 #   5. ZKB_SERVICES=backend deploy.sh: current moves, the backend restarts
 #   6. /health 200, and every module that ran before runs again; if not, the previous release is put back
-#   7. always: normal routes back, the timer restarted if it was running
+#   7. always: normal routes back
 #
 #   cd deploy/ansible
 #   ansible-playbook backend.yml -e commit=<hash>                    # drain and switch
@@ -169,29 +169,18 @@
           ansible.builtin.set_fact:
             zkb_previous: "{{ zkb_running_release.stdout | trim | default('none', true) }}"
 
-        - name: Look at the backend and the keep-alive units
+        - name: Look at the backend unit
           ansible.builtin.systemd_service:
-            name: "{{ item }}"
-          loop:
-            - "{{ zkb_backend_unit }}.service"
-            - "{{ zkb_keepalive_service }}"
-            - "{{ zkb_keepalive_timer }}"
-          register: zkb_units
+            name: "{{ zkb_backend_unit }}.service"
+          register: zkb_unit
           check_mode: false
 
-        - name: Check that the backend runs and no keep-alive march is going
+        - name: Check that the backend runs
           ansible.builtin.assert:
             that:
-              - zkb_units.results[0].status.ActiveState == 'active'
-              - zkb_units.results[1].status.ActiveState not in ['active', 'activating']
-            fail_msg: >-
-              {{ 'The backend is not running; use deploy.sh.' if zkb_units.results[0].status.ActiveState != 'active'
-                 else 'A keep-alive march is running (it holds a job for up to 6 hours): wait for it, then run this again.' }}
+              - zkb_unit.status.ActiveState == 'active'
+            fail_msg: The backend is not running; use deploy.sh.
             quiet: true
-
-        - name: Remember whether the timer runs
-          ansible.builtin.set_fact:
-            zkb_timer_was_active: "{{ zkb_units.results[2].status.ActiveState == 'active' }}"
 
         - name: Check that the live backend answers /health, and note which modules are down
           ansible.builtin.include_tasks: tasks/backend_modules.yml
@@ -214,12 +203,6 @@
     - name: Drain, back up, restart, check
       when: zkb_action == 'switch'
       block:
-        - name: Stop the keep-alive timer (a run during the drain would get a 503)
-          ansible.builtin.systemd_service:
-            name: "{{ zkb_keepalive_timer }}"
-            state: stopped
-          when: zkb_timer_was_active
-
         - name: Drain. POST /requests answers 503 with Retry-After; the job routes stay up
           ansible.builtin.include_tasks: tasks/caddy_upstream.yml
           vars:
@@ -375,9 +358,3 @@
           vars:
             zkb_upstream: backend
             zkb_upstream_mode: normal
-
-        - name: Start the keep-alive timer again if it was running
-          ansible.builtin.systemd_service:
-            name: "{{ zkb_keepalive_timer }}"
-            state: started
-          when: zkb_timer_was_active | default(false)

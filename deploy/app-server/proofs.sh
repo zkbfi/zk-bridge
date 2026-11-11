@@ -154,8 +154,9 @@ own() {
   [ -n "${ZKB_PROOFS_UNPRIVILEGED:-}" ] || chown "$@"
 }
 
-# cli <command> [options]: the archive CLI as zkb_indexer. Its summary (one JSON object) goes to standard output.
-cli() {
+# cli_exec <command> [options]: the archive CLI as zkb_indexer, plain. Its summary (one JSON object) goes to standard
+# output, its log lines to standard error.
+cli_exec() {
   local -a prefix
   if [ -n "${ZKB_PROOFS_CLI:-}" ]; then
     read -r -a prefix <<<"$ZKB_PROOFS_CLI"
@@ -169,6 +170,20 @@ cli() {
       -p "ReadWritePaths=$OUT_DIR -$MIRROR" \
       -- /usr/bin/node "$CLI_SCRIPT" "$@"
   fi
+}
+
+# cli <command> [options]: cli_exec with its log lines (standard error) caught in a file and written again by this
+# script. Run through systemd-run, the CLI's own output is attributed by journald to the transient run-u unit, so the
+# names it prints (a file that conflicts, a state the mirror lacks) would not show under zk-bridge-proofs-export. Written
+# again here, they do. A file, not a pipe: the exit code stays the CLI's under `set -o pipefail`, and nothing waits on a
+# reader. Standard output stays the caller's (it is a JSON summary that callers read).
+cli() {
+  local errfile rc=0
+  errfile=$(mktemp "${TMPDIR:-/tmp}/zkb-proofs-cli.XXXXXX") || return 1
+  cli_exec "$@" 2>"$errfile" || rc=$?
+  cat "$errfile" >&2 || true
+  rm -f "$errfile"
+  return "$rc"
 }
 
 # run_cli <command> [options]: sets CLI_RC and never stops the script.
@@ -189,20 +204,44 @@ sha256_of() {
 
 # One tree copy, run as the owner of the destination: copies each regular file that is missing, skips identical ones and
 # lists (never overwrites) those that differ. $1 source, $2 destination, $3 umask. Symbolic links are not followed.
+#
+# A beacon state may be held in two forms (docs/proof-archive.md, "One beacon state, two forms"): the bytes as the node
+# served them with a <name>.summary, or the bytes with that 64 byte entry appended. The same state in the other form is
+# identical, not a conflict: an .ssz that differs from the one there by exactly the 64 bytes that the summary names (the
+# shorter is the start of the longer). A .summary is not copied next to an .ssz of the other form: the entry would be
+# counted twice.
 COPY_TREE='
 umask "$3"
 src=$1 dest=$2
 copied=0 identical=0 conflicts=0
+size_of() { wc -c <"$1" | tr -d " "; }
+# two_forms <file> <file>: both are the same state, one in each form. Needs the summary next to the shorter one.
+two_forms() {
+  local a=$1 b=$2 long short sa sb want got
+  sa=$(size_of "$a") sb=$(size_of "$b")
+  if [ "$sa" -eq $((sb + 64)) ]; then long=$a short=$b; elif [ "$sb" -eq $((sa + 64)) ]; then long=$b short=$a; else return 1; fi
+  [ -f "${short%.ssz}.summary" ] || return 1
+  head -c "$(size_of "$short")" "$long" | cmp -s - "$short" || return 1
+  want=$(tr -d "\n" <"${short%.ssz}.summary" | sed "s/0x//g")
+  got=$(tail -c 64 "$long" | od -An -v -tx1 | tr -d " \n")
+  [ "$want" = "$got" ]
+}
 while IFS= read -r -d "" f; do
   rel=${f#"$src"/}
   d=$dest/$rel
   if [ -e "$d" ] || [ -L "$d" ]; then
     if [ -f "$d" ] && [ ! -L "$d" ] && cmp -s "$f" "$d"; then
       identical=$((identical + 1))
+    elif [ -f "$d" ] && [ ! -L "$d" ] && [[ $rel == *.ssz ]] && two_forms "$f" "$d"; then
+      identical=$((identical + 1))
     else
       echo "conflict: $rel differs from the file already there"
       conflicts=$((conflicts + 1))
     fi
+    continue
+  fi
+  if [[ $rel == *.summary ]] && [ -f "${d%.summary}.ssz" ] && ! cmp -s "${f%.summary}.ssz" "${d%.summary}.ssz"; then
+    identical=$((identical + 1))
     continue
   fi
   mkdir -p "$(dirname "$d")"

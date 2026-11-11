@@ -297,6 +297,8 @@ import { spawnSync } from "node:child_process";
 const [cmd, ...rest] = process.argv.slice(2);
 const arg = (n) => rest[rest.indexOf(n) + 1];
 fs.appendFileSync(process.env.STUB_LOG, `${cmd} ${rest.join(" ")}\n`);
+// STUB_STDERR_NOTE: say on standard error whether it is a regular file (proofs.sh catches it) or a pipe or terminal.
+if (process.env.STUB_STDERR_NOTE) console.error(`stub ${cmd}: standard error is a file=${fs.fstatSync(2).isFile()}`);
 const walk = (d, base = d) => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
   e.isDirectory() ? walk(path.join(d, e.name), base) : [path.relative(base, path.join(d, e.name))]);
 const hash = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
@@ -357,6 +359,9 @@ EOS
 import fs from "node:fs";
 import path from "node:path";
 const [dir, chain, days, digit, tail = "state"] = process.argv.slice(2);
+// tail "served:<n>": the shape of a Capella state as far as the mirror looks (see repairedState in mirror.ts): a fixed
+// part ending in the offset of historical_summaries, then <n> summary entries of 64 bytes at the end.
+const first = 8 + 32 + 8 + 16 + 112 + 8192 * 32 * 2;
 const genesis = 1655733600;
 const slot = Math.floor((Date.now() / 1000 - Number(days) * 86400 - genesis) / 12);
 const head = Buffer.alloc(48);
@@ -364,7 +369,17 @@ head.writeBigUInt64LE(BigInt(genesis), 0);
 head.writeBigUInt64LE(BigInt(slot), 40);
 const name = `${chain}/${String(slot).padStart(12, "0")}-0x${digit.repeat(64)}.ssz`;
 fs.mkdirSync(path.join(dir, chain), { recursive: true });
-fs.writeFileSync(path.join(dir, name), Buffer.concat([head, Buffer.from(tail)]));
+let bytes = Buffer.concat([head, Buffer.from(tail)]);
+if (tail.startsWith("served:") || tail.startsWith("repaired:")) {
+  // "repaired:<n>": the same, plus the entry that the .summary files of these tests name (0x11.. and 0x22..) appended.
+  const entries = Number(tail.slice(tail.indexOf(":") + 1));
+  bytes = Buffer.alloc(first + 8 + entries * 64, 7);
+  head.copy(bytes);
+  bytes.writeUInt32LE(first + 8, first);
+  bytes.writeUInt32LE(first + 8, first + 4);
+  if (tail.startsWith("repaired:")) bytes = Buffer.concat([bytes, Buffer.from("11".repeat(32) + "22".repeat(32), "hex")]);
+}
+fs.writeFileSync(path.join(dir, name), bytes);
 console.log(name);
 EOS
   mkstate() { node "$PT/mkstate.mjs" "$@"; }
@@ -378,12 +393,19 @@ EOS
   state_a=$(mkstate "$PT/src-runner/beacon-states" 11155111 0.5 a)
   mkdir -p "$PT/src-backend/beacon-states/11155111"
   cp "$PT/src-runner/beacon-states/$state_a" "$PT/src-backend/beacon-states/$state_a"
-  state_b=$(mkstate "$PT/src-backend/beacon-states" 11155111 2 b)
-  printf '0x01\n0x02\n' >"$PT/src-backend/beacon-states/${state_b%.ssz}.summary"
+  state_b=$(mkstate "$PT/src-backend/beacon-states" 11155111 2 b served:3)
+  printf '0x%s\n0x%s\n' "$(printf '11%.0s' $(seq 32))" "$(printf '22%.0s' $(seq 32))" >"$PT/src-backend/beacon-states/${state_b%.ssz}.summary"
+  state_p=$(mkstate "$PT/src-runner/beacon-states" 11155111 0.7 f repaired:3)
+  cp "$PT/src-runner/beacon-states/$state_p" "$PT/src-backend/beacon-states/$state_p"
+  # The backend's copy is the bytes as served: the runner's, without the last 64 bytes (the entry its .summary names).
+  head -c "$(( $(wc -c <"$PT/src-runner/beacon-states/$state_p" | tr -d ' ') - 64 ))" "$PT/src-runner/beacon-states/$state_p" >"$PT/src-backend/beacon-states/$state_p.part"
+  mv "$PT/src-backend/beacon-states/$state_p.part" "$PT/src-backend/beacon-states/$state_p"
+  printf '0x%s\n0x%s\n' "$(printf '11%.0s' $(seq 32))" "$(printf '22%.0s' $(seq 32))" >"$PT/src-backend/beacon-states/${state_p%.ssz}.summary"
   printf 'junk\n' >"$PT/src-runner/beacon-states/11155111/junk.ssz"
   # As on the server: the services write their files 0600, and the backend's database runs in WAL mode.
   chmod 600 "$PT/src-runner/proof-cache/369/0xabc/100-0xdead.json" "$PT/src-runner/beacon-states/$state_a" "$PT/src-backend/beacon-states/$state_a" \
-    "$PT/src-backend/beacon-states/$state_b" "$PT/src-backend/beacon-states/${state_b%.ssz}.summary"
+    "$PT/src-backend/beacon-states/$state_b" "$PT/src-backend/beacon-states/${state_b%.ssz}.summary" \
+    "$PT/src-runner/beacon-states/$state_p" "$PT/src-backend/beacon-states/$state_p" "$PT/src-backend/beacon-states/${state_p%.ssz}.summary"
   sqlite3 "$PT/src-backend/backend.sqlite" "PRAGMA journal_mode=WAL;" >/dev/null
 
   # proofs <out dir> <backend state> <runner state> <env...> -- <args...>
@@ -421,6 +443,14 @@ EOS
   for entry in storage-proofs light-client-proofs evidence conflicts beacon-states snapshots manifests "beacon-states/$state_a" "beacon-states/$state_b" "beacon-states/${state_b%.ssz}.summary"; do
     [ -e "$m/$entry" ] || missing="$missing $entry"
   done
+  # State p: the runner holds the repaired form (the bytes with the summary entry appended), the backend the bytes as
+  # served plus a .summary. One state, two forms: the mirror takes the first (the runner's), copied as it is, and the
+  # backend's form is the same state, not a clash.
+  if [ -f "$m/beacon-states/$state_p" ] && cmp -s "$m/beacon-states/$state_p" "$PT/src-runner/beacon-states/$state_p" && [ ! -e "$m/beacon-states/${state_p%.ssz}.summary" ]; then
+    pass "proofs.sh export: the same state in its two forms (repaired, and bytes with a .summary) is no clash; the first form stays as it was"
+  else
+    fail "state p in two forms"
+  fi
   if [ -z "$missing" ] && [ ! -e "$m/beacon-states/11155111/junk.ssz" ] && [ -n "$(find "$m/storage-proofs" -name '100-0xdead.*.json')" ]; then pass "proofs.sh export: records, both services' beacon states (not junk) in the mirror's layout"; else fail "mirror layout, missing:$missing"; fi
   if [ "$(grep -o '^[a-z-]*' "$PT/calls.log" | tr '\n' ' ')" = "migrate ingest-cache ingest-backend mirror-write mirror-add mirror-add mirror-add mirror-prune mirror-manifest " ] \
     && grep -q '^mirror-prune --dir .* --days 30 --held .*root/beacon-runner,.*root/beacon-backend$' "$PT/calls.log" && grep -q '^ingest-backend --sqlite .*/root/snapshots/' "$PT/calls.log" && grep -q "^mirror-manifest --dir .* --stamp ${D}T000100Z --commit abc123def --days 30 --print\$" "$PT/calls.log"; then
@@ -489,6 +519,7 @@ EOS
 
   # Another content under a name the mirror has: never overwritten, ERROR, the run fails at its end with the manifest written.
   cp "$m/beacon-states/$state_b" "$PT/state-b.keep"
+  cp "$PT/src-backend/beacon-states/$state_b" "$PT/state-b.served"
   printf 'other bytes\n' >>"$PT/src-backend/beacon-states/$state_b"
   run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" ZKB_PROOFS_STAMP=${D}T000500Z bash "$DIR/proofs.sh" export
   if [ "$PROOFS_STATUS" -eq 1 ] && out_has "ERROR: beacon-states/$state_b exists with other content" && cmp -s "$m/beacon-states/$state_b" "$PT/state-b.keep" \
@@ -497,11 +528,26 @@ EOS
   else
     fail "write-once clash (status $PROOFS_STATUS): $PROOFS_OUT"
   fi
-  cp "$PT/state-b.keep" "$PT/src-backend/beacon-states/$state_b"
+  cp "$PT/state-b.served" "$PT/src-backend/beacon-states/$state_b"
   run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" ZKB_PROOFS_STAMP=${D}T000510Z STUB_RECORD='{"stub":"changed"}' STUB_RECORD_CLASH=1 bash "$DIR/proofs.sh" export
   if [ "$PROOFS_STATUS" -eq 1 ] && out_has 'ERROR: mirror-write found a file'; then pass "proofs.sh export: a record clash in mirror-write fails the run too"; else fail "record clash (status $PROOFS_STATUS): $PROOFS_OUT"; fi
   run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" ZKB_PROOFS_STAMP=${D}T000510Z bash "$DIR/proofs.sh" export
   if [ "$PROOFS_STATUS" -eq 1 ] && out_has "manifest ${D}T000510Z exists already"; then pass "proofs.sh export: a stamp whose manifest exists is refused"; else fail "same stamp (status $PROOFS_STATUS)"; fi
+
+  # The CLI's log lines (the names of a conflict) must come out of proofs.sh itself, not straight from the CLI: run through
+  # systemd-run, journald files the CLI's own output under the transient unit, so the service's journal would only say
+  # "named above". proofs.sh catches them in a file and writes them again, and the exit code stays the CLI's.
+  run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" ZKB_PROOFS_STAMP=${D}T000520Z STUB_STDERR_NOTE=1 STUB_EXIT_INGEST=3 bash "$DIR/proofs.sh" export
+  if [ "$PROOFS_STATUS" -eq 0 ] && out_has 'stub migrate: standard error is a file=true' && out_has 'stub mirror-add: standard error is a file=true' && ! out_has 'standard error is a file=false' && out_has 'WARNING: ingest'; then
+    pass "proofs.sh export: the CLI's log lines are caught and written again by the script, and its exit codes still count"
+  else
+    fail "CLI stderr re-emitted (status $PROOFS_STATUS): $PROOFS_OUT"
+  fi
+  # A state under a known name with other content: the file name shows in the output of the script.
+  printf 'other bytes\n' >>"$PT/src-backend/beacon-states/$state_b"
+  run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" ZKB_PROOFS_STAMP=${D}T000530Z bash "$DIR/proofs.sh" export
+  if [ "$PROOFS_STATUS" -eq 1 ] && out_has "^ERROR: beacon-states/$state_b exists with other content" && out_has 'proofs: ERROR: mirror-add found a file'; then pass "proofs.sh export: a clash names its file and the script's own line says so"; else fail "clash names (status $PROOFS_STATUS): $PROOFS_OUT"; fi
+  cp "$PT/state-b.served" "$PT/src-backend/beacon-states/$state_b"
 
   # Conflicts reported by the archive during export are a warning.
   run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" ZKB_PROOFS_STAMP=${D}T000600Z STUB_EXIT_INGEST=3 bash "$DIR/proofs.sh" export
@@ -593,6 +639,18 @@ EOS
   run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --trust-list "$out1/manifests.sha256"
   find "$PT/dst-runner" "$PT/dst-backend" -type f -exec cksum {} + | sort >"$PT/state-2"
   if [ "$PROOFS_STATUS" -eq 0 ] && cmp -s "$PT/state-1" "$PT/state-2" && out_has 'conflicts: 0'; then pass "proofs.sh import: a second import is a no-op with zero conflicts"; else fail "second import (status $PROOFS_STATUS)"; fi
+  # A service that already holds a state in the other form: the same state, no conflict, and no .summary next to the
+  # repaired bytes (the entry would be counted twice). State b is short with a .summary in the mirror.
+  mkdir -p "$PT/dst4-backend" "$PT/dst4-runner/beacon-states/11155111"
+  cp "$m/beacon-states/$state_b" "$PT/dst4-runner/beacon-states/$state_b"
+  node -e 'require("fs").appendFileSync(process.argv[1], Buffer.from("11".repeat(32) + "22".repeat(32), "hex"))' "$PT/dst4-runner/beacon-states/$state_b"
+  run_proofs proofs "$PT/out2" "$PT/dst4-backend" "$PT/dst4-runner" bash "$DIR/proofs.sh" import "$mb" --trust-list "$out1/manifests.sha256"
+  if [ "$PROOFS_STATUS" -eq 0 ] && out_has 'conflicts: 0' && ! out_has '^conflict:' && [ ! -e "$PT/dst4-runner/beacon-states/${state_b%.ssz}.summary" ] \
+    && [ "$(wc -c <"$PT/dst4-runner/beacon-states/$state_b" | tr -d ' ')" -eq "$(( $(wc -c <"$m/beacon-states/$state_b" | tr -d ' ') + 64 ))" ] && [ -f "$PT/dst4-backend/beacon-states/${state_b%.ssz}.summary" ]; then
+    pass "proofs.sh import: a state held in the other form (repaired bytes, no .summary) is the same state: no conflict, no summary added"
+  else
+    fail "import over the other form (status $PROOFS_STATUS): $PROOFS_OUT"
+  fi
   printf 'different\n' >"$PT/dst-runner/beacon-states/$state_a"
   rm -f "$PT/dst-backend/beacon-states/$state_b"
   run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --trust-list "$out1/manifests.sha256"
