@@ -3,17 +3,17 @@ import { parseDeliveryCostSettings } from "../src/delivery-cost-settings.js";
 
 describe("parseDeliveryCostSettings", () => {
   it("uses the documented defaults and holds no proof setting", () => {
-    expect(parseDeliveryCostSettings({})).toEqual({ sampleLimit: 200, defaultGas: 550_000n });
+    expect(parseDeliveryCostSettings({})).toEqual({ sampleLimit: 200, defaultGas: 600_000n });
   });
 
   it("reads every variable, and ignores the old proof and coin price variables", () => {
     const settings = parseDeliveryCostSettings({
       EXPLORER_DELIVERY_SAMPLE_LIMIT: "50",
-      EXPLORER_DEFAULT_DELIVERY_GAS: "600000",
+      EXPLORER_DEFAULT_DELIVERY_GAS: "650000",
       EXPLORER_PROOF_COST_USD: "0.5",
       EXPLORER_NATIVE_COIN_PRICE_USD_369: "0.00005",
     });
-    expect(settings).toEqual({ sampleLimit: 50, defaultGas: 600_000n });
+    expect(settings).toEqual({ sampleLimit: 50, defaultGas: 650_000n });
   });
 
   it("refuses a count that passes the safe integer range", () => {

@@ -464,6 +464,60 @@ contract BridgeWorldTest is WorldSupport {
         assertEq(BridgedToken(copy).balanceOf(recipient), value, "plain execution pays no fee");
     }
 
+    /// @dev The default delivery gas of the explorer indexer (`EXPLORER_DEFAULT_DELIVERY_GAS`,
+    /// `explorer/data/src/delivery-cost-settings.ts`). It is the figure that a fee suggestion uses while no delivery
+    /// has been measured, so while the first deliveries run.
+    uint256 internal constant EXPLORER_DEFAULT_DELIVERY_GAS = 600_000;
+
+    /// Claim: the default delivery gas of the explorer covers the first delivery transaction through the delivery
+    /// router, the costliest delivery of the common kind. Shows: the gas that the receipt of that transaction would
+    /// carry, the whole transaction (21,000, the calldata of the real proof, cold accounts and slots) less the refund
+    /// (at most a fifth of the gas, EIP-3529), is below the default; the figures are logged. The router, its reward
+    /// address and the recipient start empty, the fee is gas based (the costliest setting, `DeliveryRouterGas.t.sol`),
+    /// and the proof takes the recent path. Matters: while no delivery is measured, the explorer suggests a tip from
+    /// this default, and a default below the real gas under-pays the deliverer of the first messages.
+    /// @dev Isolation runs the call as a transaction of its own; `vm.lastCallGas` then gives the gas of that
+    /// transaction before the refund, and the refund. The historical path costs about 30,000 gas more
+    /// (`MessageBridgeGas.t.sol`: 353,009 against 322,834 of call gas).
+    /// forge-config: default.isolate = true
+    /// forge-config: deep.isolate = true
+    function test_theExplorerDefaultCoversTheFirstDeliveryThroughTheRouter() public {
+        DeliveryRouter router = new DeliveryRouter(
+            ITokenMediator(address(mediatorB)),
+            IWETH(address(new MockWrappedNative())),
+            makeAddr("fresh reward address"),
+            makeAddr("fresh failed delivery address")
+        );
+        // The first message of a token deploys its copy, which is not the common kind. Do it plainly first.
+        (Vm.Log[] memory first,) = _relayFromA(alice, receiverOnB, 100 ether);
+        _deliverToB(first);
+
+        vm.txGasPrice(1 gwei);
+        Vm.Log[] memory recorded = _relayAndCallFromA(
+            alice, address(router), 100 ether, _directorData(makeAddr("fresh recipient"), 0, 10 ether, 1 ether)
+        );
+        Transit memory transit = _proveForB(recorded);
+        vm.chainId(CHAIN_B);
+        vm.prank(bob, bob);
+        router.executeMessage(transit.proof);
+        Vm.Gas memory spent = vm.lastCallGas();
+
+        assertTrue(bridgeB.messageCallStatus(transit.messageId), "the message executed through the router");
+        // Control: the figure is a whole transaction. A token transfer of nothing, run the same way, costs at least
+        // the 21,000 gas of a transaction, which a call inside a transaction does not.
+        vm.prank(bob, bob);
+        BridgedToken(mediatorB.bridgedTokenAddress(address(nativeToken))).transfer(bob, 0);
+        assertGe(vm.lastCallGas().gasTotalUsed, 21_000, "control: isolation is on, each call is a transaction");
+        uint256 refund = uint256(int256(spent.gasRefunded));
+        if (refund > spent.gasTotalUsed / 5) refund = spent.gasTotalUsed / 5;
+        uint256 receiptGas = spent.gasTotalUsed - refund;
+        emit log_named_uint("first delivery through the router, transaction gas before the refund", spent.gasTotalUsed);
+        emit log_named_uint("refund", refund);
+        emit log_named_uint("gas of the receipt", receiptGas);
+        emit log_named_uint("calldata bytes", abi.encodeCall(DeliveryRouter.executeMessage, (transit.proof)).length);
+        assertLt(receiptGas, EXPLORER_DEFAULT_DELIVERY_GAS, "the default of the explorer covers the first delivery");
+    }
+
     /// Claim: with an enforcing gate on chain A, the first poster of an epoch confirms the fork with `gate.confirm` and
     /// then sends, and later senders just send. Nothing passes evidence through a send. Shows: a send in an unconfirmed
     /// epoch reverts with `ForkNotConfirmed` and emits no log; the first poster confirms (`ForkConfirmed`) and sends; a

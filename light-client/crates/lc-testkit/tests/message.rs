@@ -370,7 +370,7 @@ fn malformed_message_is_refused() {
 fn calldata_roundtrip_and_selector() {
     assert_eq!(
         executeMessageCall::SELECTOR,
-        [0xa5, 0x44, 0x28, 0x04],
+        [0x63, 0xf0, 0x8d, 0x5e],
         "selector from `cast sig` of the full signature"
     );
     for (spec, source_slot, anchor_slot, local) in layouts() {

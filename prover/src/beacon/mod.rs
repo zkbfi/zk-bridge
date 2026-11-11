@@ -71,6 +71,9 @@ pub struct HashEvidence {
     pub header: BeaconHeader,
     /// Branch from the stored execution block hash to the body root of the header.
     pub branch: Vec<B256>,
+    /// The fork proof of the state of the header. The bridge refuses a header whose state it proves progressive (Gloas
+    /// on), and every header without a proof of an allowed shape.
+    pub fork: lc_core::abi::ForkProof,
 }
 
 /// Evidence for `MessageBridge.addHistoricalSummariesLayout`.

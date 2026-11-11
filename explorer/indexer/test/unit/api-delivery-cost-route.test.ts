@@ -53,7 +53,7 @@ describe("GET /api/delivery-cost", () => {
     const report = parseDeliveryCostReport(body);
     expect(report.chainId).toBe(369);
     expect(report.baseFee).toEqual({ wei: null, blockNumber: null, timestamp: null });
-    expect(report.kinds.token).toMatchObject({ sampleCount: 0, isDefault: true, defaultGas: "550000" });
+    expect(report.kinds.token).toMatchObject({ sampleCount: 0, isDefault: true, defaultGas: "600000" });
   });
 
   it("the delivery cost report has no proofCost field", async () => {

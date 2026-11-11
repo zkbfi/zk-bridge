@@ -86,14 +86,15 @@ One case per file. Each case is one call of `MessageBridge.executeMessage`. Keys
 | `beaconData`, `receiptData` | `"synthetic"` in every case. The real fixtures hold no transaction bodies, so real data stops before the transaction proof (see "Real data" below). |
 | `chain` | Source chain: `pulsechain` (Capella layout) or `ethereum` (Electra layout, Fulu). |
 | `layout` | `capella` or `electra`. |
-| `calldata` | Hex of the full calldata of `executeMessage(MessageProof)`: selector `0xa5442804` then the ABI encoding of the struct. |
+| `calldata` | Hex of the full calldata of `executeMessage(MessageProof)`: selector `0x63f08d5e` then the ABI encoding of the struct (with `sourceFork` since 2026-11-10). |
 | `anchorSlot` | `anchorHeader.slot`, as a decimal string. |
 | `ancestryPath` | `recent`, `historical`, or `none` (the source slot is not before the anchor slot). The path the bridge takes for this case. |
 | `capellaEra` | The `capellaEra` argument of the verifying bridge, as a decimal string. |
 | `storedAnchorHeaderRoot` | What `lightClient.headers(anchorSlot)` must return for this case. Zero means the slot is not stored. |
 | `remoteBridge` | The bridge address on the source chain (`remoteBridge` in the verifying bridge). |
 | `localChainId`, `remoteChainId` | `localChainId` and `remoteChainId` of the verifying bridge, as decimal strings. |
-| `sourceForkSchedule` | Rows `(activationEpoch, blockRootsGindexBase, blockHashGindex)` for the verifying bridge. |
+| `genesisValidatorsRoot` | The genesis validators root of the source chain, which the light client of the verifying bridge holds. The fork proof of each source state (`MessageProof.sourceFork`) proves it. Replaces `gloasForkSlot` (2026-11-10): the bridge takes the Gloas rule from the proven shape of the source state, not from a slot. |
+| `sourceForkSchedule` | Rows `(activationEpoch, blockRootsGindexBase, blockHashGindex)` for the verifying bridge. They seed the layout tables only; the block hash rule of a source comes from its fork proof. |
 | `expected.result` | `"accept"` or `"reject"`. |
 | `expected.message` | On accept: `messageId`, `sender`, `executor`, `gasLimit`, `dataType`, `sourceChainId`, `destinationChainId`, `data`, `sourceBlockHash`, `sourceTransactionHash` (the keccak256 of the transaction at the index of the receipt). |
 | `expected.reason` | On reject: the Rust reason code. Mapping to Solidity custom errors is the Solidity test's job. |

@@ -121,7 +121,6 @@ contract DeployBridge is LinkedCode {
         uint64 slotsPerEpoch;
         uint64 capellaForkEpoch;
         uint64 capellaEra;
-        uint64 gloasForkSlot;
         uint64 initialSlot;
         bytes32 initialHeaderRoot;
         bytes32 initialSyncCommitteeHash;
@@ -172,6 +171,8 @@ contract DeployBridge is LinkedCode {
     error PlaceholderValue(string key);
     /// @notice A configuration value is zero.
     error ZeroConfigValue(string key);
+    /// @notice The configuration names a key that this bridge no longer reads.
+    error RetiredConfigKey(string key);
     /// @notice The two chains share one chain identifier.
     error SameChainIdentifier(uint64 chainId);
     /// @notice The connected chain is not the configured chain.
@@ -619,8 +620,7 @@ contract DeployBridge is LinkedCode {
                 deployment.remoteBridge,
                 MessageBridge.BridgeTerms({
                     cutoffTimestamp: chain.depositCutoffTimestamp,
-                    remoteLightClient: deployment.remoteLightClient,
-                    gloasForkSlot: chain.lightClient.gloasForkSlot
+                    remoteLightClient: deployment.remoteLightClient
                 }),
                 chain.lightClient.capellaEra,
                 gate
@@ -641,13 +641,12 @@ contract DeployBridge is LinkedCode {
         });
     }
 
-    /// @dev The optional key `gloasForkEpoch` of the remote chain, as a slot. Absent means the chain has no Gloas fork.
-    function _readGloasForkSlot(string memory json, string memory client) private view returns (uint64) {
+    /// @dev The bridge takes no Gloas slot: each message carries the fork proof of its source state, and the bridge picks
+    /// the rule from the proven shape. A configuration that still names `gloasForkEpoch` was written for the old bridge,
+    /// and the script refuses it, so that nobody reads the key as a setting that still acts.
+    function _refuseGloasForkEpoch(string memory json, string memory client) private view {
         string memory key = string.concat(client, ".gloasForkEpoch");
-        if (!vm.keyExistsJson(json, key)) return type(uint64).max;
-        return
-            uint64(_readNonZeroUint(json, key))
-                * uint64(_readNonZeroUint(json, string.concat(client, ".slotsPerEpoch")));
+        if (vm.keyExistsJson(json, key)) revert RetiredConfigKey(key);
     }
 
     function _deployMediator(
@@ -755,9 +754,6 @@ contract DeployBridge is LinkedCode {
             revert DeploymentMismatch("bridge.sendCutoffTimestamp");
         }
         if (bridge.capellaEra() != chain.lightClient.capellaEra) revert DeploymentMismatch("bridge.capellaEra");
-        if (bridge.gloasForkSlot() != chain.lightClient.gloasForkSlot) {
-            revert DeploymentMismatch("bridge.gloasForkSlot");
-        }
         if (address(bridge.depositGate()) != deployed.gate) revert DeploymentMismatch("bridge.depositGate");
         if (
             bridge.stateLayouts().length != 0 || bridge.bodyLayouts().length != 0
@@ -840,7 +836,7 @@ contract DeployBridge is LinkedCode {
         chain.lightClient.slotsPerEpoch = uint64(_readNonZeroUint(json, string.concat(client, ".slotsPerEpoch")));
         chain.lightClient.capellaForkEpoch = uint64(_readNonZeroUint(json, string.concat(client, ".capellaForkEpoch")));
         chain.lightClient.capellaEra = uint64(_readUint(json, string.concat(client, ".capellaEra")));
-        chain.lightClient.gloasForkSlot = _readGloasForkSlot(json, client);
+        _refuseGloasForkEpoch(json, client);
         chain.lightClient.initialSlot = uint64(_readNonZeroUint(json, string.concat(client, ".initialSlot")));
         chain.lightClient.initialHeaderRoot = _readBytes32(json, string.concat(client, ".initialHeaderRoot"));
         chain.lightClient.initialSyncCommitteeHash =

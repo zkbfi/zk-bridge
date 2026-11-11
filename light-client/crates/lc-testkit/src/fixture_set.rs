@@ -232,12 +232,6 @@ fn render(case: Case) -> (String, Value) {
         "sepolia" => "gloas",
         _ => "electra",
     };
-    let gloas_fork_slot = case
-        .spec
-        .fork_schedule
-        .iter()
-        .find(|entry| entry.fork_name == ForkName::Gloas && entry.epoch != FAR_FUTURE_EPOCH)
-        .map_or(u64::MAX, |entry| entry.epoch * case.spec.slots_per_epoch);
     let ancestry_path = match ancestry_path_for_slots(case.proof.anchorHeader.slot, case.proof.sourceHeader.slot) {
         Ok(AncestryPath::Recent) => "recent",
         Ok(AncestryPath::Historical) => "historical",
@@ -258,7 +252,7 @@ fn render(case: Case) -> (String, Value) {
         "remoteBridge": text(case.remote_bridge),
         "localChainId": case.local_chain_id.to_string(),
         "remoteChainId": case.remote_chain_id.to_string(),
-        "gloasForkSlot": gloas_fork_slot.to_string(),
+        "genesisValidatorsRoot": text(case.spec.genesis_validators_root),
         "sourceForkSchedule": schedule_rows(case.spec),
         "expected": expected,
     });
@@ -810,11 +804,106 @@ fn gloas_cases() -> Vec<Case> {
     cases
 }
 
+/// The cases of the fork proof of the source state (`MessageProof.sourceFork`). The proven shape picks the block hash rule,
+/// so the rule follows the state of the source block and never the fork schedule. The first case is the one of
+/// `docs/superpowers/specs/2026-11-10-mainnet-readiness.md` A6: on the Ethereum mainnet schedule, which has no Gloas epoch,
+/// a source block whose state is progressive and whose bid names X is proven through the bid, as on a chain that runs
+/// Gloas. The anchor is a Fulu state, as the schedule has it.
+fn fork_proof_cases() -> Vec<Case> {
+    use crate::synthetic::{assemble_message_with_source_fork, gloas_body, message_evidence, source_state, BodyProofs};
+    let case =
+        |name: &str, spec: &'static ChainSpec, local: u64, scenario: MessageScenario, description: &str, expected| {
+            Case {
+                name: name.to_string(),
+                description: description.to_string(),
+                spec,
+                proof: scenario.proof,
+                stored_anchor_root: scenario.stored_anchor_root,
+                remote_bridge: BRIDGE,
+                local_chain_id: local,
+                remote_chain_id: remote_chain_id(spec),
+                expected,
+            }
+        };
+    let ethereum: &'static ChainSpec = &ETHEREUM_MAINNET;
+    let (source_slot, anchor_slot) = (15_476_000, 15_476_500);
+    assert_eq!(ethereum.fork_at_slot(source_slot), ForkName::Fulu, "the schedule counts the source slot as Fulu");
+    let receipts = standard_receipts(ethereum, 369);
+    let evidence = message_evidence(ethereum, &receipts, 1, source_slot);
+    let gloas = gloas_body(alloy_primitives::keccak256(&evidence.header_rlp));
+    let body = BodyProofs {
+        body_root: gloas.root(),
+        execution_branch: Vec::new(),
+        block_hash_branch: gloas.block_hash_branch(),
+    };
+    let unscheduled = || {
+        assemble_message_with_source_fork(ethereum, &evidence, &body, 1, 0, source_slot, anchor_slot, ForkName::Gloas)
+    };
+    let mut cases = vec![case(
+        "electra_accept_unscheduled_gloas_source",
+        ethereum,
+        369,
+        unscheduled(),
+        "Ethereum mainnet schedule (no Gloas epoch). The source state is progressive (fork proof of 7 and 5 entries) and the bid of B names X as parent_block_hash (index 2856): the bid rule applies with no fork slot in the bridge.",
+        Expected::Accept,
+    )];
+    let mut plain_claim = unscheduled();
+    plain_claim.proof.sourceFork = source_state(ethereum, ForkName::Fulu).1;
+    cases.push(case(
+        "electra_reject_unscheduled_gloas_source_with_a_plain_fork_proof",
+        ethereum,
+        369,
+        plain_claim,
+        "The same Gloas source with the fork proof of a plain Fulu state: the proof is valid for another root, so no shape is proven under the state root of B.",
+        Expected::Reject("InvalidForkShapeProof"),
+    ));
+
+    let sepolia: &'static ChainSpec = &SEPOLIA;
+    let gloas_slot = 353_024 * 32;
+    let mut swapped =
+        build_message(sepolia, &standard_receipts(sepolia, 943), 1, 0, gloas_slot + 3_000, gloas_slot + 3_500);
+    swapped.proof.sourceFork = source_state(sepolia, ForkName::Fulu).1;
+    cases.push(case(
+        "gloas_reject_fork_proof_of_a_plain_state",
+        sepolia,
+        943,
+        swapped,
+        "A Gloas source whose proof carries the fork proof of a plain Fulu state instead of its own: refused before the block hash.",
+        Expected::Reject("InvalidForkShapeProof"),
+    ));
+
+    let pulsechain: &'static ChainSpec = &PULSECHAIN;
+    let receipts = standard_receipts(pulsechain, 1);
+    let mut empty = build_message(pulsechain, &receipts, 1, 0, 10_872_000, 10_872_500);
+    empty.proof.sourceFork.versionBranch.clear();
+    empty.proof.sourceFork.genesisValidatorsRootBranch.clear();
+    cases.push(case(
+        "capella_reject_empty_fork_proof",
+        pulsechain,
+        1,
+        empty,
+        "The fork proof of the source state is empty: no shape has a version branch of length 0.",
+        Expected::Reject("InvalidForkShapeProof"),
+    ));
+    let mut corrupted = build_message(pulsechain, &receipts, 1, 0, 10_872_000, 10_872_500);
+    flip_node(&mut corrupted.proof.sourceFork.genesisValidatorsRootBranch[2]);
+    cases.push(case(
+        "capella_reject_corrupted_genesis_validators_root_branch",
+        pulsechain,
+        1,
+        corrupted,
+        "One entry of the genesis validators root branch of the fork proof is flipped: the version branch holds, the root does not.",
+        Expected::Reject("InvalidForkShapeProof"),
+    ));
+    cases
+}
+
 /// All message fixtures as `(file stem, JSON)`.
 pub fn message_fixtures() -> Vec<(String, Value)> {
     let mut cases = synthetic_cases(&PULSECHAIN, "capella", 1, 10_900_000);
     cases.extend(synthetic_cases(&ETHEREUM_MAINNET, "electra", 369, 15_500_000));
     cases.extend(gloas_cases());
+    cases.extend(fork_proof_cases());
     cases.into_iter().map(render).collect()
 }
 

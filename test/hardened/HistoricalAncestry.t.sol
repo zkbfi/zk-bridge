@@ -80,7 +80,7 @@ contract HistoricalAncestryTest is MessageScenes {
             address(lightClientForB),
             CHAIN_A,
             MessageFixtures.REMOTE_BRIDGE,
-            MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max),
+            MessageBridge.BridgeTerms(0, address(lightClientForA)),
             capellaEra,
             address(gateB)
         );
@@ -116,9 +116,9 @@ contract HistoricalAncestryTest is MessageScenes {
         MessageBridge.MessageProof memory proof = _historicalProof(scene, 0, named);
         assertEq(proof.ancestryBranch.length, expectedBranchLength);
         _deliverAndAssert(bridge_, proof, named);
-        BeaconProofVerifier.HistoricalLayout[] memory rows = bridge_.historicalLayouts();
+        BeaconProofVerifier.SlotRange[] memory rows = bridge_.historicalLayouts();
         assertEq(rows.length, 1);
-        assertEq(rows[0].historicalSummariesGindex, params.historicalSummariesGindex);
+        assertEq(rows[0].gindex, params.historicalSummariesGindex);
     }
 
     // ================================================================ the position, by hand
@@ -471,7 +471,7 @@ contract HistoricalAncestryTest is MessageScenes {
             abi.encodeWithSelector(BeaconProofVerifier.LayoutNotValidated.selector, second.anchorSlot)
         );
         _addHistoricalRow(bridge_, second, secondScene);
-        BeaconProofVerifier.HistoricalLayout[] memory rows = bridge_.historicalLayouts();
+        BeaconProofVerifier.SlotRange[] memory rows = bridge_.historicalLayouts();
         assertEq(rows.length, 1);
         assertEq(rows[0].firstSlot, first.anchorSlot);
         assertEq(rows[0].lastSlot, second.anchorSlot);

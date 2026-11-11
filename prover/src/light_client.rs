@@ -6,7 +6,7 @@
 use crate::error::{Error, Result};
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_sol_types::{SolCall, SolValue};
-use lc_core::abi::{executeMessageCall, BeaconBlockHeader as AbiHeader, MessageProof};
+use lc_core::abi::{executeMessageCall, BeaconBlockHeader as AbiHeader, ForkProof, MessageProof};
 use lc_core::chain::{
     ChainSpec, ForkName, ETHEREUM_MAINNET, PULSECHAIN, PULSECHAIN_TESTNET_V4, SEPOLIA,
 };
@@ -273,6 +273,15 @@ pub fn to_layout_header(header: &BeaconBlockHeader) -> crate::contracts::LayoutH
     }
 }
 
+/// Converts a fork proof into the struct that `addBlockHashLayout` takes (the same fields as `lc_core::abi::ForkProof`).
+pub fn to_layout_fork_proof(fork: &ForkProof) -> crate::contracts::ForkProof {
+    crate::contracts::ForkProof {
+        version: fork.version,
+        versionBranch: fork.versionBranch.clone(),
+        genesisValidatorsRootBranch: fork.genesisValidatorsRootBranch.clone(),
+    }
+}
+
 // ------------------------------------------------------------------ messages
 
 /// The source message that a log carries: the fields of the message and its call data.
@@ -325,6 +334,9 @@ pub struct BeaconPath {
     pub ancestry_branch: Vec<B256>,
     /// Branch from the execution block hash to the source body root.
     pub block_hash_branch: Vec<B256>,
+    /// The fork proof of the state of the source header (`MessageProof.sourceFork`): the bridge takes the block hash rule
+    /// from the shape that it proves, plain (payload layout) or progressive (Gloas, bid parent hash).
+    pub source_fork: ForkProof,
 }
 
 /// The execution part of a message proof.
@@ -534,6 +546,7 @@ pub fn assemble_message_proof(
         sourceHeader: AbiHeader::from(&path.source_header),
         ancestryBranch: path.ancestry_branch.clone(),
         blockHashBranch: path.block_hash_branch.clone(),
+        sourceFork: path.source_fork.clone(),
         executionHeaderRlp: execution.header_rlp.clone(),
         receiptProof: execution.receipt_proof.clone(),
         receiptIndex: U256::from(transaction_index),
@@ -788,6 +801,13 @@ impl StateView {
     /// Branch for `current_sync_committee`.
     pub fn current_committee_branch(&self) -> Vec<B256> {
         self.state.field_branch(STATE_FIELD_CURRENT_SYNC_COMMITTEE)
+    }
+
+    /// The fork proof of this state: `fork.current_version` and `genesis_validators_root`, with the branches of its
+    /// shape (`lc_core::ancestry::fork_proof_of_state`). A message whose source header names this state carries it, and
+    /// so does block hash layout evidence whose header names it.
+    pub fn fork_proof(&self) -> ForkProof {
+        lc_core::ancestry::fork_proof_of_state(&self.state)
     }
 
     /// `state.latest_block_hash`, for a Gloas state. `None` for an earlier fork.
@@ -1511,6 +1531,8 @@ mod tests {
                     .expect("source header"),
                 ancestry_branch: hex_branch(&entry["ancestry_branch"]),
                 block_hash_branch: hex_branch(&entry["block_hash_branch"]),
+                // The fixture holds no state of the source block, so no real fork proof exists for it.
+                source_fork: lc_testkit::pulsechain::missing_fork_proof(),
             }
         }
     }
@@ -1563,12 +1585,13 @@ mod tests {
 
     /// Claim: the real historical branches pass the bridge check of `lc-core` through the crate functions: the
     /// crate rebuilds the real execution block and its receipt proof, assembles the calldata struct, and native
-    /// verification passes the anchor, the 44-entry historical ancestry branch, the block hash branch, the header
-    /// hash and the receipt proof. It stops at the transaction stage, because the fixture holds no transaction bytes.
-    /// Why it matters: this is the proof that a server sends for a message older than 8192 slots. The controls
-    /// show each earlier check can fail: a branch of another era, a padded branch and an unknown anchor all stop earlier.
+    /// verification passes the anchor and the 44-entry historical ancestry branch. It stops at the fork proof of the
+    /// source state, because the fixture holds no state of the source block (the later stages on the same real data are
+    /// checked by their parts in `lc-testkit/tests/pulsechain_real.rs`). Why it matters: this is the proof that a server
+    /// sends for a message older than 8192 slots. The controls show each earlier check can fail: a branch of another era,
+    /// a padded branch and an unknown anchor all stop earlier.
     #[test]
-    fn real_historical_message_proof_passes_native_verification_up_to_the_transaction() {
+    fn real_historical_message_proof_passes_native_verification_up_to_the_fork_proof() {
         let real = RealHistorical::load();
         let path = real.path("era_middle_block");
         assert_eq!(path.ancestry_branch.len(), 44);
@@ -1589,10 +1612,10 @@ mod tests {
             Err(Error::VerificationRefused(text)) => text,
             Err(other) => panic!("unexpected error {other}"),
         };
-        let at_transaction = reason(&proof, &context);
+        let at_fork = reason(&proof, &context);
         assert!(
-            at_transaction.contains("TransactionProofInvalid"),
-            "the check passes the ancestry and the receipt proof and stops at the transaction: {at_transaction}"
+            at_fork.contains("InvalidForkShapeProof"),
+            "the check passes the ancestry and stops at the fork proof of the source state: {at_fork}"
         );
 
         let mut other_era = proof.clone();
@@ -1612,10 +1635,6 @@ mod tests {
             ..context
         };
         assert!(reason(&proof, &unknown).contains("AnchorNotStored"));
-        let mut wrong_block = proof.clone();
-        wrong_block.blockHashBranch =
-            hex_branch(&real.entry("era_first_block")["block_hash_branch"]);
-        assert!(reason(&wrong_block, &context).contains("InvalidBlockHashBranch"));
     }
 
     /// Claim: the real fixture agrees with the gindex helpers of the crate: the historical summaries field of the

@@ -15,4 +15,7 @@ interface IBeaconLightClient {
     /// @notice Whether the execution block hash sits in a finalized beacon header.
     /// @param blockHash The execution block hash.
     function isFinalizedExecutionBlock(bytes32 blockHash) external view returns (bool);
+
+    /// @notice The genesis validators root of the tracked chain. A fork proof of a state of that chain must prove it.
+    function genesisValidatorsRoot() external view returns (bytes32);
 }

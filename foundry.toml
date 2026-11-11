@@ -9,6 +9,14 @@ optimizer = true
 optimizer_runs = 200
 bytecode_hash = "none"
 cbor_metadata = false
+# Each test runs as one transaction. The default of `isolate` changed between forge versions (false in 1.4.4, true in
+# 1.8.5), so it is pinned here. With isolation, every top-level call of a test runs as its own transaction: a
+# `gasleft()` delta then also counts the 21,000 gas of the transaction, its calldata and the accounts that the test had
+# warmed, with no refunds, and each call of a test to itself raises the nonce of the test contract. The gas bounds of
+# this suite measure a call inside a transaction, and some tests predict CREATE addresses. A test that needs the gas of
+# a whole transaction turns isolation on for itself (`forge-config: default.isolate = true`, see
+# `test/hardened/BridgeWorld.t.sol`).
+isolate = false
 fs_permissions = [
   { access = "read", path = "./out" },
   { access = "read", path = "./script/hardened" },
@@ -33,6 +41,8 @@ optimizer = true
 optimizer_runs = 200
 bytecode_hash = "none"
 cbor_metadata = false
+# Pinned as in the default profile.
+isolate = false
 fs_permissions = [
   { access = "read", path = "./out" },
   { access = "read", path = "./script/hardened" },

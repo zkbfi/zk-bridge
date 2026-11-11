@@ -28,9 +28,6 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
     MessageReentrant internal reentrant;
     MessageSending internal sending;
 
-    /// @dev The Gloas fork slot of the destination bridges that the next `_deployDestinationBridge` creates.
-    uint64 internal bridgeGloasForkSlot = type(uint64).max;
-
     function setUp() public virtual override {
         super.setUp();
         recorder = MessageRecorder(_putTarget(MessageFixtures.TARGET_RECORDER, address(new MessageRecorder())));
@@ -64,7 +61,7 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
             "MessageBridge.sol:MessageBridge",
             abi.encode(
                 address(lightClientForA), CHAIN_B, DESTINATION_BRIDGE,
-                MessageBridge.BridgeTerms(cutoff, address(lightClientForB), type(uint64).max), DEFAULT_CAPELLA_ERA, gate
+                MessageBridge.BridgeTerms(cutoff, address(lightClientForB)), DEFAULT_CAPELLA_ERA, gate
             ),
             MessageFixtures.REMOTE_BRIDGE
         );
@@ -94,7 +91,7 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
             "MessageBridge.sol:MessageBridge",
             abi.encode(
                 address(client), CHAIN_A, MessageFixtures.REMOTE_BRIDGE,
-                MessageBridge.BridgeTerms(cutoff, address(lightClientForA), bridgeGloasForkSlot), capellaEra, gate
+                MessageBridge.BridgeTerms(cutoff, address(lightClientForA)), capellaEra, gate
             ),
             DESTINATION_BRIDGE
         );
@@ -137,7 +134,7 @@ abstract contract MessageScenes is HistoricalScenes, OpeningScenes {
         _addHistoricalRow(bridge, params, scene);
         assertGt(anchor - depositSlots[0], 8192, "the scene is on the historical path");
         named = MessageFixtures.deliver();
-        proof = _proofOf(scene.anchorHeader, scene.depositHeaders[0], scene.historicalBranches[0], scene.blockHashBranches[0], _messageHeaderRlp(), named);
+        proof = _proofOf(scene.anchorHeader, scene.depositHeaders[0], scene.historicalBranches[0], scene.blockHashBranches[0], scene.sourceFork, _messageHeaderRlp(), named);
     }
 
     /// @dev A new light client that starts at `initialSlot`. Every later scene stores its headers in it.

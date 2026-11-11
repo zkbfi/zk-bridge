@@ -71,7 +71,7 @@ abstract contract WorldSupport is GateSupport, DynamicProofs {
             address(lightClientForA),
             CHAIN_B,
             predictedBridgeB,
-            MessageBridge.BridgeTerms(0, address(lightClientForB), type(uint64).max),
+            MessageBridge.BridgeTerms(0, address(lightClientForB)),
             DEFAULT_CAPELLA_ERA,
             gateOfA
         );
@@ -82,7 +82,7 @@ abstract contract WorldSupport is GateSupport, DynamicProofs {
             address(lightClientForB),
             CHAIN_A,
             predictedBridgeA,
-            MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max),
+            MessageBridge.BridgeTerms(0, address(lightClientForA)),
             DEFAULT_CAPELLA_ERA,
             gateOfB
         );

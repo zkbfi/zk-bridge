@@ -1327,8 +1327,36 @@ pub fn assemble_message(
     assemble_message_with_body(spec, evidence, &body, transaction_index, log_index, source_slot, anchor_slot)
 }
 
+/// The post-state of a synthetic source block of `fork`: filler fields, the genesis validators root of the chain, and the
+/// `fork` field of that fork (its version and epoch from the schedule, the version before it as `previous_version`).
+/// Returns the state root and the fork proof that a message from that block carries. A Gloas state is progressive.
+///
+/// # Panics
+/// Panics when the schedule of `spec` has no entry for `fork`.
+pub fn source_state(spec: &ChainSpec, fork: ForkName) -> (B256, lc_core::abi::ForkProof) {
+    let position = spec.fork_schedule.iter().position(|entry| entry.fork_name == fork).expect("a scheduled fork");
+    let entry = spec.fork_schedule[position];
+    let previous = spec.fork_schedule[position.saturating_sub(1)].fork_version;
+    let data = lc_core::ssz_state::ForkData {
+        previous_version: previous,
+        current_version: entry.fork_version,
+        epoch: entry.epoch,
+    };
+    let mut state = StateBuilder::new(fork);
+    state.set_genesis_validators_root(spec.genesis_validators_root);
+    state.set_field_root(STATE_FIELD_FORK, data.hash_tree_root());
+    let fields = state.field_roots();
+    let progressive = fork >= ForkName::Gloas;
+    let root = if progressive { progressive_container_root(&fields) } else { merkleize(&fields) };
+    (root, lc_core::ancestry::fork_proof_of_fields(&fields, progressive, &data))
+}
+
+/// The position of `fork` among the `BeaconState` fields.
+const STATE_FIELD_FORK: usize = 3;
+
 /// Like [`assemble_message`], with the body proofs of the source block chosen by the caller. A test uses it to put the
-/// execution block hash at the wrong place of a body and still have a valid ancestry path to the source header.
+/// execution block hash at the wrong place of a body and still have a valid ancestry path to the source header. The state
+/// of the source block has the fork of `source_slot` in the schedule.
 pub fn assemble_message_with_body(
     spec: &'static ChainSpec,
     evidence: &ExecutionBlockEvidence,
@@ -1338,12 +1366,39 @@ pub fn assemble_message_with_body(
     source_slot: u64,
     anchor_slot: u64,
 ) -> MessageScenario {
+    let fork = spec.fork_at_slot(source_slot);
+    assemble_message_with_source_fork(
+        spec,
+        evidence,
+        body,
+        transaction_index,
+        log_index,
+        source_slot,
+        anchor_slot,
+        fork,
+    )
+}
+
+/// Like [`assemble_message_with_body`], with the fork of the source state chosen by the caller ([`source_state`]). A
+/// fixture uses it for a Gloas source on a chain whose schedule has no Gloas epoch yet.
+#[allow(clippy::too_many_arguments)]
+pub fn assemble_message_with_source_fork(
+    spec: &'static ChainSpec,
+    evidence: &ExecutionBlockEvidence,
+    body: &BodyProofs,
+    transaction_index: u64,
+    log_index: u64,
+    source_slot: u64,
+    anchor_slot: u64,
+    source_fork: ForkName,
+) -> MessageScenario {
     let block_hash = header_hash(&evidence.header_rlp);
+    let (source_state_root, source_fork_proof) = source_state(spec, source_fork);
     let source_header = BeaconBlockHeader {
         slot: source_slot,
         proposer_index: 7,
         parent_root: filler("source-parent", source_slot),
-        state_root: filler("source-state-root", source_slot),
+        state_root: source_state_root,
         body_root: body.body_root,
     };
 
@@ -1383,6 +1438,7 @@ pub fn assemble_message_with_body(
         sourceHeader: (&source_header).into(),
         ancestryBranch: ancestry_branch,
         blockHashBranch: body.block_hash_branch.clone(),
+        sourceFork: source_fork_proof,
         executionHeaderRlp: evidence.header_rlp.clone(),
         receiptProof: evidence.receipt_proof.clone(),
         receiptIndex: U256::from(transaction_index),

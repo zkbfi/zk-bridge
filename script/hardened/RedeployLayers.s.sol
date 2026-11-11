@@ -36,8 +36,8 @@ import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 ///   can be replaced at any time with no change on the other chain.
 ///
 /// Every value that the new contracts share with the old ones is read from the old contracts on chain, not from a
-/// file: the light client, the remote light client, the gate, the Capella era, the Gloas slot and the send cutoff of
-/// the bridge; the flow limiter and the home chain name of the mediator; the wrapped native token, the reward address
+/// file: the light client, the remote light client, the gate, the Capella era and the send cutoff of the bridge (a new
+/// bridge takes no Gloas slot: each message proves the fork of its source state); the flow limiter and the home chain name of the mediator; the wrapped native token, the reward address
 /// and the failed delivery address of the router. After deployment the script reads every value back from the new
 /// contracts and refuses a mismatch. The new bridges start locked and with no layout rows: see
 /// `docs/redeploy-2026-11-gas.md` for the steps after the deployment.
@@ -61,7 +61,6 @@ contract RedeployLayers is LinkedCode {
         address remoteLightClient;
         address gate;
         uint64 capellaEra;
-        uint64 gloasForkSlot;
         uint64 cutoffTimestamp;
         address flowLimiter;
         string remoteChainName;
@@ -155,7 +154,6 @@ contract RedeployLayers is LinkedCode {
         kept.remoteLightClient = bridge.remoteLightClient();
         kept.gate = address(bridge.depositGate());
         kept.capellaEra = bridge.capellaEra();
-        kept.gloasForkSlot = bridge.gloasForkSlot();
         kept.cutoffTimestamp = bridge.sendCutoffTimestamp();
         TokenMediator mediator = TokenMediator(chain.previousMediator);
         kept.flowLimiter = address(mediator.flowLimiter());
@@ -211,7 +209,7 @@ contract RedeployLayers is LinkedCode {
                 kept.lightClient,
                 remoteChainId,
                 remote.bridge,
-                MessageBridge.BridgeTerms(kept.cutoffTimestamp, kept.remoteLightClient, kept.gloasForkSlot),
+                MessageBridge.BridgeTerms(kept.cutoffTimestamp, kept.remoteLightClient),
                 kept.capellaEra,
                 kept.gate
             )
@@ -317,7 +315,6 @@ contract RedeployLayers is LinkedCode {
         }
         if (address(bridge.depositGate()) != kept.gate) revert DeploymentMismatch("bridge.depositGate");
         if (bridge.capellaEra() != kept.capellaEra) revert DeploymentMismatch("bridge.capellaEra");
-        if (bridge.gloasForkSlot() != kept.gloasForkSlot) revert DeploymentMismatch("bridge.gloasForkSlot");
         if (bridge.sendCutoffTimestamp() != kept.cutoffTimestamp) revert DeploymentMismatch("bridge.sendCutoff");
         if (bridge.depositsOpen()) revert DeploymentMismatch("bridge.depositsOpen must start false");
     }

@@ -7,6 +7,7 @@ import {BeaconProofVerifier} from "../../../src/hardened/BeaconProofVerifier.sol
 import {BeaconBlockHeader, SSZ} from "../../../src/hardened/SSZ.sol";
 import {WithdrawalScenes} from "./WithdrawalScenes.sol";
 import {MessageFixtures} from "./MessageFixtures.sol";
+import {ForkProofs} from "./ForkProofs.sol";
 
 /// @notice Builds withdrawal evidence for the historical path. The anchor state is a sparse Merkle tree. It holds the
 /// header root of each deposit at the historical position, which this file computes BY HAND (no call into the bridge).
@@ -23,6 +24,9 @@ abstract contract HistoricalScenes is WithdrawalScenes {
     /// @param evidenceSlot A stored slot in a completed era at or after `capellaEra`, more than 8192 below the anchor.
     /// @param depositSlots The slots of the deposit headers. Each one gets a leaf at the historical position.
     /// @param extraStoredSlots More slots to store. Each one below the anchor, at or after `capellaEra`, gets a leaf too.
+    /// @param upperBodySlot A slot above every source and below the anchor at which the scene stores a plain body evidence
+    /// header, or zero for none. A progressive (Gloas) anchor gives no body row (`GloasSlotRefused`), so a scene with one
+    /// needs this header to cover its plain sources from above, as the pre-fork heads of a real light client do.
     struct HistoricalParams {
         uint64 anchorSlot;
         uint64 capellaEra;
@@ -31,6 +35,7 @@ abstract contract HistoricalScenes is WithdrawalScenes {
         uint64 evidenceSlot;
         uint64[] depositSlots;
         uint64[] extraStoredSlots;
+        uint64 upperBodySlot;
     }
 
     /// @notice The result of building a historical scene.
@@ -48,6 +53,10 @@ abstract contract HistoricalScenes is WithdrawalScenes {
         BeaconProofVerifier.BlockRootsEvidence rootsEvidence;
         BeaconProofVerifier.BlockHashEvidence anchorBodyEvidence;
         BeaconProofVerifier.BlockHashEvidence lowBodyEvidence;
+        BeaconProofVerifier.BlockHashEvidence upperBodyEvidence;
+        /// @dev The fork proof of the state of the deposit headers (`_plainState`), computed once, so that a proof built
+        /// after `vm.expectRevert` makes no SHA-256 precompile call of its own.
+        BeaconProofVerifier.ForkProof sourceFork;
     }
 
     /// @dev A header that the scene stores in the light client.
@@ -173,6 +182,7 @@ abstract contract HistoricalScenes is WithdrawalScenes {
         returns (HistoricalScene memory scene)
     {
         scene.blockHash = keccak256(headerRlp);
+        scene.sourceFork = _plainState().fork;
         uint256 depositCount = params.depositSlots.length;
         scene.depositHeaders = new BeaconBlockHeader[](depositCount);
         scene.blockHashBranches = new bytes32[][](depositCount);
@@ -184,20 +194,35 @@ abstract contract HistoricalScenes is WithdrawalScenes {
 
         LeafSet memory set = _newLeafSet(params);
         LeafPositions memory at = _addLeaves(set, params, scene);
-        (uint256[] memory gindices, bytes32[] memory roots) = _trimmed(set);
-        (bytes32 stateRoot, bytes32[][] memory branches) = _mixedTree(gindices, roots);
+        ForkProofs.ForkedState memory anchorState = _historicalAnchorState(params, set);
 
         bytes32[] memory anchorBodyBranch = _siblings(SSZ.depthOf(BODY_GINDEX), "anchor body", params.anchorSlot);
         scene.anchorHeader = BeaconBlockHeader({
             slot: params.anchorSlot,
             proposerIndex: 9,
             parentRoot: keccak256(abi.encode("anchor parent", params.anchorSlot)),
-            stateRoot: stateRoot,
+            stateRoot: anchorState.root,
             bodyRoot: _rootFromBranch(_execHash(params.anchorSlot), anchorBodyBranch, BODY_GINDEX)
         });
         scene.anchorRoot = SSZ.hashTreeRootMemory(scene.anchorHeader);
-        scene.anchorBodyEvidence = BeaconProofVerifier.BlockHashEvidence(scene.anchorHeader, anchorBodyBranch);
-        _fillEvidence(params, scene, at, branches);
+        scene.anchorBodyEvidence =
+            BeaconProofVerifier.BlockHashEvidence(scene.anchorHeader, anchorBodyBranch, anchorState.fork);
+        _fillEvidence(params, scene, at, anchorState.extraBranches);
+    }
+
+    /// @dev The anchor state: the leaves of `set`, and the genesis validators root and the version at the positions of the
+    /// shape that the `historical_summaries` position names (2950 is progressive), so the anchor has a fork proof for its
+    /// body evidence. The extra branches follow the order of `set`.
+    function _historicalAnchorState(HistoricalParams memory params, LeafSet memory set)
+        private
+        pure
+        returns (ForkProofs.ForkedState memory)
+    {
+        (uint256[] memory gindices, bytes32[] memory roots) = _trimmed(set);
+        uint8 shape = params.historicalSummariesGindex == 2950
+            ? ForkProofs.PROGRESSIVE
+            : uint8(SSZ.depthOf(params.historicalSummariesGindex));
+        return ForkProofs.stateWith(shape, GENESIS_ROOT_A, ForkProofs.versionOf(shape), gindices, roots);
     }
 
     function _fillEvidence(
@@ -231,15 +256,20 @@ abstract contract HistoricalScenes is WithdrawalScenes {
                 branchB: branches[at.fillerB]
             });
         }
+        if (params.upperBodySlot != 0) {
+            (BeaconBlockHeader memory upper, bytes32[] memory upperBranch) =
+                _bodyEvidenceHeader(params.upperBodySlot, BODY_GINDEX);
+            scene.upperBodyEvidence = _hashEvidence(upper, upperBranch);
+        }
         // The lowest body evidence is the header 40 slots below the lowest deposit; with no deposit it is the evidence header.
         if (depositCount == 0) {
             (BeaconBlockHeader memory header, bytes32[] memory branch) = _bodyEvidenceHeader(params.evidenceSlot, BODY_GINDEX);
-            scene.lowBodyEvidence = BeaconProofVerifier.BlockHashEvidence(header, branch);
+            scene.lowBodyEvidence = _hashEvidence(header, branch);
             return;
         }
         (BeaconBlockHeader memory low, bytes32[] memory lowBranch) =
             _bodyEvidenceHeader(_lowestDeposit(params) - 40, BODY_GINDEX);
-        scene.lowBodyEvidence = BeaconProofVerifier.BlockHashEvidence(low, lowBranch);
+        scene.lowBodyEvidence = _hashEvidence(low, lowBranch);
     }
 
     function _lowestDeposit(HistoricalParams memory params) internal pure returns (uint64 lowest) {
@@ -259,7 +289,7 @@ abstract contract HistoricalScenes is WithdrawalScenes {
             slot: slot,
             proposerIndex: 7,
             parentRoot: keccak256(abi.encode("deposit parent", slot)),
-            stateRoot: keccak256(abi.encode("deposit state", slot)),
+            stateRoot: _plainState().root,
             bodyRoot: _rootFromBranch(blockHash, hashBranch, BODY_GINDEX)
         });
     }
@@ -335,7 +365,7 @@ abstract contract HistoricalScenes is WithdrawalScenes {
 
     /// @notice Stores the headers of a scene in the light client in slot order. A repeated slot is a test bug.
     function _storeHistorical(HistoricalParams memory params, HistoricalScene memory scene) internal {
-        uint256 capacity = params.extraStoredSlots.length + 5;
+        uint256 capacity = params.extraStoredSlots.length + 6;
         StoredHeader[] memory list = new StoredHeader[](capacity);
         uint256 count;
         if (params.depositSlots.length > 0) {
@@ -344,6 +374,10 @@ abstract contract HistoricalScenes is WithdrawalScenes {
             );
         }
         list[count++] = StoredHeader(params.evidenceSlot, SSZ.hashTreeRootMemory(scene.evidenceHeader));
+        if (params.upperBodySlot != 0) {
+            list[count++] =
+                StoredHeader(params.upperBodySlot, SSZ.hashTreeRootMemory(scene.upperBodyEvidence.header));
+        }
         for (uint256 i = 0; i < params.extraStoredSlots.length; i++) {
             list[count++] = StoredHeader(params.extraStoredSlots[i], _fillerRoot(params.extraStoredSlots[i]));
         }
@@ -371,8 +405,13 @@ abstract contract HistoricalScenes is WithdrawalScenes {
     }
 
     /// @notice Adds the two block hash layouts that cover every deposit slot up to the anchor.
+    /// A scene with an upper body header takes it in place of the anchor, which may be progressive.
     function _addBodyRows(BeaconProofVerifier bridge_, HistoricalScene memory scene) internal {
         bridge_.addBlockHashLayout(BODY_GINDEX, scene.lowBodyEvidence);
+        if (scene.upperBodyEvidence.header.slot != 0) {
+            bridge_.addBlockHashLayout(BODY_GINDEX, scene.upperBodyEvidence);
+            return;
+        }
         bridge_.addBlockHashLayout(BODY_GINDEX, scene.anchorBodyEvidence);
     }
 
@@ -398,6 +437,7 @@ abstract contract HistoricalScenes is WithdrawalScenes {
             scene.depositHeaders[i],
             ancestryBranch,
             scene.blockHashBranches[i],
+            scene.sourceFork,
             _defaultHeaderRlp(),
             named
         );

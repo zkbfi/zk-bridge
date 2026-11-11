@@ -52,9 +52,9 @@ contract ForkLayoutTest is MessageScenes {
         emit BlockRootsLayoutValidated(69, params.anchorSlot, params.anchorSlot);
         vm.prank(caller);
         fresh.addBlockRootsLayout(69, _rootsEvidence());
-        BeaconProofVerifier.StateLayout[] memory layouts = fresh.stateLayouts();
+        BeaconProofVerifier.SlotRange[] memory layouts = fresh.stateLayouts();
         assertEq(layouts.length, 1);
-        assertEq(layouts[0].blockRootsGindex, 69);
+        assertEq(layouts[0].gindex, 69);
         assertEq(layouts[0].firstSlot, params.anchorSlot);
         assertEq(layouts[0].lastSlot, params.anchorSlot);
     }
@@ -66,9 +66,9 @@ contract ForkLayoutTest is MessageScenes {
         emit BlockHashLayoutValidated(812, params.anchorSlot, params.anchorSlot);
         vm.prank(caller);
         fresh.addBlockHashLayout(812, _hashEvidence());
-        BeaconProofVerifier.BodyLayout[] memory layouts = fresh.bodyLayouts();
+        BeaconProofVerifier.SlotRange[] memory layouts = fresh.bodyLayouts();
         assertEq(layouts.length, 1);
-        assertEq(layouts[0].blockHashGindex, 812);
+        assertEq(layouts[0].gindex, 812);
     }
 
     /// Claim: more evidence widens the validated range of the same position and adds no new row. Shows: evidence at
@@ -77,9 +77,9 @@ contract ForkLayoutTest is MessageScenes {
     /// change back in between).
     function test_H19_widenValidatedRange() public {
         fresh.addBlockHashLayout(812, _hashEvidence()); // at the anchor slot
-        fresh.addBlockHashLayout(812, BeaconProofVerifier.BlockHashEvidence(scene.evidenceAfter, scene.evidenceAfterBranch));
-        fresh.addBlockHashLayout(812, BeaconProofVerifier.BlockHashEvidence(scene.evidenceBefore, scene.evidenceBeforeBranch));
-        BeaconProofVerifier.BodyLayout[] memory layouts = fresh.bodyLayouts();
+        fresh.addBlockHashLayout(812, _hashEvidence(scene.evidenceAfter, scene.evidenceAfterBranch));
+        fresh.addBlockHashLayout(812, _hashEvidence(scene.evidenceBefore, scene.evidenceBeforeBranch));
+        BeaconProofVerifier.SlotRange[] memory layouts = fresh.bodyLayouts();
         assertEq(layouts.length, 1);
         assertEq(layouts[0].firstSlot, params.depositSlot - 40);
         assertEq(layouts[0].lastSlot, params.anchorSlot);
@@ -99,7 +99,7 @@ contract ForkLayoutTest is MessageScenes {
         vm.expectEmit(true, false, false, true, address(fresh));
         emit BlockRootsLayoutValidated(69, params.anchorSlot, laterParams.anchorSlot);
         fresh.addBlockRootsLayout(69, _rootsEvidence());
-        BeaconProofVerifier.StateLayout[] memory layouts = fresh.stateLayouts();
+        BeaconProofVerifier.SlotRange[] memory layouts = fresh.stateLayouts();
         assertEq(layouts.length, 1, "the same position widens and adds no row");
         assertEq(layouts[0].firstSlot, params.anchorSlot);
         assertEq(layouts[0].lastSlot, laterParams.anchorSlot);
@@ -321,9 +321,9 @@ contract ForkLayoutTest is MessageScenes {
         emit HistoricalSummariesLayoutValidated(SUMMARIES, HISTORICAL_ANCHOR, HISTORICAL_ANCHOR);
         vm.prank(caller);
         fresh.addHistoricalSummariesLayout(SUMMARIES, historical.historicalEvidence);
-        BeaconProofVerifier.HistoricalLayout[] memory rows = fresh.historicalLayouts();
+        BeaconProofVerifier.SlotRange[] memory rows = fresh.historicalLayouts();
         assertEq(rows.length, 1);
-        assertEq(rows[0].historicalSummariesGindex, SUMMARIES);
+        assertEq(rows[0].gindex, SUMMARIES);
         assertEq(rows[0].firstSlot, HISTORICAL_ANCHOR);
         assertEq(rows[0].lastSlot, HISTORICAL_ANCHOR);
     }
@@ -337,7 +337,7 @@ contract ForkLayoutTest is MessageScenes {
         HistoricalScene memory later = _historicalScene(laterParams);
         fresh.addHistoricalSummariesLayout(SUMMARIES, later.historicalEvidence);
         fresh.addHistoricalSummariesLayout(SUMMARIES, first.historicalEvidence);
-        BeaconProofVerifier.HistoricalLayout[] memory rows = fresh.historicalLayouts();
+        BeaconProofVerifier.SlotRange[] memory rows = fresh.historicalLayouts();
         assertEq(rows.length, 1);
         assertEq(rows[0].firstSlot, HISTORICAL_ANCHOR);
         assertEq(rows[0].lastSlot, 1_200_000);
@@ -455,7 +455,7 @@ contract ForkLayoutTest is MessageScenes {
             address(lightClientForB),
             CHAIN_A,
             MessageFixtures.REMOTE_BRIDGE,
-            MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max),
+            MessageBridge.BridgeTerms(0, address(lightClientForA)),
             110,
             address(gateB)
         );
@@ -501,7 +501,7 @@ contract ForkLayoutTest is MessageScenes {
         (, HistoricalScene memory honest) = _honestAfterBad();
         fresh.addHistoricalSummariesLayout(SUMMARIES, honest.historicalEvidence);
         assertEq(fresh.historicalLayouts().length, 1);
-        assertEq(fresh.historicalLayouts()[0].historicalSummariesGindex, SUMMARIES);
+        assertEq(fresh.historicalLayouts()[0].gindex, SUMMARIES);
     }
 
     /// @dev The honest control: the fixture's own anchor (stored before the bad anchors).

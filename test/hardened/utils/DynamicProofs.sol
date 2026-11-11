@@ -92,6 +92,7 @@ abstract contract DynamicProofs is WithdrawalScenes {
             transaction
         );
         SceneParams memory params = _defaultParams();
+        params.genesisRoot = genesisRoot;
         Scene memory scene = _buildScene(
             MessageFixtures.deliver(),
             params,

@@ -56,7 +56,7 @@ Then act by stage:
 
 - After the update is mined, the stage moves to **Covered**; after the delivery is mined, to **Delivered**, and the panel disappears (it only shows while the message is unfinished).
 - The recipient receives the whole amount (no fee is taken on a direct delivery). Activity shows the transfer under **Delivered**.
-- Your cost is the gas of the update (if you posted it) and of the delivery, both on the destination chain. The button on Activity shows the dapp's estimate of it before you start. The proof check inside a delivery measured 290,655 gas in the bridge's own test.
+- Your cost is the gas of the update (if you posted it) and of the delivery, both on the destination chain. The button on Activity shows the dapp's estimate of it before you start. The proof check inside a delivery measured 322,834 gas in the bridge's own test.
 
 ## If it fails
 

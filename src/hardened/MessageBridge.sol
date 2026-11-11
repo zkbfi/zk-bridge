@@ -42,12 +42,10 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     /// @param cutoffTimestamp Sends revert from this timestamp on. Zero means no cutoff.
     /// @param remoteLightClient The light client on the other chain, which tracks the beacon chain of THIS chain and
     /// feeds the remote bridge. `openDeposits` reads its storage. It must not be zero.
-    /// @param gloasForkSlot The first slot of Gloas on the remote chain, or `NO_GLOAS_FORK`. Body-layout proofs from a
-    /// slot at or after it are refused.
+    /// @dev No fork slot is a term: each proof carries the fork proof of its source state (`MessageProof.sourceFork`).
     struct BridgeTerms {
         uint64 cutoffTimestamp;
         address remoteLightClient;
-        uint64 gloasForkSlot;
     }
 
     /// @notice The evidence for one message. Nothing in it is secret.
@@ -55,6 +53,8 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     /// @param sourceHeader The beacon block that carries the execution block of the sending transaction.
     /// @param ancestryBranch The branch from the root of `sourceHeader` to the state root of `anchorHeader`.
     /// @param blockHashBranch The branch from the execution block hash to the body root of `sourceHeader`.
+    /// @param sourceFork The fork proof of the state of `sourceHeader` (under `sourceHeader.stateRoot`). Its proven shape
+    /// picks the block hash rule: plain takes the payload layout, progressive (Gloas on) takes the bid parent hash.
     /// @param executionHeaderRlp The RLP of the execution block header. Its hash must be the proven block hash.
     /// @param receiptProof The trie nodes from the receipts root to the receipt.
     /// @param receiptIndex The index of the transaction in the block. It is the trie key of the receipt.
@@ -66,6 +66,7 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
         BeaconBlockHeader sourceHeader;
         bytes32[] ancestryBranch;
         bytes32[] blockHashBranch;
+        ForkProof sourceFork;
         bytes executionHeaderRlp;
         bytes[] receiptProof;
         uint256 receiptIndex;
@@ -156,9 +157,9 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
 
     mapping(bytes32 messageId => DeliveryStatus) private _deliveries;
 
-    StateLayout[] private _stateLayouts;
-    BodyLayout[] private _bodyLayouts;
-    HistoricalLayout[] private _historicalLayouts;
+    /// @dev The `block_roots`, block hash and `historical_summaries` layout tables, in the slots that three separate
+    /// arrays had before (`BeaconProofVerifier.LayoutTables`).
+    LayoutTables private _layouts;
 
     /// @param lightClient_ The light client of the remote chain.
     /// @param remoteChainId_ The identifier of the other chain.
@@ -173,7 +174,7 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
         BridgeTerms memory bridgeTerms,
         uint64 capellaEra_,
         address depositGate_
-    ) BeaconProofVerifier(lightClient_, capellaEra_, bridgeTerms.remoteLightClient, bridgeTerms.gloasForkSlot) {
+    ) BeaconProofVerifier(lightClient_, capellaEra_, bridgeTerms.remoteLightClient) {
         if (lightClient_ == address(0)) revert ZeroValue("lightClient");
         if (remoteChainId_ == 0) revert ZeroValue("remoteChainId");
         if (remoteBridge_ == address(0)) revert ZeroValue("remoteBridge");
@@ -287,8 +288,9 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
         returns (bytes memory encoded, bytes32 topicMessageId, bytes32 sourceTransactionHash)
     {
         _requireAncestry(proof.anchorHeader, proof.sourceHeader, proof.ancestryBranch);
-        bytes32 blockHash = keccak256(proof.executionHeaderRlp);
-        _requireBlockHashBranch(blockHash, proof.sourceHeader, proof.blockHashBranch);
+        _requireBlockHashBranch(
+            keccak256(proof.executionHeaderRlp), proof.sourceHeader, proof.blockHashBranch, proof.sourceFork
+        );
 
         (topicMessageId, encoded, sourceTransactionHash) = ReceiptProofLib.provenLog(
             proof.executionHeaderRlp,
@@ -442,17 +444,9 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
         return remoteChainId;
     }
 
-    // ------------------------------------------------------------------ storage hooks
+    // ------------------------------------------------------------------ storage hook
 
-    function _stateLayoutTable() internal view override returns (StateLayout[] storage) {
-        return _stateLayouts;
-    }
-
-    function _bodyLayoutTable() internal view override returns (BodyLayout[] storage) {
-        return _bodyLayouts;
-    }
-
-    function _historicalLayoutTable() internal view override returns (HistoricalLayout[] storage) {
-        return _historicalLayouts;
+    function _layoutTables() internal view override returns (LayoutTables storage) {
+        return _layouts;
     }
 }

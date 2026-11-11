@@ -1607,7 +1607,7 @@ impl HttpBeaconSource {
     pub fn message_path(&self, source: &SourceBlock, anchor: &StoredHead) -> Result<BeaconPath> {
         let source_slot = self.slot_for_timestamp(source.timestamp)?;
         let anchor = self.head_header(anchor)?;
-        if self.chain.spec().fork_at_slot(source_slot) >= ForkName::Gloas {
+        if self.is_gloas_slot(source_slot)? {
             return self.gloas_message_path(source, source_slot, anchor);
         }
         if source_slot >= anchor.slot {
@@ -1628,11 +1628,13 @@ impl HttpBeaconSource {
         }
         let ancestry_branch =
             self.ancestry_branch_for(&anchor, source_slot, header_root(&block.header))?;
+        let source_fork = self.state_for(block.header.state_root)?.fork_proof();
         Ok(BeaconPath {
             anchor_header: anchor,
             source_header: block.header,
             ancestry_branch,
             block_hash_branch: block.block_hash_branch,
+            source_fork,
         })
     }
 
@@ -1640,10 +1642,22 @@ impl HttpBeaconSource {
     /// proven through the bid of a later beacon block, and its header is read raw.
     ///
     /// # Errors
-    /// `Error::Beacon` when the timestamp is not on a slot boundary or lies before genesis.
+    /// `Error::Beacon` when the timestamp is not on a slot boundary or lies before genesis; the errors of
+    /// [`Self::is_gloas_slot`].
     pub fn is_gloas_source(&self, timestamp: u64) -> Result<bool> {
-        let slot = self.slot_for_timestamp(timestamp)?;
-        Ok(self.chain.spec().fork_at_slot(slot) >= ForkName::Gloas)
+        self.is_gloas_slot(self.slot_for_timestamp(timestamp)?)
+    }
+
+    /// Whether `slot` is at or after the Gloas fork, by the fork schedule that the node serves
+    /// (`/eth/v1/config/fork_schedule`), not by the schedule compiled into the prover. A fork that a chain schedules after
+    /// the release of the prover is followed as soon as the node knows it. The bridge itself reads no schedule: it takes
+    /// the rule from the fork proof of the source state, which the prover attaches.
+    ///
+    /// # Errors
+    /// The errors of [`Self::fork_schedule`], and `Error::UnknownActiveFork` when the node runs a fork that the prover
+    /// does not know.
+    pub fn is_gloas_slot(&self, slot: u64) -> Result<bool> {
+        Ok(self.fork_schedule()?.fork_at_slot(slot)? >= ForkName::Gloas)
     }
 
     /// The beacon part of a message proof for an execution block X of a Gloas chain.
@@ -1676,11 +1690,13 @@ impl HttpBeaconSource {
             let header = block.header();
             let ancestry_branch =
                 self.ancestry_branch_for(&anchor, header.slot, header_root(&header))?;
+            let source_fork = self.state_for(header.state_root)?.fork_proof();
             return Ok(BeaconPath {
                 anchor_header: anchor,
                 source_header: header,
                 ancestry_branch,
                 block_hash_branch: block.bid_parent_block_hash_branch(),
+                source_fork,
             });
         }
         Err(Error::Beacon(format!(
@@ -1760,10 +1776,11 @@ impl HttpBeaconSource {
     }
 
     /// Evidence for a block hash layout row from the stored header with the highest slot at or below `at_or_below`, or
-    /// `None` when no stored header qualifies.
+    /// `None` when no stored header qualifies. It carries the fork proof of the state of that header, which the bridge
+    /// requires (a plain state; the caller asks only below the Gloas fork of the schedule).
     ///
     /// # Errors
-    /// `Error::Beacon` when the node lacks the block of that header.
+    /// `Error::Beacon` when the node lacks the block or the state of that header.
     pub fn hash_layout_evidence(
         &self,
         at_or_below: u64,
@@ -1781,10 +1798,12 @@ impl HttpBeaconSource {
             self.block_by_id(&slot.to_string())?,
             &format!("the block at slot {slot}"),
         )?;
+        let fork = self.state_for(block.header.state_root)?.fork_proof();
         Ok(Some(HashEvidence {
             gindex: block_hash_gindex(self.chain, slot)?,
             header: block.header,
             branch: block.block_hash_branch,
+            fork,
         }))
     }
 }
@@ -2111,6 +2130,14 @@ mod tests {
                     .into_bytes(),
             ),
             (format!("/eth/v2/debug/beacon/states/{:#x}", anchor.state_root), read("gloas_anchor_state.ssz")),
+            // The state of B: its fork proof goes into the message proof (`MessageProof.sourceFork`).
+            (
+                format!(
+                    "/eth/v2/debug/beacon/states/{}",
+                    source_fixture["response"]["source_header"]["state_root"].as_str().unwrap()
+                ),
+                read("gloas_head_state.ssz"),
+            ),
         ]);
         for offset in 1..=skipped as u64 {
             pages.insert(

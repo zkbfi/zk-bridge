@@ -138,6 +138,9 @@ const vector = JSON.parse(
 ) as { calldata: Hex; expected: { message: { messageId: Hex; sourceTransactionHash: Hex } } }
 const provenId = vector.expected.message.messageId
 
+/** A fork proof of a source state (`MessageProof.sourceFork`, and the `fork` of block hash layout evidence). */
+const forkProof = { version: '0x07000000' as Hex, versionBranch: [word('9')], genesisValidatorsRootBranch: [word('a')] }
+
 function executeCall(logIndex: bigint, rlp: Hex = '0xf90211', blockHashBranch: Hex[] = [word('6')]): Hex {
   return encodeFunctionData({
     abi: messageBridgeAbi,
@@ -148,6 +151,7 @@ function executeCall(logIndex: bigint, rlp: Hex = '0xf90211', blockHashBranch: H
         sourceHeader: header(14_099_000n),
         ancestryBranch: [word('4'), word('5')],
         blockHashBranch,
+        sourceFork: forkProof,
         executionHeaderRlp: rlp,
         receiptProof: ['0x01', '0x02'],
         receiptIndex: 3n,
@@ -163,7 +167,7 @@ function prerequisiteCall(): Hex {
   return encodeFunctionData({
     abi: messageBridgeAbi,
     functionName: 'addBlockHashLayout',
-    args: [(2n ** 4n + 9n) * 2n ** 4n + 12n, { header: header(14_099_840n), branch: [word('7'), word('8')] }],
+    args: [(2n ** 4n + 9n) * 2n ** 4n + 12n, { header: header(14_099_840n), branch: [word('7'), word('8')], fork: forkProof }],
   })
 }
 
@@ -373,7 +377,7 @@ describe("calldata that decodes but is not the expected call", () => {
   });
 
   it("refuses a prerequisite that has a known selector but arguments that do not decode", () => {
-    const selector = encodeFunctionData({ abi: messageBridgeAbi, functionName: "addBlockHashLayout", args: [1n, { header: header(1n), branch: [] }] }).slice(0, 10);
+    const selector = encodeFunctionData({ abi: messageBridgeAbi, functionName: "addBlockHashLayout", args: [1n, { header: header(1n), branch: [], fork: forkProof }] }).slice(0, 10);
     const broken = { function: "addBlockHashLayout", reason: "x", to: bridge, data: `${selector}1234` };
     expect(() => planMessageExecution(evidence({ prerequisites: [broken] }), chains)).toThrow(/known message bridge call/);
   });

@@ -100,7 +100,7 @@ describe("buildDeliveryCostReport", () => {
   it("answers with the default and says so when there are no samples", () => {
     const report = buildDeliveryCostReport({ chainId: 369, samples: emptySamples, baseFee: null, settings });
     expect(report.kinds.token.isDefault).toBe(true);
-    expect(report.kinds.token.defaultGas).toBe("550000");
+    expect(report.kinds.token.defaultGas).toBe("600000");
     expect(report.kinds.token.averageGas).toBeNull();
     expect(report.kinds.token.p90Gas).toBeNull();
     expect(report.baseFee).toEqual({ wei: null, blockNumber: null, timestamp: null });

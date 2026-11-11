@@ -1,10 +1,12 @@
 /**
- * The default gas of one delivery transaction. It is the sum that Foundry measured: the delivery router delivery call with
- * the gas based fee (about 198850 gas, `test/hardened/mediator/DeliveryRouterGas.t.sol`), plus the proof check of the bridge
- * (290655 gas, `test/hardened/MessageBridgeGas.t.sol`), plus the 21000 gas base of a transaction. The sum is 510505.
- * The default rounds it up to 550000 to leave room for calldata.
+ * The default gas of one delivery transaction. Foundry measures the first delivery transaction through the delivery
+ * router, with a gas based fee, through the real bridge on the recent path: 552261 gas as its receipt would show it (the
+ * whole transaction, with the calldata of the proof and cold accounts, less the refund; `test/hardened/BridgeWorld.t.sol`,
+ * `test_theExplorerDefaultCoversTheFirstDeliveryThroughTheRouter`, which fails if the default falls below it). The
+ * default rounds it up to 600000. Later deliveries through the same router cost less (about 498000), and the
+ * historical path costs about 30000 more.
  */
-export const DEFAULT_DELIVERY_GAS = 550_000n;
+export const DEFAULT_DELIVERY_GAS = 600_000n;
 
 /** How many of the newest samples of each kind the report uses. */
 export const DEFAULT_SAMPLE_LIMIT = 200;
@@ -34,7 +36,7 @@ const readSmallPositiveInteger = (environment: Environment, name: string, fallba
 /**
  * Reads the settings of the delivery cost report. Fails at once, with the variable name, on a malformed value.
  *
- * Variables: `EXPLORER_DELIVERY_SAMPLE_LIMIT` (default 200) and `EXPLORER_DEFAULT_DELIVERY_GAS` (default 550000, see
+ * Variables: `EXPLORER_DELIVERY_SAMPLE_LIMIT` (default 200) and `EXPLORER_DEFAULT_DELIVERY_GAS` (default 600000, see
  * {@link DEFAULT_DELIVERY_GAS}).
  *
  * @param environment The environment variables.

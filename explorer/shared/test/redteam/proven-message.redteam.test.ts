@@ -127,6 +127,7 @@ const calldataOf = (spec: ProofSpec = {}): Hex => {
         sourceHeader: beaconHeader(14_099_000n),
         ancestryBranch: [word("4")],
         blockHashBranch: [word("6")],
+        sourceFork: { version: "0x07000000", versionBranch: [word("9")], genesisValidatorsRootBranch: [word("a")] },
         executionHeaderRlp: header,
         receiptProof: [receiptLeaf, ...(spec.receiptProofExtra ?? [])],
         receiptIndex,

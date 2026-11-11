@@ -33,11 +33,6 @@ export const messageBridgeAbi = [
             "name": "remoteLightClient",
             "type": "address",
             "internalType": "address"
-          },
-          {
-            "name": "gloasForkSlot",
-            "type": "uint64",
-            "internalType": "uint64"
           }
         ]
       },
@@ -76,19 +71,6 @@ export const messageBridgeAbi = [
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "NO_GLOAS_FORK",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint64",
-        "internalType": "uint64"
       }
     ],
     "stateMutability": "view"
@@ -169,6 +151,28 @@ export const messageBridgeAbi = [
             "name": "branch",
             "type": "bytes32[]",
             "internalType": "bytes32[]"
+          },
+          {
+            "name": "fork",
+            "type": "tuple",
+            "internalType": "struct BeaconProofVerifier.ForkProof",
+            "components": [
+              {
+                "name": "version",
+                "type": "bytes4",
+                "internalType": "bytes4"
+              },
+              {
+                "name": "versionBranch",
+                "type": "bytes32[]",
+                "internalType": "bytes32[]"
+              },
+              {
+                "name": "genesisValidatorsRootBranch",
+                "type": "bytes32[]",
+                "internalType": "bytes32[]"
+              }
+            ]
           }
         ]
       }
@@ -318,10 +322,10 @@ export const messageBridgeAbi = [
       {
         "name": "",
         "type": "tuple[]",
-        "internalType": "struct BeaconProofVerifier.BodyLayout[]",
+        "internalType": "struct BeaconProofVerifier.SlotRange[]",
         "components": [
           {
-            "name": "blockHashGindex",
+            "name": "gindex",
             "type": "uint256",
             "internalType": "uint256"
           },
@@ -495,6 +499,28 @@ export const messageBridgeAbi = [
             "internalType": "bytes32[]"
           },
           {
+            "name": "sourceFork",
+            "type": "tuple",
+            "internalType": "struct BeaconProofVerifier.ForkProof",
+            "components": [
+              {
+                "name": "version",
+                "type": "bytes4",
+                "internalType": "bytes4"
+              },
+              {
+                "name": "versionBranch",
+                "type": "bytes32[]",
+                "internalType": "bytes32[]"
+              },
+              {
+                "name": "genesisValidatorsRootBranch",
+                "type": "bytes32[]",
+                "internalType": "bytes32[]"
+              }
+            ]
+          },
+          {
             "name": "executionHeaderRlp",
             "type": "bytes",
             "internalType": "bytes"
@@ -589,29 +615,16 @@ export const messageBridgeAbi = [
   },
   {
     "type": "function",
-    "name": "gloasForkSlot",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint64",
-        "internalType": "uint64"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
     "name": "historicalLayouts",
     "inputs": [],
     "outputs": [
       {
         "name": "",
         "type": "tuple[]",
-        "internalType": "struct BeaconProofVerifier.HistoricalLayout[]",
+        "internalType": "struct BeaconProofVerifier.SlotRange[]",
         "components": [
           {
-            "name": "historicalSummariesGindex",
+            "name": "gindex",
             "type": "uint256",
             "internalType": "uint256"
           },
@@ -898,10 +911,10 @@ export const messageBridgeAbi = [
       {
         "name": "",
         "type": "tuple[]",
-        "internalType": "struct BeaconProofVerifier.StateLayout[]",
+        "internalType": "struct BeaconProofVerifier.SlotRange[]",
         "components": [
           {
-            "name": "blockRootsGindex",
+            "name": "gindex",
             "type": "uint256",
             "internalType": "uint256"
           },
@@ -1274,15 +1287,21 @@ export const messageBridgeAbi = [
   },
   {
     "type": "error",
+    "name": "ForkShapeProofInvalid",
+    "inputs": [
+      {
+        "name": "verdict",
+        "type": "uint8",
+        "internalType": "uint8"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "GloasSlotRefused",
     "inputs": [
       {
         "name": "slot",
-        "type": "uint64",
-        "internalType": "uint64"
-      },
-      {
-        "name": "gloasForkSlot",
         "type": "uint64",
         "internalType": "uint64"
       }

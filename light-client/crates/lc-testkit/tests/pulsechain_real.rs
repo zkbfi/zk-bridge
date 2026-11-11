@@ -6,10 +6,11 @@
 
 use alloy_primitives::{Address, B256};
 use lc_core::abi::MessageProof;
-use lc_core::ancestry::verify_beacon_path;
+use lc_core::ancestry::{ancestry_leaf_gindex, message_block_hash_gindex_for_shape, verify_beacon_path};
 use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
 use lc_core::execution::{decode_execution_header, decode_receipt, Log};
 use lc_core::message::{extract_receipt, message_of_log, verify_message, MessageContext};
+use lc_core::ssz::is_valid_exact_branch;
 use lc_core::update::{
     advance_light_client_store, table_fork_version, verify_light_client_update,
     verify_light_client_update_with_fork_version, verify_sync_aggregate,
@@ -164,11 +165,40 @@ fn context(anchor_root: B256, bridge: Address) -> MessageContext {
     MessageContext { remote_bridge: bridge, local_chain_id: 1, remote_chain_id: 369, stored_anchor_root: anchor_root }
 }
 
+/// The beacon path of a real proof, checked by its parts: the anchor, the ancestry branch, and the block hash branch at the
+/// payload position of the plain shape. The fixtures hold no state of these source blocks, so the proof carries no fork
+/// proof (`missing_fork_proof`) and `verify_beacon_path` stops at the fork proof, the stage after the ancestry. PulseChain
+/// runs Capella, a plain state of depth 5, so the block hash takes the plain rule, as the bridge does after a valid fork
+/// proof of that shape. The errors are the ones of `verify_beacon_path`.
+fn beacon_path_by_parts(proof: &MessageProof, anchor_root: B256) -> Result<B256, Error> {
+    let anchor = lc_core::types::BeaconBlockHeader::from(&proof.anchorHeader);
+    let source = lc_core::types::BeaconBlockHeader::from(&proof.sourceHeader);
+    if anchor.hash_tree_root() != anchor_root {
+        return Err(Error::AnchorNotStored);
+    }
+    let ancestry = ancestry_leaf_gindex(&PULSECHAIN, anchor.slot, source.slot)?;
+    if !is_valid_exact_branch(&source.hash_tree_root(), &proof.ancestryBranch, ancestry, &anchor.state_root) {
+        return Err(Error::InvalidAncestryBranch);
+    }
+    let block_hash = lc_core::receipts::header_hash(&proof.executionHeaderRlp);
+    let position = message_block_hash_gindex_for_shape(&PULSECHAIN, 5, source.slot)?;
+    if !is_valid_exact_branch(&block_hash, &proof.blockHashBranch, position, &source.body_root) {
+        return Err(Error::InvalidBlockHashBranch);
+    }
+    Ok(block_hash)
+}
+
 /// The real log that a message proof names. It walks the stages of `verify_message` that real data can reach: the beacon
-/// path, the header, the receipt proof and the receipt. The fixtures hold no transactions, so this helper skips the
-/// transaction stage that `verify_message` runs between the receipt proof and the receipt.
+/// path (by its parts, see `beacon_path_by_parts`), the header, the receipt proof and the receipt. The fixtures hold no
+/// transactions, so this helper skips the transaction stage that `verify_message` runs between the receipt proof and the
+/// receipt.
 fn real_log(proof: &MessageProof, anchor_root: B256) -> Log {
-    let block_hash = verify_beacon_path(&PULSECHAIN, proof, &anchor_root).expect("the real beacon path verifies");
+    assert_eq!(
+        verify_beacon_path(&PULSECHAIN, proof, &anchor_root),
+        Err(Error::InvalidForkShapeProof),
+        "the fixtures hold no fork proof: the full path stops at the fork stage"
+    );
+    let block_hash = beacon_path_by_parts(proof, anchor_root).expect("the real beacon path verifies");
     assert_eq!(block_hash, lc_core::receipts::header_hash(&proof.executionHeaderRlp));
     let header = decode_execution_header(&proof.executionHeaderRlp).expect("header");
     let index = u64::try_from(proof.receiptIndex).unwrap();
@@ -179,9 +209,10 @@ fn real_log(proof: &MessageProof, anchor_root: B256) -> Log {
 
 /// Claim: the real beacon path works for a real PulseChain block (anchor state -> block_roots -> beacon header -> block hash
 /// branch -> keccak256(header) -> receipts root -> receipt proof -> receipt -> log). A real block has no message event,
-/// so the log check must stop on the emitter, and with the real emitter on the topic. The fixtures hold no transaction
-/// bodies, so `verify_message` itself stops one stage earlier, on the empty transaction proof, after the receipt proof passed.
-/// Why it matters: this proves the generalized indices, the SSZ roots, the trie walker and the receipt decoder on real data.
+/// so the log check must stop on the emitter, and with the real emitter on the topic. The fixtures hold no state of the
+/// source block, so `verify_message` itself stops at the fork proof, after the ancestry passed; the later beacon stage is
+/// checked by its parts. Why it matters: this proves the generalized indices, the SSZ roots, the trie walker and the
+/// receipt decoder on real data.
 #[test]
 fn real_beacon_path_reaches_the_log_checks() {
     for name in ["finalized", "ancestor"] {
@@ -199,10 +230,7 @@ fn real_beacon_path_reaches_the_log_checks() {
         let (proof, anchor_root, _) = real_message_proof(name, transaction_index as u64, 0);
 
         let outcome = verify_message(&proof, &context(anchor_root, emitter), &PULSECHAIN);
-        assert!(
-            matches!(outcome, Err(Error::TransactionProofInvalid(_))),
-            "{name}: the beacon path, the header and the receipt proof pass, the transaction proof is empty: {outcome:?}"
-        );
+        assert_eq!(outcome, Err(Error::InvalidForkShapeProof), "{name}: the ancestry passes, the fork proof is empty");
 
         let log = real_log(&proof, anchor_root);
         assert_eq!(message_of_log(&log, Address::repeat_byte(0xee)), Err(Error::LogEmitterMismatch), "{name}");
@@ -216,14 +244,14 @@ fn real_beacon_path_reaches_the_log_checks() {
 
 /// Claim: on the real path, a corrupted block_roots branch, a corrupted block hash branch, a wrong source slot and a
 /// header RLP with one flipped byte are each refused by their own check (the real-data version of the rejection tests).
+/// The ancestry checks run before the fork proof, so `verify_message` reports them; the block hash checks run after it, so
+/// they are checked by their parts (`beacon_path_by_parts`).
 #[test]
 fn real_beacon_path_rejects_tampering() {
     let (proof, anchor_root, _) = real_message_proof("finalized", 0, 0);
     let ctx = context(anchor_root, Address::repeat_byte(0xee));
-    assert!(
-        matches!(verify_message(&proof, &ctx, &PULSECHAIN), Err(Error::TransactionProofInvalid(_))),
-        "control reaches the transaction stage"
-    );
+    assert_eq!(verify_message(&proof, &ctx, &PULSECHAIN), Err(Error::InvalidForkShapeProof), "control: fork stage");
+    assert!(beacon_path_by_parts(&proof, anchor_root).is_ok(), "control: the parts pass");
 
     let mut broken = proof.clone();
     broken.ancestryBranch[3] = B256::repeat_byte(0x55);
@@ -231,7 +259,7 @@ fn real_beacon_path_rejects_tampering() {
 
     let mut broken = proof.clone();
     broken.blockHashBranch[2] = B256::repeat_byte(0x55);
-    assert_eq!(verify_message(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidBlockHashBranch));
+    assert_eq!(beacon_path_by_parts(&broken, anchor_root), Err(Error::InvalidBlockHashBranch));
 
     let mut broken = proof.clone();
     broken.sourceHeader.slot -= 1;
@@ -242,7 +270,7 @@ fn real_beacon_path_rejects_tampering() {
     rlp[last] ^= 1;
     let mut broken = proof.clone();
     broken.executionHeaderRlp = rlp.into();
-    assert_eq!(verify_message(&broken, &ctx, &PULSECHAIN), Err(Error::InvalidBlockHashBranch));
+    assert_eq!(beacon_path_by_parts(&broken, anchor_root), Err(Error::InvalidBlockHashBranch));
 }
 
 // ---- historical ancestry on real PulseChain data ----
@@ -382,21 +410,19 @@ fn real_historical_ancestry_rejects_wrong_index_length_and_entries() {
     }
 }
 
-/// Claim: a full message proof over the real historical path reaches the transaction stage: anchor, historical ancestry
-/// branch, block hash branch, keccak256 of the header, receipt proof. The fixtures hold no transaction bodies, so it stops
-/// on the empty transaction proof, and the log of a real block is no message. With the wrong index (a branch of the
+/// Claim: a full message proof over the real historical path passes the anchor and the historical ancestry branch and
+/// stops at the fork proof, which the fixtures do not hold; by its parts it passes the block hash branch, the keccak256 of
+/// the header and the receipt proof, and the log of a real block is no message. With the wrong index (a branch of the
 /// neighbouring entry) it stops earlier, at the ancestry branch.
 #[test]
-fn real_historical_message_reaches_the_transaction_stage() {
+fn real_historical_message_reaches_the_fork_stage() {
     let (proof, anchor_root, block) = real_historical_message_proof(0, 0);
     assert_eq!(proof.ancestryBranch.len(), 44);
     assert!(proof.anchorHeader.slot - proof.sourceHeader.slot > 8192, "the historical path");
     let has_log = !block.receipts_json[0]["logs"].as_array().unwrap().is_empty();
     let ctx = context(anchor_root, Address::repeat_byte(0xee));
-    assert!(
-        matches!(verify_message(&proof, &ctx, &PULSECHAIN), Err(Error::TransactionProofInvalid(_))),
-        "control reaches the transaction stage"
-    );
+    assert_eq!(verify_message(&proof, &ctx, &PULSECHAIN), Err(Error::InvalidForkShapeProof), "control: fork stage");
+    assert!(beacon_path_by_parts(&proof, anchor_root).is_ok(), "control: the parts pass");
     if has_log {
         let log = real_log(&proof, anchor_root);
         assert_eq!(message_of_log(&log, ctx.remote_bridge), Err(Error::LogEmitterMismatch));

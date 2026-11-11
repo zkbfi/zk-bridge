@@ -43,7 +43,7 @@ Conventions: every endpoint is a GET and answers JSON; errors answer `{ "error":
 | `GET /api/head-updates?chainId=&limit=&before=` | Stored heads, newest first (`before` is a slot). |
 | `GET /api/summary` | The top bar in one call: heads, gates, in flight counts by status and direction, 24 hour volume, last head updates. |
 | `GET /api/delivered` | Deliveries in the last 24 hours and 7 days per direction, with timing (`sentToDelivered` average, median, p90). |
-| `GET /api/delivery-cost?chainId=` | What a delivery costs on one destination chain: base fee, gas by kind (`token_callback`, `token`, `message`), with `isDefault` true when it is a configured default (550,000 gas) rather than a measurement. 400 for a missing or unknown `chainId`. |
+| `GET /api/delivery-cost?chainId=` | What a delivery costs on one destination chain: base fee, gas by kind (`token_callback`, `token`, `message`), with `isDefault` true when it is a configured default (600,000 gas) rather than a measurement. 400 for a missing or unknown `chainId`. |
 | `GET /api/undelivered?direction=&after=&limit=` | Covered, undelivered messages, oldest first (`limit` 1 to 500, default 100). |
 | `GET /api/history`, `/api/tx/:chainId/:hash`, `/api/gate`, `/api/registry`, `/api/tokens`, `/api/escrow`, `/api/audit`, `/api/release-events`, `/api/light-client-costs` | History events, one transaction's cost, deposit gate state, fork versions, tokens, escrow balances, the escrow audit, failed releases, update costs. The full contract is in the indexer's readme in the source repository. |
 | `GET /health`, `/ready`, `/status`, `/metrics` | Ponder's own endpoints. |

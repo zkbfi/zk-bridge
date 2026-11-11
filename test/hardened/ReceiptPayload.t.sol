@@ -46,7 +46,7 @@ contract ReceiptPayloadTest is MessageScenes {
             CHAIN_B,
             CHAIN_A,
             MessageFixtures.REMOTE_BRIDGE,
-            MessageBridge.BridgeTerms(0, address(lightClientForA), type(uint64).max),
+            MessageBridge.BridgeTerms(0, address(lightClientForA)),
             DEFAULT_CAPELLA_ERA,
             address(gateB)
         );
