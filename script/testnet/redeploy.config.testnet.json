@@ -1,27 +1,29 @@
 {
   "_notes": [
-    "Input of script/hardened/RedeployLayers.s.sol for the redeploy of 2026-11 (docs/redeploy-2026-11-gas.md).",
-    "previous*: the contracts that run now, from deploy/deployments/sepolia-pls943.json. The script reads from them every value that the new contracts keep (light clients, gates, Capella era, Gloas slot, cutoff, flow limiter, home chain name, wrapped native token, reward and failed delivery addresses).",
-    "deployerNonce: read it with `cast nonce <deployer> --rpc-url <alias>` right before the run. The script refuses a different nonce, because the bridges and the mediators name their twins on the other chain by predicted address.",
+    "Input of script/hardened/RedeployLayers.s.sol for the redeploy of 2026-11 with the seal-only gates (docs/redeploy-2026-11-seal-gate.md), mode layers-and-gate. The run of 2026-11-08 (docs/redeploy-2026-11-gas.md) used this file with nonces 14 and 18 and the contracts of 2026-10-26 as previous*.",
+    "previous*: the contracts that run now, from deploy/deployments/sepolia-pls943.json (bridge, mediator, delivery_router). The script reads from them every value that the new contracts keep (light clients, Capella era, cutoff, flow limiter, home chain name, wrapped native token, reward and failed delivery addresses) and, in layers-and-gate mode, the fork registry of the old gate.",
+    "gateConfig: the bridge configuration whose chainA.gate and chainB.gate sections give the mode and the beacon settings of the new gates (SealOnly on Sepolia, SealOnlyWithRegistry on 943). The script refuses a section whose chainId differs, and beacon settings that differ from the old gate or from the light client on the other chain.",
+    "deployerNonce: read on 2026-11-11 with `cast nonce <deployer> --rpc-url <alias>`. The script refuses a different nonce, because the bridges and the mediators name their twins on the other chain by predicted address. Read them again right before the run; if either moved, write the new value and dry-run again.",
     "deployer: the testnet deployer 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc (1Password vault zkb.fi, item \"testnet deployer wallet\"), which deployed the running contracts. The script refuses another signer, so the keystore that signs must hold this key (cast wallet address --account \"$KEYSTORE_NAME\").",
-    "Layers mode creates eight contracts on each chain, at deployerNonce to deployerNonce + 7: ReceiptProofLib, OpeningProofLib, BeaconLayoutLib, MessageBridge, MediatorPayloads, TokenFactory, TokenMediator, DeliveryRouter (the split for the EIP-7825 gas cap).",
+    "layers-and-gate creates nine contracts on each chain, at deployerNonce to deployerNonce + 8: BeaconForkGate, ReceiptProofLib, OpeningProofLib, BeaconLayoutLib, MessageBridge, MediatorPayloads, TokenFactory, TokenMediator, DeliveryRouter.",
     "Foundry resolves rpcAlias from FOUNDRY_RPC_ENDPOINTS, as for DeployBridge (docs/testnet-run.md). Never write a key into this file."
   ],
   "deployer": "0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc",
+  "gateConfig": "script/testnet/bridge.config.testnet.json",
   "chainA": {
     "rpcAlias": "sepolia",
     "chainId": "11155111",
-    "deployerNonce": "14",
-    "previousBridge": "0xb01856abef5b971019f1d25630450cc6bcbafb21",
-    "previousMediator": "0x1dbbcc0bc25de5f6ae122fb0009b3ee4931fd958",
-    "previousRouter": "0x759b764d7fe6e0adc97cfd00eca886ff53f6a329"
+    "deployerNonce": "23",
+    "previousBridge": "0xd4b1ecc1b919cf9ba7ff45e57e1712b31aba4c66",
+    "previousMediator": "0x2c00675092e2955d27f476b5a1bac9ac5bb6fa86",
+    "previousRouter": "0x1c4627d76e6b423e06c61f055c2ce0d3e944ce8a"
   },
   "chainB": {
     "rpcAlias": "pulsechain_testnet_v4",
     "chainId": "943",
-    "deployerNonce": "18",
-    "previousBridge": "0xf59dfaa7fbbb87c126a58dc67b89c510f9031fd1",
-    "previousMediator": "0xb4ba2fd95ba839d2d148082f4d92631b3a7444ae",
-    "previousRouter": "0x988a6160b5580895ea15a080a8d4ea763cf6538f"
+    "deployerNonce": "27",
+    "previousBridge": "0x3846e483c98cd0f164c29a5e40f7295a5765aba4",
+    "previousMediator": "0x8eef4098d3726955f7d227c4d1d92487c99f7e62",
+    "previousRouter": "0x6e0178049277442d5bf58963f9a1e0469b46fce3"
   }
 }

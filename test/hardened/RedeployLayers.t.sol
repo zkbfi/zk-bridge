@@ -14,6 +14,9 @@ import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 import {RedeployLayers} from "../../script/hardened/RedeployLayers.s.sol";
 import {WorldSupport} from "./utils/WorldSupport.sol";
 import {MockWrappedNative} from "./mediator/utils/MediatorSupport.sol";
+import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
+import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
+import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 
 /// @notice The redeploy script on a two chain world: it reads what it keeps from the running contracts, deploys new
 /// layers at the predicted addresses on both chains, and the new layers carry a token over the kept light clients and
@@ -195,18 +198,29 @@ contract RedeployLayersTest is WorldSupport {
         script.readKept(chainA);
     }
 
-    /// Claim: the configuration is read, and a placeholder nonce is refused. Shows: the testnet file (filled for the run
-    /// of 2026-11-08) parses with the nonces that ran, and the same file with its placeholder back is refused by name.
+    /// Claim: the configuration is read, names the running contracts, and a placeholder nonce is refused. Shows: the
+    /// testnet file (filled for the seal-only gate run, nonces read on 2026-11-11) parses, its previous contracts are the
+    /// bridge, the mediator and the router of `deploy/deployments/sepolia-pls943.json`, its `gateConfig` is the testnet
+    /// bridge configuration, and the same file with a placeholder nonce is refused by name.
     function test_theTestnetConfigurationRefusesItsPlaceholderNonce() public {
         string memory json = vm.readFile("script/testnet/redeploy.config.testnet.json");
         RedeployLayers.ChainConfig memory chainA = script.readChain(json, ".chainA");
         RedeployLayers.ChainConfig memory chainB = script.readChain(json, ".chainB");
+        assertEq(vm.parseJsonAddress(json, ".deployer"), 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc);
+        assertEq(vm.parseJsonString(json, ".gateConfig"), "script/testnet/bridge.config.testnet.json");
         assertEq(chainA.chainId, 11155111);
-        assertEq(chainA.deployerNonce, 14);
+        assertEq(chainA.deployerNonce, 23);
         assertEq(chainB.chainId, 943);
-        assertEq(chainB.deployerNonce, 18);
+        assertEq(chainB.deployerNonce, 27);
+        string memory deployment = vm.readFile("deploy/deployments/sepolia-pls943.json");
+        assertEq(chainA.previousBridge, vm.parseJsonAddress(deployment, ".chain_a.bridge"));
+        assertEq(chainA.previousMediator, vm.parseJsonAddress(deployment, ".chain_a.mediator"));
+        assertEq(chainA.previousRouter, vm.parseJsonAddress(deployment, ".chain_a.delivery_router"));
+        assertEq(chainB.previousBridge, vm.parseJsonAddress(deployment, ".chain_b.bridge"));
+        assertEq(chainB.previousMediator, vm.parseJsonAddress(deployment, ".chain_b.mediator"));
+        assertEq(chainB.previousRouter, vm.parseJsonAddress(deployment, ".chain_b.delivery_router"));
 
-        string memory placeholder = vm.replace(json, '"deployerNonce": "14"', '"deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_SEPOLIA"');
+        string memory placeholder = vm.replace(json, '"deployerNonce": "23"', '"deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_SEPOLIA"');
         vm.expectRevert(abi.encodeWithSelector(RedeployLayers.PlaceholderValue.selector, ".chainA.deployerNonce"));
         script.readChain(placeholder, ".chainA");
     }
@@ -272,5 +286,288 @@ contract RedeployLayersTest is WorldSupport {
         address replaced = script.deployRouter(chainA, kept, deployer);
         assertGt(replaced.code.length, 0);
         assertEq(DeliveryRouter(payable(replaced)).NATIVE_GAS_OVERHEAD(), 105_000, "the router of this build");
+    }
+}
+
+/// @notice The `layers-and-gate` mode on a two chain world: a new seal-only gate first on each chain (with the registry
+/// of the old gate on the registry chain), then the eight layer creations naming it, nine creations per chain, and the
+/// checks that refuse a gate that follows another beacon chain.
+contract RedeployLayersAndGateTest is WorldSupport {
+    RedeployLayers internal script = new RedeployLayers();
+    address internal deployer = makeAddr("deployer");
+    address internal reward = makeAddr("reward");
+    address internal failedDelivery = makeAddr("failed delivery");
+    DeliveryRouter internal routerA;
+    DeliveryRouter internal routerB;
+    ForkRegistry internal registryB;
+    BeaconForkGate internal oldGateB;
+
+    uint256 internal constant NONCE_A = 40;
+    uint256 internal constant NONCE_B = 73;
+    uint64 internal constant GATE_GENESIS = 1_606_824_023;
+    bytes32 internal constant OBSERVATION_VKEY = keccak256("fork observation program");
+
+    /// @dev Chain A runs a gate without a registry (as Sepolia), chain B a gate with a registry (as chain 943). The
+    /// registry of B reads `lightClientForA`, which follows the beacon chain of B. The beacon roots contract has code,
+    /// as on Sepolia, so a `SealOnly` gate may be created.
+    function setUp() public override {
+        super.setUp();
+        _etchMock();
+        vm.chainId(CHAIN_B);
+        registryB = new ForkRegistry(address(lightClientForA), address(verifier), OBSERVATION_VKEY);
+        oldGateB = new BeaconForkGate(
+            BEACON_ROOTS,
+            BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry,
+            GATE_GENESIS,
+            12,
+            32,
+            GENESIS_ROOT_B,
+            address(registryB)
+        );
+        _deployWorld(address(gateA), address(oldGateB));
+        vm.chainId(CHAIN_A);
+        routerA = new DeliveryRouter(
+            ITokenMediator(address(mediatorA)), IWETH(address(new MockWrappedNative())), reward, failedDelivery
+        );
+        vm.chainId(CHAIN_B);
+        routerB = new DeliveryRouter(
+            ITokenMediator(address(mediatorB)), IWETH(address(new MockWrappedNative())), reward, failedDelivery
+        );
+    }
+
+    function _chain(uint64 chainId, uint256 nonce, MessageBridge bridge, TokenMediator mediator, DeliveryRouter router)
+        internal
+        pure
+        returns (RedeployLayers.ChainConfig memory chain)
+    {
+        chain.rpcAlias = "local";
+        chain.chainId = chainId;
+        chain.deployerNonce = nonce;
+        chain.previousBridge = address(bridge);
+        chain.previousMediator = address(mediator);
+        chain.previousRouter = address(router);
+    }
+
+    function _gate(BeaconForkGate.GateMode mode, bytes32 root)
+        internal
+        pure
+        returns (RedeployLayers.GateConfig memory gate)
+    {
+        gate.mode = mode;
+        gate.genesisTime = GATE_GENESIS;
+        gate.secondsPerSlot = 12;
+        gate.slotsPerEpoch = 32;
+        gate.genesisValidatorsRoot = root;
+    }
+
+    /// Claim: the mode creates a new gate at the deployer nonce of each chain, then the eight layers after it, and the
+    /// new bridge names the new gate. Shows: nine creations per chain; the gate at `n` and the layers at `n + 1` to
+    /// `n + 8`; the gate of A is `SealOnly` with no registry, the gate of B `SealOnlyWithRegistry` with the registry of
+    /// the old gate; both enforce from deployment and are not sealed; each new bridge's `depositGate()` is the new gate;
+    /// a token relayed through the new layers on A arrives on B. Matters: the seal-only gate is immutable, and so is the
+    /// bridge that names it; the registry of 943 holds the observed fork history and stays.
+    function test_theNewGateComesFirstAndTheNewBridgeNamesIt() public {
+        RedeployLayers.ChainConfig memory chainA = _chain(uint64(CHAIN_A), NONCE_A, bridgeA, mediatorA, routerA);
+        RedeployLayers.ChainConfig memory chainB = _chain(uint64(CHAIN_B), NONCE_B, bridgeB, mediatorB, routerB);
+        vm.chainId(CHAIN_A);
+        RedeployLayers.Kept memory keptA = script.readKept(chainA);
+        RedeployLayers.GateConfig memory gateConfigA = _gate(BeaconForkGate.GateMode.SealOnly, GENESIS_ROOT_A);
+        gateConfigA.forkRegistry = script.readKeptRegistry(keptA.gate, gateConfigA.mode);
+        assertEq(gateConfigA.forkRegistry, address(0), "a mode without a registry keeps none");
+        script.checkGateOnItsChain(gateConfigA, keptA.gate, uint64(CHAIN_A));
+        vm.chainId(CHAIN_B);
+        RedeployLayers.Kept memory keptB = script.readKept(chainB);
+        RedeployLayers.GateConfig memory gateConfigB =
+            _gate(BeaconForkGate.GateMode.SealOnlyWithRegistry, GENESIS_ROOT_B);
+        gateConfigB.forkRegistry = script.readKeptRegistry(keptB.gate, gateConfigB.mode);
+        assertEq(gateConfigB.forkRegistry, address(registryB), "the registry of the old gate is kept");
+        script.checkGateOnItsChain(gateConfigB, keptB.gate, uint64(CHAIN_B));
+
+        address plannedGateA = vm.computeCreateAddress(deployer, NONCE_A);
+        address plannedGateB = vm.computeCreateAddress(deployer, NONCE_B);
+        RedeployLayers.Planned memory planA = script.plan(deployer, NONCE_A + 1);
+        RedeployLayers.Planned memory planB = script.plan(deployer, NONCE_B + 1);
+
+        vm.chainId(CHAIN_A);
+        vm.setNonce(deployer, uint64(NONCE_A));
+        script.deployGateAndLayers(deployer, chainA, keptA, gateConfigA, plannedGateA, planA, uint64(CHAIN_B), planB);
+        assertEq(vm.getNonce(deployer), NONCE_A + script.GATE_AND_LAYER_CREATIONS(), "nine creations on chain A");
+        vm.chainId(CHAIN_B);
+        vm.setNonce(deployer, uint64(NONCE_B));
+        script.deployGateAndLayers(deployer, chainB, keptB, gateConfigB, plannedGateB, planB, uint64(CHAIN_A), planA);
+        assertEq(vm.getNonce(deployer), NONCE_B + script.GATE_AND_LAYER_CREATIONS(), "nine creations on chain B");
+        assertEq(script.GATE_AND_LAYER_CREATIONS(), script.LAYER_CREATIONS() + 1);
+
+        BeaconForkGate newGateA = BeaconForkGate(plannedGateA);
+        BeaconForkGate newGateB = BeaconForkGate(plannedGateB);
+        assertEq(uint256(newGateA.mode()), uint256(BeaconForkGate.GateMode.SealOnly));
+        assertEq(uint256(newGateB.mode()), uint256(BeaconForkGate.GateMode.SealOnlyWithRegistry));
+        assertEq(address(newGateA.forkRegistry()), address(0));
+        assertEq(address(newGateB.forkRegistry()), address(registryB));
+        assertTrue(newGateA.enforcing() && newGateB.enforcing(), "seal-only gates enforce from deployment");
+        assertFalse(newGateA.isSealed() || newGateB.isSealed());
+        assertEq(newGateB.genesisValidatorsRoot(), GENESIS_ROOT_B);
+        assertEq(address(MessageBridge(planA.bridge).depositGate()), plannedGateA, "the new bridge of A names it");
+        assertEq(address(MessageBridge(planB.bridge).depositGate()), plannedGateB, "the new bridge of B names it");
+        assertEq(planA.receiptProofLib, vm.computeCreateAddress(deployer, NONCE_A + 1), "the layers follow the gate");
+        assertEq(planA.router, vm.computeCreateAddress(deployer, NONCE_A + 8));
+        assertEq(MessageBridge(planA.bridge).remoteBridge(), planB.bridge, "the new bridges name each other");
+
+        bridgeA = MessageBridge(planA.bridge);
+        bridgeB = MessageBridge(planB.bridge);
+        mediatorA = TokenMediator(planA.mediator);
+        mediatorB = TokenMediator(planB.mediator);
+        _openDepositsWithoutProof(bridgeA);
+        _openDepositsWithoutProof(bridgeB);
+        MockERC20 token = new MockERC20("Token", "TKN");
+        token.mint(alice, 10 ether);
+        vm.chainId(CHAIN_A);
+        vm.startPrank(alice);
+        token.approve(address(mediatorA), 10 ether);
+        vm.recordLogs();
+        mediatorA.relayTokens(address(token), bob, 10 ether);
+        vm.stopPrank();
+        Transit memory transit = _deliverToB(vm.getRecordedLogs());
+        assertTrue(bridgeB.messageCallStatus(transit.messageId), "the new seal-only gate admits the send");
+        assertEq(BridgedToken(mediatorB.bridgedTokenAddress(address(token))).balanceOf(bob), 10 ether);
+    }
+
+    /// Claim: the gate settings come from the testnet bridge configuration, chain by chain. Shows: the Sepolia section
+    /// reads `SealOnly` with the Sepolia beacon clock and root; the 943 section reads `SealOnlyWithRegistry` with the 943
+    /// clock and root; a section of another chain is refused; an unknown mode name is refused. Matters: the plan of
+    /// 2026-11-11 names these two modes, and the file is the one place they are written.
+    function test_theGateSettingsComeFromTheTestnetBridgeConfiguration() public {
+        string memory json = vm.readFile("script/testnet/bridge.config.testnet.json");
+        RedeployLayers.GateConfig memory sepolia = script.readGate(json, ".chainA", 11155111);
+        assertEq(uint256(sepolia.mode), uint256(BeaconForkGate.GateMode.SealOnly));
+        assertEq(sepolia.genesisTime, 1655733600);
+        assertEq(sepolia.secondsPerSlot, 12);
+        assertEq(sepolia.slotsPerEpoch, 32);
+        assertEq(sepolia.genesisValidatorsRoot, 0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078);
+        assertEq(sepolia.forkRegistry, address(0), "the registry is read from the old gate, never from the file");
+        RedeployLayers.GateConfig memory pls = script.readGate(json, ".chainB", 943);
+        assertEq(uint256(pls.mode), uint256(BeaconForkGate.GateMode.SealOnlyWithRegistry));
+        assertEq(pls.genesisTime, 1681356369);
+        assertEq(pls.secondsPerSlot, 10);
+        assertEq(pls.genesisValidatorsRoot, 0xd81664ba97279a6fa0832041b4aee6009172b4750a99467ff670a9faf3a34e64);
+
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.GateConfigOfAnotherChain.selector, 943, 11155111));
+        script.readGate(json, ".chainA", 943);
+        string memory unknown = vm.replace(json, '"mode": "SealOnly",', '"mode": "Sealed",');
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.UnknownGateMode.selector, "Sealed"));
+        script.readGate(unknown, ".chainA", 11155111);
+    }
+
+    /// Claim: a gate that follows another beacon chain, or a mode that cannot work on the chain, is refused before
+    /// anything is sent. Shows: a root or a clock that differs from the old gate fails `GateMismatch`; a registry mode on
+    /// a chain whose old gate has no registry fails; a `SealOnly` gate on a chain without the beacon roots contract
+    /// fails `BeaconRootsHaveNoCode`; a registry whose light client follows another root fails. Matters: the gate is
+    /// immutable, and a wrong root or clock makes every seal proof fail for good.
+    function test_aGateOfAnotherBeaconChainIsRefusedBeforeTheRun() public {
+        RedeployLayers.GateConfig memory gate = _gate(BeaconForkGate.GateMode.SealOnly, GENESIS_ROOT_B);
+        vm.expectRevert(
+            abi.encodeWithSelector(RedeployLayers.GateMismatch.selector, "genesisValidatorsRoot differs from the old gate")
+        );
+        script.checkGateOnItsChain(gate, address(gateA), uint64(CHAIN_A));
+
+        gate = _gate(BeaconForkGate.GateMode.SealOnly, GENESIS_ROOT_A);
+        gate.secondsPerSlot = 10;
+        vm.expectRevert(
+            abi.encodeWithSelector(RedeployLayers.GateMismatch.selector, "secondsPerSlot differs from the old gate")
+        );
+        script.checkGateOnItsChain(gate, address(gateA), uint64(CHAIN_A));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RedeployLayers.GateMismatch.selector, "oldGate.forkRegistry is empty, and the new mode needs one"
+            )
+        );
+        script.readKeptRegistry(address(gateA), BeaconForkGate.GateMode.SealOnlyWithRegistry);
+
+        gate = _gate(BeaconForkGate.GateMode.SealOnlyWithRegistry, GENESIS_ROOT_A);
+        gate.forkRegistry = address(registryB);
+        BeaconForkGate oldGateFollowingA = new BeaconForkGate(
+            BEACON_ROOTS,
+            BeaconForkGate.GateMode.DetectBeaconRootsAndRegistry,
+            GATE_GENESIS,
+            12,
+            32,
+            GENESIS_ROOT_A,
+            address(registryB)
+        );
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RedeployLayers.GateMismatch.selector,
+                "genesisValidatorsRoot differs from the light client of the registry"
+            )
+        );
+        script.checkGateOnItsChain(gate, address(oldGateFollowingA), uint64(CHAIN_B));
+
+        gate = _gate(BeaconForkGate.GateMode.SealOnly, GENESIS_ROOT_A);
+        vm.etch(BEACON_ROOTS, "");
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.BeaconRootsHaveNoCode.selector, uint64(CHAIN_A)));
+        script.checkGateOnItsChain(gate, address(gateA), uint64(CHAIN_A));
+        // A registry mode reads no EIP-4788 evidence: it passes on a chain without the beacon roots contract (943).
+        RedeployLayers.GateConfig memory registryGate =
+            _gate(BeaconForkGate.GateMode.SealOnlyWithRegistry, GENESIS_ROOT_B);
+        registryGate.forkRegistry = address(registryB);
+        script.checkGateOnItsChain(registryGate, address(oldGateB), uint64(CHAIN_B));
+    }
+
+    /// Claim: the gate of a chain must follow the beacon chain that the light client on the other chain tracks, with the
+    /// same clock. Shows: a light client with the root and the clock of the gate passes; the fixture light client that
+    /// follows the same root on another clock fails on `genesisTime`; the light client of the other beacon chain fails on
+    /// the root. Matters: the two descriptions of one beacon chain live in two files and two chains; this check ties them.
+    function test_theGateMatchesTheLightClientThatTracksItsChain() public {
+        RedeployLayers.GateConfig memory gate = _gate(BeaconForkGate.GateMode.SealOnly, GENESIS_ROOT_A);
+        BeaconLightClient matching = new BeaconLightClient(
+            address(verifier),
+            LIGHT_CLIENT_VKEY,
+            GENESIS_ROOT_A,
+            SLOTS_PER_PERIOD,
+            GATE_GENESIS,
+            12,
+            INITIAL_SLOT,
+            INITIAL_HEADER_ROOT,
+            COMMITTEE_100,
+            COMMITTEE_101
+        );
+        script.checkGateAgainstTrackingLightClient(gate, address(matching));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RedeployLayers.GateMismatch.selector, "genesisTime differs from the light client on the other chain"
+            )
+        );
+        script.checkGateAgainstTrackingLightClient(gate, address(lightClientForB));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                RedeployLayers.GateMismatch.selector,
+                "genesisValidatorsRoot differs from the light client on the other chain"
+            )
+        );
+        script.checkGateAgainstTrackingLightClient(gate, address(lightClientForA));
+    }
+
+    /// Claim: the gate read-back refuses a gate that is not the one configured. Shows: the old detection gate read as
+    /// the configured `SealOnly` gate fails on `gate.mode`; a new registry gate read with no registry expected fails on
+    /// `gate.forkRegistry`. Matters: the read-back is the last check before the bridge that names the gate is created.
+    function test_theGateReadBackRefusesAnotherGate() public {
+        RedeployLayers.GateConfig memory gate = _gate(BeaconForkGate.GateMode.SealOnly, GENESIS_ROOT_A);
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.DeploymentMismatch.selector, "gate.mode"));
+        script.verifyGate(gateA, gate);
+
+        BeaconForkGate registryGate = new BeaconForkGate(
+            BEACON_ROOTS,
+            BeaconForkGate.GateMode.SealOnlyWithRegistry,
+            GATE_GENESIS,
+            12,
+            32,
+            GENESIS_ROOT_B,
+            address(registryB)
+        );
+        gate = _gate(BeaconForkGate.GateMode.SealOnlyWithRegistry, GENESIS_ROOT_B);
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.DeploymentMismatch.selector, "gate.forkRegistry"));
+        script.verifyGate(registryGate, gate);
     }
 }

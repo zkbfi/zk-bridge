@@ -22,8 +22,9 @@ contract CreationGasCapTest is Test {
     /// @notice The share of the cap that one creation may use: the room is 10%.
     uint256 internal constant BUDGET_PERCENT = 90;
 
-    /// Claim: each of the eight creations of `RedeployLayers` (layers mode) and each other contract of `DeployBridge`
-    /// fits the cap with 10% room at Sepolia's price of code. Shows: the estimate of every contract, printed, is under
+    /// Claim: each of the eight creations of `RedeployLayers` (layers mode), the gate that the `layers-and-gate` mode
+    /// creates first (`BeaconForkGate`; its constructor also creates the opcode probe, about 60 bytes, inside the room),
+    /// and each other contract of `DeployBridge` fits the cap with 10% room at Sepolia's price of code. Shows: the estimate of every contract, printed, is under
     /// the budget. Matters: a creation above the cap is refused by the node, and the bridges and the mediators name their
     /// twins by predicted address, so a refused creation in the middle of the run strands the plan.
     function test_everyCreationFitsTheGasCapWithRoom() public view {
