@@ -578,19 +578,17 @@ fn the_evidence_names_the_message_and_carries_the_execute_calldata() {
 #[test]
 fn an_executed_message_is_reported_with_its_status() {
     let world = world();
-    for (delivery, word) in [(DeliveryStatus::Succeeded, "succeeded")] {
-        let state = DestinationState {
-            delivery,
-            ..DestinationState::complete()
-        };
-        let evidence = build(&world, state, MESSAGE_LOG_INDEX).unwrap();
-        assert_eq!(evidence.delivery_status, delivery);
-        assert!(evidence.already_delivered, "{word}");
-        assert_eq!(
-            serde_json::to_value(&evidence).unwrap()["deliveryStatus"],
-            word
-        );
-    }
+    let state = DestinationState {
+        delivery: DeliveryStatus::Succeeded,
+        ..DestinationState::complete()
+    };
+    let evidence = build(&world, state, MESSAGE_LOG_INDEX).unwrap();
+    assert_eq!(evidence.delivery_status, DeliveryStatus::Succeeded);
+    assert!(evidence.already_delivered);
+    assert_eq!(
+        serde_json::to_value(&evidence).unwrap()["deliveryStatus"],
+        "succeeded"
+    );
 }
 
 /// Claim: when the bridge lacks a block hash row, the evidence lists a call for each stored header that can supply it, and

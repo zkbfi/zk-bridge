@@ -1,0 +1,14 @@
+# Read when this crate is linted on its own (`cargo clippy --all-targets` in this directory). It forbids the message
+# proof without the fork proof that `lc-core` keeps only for the guest program keys (see prover/clippy.toml).
+# `lc-testkit` compiles these files too, but its own clippy.toml would be a program key input, so
+# `lc-testkit/tests/stale_message_api.rs` checks the test kit by a source scan instead.
+disallowed-types = [
+    { path = "lc_core::abi::MessageProof", reason = "no sourceFork; use super::abi::MessageProof" },
+    { path = "lc_core::abi::executeMessageCall", reason = "old selector 0xa5442804; use super::abi::executeMessageCall" },
+    { path = "lc_core::abi::BeaconBlockHeader", reason = "a field type of the old MessageProof; use super::abi::BeaconBlockHeader" },
+]
+disallowed-methods = [
+    { path = "lc_core::message::verify_message", reason = "fork rule by schedule; use super::message::verify_message" },
+    { path = "lc_core::ancestry::verify_beacon_path", reason = "fork rule by schedule; use super::ancestry::verify_beacon_path" },
+    { path = "lc_core::layout::message_block_hash_gindex_for_fork", reason = "the schedule rule; use message_block_hash_gindex_for_shape" },
+]
