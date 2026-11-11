@@ -354,6 +354,59 @@ export const buildBackendSpec = (): OpenApiDocument => {
           { "404": errorResponse("Not a chain id, or no observation proof for this chain.") },
         ),
       },
+      "/route/steps": {
+        get: get(
+          "Pending route steps",
+          "Every pending on-chain step of the route, both directions, with its situation and constraints in numbers: light client updates, the fork registry's own light client, fork observations, closed deposits, layout rows and deliveries. `unread` names the reads that failed, so a missing step is not taken for a done one. One answer serves 15 seconds. Shapes: `routeStepsSchema` of @zkb/data.",
+          [],
+          json(ref("RouteSteps"), "The pending steps."),
+          { ...tooMany, "503": errorResponse("The list cannot be built now.") },
+        ),
+      },
+      "/steps/requests": {
+        post: {
+          summary: "Make the proof of a step",
+          description: "Asks the backend to make the proof of one route step: a light client update, the fork registry's light client update or a fork observation on the GPU; an opening proof or delivery evidence without. A request while a job of the step runs joins it. One job per finality, the direction's daily GPU budget and the per-caller limit (shared with POST /requests) apply.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["pair", "kind", "subject"],
+                  properties: {
+                    pair: { type: "string", description: "The pair this backend serves." },
+                    kind: { type: "string", enum: ["light-client-update", "registry-light-client-update", "fork-observation", "open-deposits", "layout-rows", "deliver"] },
+                    subject: { type: "string", description: "A direction (light-client-update, open-deposits), a chain id (registry-light-client-update, fork-observation) or a message id (layout-rows, deliver)." },
+                  },
+                  additionalProperties: false,
+                },
+              },
+            },
+          },
+          responses: {
+            "202": json({ type: "object", required: ["jobId"], properties: { jobId: { type: "string" }, joined: { const: true }, ready: { const: true } }, additionalProperties: true }, "Started, joined (`joined`), or the proof is made already (`ready`)."),
+            "400": errorResponse("The body is not valid, names another pair, or the subject does not fit the kind."),
+            "404": errorResponse("This backend does not make this kind (`not-served`)."),
+            "409": errorResponse("Nothing to prove now (`why`: no-need or proof-pending)."),
+            "413": errorResponse("The body is too large."),
+            ...tooMany,
+            "503": json(ref("RateLimited"), "A chain or beacon read failed; retryAfterSeconds says when to ask again."),
+          },
+        },
+      },
+      "/steps/jobs/{jobId}": {
+        get: get("A step job", "The job that makes a step's proof: queued, running, done or failed, with its start, its expected end (`etaAt`, from the benchmarks) and a reason that is safe to show.", [path("jobId", "The jobId from POST /steps/requests.")], json(ref("StepJob"), "The job."), { "404": errorResponse("No such job."), ...tooMany }),
+      },
+      "/steps/proofs/{kind}/{subject}": {
+        get: get(
+          "The finished proof of a step",
+          "Public fields only, ready to post from any wallet: the proof message of a light client update (`payload`), the update of the fork registry's light client (`publicValues`, `proof`), the fork observation, the `openDeposits` calldata, or the delivery evidence.",
+          [path("kind", "The kind of step."), path("subject", "A direction, a chain id or a message id.")],
+          json(open("The proof, with `kind` and `subject`."), "The proof."),
+          { "404": errorResponse("Unknown kind, or no finished proof for this step."), ...tooMany },
+        ),
+      },
       "/proofs/latest/{direction}": {
         get: get(
           "Latest valid proof of a direction",
@@ -377,6 +430,50 @@ export const buildBackendSpec = (): OpenApiDocument => {
             modules: { type: "object", additionalProperties: { type: "object", required: ["state"], properties: { state: { type: "string", enum: ["running", "not built", "degraded"] }, detail: { type: "string" } } } },
             queue: { type: "object", required: ["length"], properties: { length: { type: "number" } } },
             lastJobs: { type: "object", additionalProperties: true },
+          },
+          additionalProperties: true,
+        },
+        RouteSteps: {
+          type: "object",
+          required: ["now", "steps", "unread"],
+          properties: {
+            now: { type: "number" },
+            unread: { type: "array", items: { type: "string" } },
+            steps: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["id", "kind", "subject", "direction", "chainId", "target", "messageId", "situation", "constraints", "fallback"],
+                properties: {
+                  id: { type: "string" },
+                  kind: { type: "string", enum: ["light-client-update", "registry-light-client-update", "fork-observation", "open-deposits", "layout-rows", "deliver", "seal"] },
+                  subject: { type: "string" },
+                  direction: { type: ["string", "null"], enum: [...DIRECTIONS, null] },
+                  chainId: { type: "integer", description: "The chain the posting transaction goes to." },
+                  target: { ...ADDRESS, type: ["string", "null"] },
+                  messageId: { ...HASH, type: ["string", "null"] },
+                  situation: open("since, behindSeconds, waitingTransfers, blocks (sends, deliveries), strandsAt, layoutRows, activeVersion, recordedVersion."),
+                  constraints: open("finality { finalizedSlot, nextAt }, gpu { warmMs, coldMs, workerWarm, budgetUsd, spentUsd, leftUsd }, job { jobId, status, startedAt }, proofReady, posting { gas, gasSource, gasPriceWei, costWei }, after."),
+                  fallback: { type: ["object", "null"], description: "Who posts the step when nobody else has by `at` (null: as soon as it can).", properties: { by: { type: "string", enum: ["backend", "runner"] }, at: { type: ["number", "null"] } } },
+                },
+                additionalProperties: true,
+              },
+            },
+          },
+          additionalProperties: true,
+        },
+        StepJob: {
+          type: "object",
+          required: ["jobId", "kind", "subject", "status", "startedAt", "updatedAt", "etaAt", "error"],
+          properties: {
+            jobId: { type: "string" },
+            kind: { type: "string" },
+            subject: { type: "string" },
+            status: { type: "string", enum: ["queued", "running", "done", "failed"] },
+            startedAt: { type: "number" },
+            updatedAt: { type: "number" },
+            etaAt: { type: ["number", "null"] },
+            error: { type: ["string", "null"] },
           },
           additionalProperties: true,
         },

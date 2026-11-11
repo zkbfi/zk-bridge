@@ -82,6 +82,8 @@ A token contract lets the mediator take your tokens only after you approve it. T
 
 What arrives is the amount less the fee. The Bridge screen shows it under the delivery control, in the token and in dollars, before you sign. When the fee is still being worked out, it says "estimating".
 
+When a route step holds up new sends or deliveries (deposits closed on a bridge, a deposit gate that can be sealed, or a light client within 12 h of stranding), the Bridge screen shows one line under the button that says which, with a link to the Route section of Explore, where you can carry the step out from your wallet.
+
 ## When the receiver cannot take the tokens
 
 A delivery can fail for the receiver. A token can, for example, block an address that is on a deny list. The bridge then records the failed release and stops. The message still counts as delivered: the bridge never runs it twice.

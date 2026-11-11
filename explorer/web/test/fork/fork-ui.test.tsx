@@ -42,6 +42,7 @@ const portOf = (over: Partial<ForkPort> = {}): ForkPort => ({
   chainState: async () => ({ gate: null, observation: null }),
   sealOffer: async () => ({ kind: "unavailable", reason: "none" }),
   observeOffer: async () => ({ kind: "unavailable", reason: "the backend holds no observation proof for this chain" }),
+  registryOf: async () => null,
   ...over,
 });
 

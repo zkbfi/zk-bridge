@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
  * warm-up of the remote prover (`watch/warmup-store.ts`), and `job_timings` to the timings of each proof
  * (`requests/timings.ts`): what the prover reported, and when the webhook stored and the board took the proof.
  * `fork_observations` holds the fork observation proofs of the seal module (`seal/observations.ts`), one row per attempt.
+ * `step_jobs` and `step_requests` hold the route steps' proofs that no other table keeps, and their callers (`steps/store.ts`).
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
@@ -130,6 +131,26 @@ CREATE TABLE IF NOT EXISTS fork_observations (
   error TEXT
 );
 CREATE INDEX IF NOT EXISTS fork_observations_by_chain ON fork_observations (chain_id, started_at);
+CREATE TABLE IF NOT EXISTS step_jobs (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  start_slot INTEGER,
+  result TEXT,
+  error TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS step_jobs_one_running ON step_jobs (kind, subject) WHERE status = 'running';
+CREATE INDEX IF NOT EXISTS step_jobs_by_subject ON step_jobs (kind, subject, started_at);
+CREATE TABLE IF NOT EXISTS step_requests (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  caller TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS step_requests_by_caller ON step_requests (caller, created_at);
 `;
 
 /**

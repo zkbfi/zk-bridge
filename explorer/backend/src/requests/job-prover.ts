@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path";
 import type { Pair } from "@zk-bridge/shared";
-import { createProverBinary, type BackendSection, type CommandExecutor, type ForkObservationProver, type ForkProofProver, type HandoffProver, type ProverBinary } from "@zk-bridge/shared/prover";
+import { createProverBinary, type BackendSection, type CommandExecutor, type ForkObservationProver, type ForkProofProver, type HandoffProver, type HeadProver, type OpeningProver, type ProverBinary } from "@zk-bridge/shared/prover";
 import { forkProofArchiveBases, handoffArchiveBases, type BackendConfig, type BackendSecrets } from "../config.ts";
 import type { Logger } from "../logger.ts";
 
@@ -24,13 +24,13 @@ export interface ProverFactories {
    * prover starts from the head on chain.
    */
   readonly proverForJob: (jobId: string) => ProverBinary;
-  /** A wrapper without a proving backend, for `verify`, `evidence`, `handoff-update` and `fork-proof`. */
-  readonly utilityProver: ProverBinary & HandoffProver & ForkProofProver;
+  /** A wrapper without a proving backend, for `verify`, `evidence`, `handoff-update`, `fork-proof` and `opening-proof`. */
+  readonly utilityProver: ProverBinary & HandoffProver & ForkProofProver & OpeningProver;
   /**
-   * The wrapper for `fork-observation`: the same remote endpoints and keys as a proving job, and no webhook (the package
-   * comes back on standard output).
+   * The wrapper for `fork-observation` and for `prove` from a named head (a fork registry's light client): the same remote
+   * endpoints and keys as a proving job, and no webhook (the package comes back on standard output).
    */
-  readonly observationProver: ForkObservationProver;
+  readonly observationProver: ForkObservationProver & HeadProver;
 }
 
 /** Builds the prover wrappers from the configuration. */

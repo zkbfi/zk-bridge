@@ -51,3 +51,4 @@ export * from "./bridged-symbol.js";
 export * from "./search.js";
 export * from "./tip-pricing.js";
 export * from "./revert-text.js";
+export * from "./route-steps.js";

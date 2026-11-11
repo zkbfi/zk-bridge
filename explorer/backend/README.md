@@ -4,7 +4,7 @@ The backend is one open-source service with four modules. Each module can run al
 
 | Module | What it does | Routes |
 | --- | --- | --- |
-| `requests` | Takes proof requests from dapp pages and runs one proving job per direction, and shows where each transfer is in the pipeline. | `POST /requests`, `GET /requests/:id`, `GET /directions/:direction`, `GET /progress/:messageId`, `GET /directions/:direction/pipeline`, `GET /benchmarks`, `GET /billing`, `GET /warmup/summary` (deprecated) |
+| `requests` | Takes proof requests from dapp pages and runs one proving job per direction, shows where each transfer is in the pipeline, and makes the proof of any route step on request. | `POST /requests`, `GET /requests/:id`, `GET /directions/:direction`, `GET /progress/:messageId`, `GET /directions/:direction/pipeline`, `GET /benchmarks`, `GET /billing`, `GET /warmup/summary` (deprecated), `GET /route/steps`, `POST /steps/requests`, `GET /steps/jobs/:jobId`, `GET /steps/proofs/:kind/:subject` |
 | `webhook` | Receives the proof package from the prover, checks it, and posts it to the msgboard. | `POST /webhook/jobs/:jobId` |
 | `msgboard-indexer` | Keeps the latest valid proof of each direction. | `GET /proofs/latest/:direction` |
 | `archive` | Builds and keeps evidence for messages that are sent and not yet delivered. | `GET /evidence/:messageId` |
@@ -50,7 +50,7 @@ The backend reads no endpoint from the environment.
 | `acceptOracleProof` | Local testing only. See below. Default `false`. |
 | `trustForwardedHeader`, `trustedProxyHops` | See "Callers and limits". |
 | `limits` | See "Callers and limits". |
-| `seal` | Optional; needed by the `seal` module. `{ signer, receiptTimeoutSeconds: 180 }`. See "Sealing a gate". |
+| `seal` | Optional; needed by the `seal` module. `{ signer, receiptTimeoutSeconds: 180, observation, registryKeepAlive }`. See "Sealing a gate" and "The registry light client's keep-alive". |
 
 ## Sealing a gate
 
@@ -108,8 +108,32 @@ registry only learns of a fork from a proof of the fork observation program. On 
 - **Switch.** `"seal": { ..., "observation": { "enabled": false } }` turns it off.
 
 Cost: one observation proves a fold of one update per sync committee period since the registry's light client head
-(about 22.75 hours each on PulseChain), plus the observation. Nothing updates that light client today, so the fold grows by
-one update a day; a fold has at most 64 updates (`docs/audit/known-issues.md` 1.23).
+(about 22.75 hours each on PulseChain), plus the observation. A fold has at most 64 updates
+(`docs/audit/known-issues.md` 1.23), so the module keeps that light client within one period (next section).
+
+### The registry light client's keep-alive
+
+The fork registry reads its own light client (a light client of PulseChain on PulseChain). Anyone can update it from the
+dapp (route step "Fork registry light client update"); the module posts the update only when nobody did for one sync
+committee period (`seal/registry-watch.ts`, owner's planner call of 2026-11-11: "registry light client every period
+(about 22.75 h)"):
+
+- **When.** Once per epoch it reads the light client's head (`head()`, `headers(head)`, `syncCommittees(period + 1)`,
+  `programVKey()`, its clock). Younger than one period (`slotsPerPeriod` x `secondsPerSlot`, 81,920 s on PulseChain):
+  nothing (`registry_keepalive_not_needed`, once per change).
+- **How.** It asks the step service (`POST /steps/requests` without the caller limit) for a `registry-light-client-update`:
+  it joins a job that runs, or starts `zk-bridge-prover prove --route <the chain's outgoing route> --head-slot ...
+  --head-root ... --next-committee-hash ... --program-vkey ... --to stdout` on the remote endpoints of the proving jobs. It
+  is a liveness proof: it goes past the direction's GPU budget (`gpu_budget_bypassed`). The GPU time is written to
+  `job_timings` (`registry-<id>`) under the direction whose source is the chain.
+- **Posting.** `update(proof, publicValues)` on the light client is simulated from the seal signer and sent through the
+  same port as a seal. A simulation that reverts means the head moved (someone posted first): nothing is sent
+  (`registry_keepalive_refused`).
+- **Logs and alerts.** `registry_keepalive_due`, `registry_keepalive_waiting` (the service refused, with its reason),
+  `registry_keepalive_prove_failed`, `registry_keepalive_posted`; `registry_keepalive_reverted` and
+  `registry_keepalive_send_failed` also write an `alert` line.
+- **Switch.** `"seal": { ..., "registryKeepAlive": { "enabled": false } }` turns it off. It needs the proving endpoints
+  (`remote`), like the observations.
 
 ## Secrets
 
@@ -719,6 +743,92 @@ fields: `wait_worker_ms`, `not_ready_count`, `retry_count`, `failover_count`, `r
 `worker_queue_ms`, `worker_prove_ms`, `worker_total_ms`, `remote_overhead_ms`, the endpoint label and the GPU name) and
 when the webhook posts the proof (stored, posted, grind ms). Rows older than 30 days are deleted as new ones arrive.
 The prove host passes these routes on (`deploy/app-server/Caddyfile`), and indexer.zkb.fi shows them.
+
+## Route steps
+
+Owner, 2026-11-11 (docs/superpowers/specs/2026-11-11-route-actions-design.md): "you should make them all yes in the dapp.
+our ui should show the situation / constraints of each situation and then guide the user through making it happen (using
+our backend + gpu to create proofs)". Every on-chain step of the route is permissionless; the dapp lets a visitor make the
+proof here and post it from their own wallet. The `requests` module serves four routes for it (`src/steps/`); the shapes
+and the client are in `@zkb/data` (`route-steps.ts`: `routeStepsSchema`, `stepJobSchema`, `stepProofSchema`,
+`createBackendClient(...).routeSteps`, `.requestStep`, `.stepJob`, `.stepProof`, and `stepFlow`, the guided flow).
+
+| Kind | Subject | Proof | Made by | Fallback poster, deadline |
+| --- | --- | --- | --- | --- |
+| `light-client-update` | a direction | SP1, GPU | a job of `POST /requests` (`reason: "user"`) | the keep-alive proves it `limits.keepAliveSeconds` (12 h) after the head's last update; the runner posts it |
+| `registry-light-client-update` | the chain id of a side with a `fork_registry` | SP1, GPU | `prove` from the registry light client's head | the seal module, one sync committee period (about 22.75 h) after the head |
+| `fork-observation` | the chain id of a side with a `fork_registry` | SP1, GPU | `fork-observation` (seal module's table) | the seal module, at once |
+| `open-deposits` | a direction: the bridge on its destination opens | `opening-proof`, no GPU | the prover, on request | the runner, as soon as it can |
+| `layout-rows`, `deliver` | a message id | `evidence`, no GPU | the archive, on request | the runner, for a paying tip (`deliverUnpaidAfterSeconds` for the rest) |
+| `seal` | a chain id | none (beacon evidence or the registry) | the dapp itself | the seal module, at once |
+
+### `POST /steps/requests`
+
+Body `{ pair, kind, subject }` (4 KiB at most). It asks for the proof of one step; a request while a job of the step runs
+joins it. The guards are the existing ones:
+
+- the per-caller limit counts this route and `POST /requests` together (`limits.requestsPerCallerPerMinute`); a request
+  counts once it started or joined a job;
+- a light client update is a request of the request service: one job per finality, the daily job backstop, the GPU
+  budget, a proof we already have (answered `nothing-to-prove`, `proof-pending`);
+- a registry light client update: one job per head it proves from (a finished proof from the current head is answered
+  `ready`), nothing for a head younger than two epochs, `secondsBeforeRetryAfterFailure` after a failed job, the GPU budget
+  of the direction whose source is the chain;
+- a fork observation: only while the chain runs a fork version the registry does not hold, a proof held for it is
+  answered `ready`, `seal.observation.maxProofsPerVersionPerDay` and `retryMinutes` (shared with the seal module's own
+  tries), the GPU budget for a first observation (a new version goes past it);
+- an opening proof: only while the bridge takes no deposits; a proof made in the last 10 minutes is answered `ready`;
+- delivery evidence: answered `ready` when the archive holds it, else one archive pass builds it.
+
+| Status | Body |
+| --- | --- |
+| 202 | `{ jobId, joined?, ready? }`. `jobId` is `job:<id>` (light client update), `observation:<id>`, `step:<id>` or `ready:<kind>:<subject>`. |
+| 400 | `{ error }`: a bad body, another pair, a subject that does not fit the kind. |
+| 404 | `{ error: "not-served", detail }`: this backend does not make the kind (no prover for it, no requests module, no indexer). |
+| 409 | `{ error: "nothing-to-prove", why }`: `no-need` (the step is not pending) or `proof-pending`. |
+| 429 | `{ error: "rate-limited", retryAfterSeconds, why, detail }` with `Retry-After`: `limit`, `same-finality` or `gpu-budget`. |
+| 503 | `{ error: "cannot-check", retryAfterSeconds }`: a chain or beacon read failed. |
+
+### `GET /steps/jobs/:jobId`
+
+`{ jobId, kind, subject, status, startedAt, updatedAt, etaAt, error }`. `status`: `queued`, `running`, `done`, `failed`.
+`etaAt` (a GPU job that runs): its start plus the median prover run of the newest 20 proofs, plus the median wait for a
+cold worker when no worker is warm; null otherwise. `error` is safe to show. 404 for an unknown job.
+
+### `GET /steps/proofs/:kind/:subject`
+
+The finished proof, public fields only; 404 when there is none:
+
+- `light-client-update`: `{ chainId, payload, startSlot, newSlot, provedAt, where }`, the proof message as the board
+  carries it (`payload`), from the webhook (`stored`) or the board (`board`), the one that reaches furthest;
+- `registry-light-client-update`: `{ chainId, lightClient, programKey, startSlot, startRoot, newSlot, newRoot,
+  publicValues, proof, provedAt }`;
+- `fork-observation`: `{ observation }`, the view of `GET /fork-observations/:chainId/latest`;
+- `open-deposits`: `{ chainId, bridge, calldata, remoteSlot, storedSlot, remoteBlockNumber, provedAt }`;
+- `layout-rows`, `deliver`: `{ evidence }`, the archived evidence.
+
+### `GET /route/steps`
+
+`{ now, steps, unread }`: every pending step of both directions, built from the pipeline of each direction, the chain
+indexer (the newest 20 covered messages of each direction), the chains (deposits, the registry light client, the gas
+price, a simulation of the posting from `0x…dEaD`) and the beacon node (the fork schedule). A read that fails leaves its
+steps out and is named in `unread`. One answer serves 15 seconds (a request that started a job drops it). Pending means:
+
+- light client update: transfers wait (`batch`), a proof waits to land, the destination bridge waits for it to open, a
+  job runs, or the head is 1 h old;
+- open deposits: `depositsOpen()` is false on the destination (`after` names the other direction's light client update
+  while that light client has no head yet);
+- layout rows / delivery: the message is covered and not delivered (`layout-rows` while its evidence lists rows);
+- registry light client update: its head is half a period old;
+- fork observation: the chain runs a version the registry does not hold.
+
+Each step: `situation` (`since`, `behindSeconds`, `waitingTransfers`, `blocks` (`sends`, `deliveries`), `strandsAt` (the
+stranding deadline of a light client, or 64 periods after the registry light client's head), `layoutRows`,
+`activeVersion`, `recordedVersion`), `constraints` (`finality` `{ finalizedSlot, nextAt }`; `gpu` `{ warmMs, coldMs,
+workerWarm, budgetUsd, spentUsd, leftUsd }`; `job` to join; `proofReady`; `posting` `{ gas, gasSource, gasPriceWei,
+costWei }` with the gas simulated when a proof is ready, else the runner's fallback: 337,000 for an update, 600,000 for a
+delivery; `after`) and `fallback` `{ by, at }`. A worker is warm while a warm-up session is ready, or for the endpoint's
+idle timeout after the last proof. Reads count toward the 60 reads a minute of the pipeline reads (their own counter).
 
 ## Local testing with the oracle setting
 

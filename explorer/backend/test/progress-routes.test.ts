@@ -31,6 +31,7 @@ function fakeIndexer() {
       return answer(state.headUpdates);
     },
     delivered: async () => state.delivered,
+    covered: async () => [],
   };
   return { state, reads };
 }

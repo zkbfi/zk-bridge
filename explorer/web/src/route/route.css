@@ -1,0 +1,12 @@
+/* The Route section and its step cards: square panels, pill buttons, a shadow for the card inside a drawer. */
+.zb-rs { display: block; background: var(--zb-to); padding: 14px 16px; margin: 0 -16px 2px; }
+.zb-rs[data-placement="trail"] { margin: 6px 0; box-shadow: 0 1px 6px rgb(0 0 0 / 14%); }
+.zb-rs-h { margin: 0; font-size: var(--zb-step-0); }
+.zb-rs-sub { margin: 2px 0 6px; }
+.zb-rs-group { margin: 8px 0 0; }
+.zb-rs-line { margin: 0 0 4px; overflow-wrap: anywhere; }
+.zb-rs-flow { flex-wrap: wrap; align-items: center; padding-top: 10px; }
+.zb-rs-flow .zb-small { margin: 0; flex: 1 1 14rem; }
+.zb-rs-warn { margin: 8px 0 0; color: var(--zb-accent-text); }
+.zb-rs-notice { display: block; margin: 8px 0 0; font-size: var(--zb-step--1); color: var(--zb-muted); }
+.zb-rs-notice a { color: var(--zb-ink); }

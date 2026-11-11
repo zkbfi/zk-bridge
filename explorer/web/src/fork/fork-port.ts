@@ -10,6 +10,7 @@ import { postJsonResponse } from "@zk-bridge/shared/msgboard-http";
 import {
   createBeaconProofSource,
   fetchJsonResponse,
+  forkRegistryAbi,
   offerObservation,
   fallbackBeaconSource,
   NO_BEACON_ENDPOINT_TEXT,
@@ -47,6 +48,12 @@ export type ForkPort = {
    * registry and add a newer slot, from this account.
    */
   observeOffer(chainId: number, registry: Address, account: Address): Promise<ObservationOffer>;
+  /**
+   * The `ForkRegistry` of a chain and its light client, from trusted sources only: the registry of the deployment, else
+   * the one the chain's configured gate names on chain; the light client read with `lightClient()` from that registry.
+   * Null when the chain has none or a read fails. A backend answer never names them.
+   */
+  registryOf(chainId: number): Promise<{ readonly registry: Address; readonly lightClient: Address } | null>;
 };
 
 /** The sample page: it reads no chain. */
@@ -55,6 +62,7 @@ export const fixtureForkPort: ForkPort = {
   chainState: async () => ({ gate: null, observation: null }),
   sealOffer: async () => ({ kind: "unavailable", reason: "the sample page reads no chain" }),
   observeOffer: async () => ({ kind: "unavailable", reason: "the sample page reads no chain" }),
+  registryOf: async () => null,
 };
 
 const attempt = async <T>(read: () => Promise<T>): Promise<T | null> => {
@@ -98,6 +106,14 @@ export const createForkPort = (input: {
       const registry = chain.contracts.forkRegistry ?? gate?.forkRegistry ?? null;
       const observation = registry === null ? null : await attempt(() => readForkObservation({ client: clientFor(chainId), registry }));
       return { gate, observation };
+    },
+    registryOf: async (chainId) => {
+      const chain = chainOf(chainId);
+      const gate = (chain.contracts.forkRegistry ?? null) !== null || chain.contracts.gate === null ? null : await attempt(() => readForkGateState({ client: clientFor(chainId), gate: chain.contracts.gate as Address }));
+      const registry = chain.contracts.forkRegistry ?? gate?.forkRegistry ?? null;
+      if (registry === null) return null;
+      const lightClient = await attempt(() => clientFor(chainId).readContract({ address: registry, abi: forkRegistryAbi, functionName: "lightClient" }) as Promise<Address>);
+      return lightClient === null ? null : { registry, lightClient };
     },
     sealOffer: async (chainId, account) => {
       const chain = chainOf(chainId);

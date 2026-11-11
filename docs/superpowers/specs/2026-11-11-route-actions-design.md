@@ -1,5 +1,11 @@
 # Route actions: anyone moves the route forward from the dapp
 
+Date: 2026-11-11. Status: built on branch `feat/route-actions`, not deployed. Backend routes `GET /route/steps`,
+`POST /steps/requests`, `GET /steps/jobs/:jobId`, `GET /steps/proofs/:kind/:subject` (explorer/backend/README.md, "Route
+steps"); the registry light client's keep-alive in the seal module; the shared model in `@zkb/data` (`route-steps.ts`);
+the dapp's Explore "Route" section, the blocking step on a transfer's page and the Bridge screen notice. Terminal: no
+route steps view.
+
 Owner, 2026-11-11, verbatim:
 
 > the point is to allow the user to write all of this stuff. can't we have the user post the needed proof?

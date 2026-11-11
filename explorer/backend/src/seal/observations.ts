@@ -65,3 +65,27 @@ export function latestObservationView(storage: Storage, chainId: number): Latest
   const latest = latestObservationProof(storage, chainId);
   return latest === null ? null : publicForkObservation({ package: latest.observation, provedAt: latest.provedAt, postedTransaction: latest.postedTransaction });
 }
+
+/** One attempt as a step job: its chain, status and times. */
+export type ObservationAttempt = { readonly id: string; readonly chainId: number; readonly status: "proving" | "proved" | "posted" | "failed"; readonly startedAt: number; readonly endedAt: number | null; readonly error: string | null };
+
+type AttemptRow = { id: string; chain_id: number; status: ObservationAttempt["status"]; started_at: number; ended_at: number | null; error: string | null };
+
+const toAttempt = (row: AttemptRow): ObservationAttempt => ({ id: row.id, chainId: row.chain_id, status: row.status, startedAt: row.started_at, endedAt: row.ended_at, error: row.error });
+
+/** One attempt by id, or null. */
+export function getObservationAttempt(storage: Storage, id: string): ObservationAttempt | null {
+  const row = storage.database.prepare("SELECT id, chain_id, status, started_at, ended_at, error FROM fork_observations WHERE id = ?").get(id) as AttemptRow | undefined;
+  return row === undefined ? null : toAttempt(row);
+}
+
+/**
+ * The attempt of a chain that proves now (started after `since`, so one that a restart left behind does not count), or
+ * null. A second proof of the same observation never starts while one runs: the watch waits, and a request joins it.
+ */
+export function provingObservation(storage: Storage, chainId: number, since: number): ObservationAttempt | null {
+  const row = storage.database
+    .prepare("SELECT id, chain_id, status, started_at, ended_at, error FROM fork_observations WHERE chain_id = ? AND status = 'proving' AND started_at > ? ORDER BY started_at DESC LIMIT 1")
+    .get(chainId, since) as AttemptRow | undefined;
+  return row === undefined ? null : toAttempt(row);
+}

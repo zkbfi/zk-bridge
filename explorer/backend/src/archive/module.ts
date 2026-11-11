@@ -84,7 +84,11 @@ const HANDOFF_FILE = /^(\d{1,9})\.json$/;
 const FORK_PROOF_FILE = /^(0x[0-9a-fA-F]{64})\.json$/;
 const CHAIN_ID = /^\d{1,12}$/;
 
-/** The archive service of a context, or null when the configuration names no chain indexer. */
+/** The archive service of a context, or null when the configuration names no chain indexer. The route steps build evidence through it. */
+export function archiveServiceOf(context: BackendModuleContext): ArchiveService | null {
+  return serviceFor(context);
+}
+
 function serviceFor(context: BackendModuleContext): ArchiveService | null {
   if (services.has(context)) return services.get(context) as ArchiveService | null;
   const baseUrl = context.config.indexerUrl;

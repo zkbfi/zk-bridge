@@ -4,7 +4,7 @@
  * full height, drawer included: it runs on, lit between completed steps and dark ahead, and grows with the drawer's
  * height (the same grid-row motion as the fee drawers).
  */
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { Chevron, ExternalLink } from "../bridge/icons";
 
 /** One step. A step with a drawer opens it; one with only an href links on. */
@@ -24,6 +24,10 @@ export type TrailStep = {
 export const StepTrail = ({ steps, initiallyOpen = null }: { readonly steps: readonly TrailStep[]; readonly initiallyOpen?: number | null }) => {
   const [open, setOpen] = useState<number | null>(initiallyOpen);
   const id = useId();
+  // A step that is known only after the page loaded (a pending route step) opens its drawer once, unless the reader opened another.
+  useEffect(() => {
+    if (initiallyOpen !== null) setOpen((before) => before ?? initiallyOpen);
+  }, [initiallyOpen]);
   const current = steps.findIndex((step) => !step.done);
   return (
     <ol className="zb-steps zb-trail">

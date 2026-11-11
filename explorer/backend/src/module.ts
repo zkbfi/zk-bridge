@@ -1,7 +1,8 @@
 import type { Hono } from "hono";
 import type { Pair } from "@zk-bridge/shared";
 import type { PreflightResult } from "@zk-bridge/shared/msgboard";
-import type { ForkObservationProver, ForkProofProver, HandoffProver, ProverBinary } from "@zk-bridge/shared/prover";
+import type { ForkObservationProver, ForkProofProver, HandoffProver, HeadProver, OpeningProver, ProverBinary } from "@zk-bridge/shared/prover";
+import type { StepChainReads } from "./steps/chain.ts";
 import type { BillingReader } from "./billing.ts";
 import type { BackendConfig, ModuleName } from "./config.ts";
 import type { LightClientFacts } from "./keepalive/plan.ts";
@@ -49,6 +50,12 @@ export type BackendModuleContext = {
   readonly readLightClientOf?: (side: PairSide) => Promise<LightClientFacts>;
   /** The `fork-observation` command with the proving backend, for the fork observations of the `seal` module. Absent: none are proven. */
   readonly observationProver?: ForkObservationProver;
+  /** `prove` from a named head with the proving backend: the update of a fork registry's own light client. Absent: none is proven. */
+  readonly headProver?: HeadProver;
+  /** The `opening-proof` command, for the opening proof of a route step. Absent: none is made. */
+  readonly openingProver?: OpeningProver;
+  /** The chain and beacon reads of the route steps. Default (absent): viem over each side's RPC endpoint and the global fetch. A test replaces it. */
+  readonly stepChain?: StepChainReads;
   /** Opens the signer of `seal.signer` for the `seal` module. Absent without a `seal` section. */
   readonly openSealSigner?: () => Promise<Signer>;
 };

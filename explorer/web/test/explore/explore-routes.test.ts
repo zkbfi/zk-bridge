@@ -8,6 +8,7 @@ describe("Explore's routes", () => {
   const cases: readonly [string, Route][] = [
     ["#/explore", { name: "explore" }],
     ["#/explore?q=0x4663c8c2", { name: "explore", q: "0x4663c8c2" }],
+    ["#/explore?section=route", { name: "explore", section: "route" }],
     [`#/explore/tx/11155111/${TX}`, { name: "explore", page: { kind: "tx", chainId: 11155111, id: TX } }],
     [`#/explore/address/${ADDRESS}`, { name: "explore", page: { kind: "address", id: ADDRESS } }],
     ["#/explore/proof/11155111/1", { name: "explore", page: { kind: "proof", chainId: 11155111, id: "1" } }],
@@ -28,6 +29,10 @@ describe("Explore's routes", () => {
 
   it("writes a browse page without a question mark when its query is empty", () => {
     expect(formatRoute({ name: "explore", page: { kind: "browse", id: "proofs", query: "" } })).toBe("#/explore/browse/proofs");
+  });
+
+  it("ignores a section it does not know", () => {
+    expect(parseRoute("#/explore?section=nothing")).toEqual({ name: "explore" });
   });
 
   it("refuses malformed identifiers by falling back to Explore's top", () => {

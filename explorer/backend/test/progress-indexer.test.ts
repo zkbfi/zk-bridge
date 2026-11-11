@@ -61,6 +61,8 @@ describe("the indexer reads of the progress routes", () => {
     indexer.set("/api/feed?direction=1%3E369&status=delivered&limit=200", { items: [{ ...message("delivered"), delivered: { timestamp: 3_000, success: true } }], nextCursor: null });
     expect(await reads.headUpdates(369)).toMatchObject([{ slot: 64, timestamp: 2_000 }]);
     expect(await reads.delivered(1, 369)).toMatchObject([{ status: "delivered", delivered: { timestamp: 3_000 } }]);
+    indexer.set("/api/feed?direction=1%3E369&status=covered&limit=20", { items: [message("covered")], nextCursor: null });
+    expect(await reads.covered(1, 369)).toMatchObject([{ status: "covered" }]);
   });
 
   it("uses the global fetch by default and forgets the oldest answer past its limit", async () => {
