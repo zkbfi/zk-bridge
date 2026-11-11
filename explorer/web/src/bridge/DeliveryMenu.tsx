@@ -105,8 +105,8 @@ export const deliverySummary = (form: BridgeQuery, facts: DeliveryFacts): Delive
 
 type Segment<T extends string> = { readonly value: T; readonly label: string };
 
-const Segments = <T extends string>({ label, value, options, onChange, stacked = false }: { readonly label: string; readonly value: T; readonly options: readonly Segment<T>[]; readonly onChange: (next: T) => void; readonly stacked?: boolean }) => (
-  <div className={stacked ? "zb-menu-row zb-menu-stack" : "zb-menu-row"}>
+const Segments = <T extends string>({ label, value, options, onChange }: { readonly label: string; readonly value: T; readonly options: readonly Segment<T>[]; readonly onChange: (next: T) => void }) => (
+  <div className="zb-menu-row zb-menu-stack">
     <span className="zb-m-head">{label}</span>
     <span className="zb-seg" role="radiogroup" aria-label={label}>
       {options.map((option) => (
@@ -164,7 +164,7 @@ export const DeliveryMenu = ({ form, defaultRouter, onChange, tipChoice, onTipCh
     onChange({ ...form, callTarget: target, callData: target === undefined ? undefined : data, ...(target === undefined ? { callGas: undefined } : {}) });
   return (
     <div className="zb-delivery-menu" role="group" aria-label="Delivery settings">
-      <Segments label="Who delivers" value={tipChoice} options={TIP_CHOICES} onChange={onTipChoice} stacked />
+      <Segments label="Who delivers" value={tipChoice} options={TIP_CHOICES} onChange={onTipChoice} />
       {tipChoice === "none" ? <p className="zb-slider-note" data-testid="no-tip-note">{NO_TIP_TEXT}</p> : null}
       {value === null ? null : control(value)}
       {gas === null ? null : control(gas)}

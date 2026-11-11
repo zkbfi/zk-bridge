@@ -50,14 +50,16 @@ export type DescribedTransaction = {
   readonly transfer: FeedItem | null;
 };
 
-const text = (value: unknown): string => (typeof value === "bigint" ? value.toString() : Array.isArray(value) ? `[${value.map(text).join(", ")}]` : typeof value === "object" && value !== null ? JSON.stringify(value, (_, inner) => (typeof inner === "bigint" ? inner.toString() : inner)) : String(value));
+/** An event argument as text: bigints in full, lists and structs (with bigints inside) as JSON-like text. */
+export const argText = (value: unknown): string => (typeof value === "bigint" ? value.toString() : Array.isArray(value) ? `[${value.map(argText).join(", ")}]` : typeof value === "object" && value !== null ? JSON.stringify(value, (_, inner) => (typeof inner === "bigint" ? inner.toString() : inner)) : String(value));
 
-const decodeCall = (input: Hex, abis: readonly Abi[]): string | null => {
+/** The signature `name(type arg, …)` of the first of `abis` that decodes the call, or null. */
+export const decodeCall = (input: Hex, abis: readonly Abi[]): string | null => {
   for (const abi of abis) {
     try {
       const { functionName } = decodeFunctionData({ abi, data: input });
-      const item = abi.find((entry): entry is AbiFunction => entry.type === "function" && entry.name === functionName);
-      if (item === undefined) return functionName;
+      // decodeFunctionData names a function of this ABI, so the entry exists.
+      const item = abi.find((entry) => entry.type === "function" && entry.name === functionName) as AbiFunction;
       return `${functionName}(${item.inputs.map((input) => `${input.type}${input.name === undefined || input.name === "" ? "" : ` ${input.name}`}`).join(", ")})`;
     } catch {
       // Not this ABI.
@@ -89,9 +91,10 @@ export const describeTransaction = (input: { readonly chainId: number; readonly 
   const events = receipt.logs.flatMap((log) => {
     for (const abi of ALL_ABIS) {
       try {
-        const decoded = decodeEventLog({ abi, data: log.data, topics: log.topics });
-        const args = decoded.args === undefined ? [] : Object.entries(decoded.args as unknown as Record<string, unknown>).map(([name, value]) => [name, text(value)] as const);
-        return [{ name: decoded.eventName ?? "event", address: getAddress(log.address), args }];
+        // With the generic Abi viem types the decoded event loosely; a decoded log always has its name, and args only when it has any.
+        const decoded = decodeEventLog({ abi, data: log.data, topics: log.topics }) as unknown as { readonly eventName: string; readonly args?: Record<string, unknown> };
+        const args = decoded.args === undefined ? [] : Object.entries(decoded.args).map(([name, value]) => [name, argText(value)] as const);
+        return [{ name: decoded.eventName, address: getAddress(log.address), args }];
       } catch {
         // Not this ABI.
       }
@@ -131,7 +134,7 @@ export type StepDetail =
 export type TxStep = { readonly label: string; readonly done: boolean; readonly at: number | null; readonly href?: string; readonly detail?: StepDetail };
 
 /** A chain name without its network suffix ("PulseChain testnet v4" → "PulseChain"), for short step labels (owner). */
-export const shortChain = (name: string): string => name.split(" ")[0] ?? name;
+export const shortChain = (name: string): string => name.replace(/ .*/, "");
 
 /**
  * Where a transaction sits: from the user's action (the transfer that started it) to delivery. Labels are short; the

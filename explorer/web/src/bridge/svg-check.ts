@@ -85,7 +85,7 @@ export const checkSvg = (text: string): string | null => {
     for (;;) {
       const attribute = ATTRIBUTE.exec(rest);
       if (attribute === null) break;
-      const problem = checkValue(attribute[1]!, attribute[2] ?? attribute[3] ?? "");
+      const problem = checkValue(attribute[1]!, attribute[2] ?? attribute[3]!);
       if (problem !== null) return problem;
       rest = rest.slice(attribute[0].length);
     }

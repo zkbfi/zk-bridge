@@ -35,9 +35,9 @@ export const poolReaderFor = (rpcUrl: string): Promise<CountingPoolReader> =>
  */
 export const usePrices = (tokens: readonly TokenInfo[]) => {
   const { pair, configuration, connection } = useServices();
-  const rpc = connection?.resolved().rpcUrls[369]?.value ?? configuration.rpcUrls[369] ?? defaultRpcUrl(369);
-  const live = configuration.dataMode === "live" && rpc !== null;
+  // PulseChain always has a default RPC, so there is always one to read prices over.
+  const rpc = connection?.resolved().rpcUrls[369]?.value ?? configuration.rpcUrls[369] ?? defaultRpcUrl(369)!;
   const sample = configuration.dataMode === "fixture";
-  const source = useMemo((): PriceSource | null => (sample ? { mode: "sample" } : live ? { mode: "live", id: rpc!, poolReader: () => poolReaderFor(rpc!) } : null), [sample, live, rpc]);
+  const source = useMemo((): PriceSource => (sample ? { mode: "sample" } : { mode: "live", id: rpc, poolReader: () => poolReaderFor(rpc) }), [sample, rpc]);
   return usePricesFrom({ tokens, pair, source });
 };

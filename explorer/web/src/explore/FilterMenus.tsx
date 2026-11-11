@@ -31,7 +31,7 @@ const Pop = ({ label, text, set, count, align = "start", children }: { readonly 
   const wrap = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const surface = useRef<HTMLDivElement>(null);
-  const items = (): HTMLElement[] => [...(surface.current?.querySelectorAll<HTMLElement>(ITEMS) ?? [])];
+  const items = (): HTMLElement[] => [...surface.current!.querySelectorAll<HTMLElement>(ITEMS)];
   const focusFirst = (): void => (items().find((item) => item.getAttribute("aria-checked") === "true") ?? items()[0])?.focus();
   const close = (): void => {
     setOpen(false);

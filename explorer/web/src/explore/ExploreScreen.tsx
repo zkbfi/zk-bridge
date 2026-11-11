@@ -24,6 +24,7 @@ import { priceNumber, type PriceQuote } from "../bridge/price-oracle";
 import { DEFAULT_GAS_LEVEL, slotStartTime, type CostInput } from "@zk-bridge/shared";
 import { usePrices } from "../bridge/use-prices";
 import { durationText, exploreNumbers, lightClientCards, statusWord } from "./explore-model";
+import { shortChain } from "./tx-model";
 import { ExplorePageView } from "./ExplorePages";
 import { StrandingLine } from "../stranding/StrandingLine";
 import { InFlightOrbits } from "./InFlightOrbits";
@@ -50,7 +51,7 @@ export type ExploreScreenProps = {
 const href = (page: ExplorePage): string => formatRoute({ name: "explore", page });
 
 /** A chain name without its network suffix, for tight places: "PulseChain testnet v4" → "PulseChain". */
-export const shortName = (name: string): string => name.split(" ")[0] ?? name;
+export const shortName = shortChain;
 
 /** The chain names of a pair by chain id. */
 export const chainNamer = (pair: PairConfig) => (chainId: number): string => (pair.first.chainId === chainId ? pair.first.name : pair.second.chainId === chainId ? pair.second.name : String(chainId));
@@ -320,7 +321,7 @@ const InFlight = ({ data }: { readonly data: ExploreData }) => {
             ? null
             : new Map(aggregate.data.map((row) => [row.sourceChainId === pair.first.chainId ? ("first-to-second" as const) : ("second-to-first" as const), row])),
         proofCovers: proofCoversWith(reach),
-        costOf: (chainId) => (chainId === pair.first.chainId ? firstCost : chainId === pair.second.chainId ? secondCost : null),
+        costOf: (chainId) => (chainId === pair.first.chainId ? firstCost : secondCost),
         iconOf: (token) => iconUrl(iconSubjectOf(token, pair), loadImageServer()),
         priceOf: (token) => {
           const quote = prices?.get(`${token.side}:${token.address}`) ?? null;

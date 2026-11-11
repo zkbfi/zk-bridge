@@ -141,6 +141,12 @@ export const SearchIcon = ({ title }: IconProps) => (
   </svg>
 );
 
+/** The background of an account's identicon: four quarters, each hue taken from six hex digits of the address. */
+export const identiconGradient = (address: Address): string => {
+  const hue = (index: number): string => `hsl(${parseInt(address.slice(2 + index * 6, 8 + index * 6), 16) % 360} 70% 55%)`;
+  return `conic-gradient(${hue(0)} 0 25%, ${hue(1)} 0 50%, ${hue(2)} 0 75%, ${hue(3)} 0)`;
+};
+
 /**
  * The account's identicon: four quarters coloured from the address, so the same account always looks the same.
  *
@@ -148,6 +154,5 @@ export const SearchIcon = ({ title }: IconProps) => (
  */
 export const Identicon = ({ address }: { readonly address: Address | null }) => {
   if (address === null) return <span className="zb-ident" style={{ background: "var(--zb-pill-edge)" }} aria-hidden="true" />;
-  const hue = (index: number): string => `hsl(${parseInt(address.slice(2 + index * 6, 8 + index * 6), 16) % 360} 70% 55%)`;
-  return <span className="zb-ident" aria-hidden="true" style={{ background: `conic-gradient(${hue(0)} 0 25%, ${hue(1)} 0 50%, ${hue(2)} 0 75%, ${hue(3)} 0)` }} />;
+  return <span className="zb-ident" aria-hidden="true" style={{ background: identiconGradient(address) }} />;
 };

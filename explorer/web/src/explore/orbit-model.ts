@@ -242,7 +242,7 @@ export const orbitTracks = (input: OrbitInput): readonly OrbitTrack[] => {
         reachedAt: step === 0 ? item.sentAt : item.sentAt + defaultFinalitySeconds(source.chainId),
       });
     }
-    planets.sort((a, b) => a.step - b.step || a.sentAt - b.sentAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    planets.sort((a, b) => a.step - b.step || a.sentAt - b.sentAt || (a.id < b.id ? -1 : 1));
     const counts: [number, number, number] = [0, 0, 0];
     for (const planet of planets) counts[planet.step]++;
     const drawnPer: [number, number, number] = [0, 0, 0];

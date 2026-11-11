@@ -4,8 +4,8 @@
  */
 import type { ChainSnapshotResult } from "@terminal/chain/live-reads";
 import type { ChainConfig, ChainSide, Direction, LightClientHead, PairConfig, TokenInfo } from "@terminal/model/types";
-import { bridgedSymbolOf, nativeSymbolOf, secondsPerSlot, waitEstimate } from "@zk-bridge/shared";
-import { formatUnits } from "../ui/format";
+import { bridgedSymbolOf, nativeSymbolOf, secondsPerSlot, waitEstimate, WAD } from "@zk-bridge/shared";
+import { formatUnits, parseUnits } from "../ui/format";
 
 /** The source and destination chains of a direction. */
 export const chainsFor = (pair: PairConfig, dir: Direction): { readonly source: ChainConfig; readonly destination: ChainConfig } =>
@@ -187,3 +187,72 @@ export const amountText = (value: bigint, decimals: number): string => {
  * @param token The token that is sent.
  */
 export const arrivesAsSymbol = (token: Pick<TokenInfo, "symbol" | "isBridgedCopy">): string => (token.isBridgedCopy === true ? nativeSymbolOf(token) : bridgedSymbolOf(token.symbol));
+
+/** Why a typed percentage cannot be used, or null. */
+export const percentProblem = (text: string): string | null => {
+  const value = Number(text.trim().replace(/%$/, ""));
+  if (text.trim() === "" || !Number.isFinite(value)) return "Enter a number, such as 0.5.";
+  return value < 0 || value > 100 ? "Use a number from 0 to 100." : null;
+};
+
+/**
+ * The RPC a chain is read over: the user's choice, else the configuration's, else the default (null when none).
+ *
+ * @param chosen The URL the user chose in Settings, if any.
+ * @param configured The URL the configuration names, if any.
+ * @param fallback The default URL of the chain, or null.
+ */
+export const rpcUrlFor = (chosen: string | undefined, configured: string | undefined, fallback: string | null): string | null => chosen ?? configured ?? fallback;
+
+/**
+ * What arrives: the amount less the fee once the fee is known (it can go below zero for a fee above the amount), else the
+ * amount itself; null while there is no amount.
+ *
+ * @param amount The amount sent, or null.
+ * @param feeUnits The fee in the token's units, or null while it is not known.
+ */
+export function receivedOf(amount: bigint, feeUnits: bigint | null): bigint;
+export function receivedOf(amount: bigint | null, feeUnits: bigint | null): bigint | null;
+export function receivedOf(amount: bigint | null, feeUnits: bigint | null): bigint | null {
+  return amount !== null && feeUnits !== null ? amount - feeUnits : amount;
+}
+
+/** A balance or amount shown to the user never goes below zero. */
+export const nonNegative = (value: bigint): bigint => (value > 0n ? value : 0n);
+
+/** A part of an amount as a percent of it, to 4 decimals (the amount must not be zero). */
+export const shareOfAmount = (units: bigint, amount: bigint): number => Number((units * 1_000_000n) / amount) / 10_000;
+
+/** A value in dollars (USD x 1e18) as a percent of an amount in dollars, to 6 decimals (the amount must not be zero). */
+export const usdPercentOf = (valueUsd: bigint, amountUsd: bigint): number => Number((valueUsd * WAD) / amountUsd / 10n ** 10n) / 1e6;
+
+/** A percent of 0 to 100, to 4 decimals, as a share of the amount (1e18 = 100%). */
+export const percentToWad = (percent: number): bigint => parseUnits(percent.toFixed(4), 16);
+
+/** A share rounded to the nearest multiple of a grain. */
+const nearest = (wad: bigint, grain: bigint): bigint => ((wad + grain / 2n) / grain) * grain;
+/** The grain of a tip the drawer shows and keeps: 0.0001% of the amount. */
+const TIP_GRAIN = 10n ** 12n;
+/** The grain of a share the tip slider and the gas bars sign: 0.000001% of the amount. */
+const SIGNED_GRAIN = 10n ** 10n;
+
+/**
+ * The tip before gas of a fee, as a share of the amount (1e18 = 100%) to the nearest 0.0001%: what the drawer shows and
+ * what a new gas level keeps, so moving the bars back and forth lands on the same fee instead of drifting. A fee under the
+ * cost leaves no tip.
+ *
+ * @param feeUsd The fee in dollars (x 1e18).
+ * @param costUsd The cost it covers, in dollars.
+ * @param amountUsd The amount in dollars (above zero).
+ */
+export const tipWadOf = (feeUsd: bigint, costUsd: bigint, amountUsd: bigint): bigint => nearest(feeUsd > costUsd ? ((feeUsd - costUsd) * WAD) / amountUsd : 0n, TIP_GRAIN);
+
+/**
+ * The share to sign for a tip on top of a cost, to the nearest 0.000001% of the amount: short text in the address, and
+ * the dust of a near-free delivery gas never shows as a last-digit unit.
+ *
+ * @param tipWad The tip before gas, as a share (1e18 = 100%).
+ * @param costUsd The cost to add, in dollars (x 1e18).
+ * @param amountUsd The amount in dollars (above zero).
+ */
+export const signedShareOf = (tipWad: bigint, costUsd: bigint, amountUsd: bigint): bigint => nearest(tipWad + (costUsd * WAD) / amountUsd, SIGNED_GRAIN);

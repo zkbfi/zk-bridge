@@ -188,7 +188,7 @@ export const FeeLine = ({ summary, summaryFull, priceNote, gasHelp, gasLevel, on
 
   const pick = (event: ReactMouseEvent<HTMLButtonElement>, key: Open): void => {
     const box = event.currentTarget.getBoundingClientRect();
-    const left = root.current?.getBoundingClientRect().left ?? 0;
+    const left = root.current!.getBoundingClientRect().left;
     if (key !== open) setFrom(box.left + box.width / 2 - left);
     choose(open === key ? null : key);
   };
@@ -198,8 +198,7 @@ export const FeeLine = ({ summary, summaryFull, priceNote, gasHelp, gasLevel, on
   // The gas level: the can and its bars are one segment; a tap moves up a level (High wraps to Low), the arrow
   // keys step up and down without wrapping. Its tooltip stays while the pointer is on it, so the new level reads at once.
   const level = gasLevel === 0 ? DEFAULT_GAS_LEVEL : gasLevel;
-  const levelKeys = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
-    if (onGasLevel === undefined) return;
+  const levelKeys = (onLevel: (next: FeeGasLevel) => void) => (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
     const up = event.key === "ArrowUp" || event.key === "ArrowRight";
     const down = event.key === "ArrowDown" || event.key === "ArrowLeft";
     if (!up && !down) return;
@@ -207,7 +206,7 @@ export const FeeLine = ({ summary, summaryFull, priceNote, gasHelp, gasLevel, on
     event.preventDefault();
     event.stopPropagation();
     const next = up ? Math.min(3, level + 1) : Math.max(1, level - 1);
-    if (next !== level) onGasLevel(next as FeeGasLevel);
+    if (next !== level) onLevel(next as FeeGasLevel);
   };
   const gas =
     onGasLevel === undefined ? (
@@ -215,7 +214,7 @@ export const FeeLine = ({ summary, summaryFull, priceNote, gasHelp, gasLevel, on
         <GasCan title="Gas" level={gasLevel} />
       </span>
     ) : (
-      <button type="button" className="zb-dseg zb-gas" aria-label={`Gas level: ${GAS_LEVEL_NAMES[level]}. Change`} aria-describedby={ids.gas} data-fee="gas" data-level={gasLevel} onClick={() => onGasLevel(nextGasLevel(level))} onKeyDown={levelKeys} {...hoverProps("gas")}>
+      <button type="button" className="zb-dseg zb-gas" aria-label={`Gas level: ${GAS_LEVEL_NAMES[level]}. Change`} aria-describedby={ids.gas} data-fee="gas" data-level={gasLevel} onClick={() => onGasLevel(nextGasLevel(level))} onKeyDown={levelKeys(onGasLevel)} {...hoverProps("gas")}>
         <GasCan title="Gas" level={gasLevel} />
       </button>
     );
@@ -311,7 +310,7 @@ export const FeeControl = ({ slider }: { readonly slider: FeeSlider }) => {
   const share = (value: number): number => (slider.max === slider.min ? 0 : Math.min(100, Math.max(0, ((value - slider.min) / (slider.max - slider.min)) * 100)));
   // The recommended tick first: it is the one a reset goes back to, so its label is the last to give way.
   const ticks = [...(slider.recommended === undefined ? [] : [{ at: slider.recommended.at, label: "recommended" }]), ...slider.ticks];
-  const track = useRef<HTMLDivElement>(null);
+  const [track, setTrack] = useState<HTMLDivElement | null>(null);
   const width = useTrackWidth(track);
   const placed = tickLabels(ticks.map((tick) => ({ label: tick.label, left: share(tick.at) })), width);
   // A tick whose label would touch another keeps its mark; its name moves into the control's help.
@@ -387,7 +386,7 @@ export const FeeControl = ({ slider }: { readonly slider: FeeSlider }) => {
           )}
         </div>
       )}
-      <div className="zb-range" ref={track}>
+      <div className="zb-range" ref={setTrack}>
         <span className="zb-range-bar" />
         {slider.band === undefined ? null : (
           <span className="zb-range-band" title={slider.band.label} aria-label={slider.band.label} role="img" style={{ left: `${share(Math.min(slider.band.from, slider.band.to))}%`, width: `${Math.max(1, share(Math.max(slider.band.from, slider.band.to)) - share(Math.min(slider.band.from, slider.band.to)))}%` }} />
@@ -423,10 +422,9 @@ const TICK_CHAR_PX = 7.2;
 const TICK_GAP_PX = 10;
 
 /** The width of the slider's track in pixels, followed as the layout changes; the assumed width until it is known. */
-const useTrackWidth = (ref: { readonly current: HTMLElement | null }): number => {
+const useTrackWidth = (element: HTMLElement | null): number => {
   const [width, setWidth] = useState(ASSUMED_TRACK_PX);
   useEffect(() => {
-    const element = ref.current;
     if (element === null) return;
     const measure = (): void => {
       const measured = element.getBoundingClientRect().width;
@@ -437,7 +435,7 @@ const useTrackWidth = (ref: { readonly current: HTMLElement | null }): number =>
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [ref]);
+  }, [element]);
   return width;
 };
 

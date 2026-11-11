@@ -1,8 +1,11 @@
 import { BrandMark } from "../ui/BrandMark";
 import { Chevron, SearchIcon } from "./icons";
 
-/** The search shortcut as this keyboard writes it: ⌘K on Apple devices, Ctrl K elsewhere. */
-const SHORTCUT = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘K" : "Ctrl K";
+/** The search shortcut as a keyboard writes it: ⌘K on Apple devices, Ctrl K elsewhere (and where there is no navigator). */
+export const shortcutOf = (nav: Pick<Navigator, "platform" | "userAgent"> | undefined): string =>
+  /Mac|iPhone|iPad/.test(nav?.platform || nav?.userAgent || "") ? "⌘K" : "Ctrl K";
+
+const SHORTCUT = shortcutOf(globalThis.navigator);
 
 /** The three screens that slide sideways, left to right. */
 export const SCREENS = ["Activity", "Bridge", "Explore"] as const;
