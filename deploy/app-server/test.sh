@@ -651,6 +651,33 @@ EOS
   else
     fail "import over the other form (status $PROOFS_STATUS): $PROOFS_OUT"
   fi
+  # The mirror shape of 2026-11-09: the runner's repaired .ssz plus the short form's .summary under one name. A service that
+  # holds the repaired bytes alone takes it as identical, and the summary is not put next to them. COPY_TREE is run as
+  # proofs.sh defines it.
+  copy_tree_text=$(sed -n "/^COPY_TREE='\$/,/^'\$/p" "$DIR/proofs.sh" | sed '1d;$d')
+  ct="$PT/copytree"
+  mkdir -p "$ct/src/11155111" "$ct/dst/11155111"
+  cp "$PT/src-runner/beacon-states/$state_p" "$ct/src/$state_p"
+  cp "$PT/src-backend/beacon-states/${state_p%.ssz}.summary" "$ct/src/${state_p%.ssz}.summary"
+  cp "$PT/src-runner/beacon-states/$state_p" "$ct/dst/$state_p"
+  ct_out=$(bash -c "$copy_tree_text" _ "$ct/src" "$ct/dst" 077 2>&1)
+  if [ "$ct_out" = "copied=0 identical=2 conflicts=0" ] && [ ! -e "$ct/dst/${state_p%.ssz}.summary" ]; then
+    pass "proofs.sh import: a .summary next to a whole .ssz is redundant, not a conflict, and is not copied beside the service's bytes"
+  else
+    fail "COPY_TREE over a redundant summary: $ct_out"
+  fi
+  rm -rf "$ct/dst"; mkdir -p "$ct/dst/11155111"
+  cp "$PT/src-backend/beacon-states/$state_p" "$ct/dst/$state_p"
+  cp "$PT/src-backend/beacon-states/${state_p%.ssz}.summary" "$ct/dst/${state_p%.ssz}.summary"
+  ct_out=$(bash -c "$copy_tree_text" _ "$ct/src" "$ct/dst" 077 2>&1)
+  if [ "$ct_out" = "copied=0 identical=2 conflicts=0" ] && [ "$(wc -c <"$ct/dst/$state_p" | tr -d ' ')" -lt "$(wc -c <"$ct/src/$state_p" | tr -d ' ')" ]; then
+    pass "proofs.sh import: short bytes in the service and the mirror's repaired bytes with a summary are the same state"
+  else
+    fail "COPY_TREE short vs repaired plus summary: $ct_out"
+  fi
+  rm -rf "$ct/dst"; mkdir -p "$ct/dst"
+  ct_out=$(bash -c "$copy_tree_text" _ "$ct/src" "$ct/dst" 077 2>&1)
+  if [ "$ct_out" = "copied=2 identical=0 conflicts=0" ] && [ -f "$ct/dst/${state_p%.ssz}.summary" ]; then pass "proofs.sh import: into an empty service both files of the pair are copied"; else fail "COPY_TREE into an empty directory: $ct_out"; fi
   printf 'different\n' >"$PT/dst-runner/beacon-states/$state_a"
   rm -f "$PT/dst-backend/beacon-states/$state_b"
   run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --trust-list "$out1/manifests.sha256"

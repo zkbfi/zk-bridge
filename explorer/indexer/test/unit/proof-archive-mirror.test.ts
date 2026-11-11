@@ -284,6 +284,33 @@ describe("a beacon state in its two forms", () => {
     expect(await addToMirror(join(directory, "old"), backend, "beacon-states")).toMatchObject({ added: 0, identical: 1 });
   });
 
+  it("takes a summary next to an already whole .ssz as redundant: the mirror shape of 2026-11-09 (repaired .ssz plus the short form's .summary)", async () => {
+    // The mirror got the runner's repaired .ssz, then the backend's .summary for the same name.
+    await put(mirror, `beacon-states/${entry}.ssz`, repaired);
+    await put(mirror, `beacon-states/${entry}.summary`, summaryText());
+    const runner = join(directory, "runner");
+    await put(runner, `${entry}.ssz`, repaired);
+    const backend = join(directory, "backend");
+    await put(backend, `${entry}.ssz`, served);
+    await put(backend, `${entry}.summary`, summaryText());
+    expect(await addToMirror(mirror, runner, "beacon-states")).toEqual({ added: 0, identical: 1, skipped: 0, conflicts: [] });
+    expect(await addToMirror(mirror, backend, "beacon-states")).toEqual({ added: 0, identical: 1, skipped: 0, conflicts: [] });
+    // The files stay as they are (they are listed in manifests).
+    expect(await readFile(join(mirror, "beacon-states", `${entry}.ssz`))).toEqual(repaired);
+    expect(await readFile(join(mirror, "beacon-states", `${entry}.summary`), "utf8")).toBe(summaryText());
+    // A different state under the name still conflicts, from either service.
+    const other = join(directory, "other");
+    await put(other, `${entry}.ssz`, servedState(10, 3, "different"));
+    await put(other, `${entry}.summary`, summaryText());
+    expect((await addToMirror(mirror, other, "beacon-states")).conflicts).toEqual([`beacon-states/${entry}.ssz`]);
+    await put(other, `${entry}.ssz`, Buffer.concat([servedState(10, 3, "different"), entryBytes()]));
+    await rm(join(other, `${entry}.summary`));
+    expect((await addToMirror(mirror, other, "beacon-states")).conflicts).toEqual([`beacon-states/${entry}.ssz`]);
+    // A summary of the mirror that does not fit counts for nothing: the .ssz alone is still a candidate.
+    await put(mirror, `beacon-states/${entry}.summary`, "junk");
+    expect(await addToMirror(mirror, runner, "beacon-states")).toMatchObject({ added: 0, identical: 1, conflicts: [] });
+  });
+
   it("reports another state under the same name, another summary, and a summary that does not fit, as conflicts", async () => {
     const runner = join(directory, "runner");
     await put(runner, `${entry}.ssz`, repaired);

@@ -208,12 +208,12 @@ sha256_of() {
 # A beacon state may be held in two forms (docs/proof-archive.md, "One beacon state, two forms"): the bytes as the node
 # served them with a <name>.summary, or the bytes with that 64 byte entry appended. The same state in the other form is
 # identical, not a conflict: an .ssz that differs from the one there by exactly the 64 bytes that the summary names (the
-# shorter is the start of the longer). A .summary is not copied next to an .ssz of the other form: the entry would be
-# counted twice.
+# shorter is the start of the longer). A .summary is not copied next to an .ssz that was already there: the entry would be
+# counted twice, or be redundant.
 COPY_TREE='
 umask "$3"
 src=$1 dest=$2
-copied=0 identical=0 conflicts=0
+copied=0 identical=0 conflicts=0 new_ssz=
 size_of() { wc -c <"$1" | tr -d " "; }
 # two_forms <file> <file>: both are the same state, one in each form. Needs the summary next to the shorter one.
 two_forms() {
@@ -240,7 +240,9 @@ while IFS= read -r -d "" f; do
     fi
     continue
   fi
-  if [[ $rel == *.summary ]] && [ -f "${d%.summary}.ssz" ] && ! cmp -s "${f%.summary}.ssz" "${d%.summary}.ssz"; then
+  # A .summary is only for an .ssz that is short; next to one the destination already held it would be counted twice, or
+  # be redundant. It goes in only with an .ssz copied in this run.
+  if [[ $rel == *.summary ]] && [ -f "${d%.summary}.ssz" ] && [[ $new_ssz != *"|${d%.summary}.ssz|"* ]]; then
     identical=$((identical + 1))
     continue
   fi
@@ -249,6 +251,7 @@ while IFS= read -r -d "" f; do
   # directory), and the archive user could not read the copy.
   if cat "$f" > "$d.part.$$" && mv "$d.part.$$" "$d"; then :; else rm -f "$d.part.$$"; exit 1; fi
   copied=$((copied + 1))
+  if [[ $rel == *.ssz ]]; then new_ssz="$new_ssz|$d|"; fi
 done < <(find "$src" -type f -print0)
 echo "copied=$copied identical=$identical conflicts=$conflicts"
 '
