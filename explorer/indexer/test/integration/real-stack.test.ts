@@ -17,7 +17,7 @@ import {
 } from "viem";
 import { mnemonicToAccount } from "viem/accounts";
 import { beaconLightClientAbi, buildMessageId, messageBridgeAbi, tokenMediatorAbi } from "@zk-bridge/shared";
-import { compileSyntheticContracts, connectChain, type ChainHandle } from "./support/chains";
+import { compileSyntheticContracts, connectChain, installEmptyPulsexFactories, type ChainHandle } from "./support/chains";
 import { REPOSITORY_ROOT, startAnvil, startIndexer, startPostgres, waitFor, type RunningIndexer, type Stoppable } from "./support/processes";
 
 /**
@@ -170,7 +170,8 @@ describe("the indexer follows the real contracts of the local stack", () => {
     try {
       execFileSync("bash", [join(REPOSITORY_ROOT, "docker", "deploy.sh")], {
         env: { ...process.env, STATE_DIR: stateDirectory, RPC_A: anvilA.url, RPC_B: anvilB.url, REPO: REPOSITORY_ROOT },
-        stdio: "ignore",
+        // The script logs to stderr. Keep it, so that a failure shows its cause (execFileSync puts it in the error).
+        stdio: ["ignore", "ignore", "pipe"],
         timeout: 280_000,
       });
     } finally {
@@ -184,6 +185,7 @@ describe("the indexer follows the real contracts of the local stack", () => {
 
     chainA = await connectChain(1, anvilA.url, artifacts);
     chainB = await connectChain(369, anvilB.url, artifacts);
+    await installEmptyPulsexFactories(chainB);
     await admitEverySend(chainA, a.gate, artifacts);
     await openSends(chainA, a.bridge);
     await openSends(chainB, b.bridge);
@@ -255,6 +257,8 @@ describe("the indexer follows the real contracts of the local stack", () => {
     const items = await waitFor("all three sends", async () => {
       const feed = await api<Feed>("/api/feed");
       return feed.items.length === 3 && feed.items.every((entry) => entry.status !== undefined) ? feed.items : undefined;
+    }).catch(async (error: Error) => {
+      throw new Error(`${error.message}; feed: ${JSON.stringify(await api("/api/feed"))}; sends: ${JSON.stringify(sends)}`);
     });
     const byId = new Map(items.map((entry) => [entry.messageId, entry]));
     expect(byId.get(sends.relayB?.id as Hex)).toMatchObject({ kind: "token", direction: { label: "369>1" }, executor: a.mediator.toLowerCase() });

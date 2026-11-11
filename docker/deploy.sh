@@ -100,9 +100,16 @@ rm -rf "$STATE_DIR/deployment.json"
 cast rpc anvil_setCode "$BEACON_ROOTS" "$BEACON_ROOTS_CODE" --rpc-url "$RPC_A" > /dev/null
 has_code "$BEACON_ROOTS" "$RPC_A" || fail "the EIP-4788 contract is missing on chain A"
 
-# Step 3: wrapped native tokens, test tokens and verifiers. Chain B sends one empty transaction first, so the two chains give different addresses.
+# Step 3: wrapped native tokens, test tokens and verifiers. Chain B sends empty transactions first, so the two chains give
+# different addresses. The deploy script of step 4 deploys 9 contracts per chain, at the nonces N to N + 8, and `forge
+# script` names each transaction by the address it creates, looking the address up among the contracts of BOTH chains. If
+# a contract of chain A and another contract of chain B got the same address (the nonces of the two chains differ by 1 to
+# 8), forge would name the transaction after the wrong one, fail to decode its constructor arguments and abort with
+# "type check failed for offset". The nonces of the two chains must therefore differ by more than 8: chain B gets 10 more.
 start_block_a="$(cast block-number --rpc-url "$RPC_A")"
-cast send "$DEPLOYER" --rpc-url "$RPC_B" --unlocked --from "$DEPLOYER" > /dev/null
+for _ in $(seq 10); do
+  cast send "$DEPLOYER" --rpc-url "$RPC_B" --unlocked --from "$DEPLOYER" > /dev/null
+done
 start_block_b="$(cast block-number --rpc-url "$RPC_B")"
 cd "$REPO"
 WRAPPED_NATIVE_A="$(create "$RPC_A" "$WRAPPED_NATIVE_CONTRACT")"

@@ -14,6 +14,7 @@ import {
   type TransactionReceipt,
   type WalletClient,
 } from "viem";
+import { PULSEX_FACTORIES } from "@zk-bridge/shared";
 import { REPOSITORY_ROOT } from "./processes";
 
 /** The compiled test doubles of `test/contracts/Synthetic.sol`. */
@@ -69,7 +70,10 @@ export type ChainHandle = {
  */
 export const connectChain = async (chainId: number, url: string, artifacts: SyntheticArtifacts): Promise<ChainHandle> => {
   const chain = defineChain({ id: chainId, name: `local-${chainId}`, nativeCurrency: { name: "Coin", symbol: "COIN", decimals: 18 }, rpcUrls: { default: { http: [url] } } });
-  const publicClient = createPublicClient({ chain, transport: http(url) });
+  // viem waits for a receipt by polling every 4 seconds by default. Anvil has the receipt at once, so each transaction
+  // would take 4 s: a deployment of a dozen contracts takes a minute, and the blocks of a test land seconds apart on the
+  // chain clock, which moves a send past the finality window of the indexer before the test looks at it.
+  const publicClient = createPublicClient({ chain, transport: http(url), pollingInterval: 100 });
   const walletClient = createWalletClient({ chain, transport: http(url) });
   const accounts = await walletClient.getAddresses();
   const artifact = (name: string) => {
@@ -109,4 +113,27 @@ export const connectChain = async (chainId: number, url: string, artifacts: Synt
       await publicClient.request({ method: "anvil_mine" as never, params: [`0x${count.toString(16)}`] as never });
     },
   };
+};
+
+/**
+ * Runtime code that answers every call with 32 zero bytes: `PUSH1 0x20, PUSH0, RETURN` (returns zeroed memory). As a
+ * PulseX factory it says "no pair" for every token, which the pricing reads as "no market".
+ */
+const ANSWER_ZERO_CODE = "0x60205ff3";
+
+/**
+ * Puts a PulseX factory that knows no pair at the addresses of the two PulseX factories on a local chain.
+ *
+ * Why: the indexer prices the native coin of every send, delivery and head update on chain 369 by reading the PulseX
+ * factories through Ponder's client. A local chain has no PulseX, so `getPair` returns no data, and Ponder's client
+ * answers that with ten retries over about a minute (125 ms doubling to 32 s) for each read, which stalls the handler
+ * of every event on that chain. With the stub the read answers at once and the price is none, as on a chain with no
+ * market. Install it before the indexer starts.
+ *
+ * @param chain The local chain that plays PulseChain (chain 369).
+ */
+export const installEmptyPulsexFactories = async (chain: ChainHandle): Promise<void> => {
+  for (const factory of PULSEX_FACTORIES) {
+    await chain.publicClient.request({ method: "anvil_setCode" as never, params: [factory, ANSWER_ZERO_CODE] as never });
+  }
 };

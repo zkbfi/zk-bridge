@@ -133,10 +133,10 @@ contract SyntheticGate {
 
 /// @dev A fork registry that emits ForkObserved.
 contract SyntheticRegistry {
-    event ForkObserved(bytes4 indexed version, uint64 slot);
+    event ForkObserved(bytes4 indexed version, uint8 shape, uint64 slot);
 
-    function observe(bytes4 version, uint64 slot) external {
-        emit ForkObserved(version, slot);
+    function observe(bytes4 version, uint8 shape, uint64 slot) external {
+        emit ForkObserved(version, shape, slot);
     }
 }
 
