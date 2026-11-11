@@ -161,7 +161,8 @@ verify() {
   [ -n "$NEWEST" ] || { log "the mirror has no manifest"; MISSING=1; return 1; }
   READ=$NEWEST
   # Root's copy of the manifest, when the server keeps one, must be the same bytes; the list of files is read from it.
-  local copy=$LOCAL_DIR/trusted-manifests/$(basename "$NEWEST")
+  local copy
+  copy=$LOCAL_DIR/trusted-manifests/$(basename "$NEWEST")
   if [ -f "$copy" ]; then
     cmp -s "$NEWEST" "$copy" || { log "$(basename "$NEWEST") differs from the server's trusted copy: it was changed after the export"; CHANGED=1; return 1; }
     READ=$copy
@@ -225,14 +226,14 @@ main() {
   trap cleanup EXIT
 
   # One run at a time. A lock left by a run that died is taken over.
-  local lock=$LOCAL_DIR/.pull.lock
-  if ! mkdir "$lock" 2>/dev/null; then
-    if kill -0 "$(cat "$lock/pid" 2>/dev/null || echo 0)" 2>/dev/null; then die "another run is going"; fi
-    rm -rf "$lock"
-    mkdir "$lock" || die "cannot take the lock"
+  local run_lock=$LOCAL_DIR/.pull.lock
+  if ! mkdir "$run_lock" 2>/dev/null; then
+    if kill -0 "$(cat "$run_lock/pid" 2>/dev/null || echo 0)" 2>/dev/null; then die "another run is going"; fi
+    rm -rf "$run_lock"
+    mkdir "$run_lock" || die "cannot take the lock"
   fi
-  echo $$ >"$lock/pid"
-  TMP_FILES+=("$lock")
+  echo $$ >"$run_lock/pid"
+  TMP_FILES+=("$run_lock")
   rm -f "$LOCAL_DIR"/.check-* "$LOCAL_DIR"/.listed-*
 
   log "pulling the mirror from $HOST"

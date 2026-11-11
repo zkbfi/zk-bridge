@@ -412,7 +412,7 @@ EOS
   : >"$PT/calls.log"
   run_proofs proofs "$out1" "$PT/src-backend" "$PT/src-runner" ZKB_PROOFS_STAMP=${D}T000100Z bash "$DIR/proofs.sh" export
   if [ "$PROOFS_STATUS" -eq 0 ] && [ -f "$m/manifests/${D}T000100Z.json" ] && [ -f "$m/snapshots/${D}T000100Z.sqlite" ] \
-    && [ -z "$(ls -A "$out1" | grep -E '^\.staging-|^\.extract-|\.tar\.gz')" ] && out_has "^manifest: $m/manifests/${D}T000100Z.json\$"; then
+    && [ -z "$(find "$out1" -mindepth 1 -maxdepth 1 \( -name '.staging-*' -o -name '.extract-*' -o -name '*.tar.gz*' \))" ] && out_has "^manifest: $m/manifests/${D}T000100Z.json\$"; then
     pass "proofs.sh export: the mirror with its manifest and snapshot of the day, no staging left, no tarball"
   else
     fail "proofs.sh export (status $PROOFS_STATUS): $PROOFS_OUT"
@@ -588,7 +588,7 @@ EOS
   else
     fail "import CLI calls: $(tr '\n' '|' <"$PT/calls.log")"
   fi
-  if [ -z "$(ls -A "$PT/out2" | grep -E '^\.extract-')" ]; then pass "proofs.sh import: the temporary directories are gone"; else fail "extract dir left behind"; fi
+  if [ -z "$(find "$PT/out2" -mindepth 1 -maxdepth 1 -name '.extract-*')" ]; then pass "proofs.sh import: the temporary directories are gone"; else fail "extract dir left behind"; fi
   find "$PT/dst-runner" "$PT/dst-backend" -type f -exec cksum {} + | sort >"$PT/state-1"
   run_proofs proofs "$PT/out2" "$PT/dst-backend" "$PT/dst-runner" bash "$DIR/proofs.sh" import "$mb" --trust-list "$out1/manifests.sha256"
   find "$PT/dst-runner" "$PT/dst-backend" -type f -exec cksum {} + | sort >"$PT/state-2"
@@ -876,7 +876,7 @@ EOS
   : >"$PT/ipfs/calls"
   env IPFS_DIR="$PT/ipfs" IPFS_PATH="$PT/ipfs-repo2" PATH="$PT/fakebin:$PATH" sh -c "$rpc_script" sh "/api/v0/pin/ls?arg=x&type=recursive" >/dev/null 2>&1 || true
   if grep -q '^POST http://127\.0\.0\.1:5002/' "$PT/ipfs/calls"; then pass "ipfs rpc: without an api file, Addresses.API of the config"; else fail "Addresses.API fallback: $(cat "$PT/ipfs/calls")"; fi
-  if [ -z "$(ls -A "$PT/pub2" | grep -E '^\.publish-')" ]; then pass "publish: the work directory is gone after a real publication"; else fail "publish work dir left"; fi
+  if [ -z "$(find "$PT/pub2" -mindepth 1 -maxdepth 1 -name '.publish-*')" ]; then pass "publish: the work directory is gone after a real publication"; else fail "publish work dir left"; fi
   # The nightly export publishes only when told to; the backup manifest then records the log.
   : >"$PT/calls.log"
   run_proofs pub "$PT/pub3" ZKB_PROOFS_STAMP=20260120T000000Z bash "$DIR/proofs.sh" export
@@ -1043,7 +1043,7 @@ if grep -q '/api/v0/pin/ls?type=recursive$' "$PW/calls" && [ "$(ls -ld "$PW/out/
 if grep -qF "$tok" "$PW/argv" "$PW/as-argv" "$PW/out.log"; then fail "the pins writer puts the API token in an argv or its output"; else pass "ipfs-pins.sh: the API token is in no argv"; fi
 if [ "$(sort -u "$PW/headers")" = "Authorization: Bearer $tok" ] && grep -q -- '-H @-' "$PW/argv"; then pass "ipfs-pins.sh: the token goes to curl -H @- on standard input"; else fail "ipfs-pins.sh header handling"; fi
 cp "$PW/out/pins.txt" "$PW/before"
-if pins_run PW_FAIL=1 && false; then :; elif cmp -s "$PW/before" "$PW/out/pins.txt" && [ -z "$(ls -A "$PW/out" | grep -v '^pins.txt$')" ]; then pass "ipfs-pins.sh: a failed call keeps the earlier list and leaves no temporary file"; else fail "ipfs-pins.sh failure handling"; fi
+if pins_run PW_FAIL=1 && false; then :; elif cmp -s "$PW/before" "$PW/out/pins.txt" && [ -z "$(find "$PW/out" -mindepth 1 -maxdepth 1 ! -name pins.txt)" ]; then pass "ipfs-pins.sh: a failed call keeps the earlier list and leaves no temporary file"; else fail "ipfs-pins.sh failure handling"; fi
 printf '{"Keys":{}}\n' >"$PW/answer"
 if pins_run && [ ! -s "$PW/out/pins.txt" ]; then pass "ipfs-pins.sh: no pins gives an empty list"; else fail "ipfs-pins.sh empty list"; fi
 rm -rf "$PW"
