@@ -36,7 +36,7 @@ export const machineDocsPlugin = (options: { readonly repositoryRoot: string; re
     },
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
-        const path = decodeURIComponent((request.url ?? "").split("?")[0] ?? "").replace(/^\/+/, "");
+        const path = decodeURIComponent((request.url ?? "").split("?")[0] as string).replace(/^\/+/, "");
         if (path !== "llms.txt" && path !== "llms-full.txt" && !path.startsWith("docs/") && !path.startsWith("data/")) return next();
         let content: string | undefined;
         try {
@@ -47,7 +47,7 @@ export const machineDocsPlugin = (options: { readonly repositoryRoot: string; re
           return;
         }
         if (content === undefined) return next();
-        response.setHeader("content-type", CONTENT_TYPES[path.split(".").pop() as string] ?? "text/plain");
+        response.setHeader("content-type", CONTENT_TYPES[path.split(".").pop() as string] as string);
         response.end(content);
       });
     },

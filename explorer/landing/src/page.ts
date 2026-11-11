@@ -48,7 +48,7 @@ const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;"
 
 /** Escapes text for use in HTML text and quoted attributes. */
 export function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ESCAPES[character] ?? character);
+  return value.replace(/[&<>"']/g, (character) => ESCAPES[character] as string);
 }
 
 /** The marker in a subdomain-style gateway, such as `https://{cid}.ipfs.dweb.link/`. */
@@ -96,15 +96,16 @@ function docsAddress(address: string): string {
   return `${address}${address.endsWith("/") ? "" : "/"}#/docs`;
 }
 
-function gatewayLinks(cid: string, gateways: readonly string[], withDocs: boolean): string {
+function gatewayLinks(cid: string, gateways: readonly string[]): string {
   const items = gatewayLinkList(cid, gateways).map((link) => {
     const note = link.sharedOrigin ? " (shared origin: other sites on this gateway share the browser storage of the app)" : "";
-    const docs = withDocs ? ` · <a href="${escapeHtml(docsAddress(link.address))}" rel="noopener">Docs</a>` : "";
+    const docs = ` · <a href="${escapeHtml(docsAddress(link.address))}" rel="noopener">Docs</a>`;
     return `<li><a href="${escapeHtml(link.address)}" rel="noopener">${escapeHtml(link.label)}</a>${docs}${escapeHtml(note)}</li>`;
   });
   return `<ul>${items.join("")}</ul>`;
 }
 
+/** One release of the app: its hashes and its links, each with the docs inside the app. Only the dapp is listed. */
 function releaseSection(release: ReleaseEntry, gateways: readonly string[]): string {
   return [
     `<div class="release">`,
@@ -112,7 +113,7 @@ function releaseSection(release: ReleaseEntry, gateways: readonly string[]): str
     `<p>Commit ${copyable(release.commit, "Copy commit hash")}, published ${escapeHtml(release.publishedAt)}.</p>`,
     `<p>Content address: ${copyable(release.cid, "Copy content address")}</p>`,
     `<p>Archive SHA-256: ${copyable(release.archiveSha256, "Copy SHA-256")}</p>`,
-    gatewayLinks(release.cid, gateways, release.name === "dapp"),
+    gatewayLinks(release.cid, gateways),
     `</div>`,
   ].join("");
 }
@@ -274,8 +275,13 @@ function focusIn(root: ParentNode, selector: string): void {
   root.querySelector<HTMLElement>(selector)?.focus();
 }
 
+/** Moves focus to the checked item of an open menu, or to its first item when none is checked. */
+function focusChosenItem(menu: ParentNode): void {
+  (menu.querySelector<HTMLElement>('.dl-item[aria-checked="true"]') ?? menu.querySelector<HTMLElement>(".dl-item"))?.focus();
+}
+
 /** Wires the download menus: click and keyboard. The menus are drawn again from `choices` after each change. */
-function wireDownloads(target: HTMLElement, state: Extract<LandingState, { kind: "verified" }>): void {
+function wireDownloads(target: HTMLElement, state: Extract<LandingState, { kind: "verified" }> & { platform: Detection | null }): void {
   const choices: MenuChoices = {};
   const baseUrl = downloadBase(state);
   const programs = groupDownloads(state.manifest.downloads).programs;
@@ -283,22 +289,24 @@ function wireDownloads(target: HTMLElement, state: Extract<LandingState, { kind:
     const group = programs.find((candidate) => candidate.name === name);
     const current = Array.from(target.querySelectorAll<HTMLElement>(".dl-program[data-program]")).find((node) => node.dataset.program === name);
     if (group === undefined || current === undefined) return null;
-    const html = renderProgram(group, baseUrl, state.platform ?? null, choices[name]);
+    const html = renderProgram(group, baseUrl, state.platform, choices[name]);
     current.outerHTML = html;
-    return Array.from(target.querySelectorAll<HTMLElement>(".dl-program[data-program]")).find((node) => node.dataset.program === name) ?? null;
+    return Array.from(target.querySelectorAll<HTMLElement>(".dl-program[data-program]")).find((node) => node.dataset.program === name) as HTMLElement;
   };
   const stateOf = (name: string) => {
     const group = programs.find((candidate) => candidate.name === name);
     const existing = choices[name];
     if (existing !== undefined) return existing;
-    const fresh = { selected: group === undefined ? null : defaultSelection(group, state.platform ?? null), open: false };
+    const fresh = { selected: group === undefined ? null : defaultSelection(group, state.platform), open: false };
     choices[name] = fresh;
     return fresh;
   };
-  const setMenu = (name: string, open: boolean, focus: string | null): void => {
+  const setMenu = (name: string, open: boolean, focus: "item" | "trigger" | null): void => {
     stateOf(name).open = open;
     const node = draw(name);
-    if (node !== null && focus !== null) focusIn(node, focus);
+    if (node === null || focus === null) return;
+    if (focus === "item") focusChosenItem(node);
+    else focusIn(node, ".dl-trigger");
   };
   const closeAll = (): void => {
     for (const [name, choice] of Object.entries(choices)) if (choice.open) setMenu(name, false, null);
@@ -314,7 +322,7 @@ function wireDownloads(target: HTMLElement, state: Extract<LandingState, { kind:
       const group = programs.find((candidate) => candidate.name === name);
       const open = trigger.getAttribute("aria-expanded") !== "true";
       if (group !== undefined && !(name in choices)) stateOf(name);
-      setMenu(name, open, open ? '.dl-item[aria-checked="true"], .dl-item' : ".dl-trigger");
+      setMenu(name, open, open ? "item" : "trigger");
       return;
     }
     if (item !== null && item !== undefined) {
@@ -335,7 +343,7 @@ function wireDownloads(target: HTMLElement, state: Extract<LandingState, { kind:
     const trigger = element?.closest<HTMLElement>(".dl-trigger");
     if (trigger !== null && trigger !== undefined && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault();
-      setMenu(trigger.dataset.program ?? "", true, '.dl-item[aria-checked="true"], .dl-item');
+      setMenu(trigger.dataset.program ?? "", true, "item");
       return;
     }
     if (menu === null || menu === undefined) return;
@@ -352,7 +360,7 @@ function wireDownloads(target: HTMLElement, state: Extract<LandingState, { kind:
     else if (event.key === "Escape") {
       event.preventDefault();
       const name = menu.closest<HTMLElement>(".dl-program")?.dataset.program ?? "";
-      setMenu(name, false, ".dl-trigger");
+      setMenu(name, false, "trigger");
     } else if (event.key === "Tab") closeAll();
   });
 }

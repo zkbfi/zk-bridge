@@ -129,10 +129,9 @@ export function parseManifest(text: string): ReleaseManifest {
   };
 }
 
+/** Object keys are unique, so two keys are never equal. */
 function compareKeys(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
+  return a < b ? -1 : 1;
 }
 
 function sortKeys(value: unknown): unknown {

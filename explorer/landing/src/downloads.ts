@@ -12,7 +12,7 @@ export type MenuChoices = Record<string, MenuState>;
 
 const ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 function escape(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ESCAPES[character] ?? character);
+  return value.replace(/[&<>"']/g, (character) => ESCAPES[character] as string);
 }
 
 /** A byte count as text, such as `54.3 MB`. */

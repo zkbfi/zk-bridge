@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import { canonicalManifestBytes, ManifestError, parseManifest, verifyManifestSignature } from "../src/manifest.ts";
 import { makeSigner, sampleManifest } from "./helpers.ts";
 
@@ -68,4 +68,19 @@ test("canonical bytes do not depend on key order", () => {
   const text = new TextDecoder().decode(canonicalManifestBytes(sampleManifest));
   assert.ok(text.startsWith('{"channels":'));
   assert.ok(!text.includes(" "));
+});
+
+test("reads the size of a download and refuses a size that is not a whole number of bytes", () => {
+  const withSize = (size: unknown) => JSON.stringify({ ...sampleManifest, downloads: [{ ...sampleManifest.downloads[0], size }] });
+  assert.equal(parseManifest(withSize(1234)).downloads[0]?.size, 1234);
+  assert.equal(parseManifest(withSize(0)).downloads[0]?.size, 0);
+  assert.equal("size" in (parseManifest(JSON.stringify(sampleManifest)).downloads[0] ?? {}), false);
+  for (const bad of ["12", -1, 1.5, 2 ** 60, null]) {
+    assert.throws(() => parseManifest(withSize(bad)), /downloads\[0\]\.size must be a whole number of bytes/, String(bad));
+  }
+});
+
+test("the signed bytes list keys in order whatever the order they were written in", () => {
+  const shuffled = { sequence: 5, schema: 1, downloads: [], releases: [], channels: { b: "2", a: "1" } };
+  assert.equal(new TextDecoder().decode(canonicalManifestBytes(shuffled as never)), '{"channels":{"a":"1","b":"2"},"downloads":[],"releases":[],"schema":1,"sequence":5}');
 });

@@ -160,7 +160,7 @@ export const buildLandingLlmsFullTxt = (content: MachineContent, release: Landin
 export const checkLandingLlmsTxt = (text: string, release: LandingRelease, emitted: ReadonlySet<string>): string[] => {
   const problems: string[] = [];
   const lines = text.split("\n");
-  if (!/^# \S/.test(lines[0] ?? "")) problems.push("the first line must be an H1 title");
+  if (!/^# \S/.test(lines[0] as string)) problems.push("the first line must be an H1 title");
   if (lines.filter((entry) => entry.startsWith("# ")).length !== 1) problems.push("there must be exactly one H1");
   const firstBlock = lines.findIndex((entry, index) => index > 0 && entry.trim() !== "");
   if (!(lines[firstBlock] ?? "").startsWith("> ")) problems.push("a blockquote summary must follow the title");

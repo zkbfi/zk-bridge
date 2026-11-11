@@ -53,3 +53,50 @@ describe("front matter", () => {
     expect(() => readFrontMatter(source, "p.md")).toThrow(message);
   });
 });
+
+describe("front matter values and fields", () => {
+  it("refuses a double-quoted value that is not a JSON string, and a single-quoted one that never closes", () => {
+    expect(() => parseFrontMatterBlock('a: "broken')).toThrow(/double-quoted value must be a valid JSON string/);
+    expect(() => parseFrontMatterBlock("a: 12 \nb: \"1\"")).not.toThrow();
+    expect(() => parseFrontMatterBlock('a: "12"\nb: "x\\"')).toThrow(/line 2/);
+    expect(() => parseFrontMatterBlock("a: 'open")).toThrow(/single-quoted value must end with a quote/);
+    expect(() => parseFrontMatterBlock("a: '")).toThrow(/single-quoted value must end with a quote/);
+  });
+
+  it("refuses a list that does not close", () => {
+    expect(() => parseFrontMatterBlock("a: [1, 2")).toThrow(/must close with \]/);
+  });
+
+  it("reads a key with no value as an empty text", () => {
+    expect(parseFrontMatterBlock("a:")).toEqual({ a: "" });
+  });
+
+  it("reads a double-quoted number-looking JSON value that is not a string as an error", () => {
+    expect(() => parseFrontMatterBlock("a: \"x\"\nb: \"\\u00\"")).toThrow(/line 2/);
+  });
+
+  const base = { title: "T", summary: "s", audience: ["user"], chains: "all", verified_release: "0.1.0" };
+  it.each([
+    ["no audience", { ...base, audience: undefined }, /"audience" is required/],
+    ["an empty audience", { ...base, audience: [] }, /"audience" is required/],
+    ["a repeated audience", { ...base, audience: ["user", "user"] }, /repeats a value/],
+    ["an empty chain list", { ...base, chains: [] }, /"chains" is required/],
+    ["a negative chain id", { ...base, chains: [-1] }, /"chains" is required/],
+    ["a negative single chain", { ...base, chains: -1 }, /"chains" is required/],
+    ["an unknown kind", { ...base, kind: "essay" }, /"kind" must be/],
+    ["a skill with a blank description", { ...base, kind: "skill", name: "a-b", description: " " }, /needs "description"/],
+  ])("validates %s", (_label, data, message) => {
+    const result = validateFrontMatter(data as Record<string, unknown>);
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.errors.join("\n")).toMatch(message);
+  });
+
+  it("names the file when the block cannot be parsed", () => {
+    expect(() => readFrontMatter(page("nonsense"), "p.md")).toThrow('p.md: front matter line 1: expected "key: value"');
+  });
+
+  it("takes a single chain id and a skill with its description", () => {
+    expect(validateFrontMatter({ ...base, chains: 943 })).toMatchObject({ ok: true, value: { chains: [943] } });
+    expect(validateFrontMatter({ ...base, kind: "skill", name: "a-b", description: "d" })).toMatchObject({ ok: true, value: { name: "a-b", description: "d" } });
+  });
+});

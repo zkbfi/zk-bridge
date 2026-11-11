@@ -64,7 +64,7 @@ export async function copyValue(element: CopyTarget, env: CopyEnv): Promise<bool
 /** The real browser: the clipboard, a text selection and `execCommand`, and timers. */
 export function browserCopyEnv(): CopyEnv {
   return {
-    writeText: typeof navigator !== "undefined" && navigator.clipboard?.writeText !== undefined ? (text) => navigator.clipboard.writeText(text) : null,
+    writeText: navigator.clipboard?.writeText !== undefined ? (text) => navigator.clipboard.writeText(text) : null,
     selectAndCopy: (element) => {
       const node = element as unknown as Node;
       const selection = globalThis.getSelection();

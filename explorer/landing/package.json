@@ -3,12 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Static release page. It checks a signed manifest in the browser. It has no dependencies.",
+  "description": "Static release page. It checks a signed manifest in the browser. The page has no dependencies; the tests use vitest and jsdom.",
   "engines": {
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "vitest run --coverage",
     "build": "node scripts/build.ts"
+  },
+  "devDependencies": {
+    "jsdom": "30.1.1",
+    "vitest": "4.1.11"
   }
 }

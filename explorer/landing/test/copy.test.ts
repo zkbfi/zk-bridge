@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import { COPIED_TEXT, SELECTED_TEXT, copyValue, copyable, wireCopy } from "../src/copy.ts";
 import type { CopyEnv, CopyTarget } from "../src/copy.ts";
 import { renderDownloads } from "../src/downloads.ts";

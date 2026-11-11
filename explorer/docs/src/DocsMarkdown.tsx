@@ -5,7 +5,6 @@
  */
 import type { ReactNode } from "react";
 import { Num } from "@web/bridge/Num";
-import { collapseZeros } from "@web/bridge/number";
 import type { Block, Inline } from "@web/docs/markdown";
 
 /** A shown number with three or more zeros after the point, anywhere in a text (the app's leading-zeros rule). */
@@ -22,7 +21,6 @@ export const withNumbers = (text: string, key: string): ReactNode => {
   let last = 0;
   for (const match of text.matchAll(SMALL_NUMBER)) {
     const at = match.index;
-    if (collapseZeros(match[0]) === null) continue;
     if (at > last) parts.push(text.slice(last, at));
     parts.push(<Num key={`${key}-n${at}`} text={match[0]} />);
     last = at + match[0].length;

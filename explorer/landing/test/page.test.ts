@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import { escapeHtml, findMalformedGateway, gatewayLinkList, loadLandingState, renderLanding } from "../src/page.ts";
 import type { LandingConfig, LandingState } from "../src/page.ts";
 import { parseManifest, canonicalManifestBytes } from "../src/manifest.ts";
@@ -190,4 +190,43 @@ test("a list signed before the docs moved into the dapp still reads, and lists t
   assert.ok(html.includes("<h3>dapp 1.0.0</h3>"));
   assert.ok(!html.includes("<h2>docs"));
   assert.ok(!html.includes(legacyManifest.releases[1]!.cid));
+});
+
+const snapshot = { light: "./l.webp", dark: "./d.webp", width: 10, height: 20 };
+
+test("the snapshot links to the app at the first gateway and names its version", () => {
+  const html = renderLanding({ ...verified(), snapshot } as LandingState);
+  const cid = sampleManifest.releases[0]!.cid;
+  assert.ok(html.includes(`<a href="https://one.example/ipfs/${cid}" rel="noopener"><picture>`));
+  assert.ok(html.includes("<figcaption>The app 1.0.0, as it looks after the loader.</figcaption>"));
+});
+
+test("the snapshot of a list with no dapp release has no link and no version", () => {
+  const noDapp = { ...sampleManifest, releases: [] };
+  const html = renderLanding({ ...verified(noDapp), snapshot } as LandingState);
+  assert.ok(html.includes('<figure class="snapshot" id="snapshot"><picture>'));
+  assert.ok(html.includes("<figcaption>The app, as it looks after the loader.</figcaption>"));
+  assert.ok(!html.includes("Docs and guides"));
+});
+
+test("the snapshot has no link when no gateway can host the content address, and the docs link goes too", () => {
+  const html = renderLanding({ ...verified(sampleManifest, null, ["https://{cid}.ipfs.sub.example/"]), snapshot } as LandingState);
+  const odd = { ...sampleManifest, releases: [{ ...sampleManifest.releases[0], cid: "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG" }] };
+  const oddHtml = renderLanding({ ...verified(odd as typeof sampleManifest, null, ["https://{cid}.ipfs.sub.example/"]), snapshot } as LandingState);
+  assert.ok(html.includes("<a href="));
+  assert.ok(oddHtml.includes('<figure class="snapshot" id="snapshot"><picture>'));
+  assert.ok(!oddHtml.includes("Docs and guides"));
+});
+
+test("a thrown value that is not an error still fails the check with a plain sentence", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw "offline";
+  }) as unknown as typeof fetch;
+  try {
+    const state = await loadLandingState(configFor([]), null);
+    assert.deepEqual(state, { kind: "failed", title: "T", reason: "The release list could not be checked." });
+  } finally {
+    globalThis.fetch = original;
+  }
 });

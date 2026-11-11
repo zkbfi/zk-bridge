@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,5 +95,39 @@ describe("the real list", () => {
     for (const internal of ["deployment-plan", "audit/known-issues", "superpowers/specs/2026-10-30-dapp-bridge-first-design"]) {
       if (!list.includes(`${internal}.md`)) expect(ids).not.toContain(internal);
     }
+  });
+});
+
+describe("the plugin reading its list from a file", () => {
+  type Context = { addWatchFile: (file: string) => void; error: (message: string) => never };
+  const loadWith = (plugin: ReturnType<typeof publicPagesPlugin>, id: string) => {
+    const watched: string[] = [];
+    const context: Context = { addWatchFile: (file) => watched.push(file), error: (message) => { throw new Error(message); } };
+    const result = (plugin.load as (this: Context, id: string) => unknown).call(context, id);
+    return { result, watched };
+  };
+
+  it("reads explorer/docs/public-pages.json below the repository root and watches the list and each page", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "docs-list-")));
+    folders.push(root);
+    mkdirSync(join(root, "explorer/docs"), { recursive: true });
+    mkdirSync(join(root, "docs"));
+    writeFileSync(join(root, "explorer/docs/public-pages.json"), '{"operator":["a.md"]}');
+    writeFileSync(join(root, "docs/a.md"), "# A\n");
+    const { result, watched } = loadWith(publicPagesPlugin({ repositoryRoot: root }), "\0virtual:public-operator-pages");
+    expect(result).toBe('export default {"docs/a.md":"# A\\n"};');
+    expect(watched).toEqual([join(root, "explorer/docs/public-pages.json"), join(root, "docs/a.md")]);
+  });
+
+  it("reads the list file it is given, and refuses a docs/ page it does not list", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "docs-list-")));
+    folders.push(root);
+    const listFile = join(root, "list.json");
+    writeFileSync(listFile, '{"operator":[]}');
+    const plugin = publicPagesPlugin({ repositoryRoot: root, listFile });
+    expect(loadWith(plugin, "\0virtual:public-operator-pages").result).toBe("export default {};");
+    expect(() => loadWith(plugin, join(root, "docs/other.md"))).toThrow(/docs\/other\.md is not in explorer\/docs\/public-pages\.json/);
+    expect(loadWith(plugin, join(root, "src/x.ts")).result).toBeNull();
+    expect((plugin.resolveId as (id: string) => string | null)("something-else")).toBeNull();
   });
 });

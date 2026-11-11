@@ -14,6 +14,9 @@ export default defineConfig({
       reporter: ["text", "json-summary"],
       include: ["src/**"],
       exclude: [
+        // Type declarations hold no code; the coverage reader cannot parse them (PARSE_ERROR) and has nothing to count.
+        "**/*.d.mts",
+        "**/*.d.ts",
         // Thin worker entry: it only wires the thread to runGrindJob, which grind-job.test.ts covers.
         "src/msgboard/grind-worker.mjs",
         // Thin worker entry of the preflight: grind-preflight-real.test.ts runs it on a real thread.

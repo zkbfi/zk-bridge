@@ -8,7 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "gate": "../../script/check-docs-public.sh",
     "check:machine": "node scripts/check-machine-docs.ts"
