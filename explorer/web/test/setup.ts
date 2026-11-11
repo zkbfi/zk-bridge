@@ -1,8 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 
 afterEach(() => cleanup());
+
+// The default wait of findBy and waitFor is 1 s. A full run with coverage on a busy machine renders a screen in more than
+// that, and tests then fail only under load. 10 s keeps a real failure fast to see and a slow render from failing.
+configure({ asyncUtilTimeout: 10_000 });
 
 // jsdom has no layout engine. These stubs keep Chakra and the palette from failing on missing browser functions.
 if (typeof window.matchMedia !== "function") {
