@@ -1,33 +1,33 @@
 {
   "chain_a": {
-    "bridge": "0x8821d6bb9b4ff9ca03272ff28f4ff39b86f2dedb",
+    "bridge": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
     "chain_id": 11155111,
-    "delivery_router": "0x1e5ce684e51ee04374171fddeaacfff9bf7915f5",
+    "delivery_router": "0xa125684b9479fbab64218581763788bafb520a57",
     "delivery_routers": [
       "0x3846e483c98cd0f164c29a5e40f7295a5765aba4"
     ],
-    "gate": "0xdcd7165d9941099b6657101c42cfceb3b958557c",
+    "gate": "0x85fbe4c5f7992fbd97a8e4dafc821fad3b0d20f3",
     "light_client": "0x64ddc23ff43ea0cd2ce9a13ef6681ee651e76e4e",
     "light_client_start_block": 12020692,
-    "mediator": "0xe9685ce4360a61908b563b97c6d23ef156e87883",
-    "start_block": 12114017,
-    "token_factory": "0x8d44aa6d68c29815e0a05a3c96d4608e56d80bc6",
+    "mediator": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
+    "start_block": 12114196,
+    "token_factory": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
     "wrapped_native": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9"
   },
   "chain_b": {
-    "bridge": "0x1e5ce684e51ee04374171fddeaacfff9bf7915f5",
+    "bridge": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
     "chain_id": 943,
-    "delivery_router": "0xbd21879c5ae40d133cb72afc8f4f4bab937b4937",
+    "delivery_router": "0xa125684b9479fbab64218581763788bafb520a57",
     "delivery_routers": [
       "0xbea5f0fd3712b02c25bda32c7719fb9373c0fa20"
     ],
     "fork_registry": "0x0f094a965f280599b41f57a5182955f4afad063f",
-    "gate": "0x8821d6bb9b4ff9ca03272ff28f4ff39b86f2dedb",
+    "gate": "0x85fbe4c5f7992fbd97a8e4dafc821fad3b0d20f3",
     "light_client": "0x1dbbcc0bc25de5f6ae122fb0009b3ee4931fd958",
     "light_client_start_block": 25767015,
-    "mediator": "0xd99916b2797083f9f1839ad834bbf20e4c9749a1",
-    "start_block": 25877501,
-    "token_factory": "0xb9bd141510036ed0914e79d42bab033c75b0e82c",
+    "mediator": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
+    "start_block": 25877713,
+    "token_factory": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
     "wrapped_native": "0x70499adebb11efd915e3b69e700c331778628707"
   }
 }
