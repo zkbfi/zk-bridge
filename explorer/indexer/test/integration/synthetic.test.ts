@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { encodeFunctionData, getAddress, keccak256, toHex, type Address, type Hex } from "viem";
 import { buildMessageId, encodeAmbMessage, tokenMediatorAbi } from "@zk-bridge/shared";
-import { connectChain, compileSyntheticContracts, type ChainHandle } from "./support/chains";
+import { connectChain, compileSyntheticContracts, installEmptyPulsexFactories, type ChainHandle } from "./support/chains";
 import { startAnvil, startIndexer, startPostgres, waitFor, type RunningIndexer, type Stoppable } from "./support/processes";
 
 /**
@@ -156,6 +156,8 @@ describe("the indexer follows synthetic chains", () => {
     chainA = await connectChain(1, anvilA.url, artifacts);
     chainB = await connectChain(369, anvilB.url, artifacts);
 
+    await installEmptyPulsexFactories(chainB);
+
     // One account sends every deployment, so they go one after the other (the nonce must not collide).
     bridgeA = await chainA.deploy("SyntheticBridge");
     mediatorA = await chainA.deploy("SyntheticMediator");
@@ -243,7 +245,9 @@ describe("the indexer follows synthetic chains", () => {
     await chainB.send(mediatorB, "SyntheticMediator", "bridged", [copyB, recipient(), SIX_DECIMALS, ids.m1]);
     await chainB.send(bridgeB, "SyntheticBridge", "complete", [mediatorA, mediatorB, ids.m1, true], 4);
     const item = await waitForStatus(ids.m1 as Hex, "delivered");
-    expect(item.delivered).toMatchObject({ success: true, executedBy: chainB.accounts[4]?.toLowerCase() });
+    // A delivery that fails reverts up and leaves no log, so a delivery row is a success and has no success flag.
+    expect(item.delivered).toMatchObject({ executedBy: chainB.accounts[4]?.toLowerCase() });
+    expect(item.delivered).not.toHaveProperty("success");
     expect(item.transfer?.deliveredValue).toBe("1000000");
     expect(item.transfer?.paidTo).toBe(recipient().toLowerCase());
     expect(item.transfer?.destinationToken).toMatchObject({ symbol: "zALP", isBridgedCopy: true, homeToken: tokenA.toLowerCase() });
@@ -365,7 +369,7 @@ describe("the indexer follows synthetic chains", () => {
   it("indexes the gate, the registry and the opening of sends", async () => {
     await chainB.send(gateB, "SyntheticGate", "confirm", [7n, "0x0000036c"]);
     await chainA.send(gateA, "SyntheticGate", "seal", ["0x12345678", 999n]);
-    await chainB.send(registryB, "SyntheticRegistry", "observe", ["0x0000036c", 1234n]);
+    await chainB.send(registryB, "SyntheticRegistry", "observe", ["0x0000036c", 1, 1234n]);
     await chainB.send(bridgeB, "SyntheticBridge", "open", [77n, keccak256(toHex("remote")), 76n]);
 
     const gate = await waitFor("gate events", async () => {
@@ -394,10 +398,12 @@ describe("the indexer follows synthetic chains", () => {
     }>(`/api/summary?now=${Math.floor(Date.now() / 1000)}`);
     expect(summary.body.pair).toBe("eth-pls");
     const volume = summary.body.volume24h.find((row) => row.token?.address === tokenA.toLowerCase());
-    expect(volume).toMatchObject({ chainId: 1, volume: "1150000", transfers: 3 });
-    // Only the arbitrary message that waited for finality is still in flight, and a head covers it.
-    expect(summary.body.inFlight, JSON.stringify(summary.body.inFlight)).toMatchObject({ total: 1 });
-    expect(summary.body.inFlight.byStatus.covered).toBe(1);
+    // Two sends of the native token from chain A are transfers: m1 (1,000,000) and the stuck one (100,000).
+    expect(volume).toMatchObject({ chainId: 1, volume: "1100000", transfers: 2 });
+    // The two arbitrary messages are still in flight: the one whose delivery reverted (a failed delivery leaves no log,
+    // so it stays undelivered) and the one that waited for finality. The head of slot 101 covers both.
+    expect(summary.body.inFlight, JSON.stringify(summary.body.inFlight)).toMatchObject({ total: 2 });
+    expect(summary.body.inFlight.byStatus.covered).toBe(2);
     expect(summary.body.heads.find((head) => head.chainId === 369)?.storedHeadSlot).toBe(101);
     expect(summary.body.lastHeadUpdates.find((entry) => entry.chainId === 369)?.update).toMatchObject({ slot: 101, poster: poster().toLowerCase() });
   });
