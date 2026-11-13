@@ -359,16 +359,23 @@ design is in `docs/superpowers/specs/2026-11-13-gpu-tiers-design.md`. The file h
 
 The file has three parts:
 
-- `template`: the one RunPod template that every tier shares. It holds the worker image by digest (`imageName`), the
-  container disk, the exposed port, the registry credential id (`containerRegistryAuthId`, an id, not a password) and the
-  environment (`PORT`, `PORT_HEALTH`). Change the image here, once. RunPod ignores a new `templateId` on an endpoint that
-  exists, so the shared template is how a new image reaches every tier.
-- `endpoints`: the tiers in the order the prover tries them. Each has a `label`, a RunPod `name`, `gpuIds` (an ordered list
-  of RunPod GPU group ids; an id that starts with `-`, such as `-NVIDIA L40`, excludes that card), `workersMin`,
-  `workersMax`, `idleTimeout` (seconds), `flashBootType`, `scalerType`, `scalerValue`, `executionTimeoutMs` and `type`
-  (`LB`, load balancing). `id` is the RunPod endpoint id. Leave it out for a tier that does not exist yet: the script
-  creates it (matching by `name` on later runs) and prints the new id, which you then put in the file and in `backend.json`.
+- `template`: the settings that every tier's template shares: the worker image by digest (`imageName`), the container
+  disk, the exposed port, the registry credential id (`containerRegistryAuthId`, an id, not a password) and the
+  environment (`PORT`, `PORT_HEALTH`). Change the image here, once: the script then updates the template of every tier.
+  It names no template itself.
+- `endpoints`: the tiers in the order the prover tries them. Each has a `label`, a RunPod `name`, a `template`
+  (`{ "id"?, "name" }`), `gpuIds` (an ordered list of RunPod GPU group ids; an id that starts with `-`, such as
+  `-NVIDIA L40`, excludes that card), `workersMin`, `workersMax`, `idleTimeout` (seconds), `flashBootType`, `scalerType`,
+  `scalerValue`, `executionTimeoutMs` and `type` (`LB`, load balancing). `id` is the RunPod endpoint id. Leave it out for
+  a tier that does not exist yet: the script creates it (matching by `name` on later runs) and prints the new id, which
+  you then put in the file and in `backend.json`.
 - `retired`: ids of endpoints that should be gone. The script deletes them only with `--apply --delete-retired`.
+
+RunPod binds one template to one endpoint ("This template is already bound to an endpoint"), so each tier has its own
+template, with the same settings and its own name. The `template` of a tier is found by its `id`, else from its
+endpoint, else by its `name` among the account's templates, so a template that an earlier run made before its endpoint
+failed is reused and not made twice. Without an `id` it is created and the new id is read from RunPod's answer. The
+script never deletes a template, also not when it deletes a retired endpoint.
 
 The tiers (planner's first choice, owner may change): `gpu-24gb` (`ADA_24`, `AMPERE_24`, no RTX A5000), `gpu-32gb`
 (`ADA_32_PRO`) and `gpu-48gb` (`ADA_48_PRO`, no L40). No 80 GB tier.
@@ -376,7 +383,8 @@ The tiers (planner's first choice, owner may change): `gpu-24gb` (`ADA_24`, `AMP
 To change RunPod:
 
 1. Edit `deploy/runpod/endpoints.json` and commit it.
-2. Dry run. It reads RunPod and prints, for the template and each tier, the fields that differ as `old -> new`. Environment
+2. Dry run. It reads RunPod and prints, for each tier, a template line and an endpoint line with the fields that differ as
+   `old -> new`. Environment
    values show as `(set)`. It also lists endpoints that exist at RunPod but are not in the file and not retired. It never
    touches those. It changes nothing.
 
@@ -384,14 +392,15 @@ To change RunPod:
    RUNPOD_API_KEY=... node deploy/runpod/apply.mjs
    ```
 
-3. Apply. It saves the template when it differs, then each tier that differs, and creates each tier that is missing.
+3. Apply. For each tier in order it saves the tier's template when it differs (or creates it), then saves the endpoint
+   when it differs (or creates it) bound to that template.
 
    ```
    RUNPOD_API_KEY=... node deploy/runpod/apply.mjs --apply
    ```
 
-4. Add `--delete-retired` to delete the endpoints under `retired` (it sets their workers to 0 first). This path has not
-   been run against RunPod yet.
+4. Add `--delete-retired` to delete the endpoints under `retired` (it sets their workers to 0 first; their templates stay).
+   This path has not been run against RunPod yet.
 
 The key is read from the environment only, never from an argument, and the script prints neither the key nor a request.
 It uses RunPod's GraphQL API, because the REST API has a small daily limit. A RunPod error prints its message and the exit

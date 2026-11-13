@@ -1,7 +1,5 @@
 {
   "template": {
-    "id": "hsj330cqpf",
-    "name": "zk-bridge-prover-gpu-template",
     "imageName": "ghcr.io/zkbfi/zk-bridge-prover-gpu-worker@sha256:3e790341daa3969148cfc0d446f862fd3c770142e233d262049f0e158b4061d7",
     "containerDiskInGb": 40,
     "volumeInGb": 0,
@@ -17,6 +15,7 @@
       "label": "gpu-24gb",
       "id": "43nsvfb8svkosr",
       "name": "zk-bridge-prover-gpu",
+      "template": { "id": "hsj330cqpf", "name": "zk-bridge-prover-gpu-template" },
       "gpuIds": ["ADA_24", "AMPERE_24", "-NVIDIA RTX A5000"],
       "workersMin": 0,
       "workersMax": 1,
@@ -30,6 +29,7 @@
     {
       "label": "gpu-32gb",
       "name": "zk-bridge-prover-gpu-32gb",
+      "template": { "name": "zk-bridge-prover-gpu-32gb-template" },
       "gpuIds": ["ADA_32_PRO"],
       "workersMin": 0,
       "workersMax": 1,
@@ -43,6 +43,7 @@
     {
       "label": "gpu-48gb",
       "name": "zk-bridge-prover-gpu-48gb",
+      "template": { "name": "zk-bridge-prover-gpu-48gb-template" },
       "gpuIds": ["ADA_48_PRO", "-NVIDIA L40"],
       "workersMin": 0,
       "workersMax": 1,
