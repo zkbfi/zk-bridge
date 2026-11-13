@@ -28,8 +28,9 @@
     },
     {
       "label": "gpu-32gb",
+      "id": "muecz9pudncily",
       "name": "zk-bridge-prover-gpu-32gb",
-      "template": { "name": "zk-bridge-prover-gpu-32gb-template" },
+      "template": { "id": "10sn7k4j8q", "name": "zk-bridge-prover-gpu-32gb-template" },
       "gpuIds": ["ADA_32_PRO"],
       "workersMin": 0,
       "workersMax": 1,
@@ -42,8 +43,9 @@
     },
     {
       "label": "gpu-48gb",
+      "id": "nuax43o5zxyv9a",
       "name": "zk-bridge-prover-gpu-48gb",
-      "template": { "name": "zk-bridge-prover-gpu-48gb-template" },
+      "template": { "id": "6tvj1628az", "name": "zk-bridge-prover-gpu-48gb-template" },
       "gpuIds": ["ADA_48_PRO", "-NVIDIA L40"],
       "workersMin": 0,
       "workersMax": 1,

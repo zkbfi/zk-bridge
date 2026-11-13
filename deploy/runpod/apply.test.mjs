@@ -24,7 +24,19 @@ import {
 } from "./apply.mjs";
 
 const fileText = readFileSync(new URL("./endpoints.json", import.meta.url), "utf8");
-const config = () => parseConfig(fileText);
+/**
+ * The file as it was before the 32 GB and 48 GB tiers existed: the tests build on that state (two tiers to create), so
+ * the ids that the first apply wrote back into the file are taken out again here.
+ */
+const beforeTiersText = () => {
+  const parsed = JSON.parse(fileText);
+  for (const tier of parsed.endpoints.slice(1)) {
+    delete tier.id;
+    delete tier.template.id;
+  }
+  return JSON.stringify(parsed);
+};
+const config = () => parseConfig(beforeTiersText());
 /** The wanted template of the first tier: the shared settings with its name and id. */
 const wantedTemplate = () => ({ ...config().template, name: "zk-bridge-prover-gpu-template", id: "hsj330cqpf" });
 
@@ -212,7 +224,7 @@ test("a tier's template is found by its id, by its endpoint, or by its name (a t
   const byListed = planChanges(config(), account([bare], [liveTemplate({ id: "listed", name: "zk-bridge-prover-gpu-32gb-template" })])).endpoints[1];
   assert.deepEqual([byListed.template.wanted.id, byListed.template.exists], ["listed", true]);
   // A template named by id in the file, shown only in the account's list.
-  const named = parseConfig(JSON.stringify({ ...JSON.parse(fileText), endpoints: JSON.parse(fileText).endpoints.map((entry) => (entry.label === "gpu-32gb" ? { ...entry, template: { id: "pinned", name: "zk-bridge-prover-gpu-32gb-template" } } : entry)) }));
+  const named = parseConfig(JSON.stringify({ ...JSON.parse(beforeTiersText()), endpoints: JSON.parse(beforeTiersText()).endpoints.map((entry) => (entry.label === "gpu-32gb" ? { ...entry, template: { id: "pinned", name: "zk-bridge-prover-gpu-32gb-template" } } : entry)) }));
   assert.equal(planChanges(named, account([], [liveTemplate({ id: "pinned", name: "other name" })])).endpoints[1].template.changes[0].field, "name");
   // A tier without an id is matched by name.
   const byTierName = planChanges(config(), account([liveEndpoint({ id: "new32", name: "zk-bridge-prover-gpu-32gb", gpuIds: "ADA_32_PRO", templateId: "tpl-32", template: liveTemplate({ id: "tpl-32" }) })]));
@@ -260,7 +272,7 @@ function stub(endpoints, { templates = [], failOn } = {}) {
   return { calls, post };
 }
 
-const quietly = { env: { RUNPOD_API_KEY: "k" }, readFile: () => fileText, out: () => {} };
+const quietly = { env: { RUNPOD_API_KEY: "k" }, readFile: () => beforeTiersText(), out: () => {} };
 
 test("a dry run reads the endpoints and the templates, prints the differences and sends no mutation", async () => {
   const { calls, post } = stub([liveEndpoint({ idleTimeout: 60 })]);
@@ -322,7 +334,7 @@ test("retired endpoints are kept without --delete-retired, and deleted with it (
   assert.equal(keep.calls.some((call) => call.query === DELETE_ENDPOINT_QUERY), false);
 
   const drop = stub(live);
-  const retiredConfig = JSON.stringify({ ...JSON.parse(fileText), retired: ["zmp5owbxu73fc2", "idle-retired", "gone-already"] });
+  const retiredConfig = JSON.stringify({ ...JSON.parse(beforeTiersText()), retired: ["zmp5owbxu73fc2", "idle-retired", "gone-already"] });
   const lines = [];
   await run({ ...quietly, argv: ["--apply", "--delete-retired"], post: drop.post, readFile: () => retiredConfig, out: (line) => lines.push(line) });
   const queries = drop.calls.map((call) => call.query);
@@ -348,7 +360,7 @@ test("run: the key must be in the environment; the configuration comes from a pa
   assert.match(errors[0], /RUNPOD_API_KEY/);
   const { post } = stub([]);
   const read = { stdin: 0, paths: [] };
-  const base = { env: { RUNPOD_API_KEY: "k" }, post, out: () => {}, readStdin: () => (read.stdin += 1, fileText), readFile: (path) => (read.paths.push(path), fileText) };
+  const base = { env: { RUNPOD_API_KEY: "k" }, post, out: () => {}, readStdin: () => (read.stdin += 1, beforeTiersText()), readFile: (path) => (read.paths.push(path), beforeTiersText()) };
   assert.equal(await run({ ...base, argv: ["--config", "-"] }), 0);
   assert.equal(read.stdin, 1);
   assert.equal(await run({ ...base, argv: ["--config", "/tmp/other.json"] }), 0);
@@ -361,11 +373,11 @@ test("a GraphQL error ends the run with a non-zero code and prints the message, 
   const errors = [];
   const key = "rpa_SECRETKEYVALUE";
   const { post } = stub([liveEndpoint()], { failOn: "saveEndpoint" });
-  const code = await run({ argv: ["--apply"], env: { RUNPOD_API_KEY: key }, post, readFile: () => fileText, out: () => {}, err: (line) => errors.push(line) });
+  const code = await run({ argv: ["--apply"], env: { RUNPOD_API_KEY: key }, post, readFile: () => beforeTiersText(), out: () => {}, err: (line) => errors.push(line) });
   assert.equal(code, 1);
   assert.deepEqual(errors, ["RunPod refused the request: nope"]);
   const unexpected = [];
-  assert.equal(await run({ argv: [], env: { RUNPOD_API_KEY: key }, post: async () => { throw Object.assign(new Error(`boom ${key}`), { code: "EBOOM" }); }, readFile: () => fileText, err: (line) => unexpected.push(line) }), 1);
+  assert.equal(await run({ argv: [], env: { RUNPOD_API_KEY: key }, post: async () => { throw Object.assign(new Error(`boom ${key}`), { code: "EBOOM" }); }, readFile: () => beforeTiersText(), err: (line) => unexpected.push(line) }), 1);
   assert.deepEqual(unexpected, ["failed: EBOOM"]);
   const plain = [];
   assert.equal(await run({ argv: [], env: { RUNPOD_API_KEY: key }, post: async () => { throw new Error(`boom ${key}`); }, readFile: () => fileText, err: (line) => plain.push(line) }), 1);
