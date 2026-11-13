@@ -3,6 +3,9 @@ import { z } from "zod";
 /** The most endpoints that the prover accepts in `prover.remote_endpoints` (`MAX_REMOTE_ENDPOINTS` in the prover). */
 export const MAX_REMOTE_ENDPOINTS = 8;
 
+/** The ready wait of an endpoint that sets none: `remote_cold_start_wait_seconds` of the prover, which the file leaves at 900. */
+export const DEFAULT_READY_WAIT_SECONDS = 900;
+
 /** The label rule of the prover: 1 to 32 lower case letters, digits, `-` or `_`, starting with a letter or a digit. */
 const LABEL = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
@@ -28,6 +31,12 @@ export const remoteEndpointSchema = z
     apiKeyVariable: z.string().regex(VARIABLE, "must be the NAME of an environment variable in capitals").optional(),
     /** The longest wait for a worker that is not ready yet. Short for a dedicated worker. Default: the prover's 900 s. */
     readyWaitSeconds: z.number().int().nonnegative().optional(),
+    /**
+     * The start wait of a GPU tier. With it, the prover asks `/ping` of this endpoint until a worker is ready before it
+     * sends the job; after this many seconds it also pings the next endpoint and sends the job to the first that is
+     * ready, the earlier one when both are. Below the ready wait. Leave it out to send the job at once.
+     */
+    startWaitSeconds: z.number().int().positive().optional(),
     /** The time one request may take. Default: the time of the generated file. */
     timeoutSeconds: z.number().int().positive().optional(),
     /** How often the job is sent to this endpoint before the prover moves on. Default: the attempts of the generated file. */
@@ -37,6 +46,10 @@ export const remoteEndpointSchema = z
   .refine((endpoint) => endpoint.apiKeyVariable === undefined || new URL(endpoint.url).protocol === "https:" || isLoopback(new URL(endpoint.url)), {
     message: "must use https when the endpoint has an API key (http only on the local machine): the key travels in the request",
     path: ["url"],
+  })
+  .refine((endpoint) => endpoint.startWaitSeconds === undefined || endpoint.startWaitSeconds < (endpoint.readyWaitSeconds ?? DEFAULT_READY_WAIT_SECONDS), {
+    message: "must be below the ready wait of the endpoint (readyWaitSeconds, default 900): the prover waits for a worker at most that long",
+    path: ["startWaitSeconds"],
   });
 
 /** One proving endpoint. */

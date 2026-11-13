@@ -123,6 +123,11 @@ struct FakeWorker {
 impl FakeWorker {
     /// Starts a server. `script` gets the index of the request (from 0) and answers it.
     fn start(script: impl Fn(usize) -> Reply + Send + Sync + 'static) -> Self {
+        Self::start_routed(move |index, _path| script(index))
+    }
+
+    /// Starts a server. `script` gets the index of the request (from 0) and its path, and answers it.
+    fn start_routed(script: impl Fn(usize, &str) -> Reply + Send + Sync + 'static) -> Self {
         let server = Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
         let url = format!("http://{}", server.server_addr().to_ip().unwrap());
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -148,6 +153,7 @@ impl FakeWorker {
                     user_agent,
                     body,
                 };
+                let path = record.path.clone();
                 let index = {
                     let mut seen = loop_seen.lock().unwrap();
                     seen.push(record);
@@ -155,7 +161,7 @@ impl FakeWorker {
                 };
                 let script = Arc::clone(&script);
                 std::thread::spawn(move || {
-                    let reply = script(index);
+                    let reply = script(index, &path);
                     std::thread::sleep(reply.delay);
                     let response =
                         tiny_http::Response::from_string(reply.body).with_status_code(reply.status);
@@ -181,6 +187,7 @@ impl FakeWorker {
                 attempts,
                 retry_delay: Duration::from_millis(20),
                 cold_start_wait: Duration::from_secs(30),
+                start_wait: None,
             },
             Logger::in_memory().0,
         )
@@ -199,6 +206,7 @@ impl FakeWorker {
                 attempts: 1,
                 retry_delay: Duration::from_millis(20),
                 cold_start_wait,
+                start_wait: None,
             },
             logger,
         );
@@ -547,6 +555,7 @@ fn the_backend_and_the_worker_agree_over_http() {
             attempts: 1,
             retry_delay: Duration::ZERO,
             cold_start_wait: Duration::ZERO,
+            start_wait: None,
         },
         Logger::in_memory().0,
     );
@@ -817,6 +826,7 @@ fn endpoint(label: &str, url: &str, api_key: Option<&str>, ready_wait: Duration)
         attempts: 1,
         retry_delay: Duration::from_millis(20),
         cold_start_wait: ready_wait,
+        start_wait: None,
     }
 }
 
@@ -1112,4 +1122,463 @@ fn a_bad_proof_is_an_error_and_is_not_proved_again() {
         refused.contains("endpoint=dedicated") && refused.contains("level=error"),
         "{refused}"
     );
+}
+
+// GPU tiers: an endpoint with a start wait gets the job only once its `GET /ping` answers 200
+// (`docs/gpu-prover.md`, "Endpoint list"). The waits here are short; the rules are the ones of 30 s in production.
+
+/// The pause between two rounds of pings in these tests.
+const PING_INTERVAL: Duration = Duration::from_millis(20);
+
+/// A GPU tier: `/ping` answers 200 once `ready` says so, else `not_ready` (204 while a worker starts, 503 for a
+/// worker that is refused). `/prove` answers `prove`.
+fn tier(
+    ready: impl Fn() -> bool + Send + Sync + 'static,
+    not_ready: u16,
+    prove: Reply,
+) -> FakeWorker {
+    FakeWorker::start_routed(move |_, path| {
+        if path == "/ping" {
+            if ready() {
+                Reply::with(200, r#"{"status":"ready"}"#)
+            } else {
+                Reply::with(not_ready, "")
+            }
+        } else {
+            prove.clone()
+        }
+    })
+}
+
+/// A tier that is ready `after` its start (never with `None`) and proves at once.
+fn tier_ready_after(after: Option<Duration>) -> FakeWorker {
+    let born = std::time::Instant::now();
+    tier(
+        move || after.is_some_and(|after| born.elapsed() >= after),
+        204,
+        transport_answer(),
+    )
+}
+
+/// The settings of one tier: a key, one attempt, the start wait and the ready wait given.
+fn tier_settings(
+    label: &str,
+    url: &str,
+    start_wait: Option<Duration>,
+    ready_wait: Duration,
+) -> RemoteSettings {
+    RemoteSettings {
+        start_wait,
+        ..endpoint(label, url, Some(API_KEY), ready_wait)
+    }
+}
+
+/// A backend over tiers, with the short ping interval. The second value gives the log lines.
+fn tiers(settings: Vec<RemoteSettings>) -> (RemoteProver, Arc<Mutex<Vec<String>>>) {
+    let (logger, lines) = Logger::in_memory();
+    let prover = RemoteProver::with_endpoints(settings, logger).with_ping_interval(PING_INTERVAL);
+    (prover, lines)
+}
+
+fn paths(worker: &FakeWorker, path: &str) -> usize {
+    worker
+        .requests()
+        .iter()
+        .filter(|seen| seen.path == path)
+        .count()
+}
+
+fn log_line(lines: &Arc<Mutex<Vec<String>>>, event: &str) -> Option<String> {
+    lines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|line| {
+            line.contains(&format!("event={event} ")) || line.ends_with(&format!("event={event}"))
+        })
+        .cloned()
+}
+
+/// Claim: a tier that is ready at once gets the job at once. The next tier is never asked. The ping carries the key of
+/// the endpoint, like `/prove`. The choice is logged and the timings name the tier.
+/// Why it matters: in the usual case the warm-up has started the cheap worker; the job must not wait for anything.
+#[test]
+fn a_tier_that_is_ready_at_once_gets_the_job() {
+    let cheap = tier_ready_after(Some(Duration::ZERO));
+    let dear = tier_ready_after(Some(Duration::ZERO));
+    let (prover, lines) = tiers(vec![
+        tier_settings(
+            "gpu-24gb",
+            &cheap.url,
+            Some(Duration::from_millis(300)),
+            Duration::from_secs(5),
+        ),
+        tier_settings("gpu-48gb", &dear.url, None, Duration::from_secs(5)),
+    ]);
+    let (answer, timings) = prover
+        .request_proof_timed(BODY)
+        .expect("the cheap tier answers");
+    assert_eq!(answer.proof, "0xaaaaaaaa");
+    assert_eq!(timings.endpoint, "gpu-24gb");
+    assert_eq!(timings.failover_count, 0);
+    assert!(timings.start_wait_ms < 300, "{}", timings.start_wait_ms);
+    let seen = cheap.requests();
+    assert_eq!(
+        seen.iter()
+            .map(|seen| seen.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/ping", "/prove"]
+    );
+    assert_eq!(seen[0].method, "GET");
+    assert_eq!(
+        seen[0].authorization.as_deref(),
+        Some(format!("Bearer {API_KEY}").as_str())
+    );
+    assert!(dear.requests().is_empty());
+    let chosen = log_line(&lines, "remote_tier_chosen").expect("a choice line");
+    assert!(
+        chosen.contains("endpoint_index=1") && chosen.contains("endpoint=gpu-24gb"),
+        "{chosen}"
+    );
+    assert!(log_line(&lines, "remote_tier_escalate").is_none());
+    assert_no_address(&lines, &[&cheap.url, &dear.url]);
+}
+
+/// Claim: a tier that is not ready after its start wait brings in the next tier. The next tier is ready, so it gets the
+/// job; the first tier never gets it. The escalation is logged with both tiers and the time waited.
+/// Why it matters: the owner accepts 30 s of waiting for a cheap GPU, not the full cold start.
+#[test]
+fn a_tier_not_ready_in_its_start_wait_hands_the_job_to_the_next() {
+    let cheap = tier_ready_after(None);
+    let dear = tier_ready_after(Some(Duration::ZERO));
+    let start_wait = Duration::from_millis(200);
+    let (prover, lines) = tiers(vec![
+        tier_settings(
+            "gpu-24gb",
+            &cheap.url,
+            Some(start_wait),
+            Duration::from_secs(5),
+        ),
+        tier_settings(
+            "gpu-32gb",
+            &dear.url,
+            Some(start_wait),
+            Duration::from_secs(5),
+        ),
+    ]);
+    let started = std::time::Instant::now();
+    let (_, timings) = prover
+        .request_proof_timed(BODY)
+        .expect("the next tier answers");
+    assert!(started.elapsed() >= start_wait, "{:?}", started.elapsed());
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(timings.endpoint, "gpu-32gb");
+    assert_eq!(timings.failover_count, 0);
+    assert!(timings.start_wait_ms >= 200, "{}", timings.start_wait_ms);
+    assert!(paths(&cheap, "/ping") >= 2);
+    assert_eq!(paths(&cheap, "/prove"), 0);
+    assert_eq!(paths(&dear, "/prove"), 1);
+    let escalate = log_line(&lines, "remote_tier_escalate").expect("an escalation line");
+    for part in [
+        "from_endpoint_index=1",
+        "from_endpoint=gpu-24gb",
+        "to_endpoint_index=2",
+        "to_endpoint=gpu-32gb",
+        "waited_seconds=0",
+    ] {
+        assert!(escalate.contains(part), "{part} in {escalate}");
+    }
+    let chosen = log_line(&lines, "remote_tier_chosen").expect("a choice line");
+    assert!(chosen.contains("endpoint=gpu-32gb"), "{chosen}");
+    assert_no_address(&lines, &[&cheap.url, &dear.url]);
+}
+
+/// Claim: when both tiers become ready in the same round of pings, the earlier tier gets the job.
+/// Why it matters: the earlier tier is the cheaper one.
+#[test]
+fn when_both_tiers_are_ready_the_earlier_one_wins() {
+    let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dear_pings = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let cheap = {
+        let ready = Arc::clone(&ready);
+        tier(
+            move || ready.load(std::sync::atomic::Ordering::SeqCst),
+            204,
+            transport_answer(),
+        )
+    };
+    // The dear tier makes both tiers ready after its second ping, between two rounds: in the next round both are.
+    let dear = {
+        let (ready, pings) = (Arc::clone(&ready), Arc::clone(&dear_pings));
+        tier(
+            move || {
+                let now_ready = ready.load(std::sync::atomic::Ordering::SeqCst);
+                if pings.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1 >= 2 {
+                    ready.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                now_ready
+            },
+            204,
+            transport_answer(),
+        )
+    };
+    let (prover, lines) = tiers(vec![
+        tier_settings(
+            "gpu-24gb",
+            &cheap.url,
+            Some(Duration::from_millis(100)),
+            Duration::from_secs(5),
+        ),
+        tier_settings(
+            "gpu-32gb",
+            &dear.url,
+            Some(Duration::from_millis(100)),
+            Duration::from_secs(5),
+        ),
+    ]);
+    let (_, timings) = prover.request_proof_timed(BODY).expect("a tier answers");
+    assert_eq!(timings.endpoint, "gpu-24gb");
+    assert_eq!(paths(&cheap, "/prove"), 1);
+    assert_eq!(paths(&dear, "/prove"), 0);
+    assert!(log_line(&lines, "remote_tier_escalate").is_some());
+}
+
+/// Claim: after the escalation the first tier is still pinged. When it becomes ready before the next tier, it gets
+/// the job, and the next tier never gets it.
+/// Why it matters: the started cheap worker is not thrown away; it may still win the race.
+#[test]
+fn the_first_tier_still_wins_when_it_is_ready_first_after_the_escalation() {
+    let cheap = tier_ready_after(Some(Duration::from_millis(400)));
+    let dear = tier_ready_after(None);
+    let (prover, lines) = tiers(vec![
+        tier_settings(
+            "gpu-24gb",
+            &cheap.url,
+            Some(Duration::from_millis(150)),
+            Duration::from_secs(5),
+        ),
+        tier_settings(
+            "gpu-32gb",
+            &dear.url,
+            Some(Duration::from_millis(150)),
+            Duration::from_secs(5),
+        ),
+    ]);
+    let (_, timings) = prover
+        .request_proof_timed(BODY)
+        .expect("the cheap tier answers");
+    assert_eq!(timings.endpoint, "gpu-24gb");
+    assert!(timings.start_wait_ms >= 400, "{}", timings.start_wait_ms);
+    assert_eq!(paths(&cheap, "/prove"), 1);
+    assert!(paths(&dear, "/ping") >= 1);
+    assert_eq!(paths(&dear, "/prove"), 0);
+    assert!(log_line(&lines, "remote_tier_escalate").is_some());
+}
+
+/// Claim: the escalation goes on down the list: each tier brings in the next after its own start wait. The job goes
+/// to the third tier when it is the only one that becomes ready.
+#[test]
+fn the_escalation_goes_down_the_whole_list() {
+    let first = tier_ready_after(None);
+    let second = tier_ready_after(None);
+    let third = tier_ready_after(Some(Duration::ZERO));
+    let wait = Some(Duration::from_millis(100));
+    let (prover, lines) = tiers(vec![
+        tier_settings("gpu-24gb", &first.url, wait, Duration::from_secs(5)),
+        tier_settings("gpu-32gb", &second.url, wait, Duration::from_secs(5)),
+        tier_settings("gpu-48gb", &third.url, None, Duration::from_secs(5)),
+    ]);
+    let started = std::time::Instant::now();
+    let (_, timings) = prover
+        .request_proof_timed(BODY)
+        .expect("the third tier answers");
+    assert!(
+        started.elapsed() >= Duration::from_millis(200),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(timings.endpoint, "gpu-48gb");
+    assert_eq!(timings.failover_count, 0);
+    assert_eq!(paths(&first, "/prove") + paths(&second, "/prove"), 0);
+    assert_eq!(paths(&third, "/prove"), 1);
+    let escalations: Vec<String> = lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.contains("event=remote_tier_escalate"))
+        .cloned()
+        .collect();
+    assert_eq!(escalations.len(), 2, "{escalations:?}");
+    assert!(
+        escalations[1].contains("from_endpoint=gpu-32gb")
+            && escalations[1].contains("to_endpoint=gpu-48gb")
+    );
+}
+
+/// Claim: when no tier becomes ready within its ready wait, the job fails with one line per tier, and no tier ever got
+/// the job. A 503 of `/ping` (a refused or broken worker) counts as not ready, like a 204. The last tier may have a
+/// start wait too.
+#[test]
+fn tiers_that_never_start_fail_clearly() {
+    let cheap = tier(|| false, 503, transport_answer());
+    let dear = tier(|| false, 204, transport_answer());
+    let (prover, lines) = tiers(vec![
+        tier_settings(
+            "gpu-24gb",
+            &cheap.url,
+            Some(Duration::from_millis(100)),
+            Duration::from_millis(300),
+        ),
+        tier_settings(
+            "gpu-32gb",
+            &dear.url,
+            Some(Duration::from_millis(100)),
+            Duration::from_millis(300),
+        ),
+    ]);
+    let started = std::time::Instant::now();
+    let text = prover.request_proof(BODY).unwrap_err().to_string();
+    assert!(
+        started.elapsed() >= Duration::from_millis(400),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(
+        text.contains("no remote endpoint gave a proof (2 tried)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("endpoint 1 (gpu-24gb): ") && text.contains("status 503"),
+        "{text}"
+    );
+    assert!(
+        text.contains("endpoint 2 (gpu-32gb): ") && text.contains("status 204"),
+        "{text}"
+    );
+    assert!(text.matches("not ready after").count() == 2, "{text}");
+    assert!(
+        text.find("endpoint 1").unwrap() < text.find("endpoint 2").unwrap(),
+        "{text}"
+    );
+    assert_eq!(paths(&cheap, "/prove") + paths(&dear, "/prove"), 0);
+    assert!(log_line(&lines, "remote_endpoints_exhausted").is_some());
+    assert!(!text.contains(API_KEY));
+    assert_no_address(&lines, &[&cheap.url, &dear.url]);
+}
+
+/// Claim: a single tier with a start wait that never starts fails with its own reason, like a single endpoint.
+#[test]
+fn a_single_tier_that_never_starts_fails_with_its_reason() {
+    let only = tier(|| false, 204, transport_answer());
+    let (prover, _lines) = tiers(vec![tier_settings(
+        "gpu-24gb",
+        &only.url,
+        Some(Duration::from_millis(50)),
+        Duration::from_millis(150),
+    )]);
+    let text = prover.request_proof(BODY).unwrap_err().to_string();
+    assert!(
+        text.contains("the remote worker was not ready after") && !text.contains("tried"),
+        "{text}"
+    );
+    assert_eq!(paths(&only, "/prove"), 0);
+}
+
+/// Claim: a tier that turns the ping away (a key it does not take) is given up at once, and the next tier joins at
+/// once, without waiting for the start wait.
+#[test]
+fn a_tier_that_turns_the_ping_away_is_left_at_once() {
+    let refusing = tier(|| false, 401, transport_answer());
+    let dear = tier_ready_after(Some(Duration::ZERO));
+    let (prover, lines) = tiers(vec![
+        tier_settings(
+            "gpu-24gb",
+            &refusing.url,
+            Some(Duration::from_secs(20)),
+            Duration::from_secs(30),
+        ),
+        tier_settings("gpu-32gb", &dear.url, None, Duration::from_secs(5)),
+    ]);
+    let started = std::time::Instant::now();
+    let (_, timings) = prover
+        .request_proof_timed(BODY)
+        .expect("the next tier answers");
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(timings.endpoint, "gpu-32gb");
+    assert_eq!(timings.failover_count, 1);
+    assert_eq!(paths(&refusing, "/ping"), 1);
+    let failover = log_line(&lines, "remote_endpoint_failover").expect("a failover line");
+    assert!(
+        failover.contains("endpoint=gpu-24gb") && failover.contains("next_endpoint=gpu-32gb"),
+        "{failover}"
+    );
+}
+
+/// Claim: when the chosen tier then fails in a way another endpoint can help (a server error past its attempts), the
+/// job goes to a tier that is not given up yet, here the first tier that became ready meanwhile. One job is never on
+/// two tiers at once: each tier got `/prove` once, one after the other.
+#[test]
+fn a_chosen_tier_that_fails_hands_the_job_on() {
+    let cheap = tier_ready_after(Some(Duration::from_millis(300)));
+    let dear = tier(
+        || true,
+        204,
+        Reply::with(500, r#"{"error":"the proof failed"}"#),
+    );
+    let (prover, lines) = tiers(vec![
+        tier_settings(
+            "gpu-24gb",
+            &cheap.url,
+            Some(Duration::from_millis(100)),
+            Duration::from_secs(5),
+        ),
+        tier_settings(
+            "gpu-32gb",
+            &dear.url,
+            Some(Duration::from_millis(100)),
+            Duration::from_secs(5),
+        ),
+    ]);
+    let (_, timings) = prover
+        .request_proof_timed(BODY)
+        .expect("the cheap tier answers");
+    assert_eq!(timings.endpoint, "gpu-24gb");
+    assert_eq!(timings.failover_count, 1);
+    assert_eq!(paths(&dear, "/prove"), 1);
+    assert_eq!(paths(&cheap, "/prove"), 1);
+    let failover = log_line(&lines, "remote_endpoint_failover").expect("a failover line");
+    assert!(
+        failover.contains("endpoint_index=2") && failover.contains("next_endpoint_index=1"),
+        "{failover}"
+    );
+}
+
+/// Claim: endpoints without a start wait are never pinged: the job goes straight to `/prove`, as before, and the
+/// timings carry no start wait.
+#[test]
+fn endpoints_without_a_start_wait_are_not_pinged() {
+    let dedicated = FakeWorker::start(|_| Reply::with(500, r#"{"error":"the proof failed"}"#));
+    let serverless = FakeWorker::start(|_| transport_answer());
+    let (prover, lines) = tiers(vec![
+        endpoint("dedicated", &dedicated.url, None, Duration::ZERO),
+        endpoint("serverless", &serverless.url, Some(API_KEY), Duration::ZERO),
+    ]);
+    let (_, timings) = prover
+        .request_proof_timed(BODY)
+        .expect("serverless answers");
+    assert_eq!(timings.endpoint, "serverless");
+    assert_eq!(timings.failover_count, 1);
+    assert_eq!(timings.start_wait_ms, 0);
+    assert_eq!(paths(&dedicated, "/ping") + paths(&serverless, "/ping"), 0);
+    assert_eq!(paths(&dedicated, "/prove"), 1);
+    assert_eq!(paths(&serverless, "/prove"), 1);
+    assert!(log_line(&lines, "remote_tier_chosen").is_none());
 }

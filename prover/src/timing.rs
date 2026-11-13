@@ -164,6 +164,9 @@ pub struct RemoteTimings {
     pub not_ready_count: u32,
     /// How often an ordinary failure (no answer, a server error) made the backend send the job again.
     pub retry_count: u32,
+    /// The part of `wait_worker_ms` spent asking `GET /ping` of endpoints with a start wait (a GPU tier) before the job
+    /// was sent. 0 when no endpoint of the list has a start wait.
+    pub start_wait_ms: u64,
     /// The label of the endpoint that gave the proof (`prover.remote_endpoints`, or `remote` for the single
     /// `prover.remote_url`). A label from the configuration, never a URL.
     pub endpoint: String,
@@ -201,6 +204,7 @@ pub fn prover_step_lines(
             "wait_worker",
             vec![
                 ("elapsed_ms", remote.wait_worker_ms.to_string()),
+                ("start_wait_ms", remote.start_wait_ms.to_string()),
                 ("not_ready_count", remote.not_ready_count.to_string()),
                 ("retry_count", remote.retry_count.to_string()),
                 ("endpoint", remote.endpoint.clone()),
@@ -251,6 +255,7 @@ pub fn summary_fields(
     let remote = prover.and_then(|timings| timings.remote.as_ref());
     if let Some(remote) = remote {
         fields.push(("wait_worker_ms", remote.wait_worker_ms.to_string()));
+        fields.push(("start_wait_ms", remote.start_wait_ms.to_string()));
         fields.push(("not_ready_count", remote.not_ready_count.to_string()));
         fields.push(("retry_count", remote.retry_count.to_string()));
         fields.push(("endpoint", remote.endpoint.clone()));
@@ -335,6 +340,7 @@ mod tests {
             verify_ms: 6,
             remote: Some(RemoteTimings {
                 wait_worker_ms: 60_000,
+                start_wait_ms: 30_500,
                 not_ready_count: 2,
                 retry_count: 1,
                 endpoint: "serverless".into(),
@@ -348,6 +354,7 @@ mod tests {
             ("build_ms", "1200"),
             ("native_ms", "610"),
             ("wait_worker_ms", "60000"),
+            ("start_wait_ms", "30500"),
             ("not_ready_count", "2"),
             ("retry_count", "1"),
             ("endpoint", "serverless"),

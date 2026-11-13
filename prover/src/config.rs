@@ -150,6 +150,13 @@ pub struct RemoteEndpointConfig {
     /// Short for a dedicated worker (it is up or it is not), long for a serverless endpoint that starts one.
     #[serde(default)]
     pub ready_wait_seconds: Option<u64>,
+    /// The start wait of this endpoint (a GPU tier). Optional. With it, the prover asks `GET /ping` of the endpoint
+    /// until a worker answers 200 before it sends the job. When no worker is ready after this many seconds, the prover
+    /// also pings the next endpoint and sends the job to the first one that is ready, the earlier one when both are
+    /// (`docs/gpu-prover.md`, "Endpoint list"). At least 1 and below the endpoint's ready wait. Without it the job is
+    /// sent at once, as before.
+    #[serde(default)]
+    pub start_wait_seconds: Option<u64>,
     /// The time one request to this endpoint may take. Default `remote_timeout_seconds`.
     #[serde(default)]
     pub timeout_seconds: Option<u64>,

@@ -281,6 +281,7 @@ Per endpoint:
 | `ready_wait_seconds` | `remote_cold_start_wait_seconds` | The longest wait for a worker of this endpoint that answers "not ready", counted from the first request to this endpoint. |
 | `timeout_seconds` | `remote_timeout_seconds` | One request to this endpoint. |
 | `attempts` | `remote_attempts` | Requests after ordinary failures (no answer, 5xx, 429) before the prover moves on. |
+| `start_wait_seconds` | none | The start wait of a GPU tier (see "GPU tiers" below). With it, the prover pings the endpoint until a worker is ready before it sends the job. After this many seconds it pings the next endpoint too. At least 1 and below the endpoint's ready wait. Without it the job is sent at once. |
 
 What the prover does with each answer:
 
@@ -295,13 +296,58 @@ What the prover does with each answer:
 | "Not ready" (503, 204, "no workers available", the RunPod 400 "timed out waiting for worker") | Waited for, up to `ready_wait_seconds`. | Gets the job when the wait runs out. |
 | Every endpoint failed | | The job fails with one line per endpoint: `no remote endpoint gave a proof (2 tried); endpoint 1 (dedicated): ...; endpoint 2 (serverless): ...` |
 
-Log lines name the endpoint by its position and label: `remote_prove_retry` and `remote_worker_not_ready` carry `endpoint_index` and `endpoint`; `remote_endpoint_failover` carries `endpoint_index`, `endpoint`, `next_endpoint_index`, `next_endpoint` and the reason. The prover takes the endpoint's address out of every reason. The `prove_timing` line carries `endpoint` (the label that gave the proof) and `failover_count` (how many endpoints were given up before it).
+Log lines name the endpoint by its position and label: `remote_prove_retry` and `remote_worker_not_ready` carry `endpoint_index` and `endpoint`; `remote_endpoint_failover` carries `endpoint_index`, `endpoint`, `next_endpoint_index`, `next_endpoint` and the reason. The prover takes the endpoint's address out of every reason. The `prove_timing` line carries `endpoint` (the label that gave the proof), `failover_count` (how many endpoints were given up before it) and `start_wait_ms` (see "GPU tiers").
 
 A timeout does not stop the worker: a dedicated worker that answers too late may still finish that proof while the serverless endpoint proves the job. That costs nothing on a dedicated pod, which bills by the hour, but it keeps that GPU busy for the next job. Keep `timeout_seconds` of the dedicated worker well above one proof.
 
 The worst case before the fallback starts, with the values above: a dedicated worker that takes the connection and never answers costs 2 × 120 s plus a 10 s pause, about 250 s. A dedicated worker that is down (connection refused) costs 10 s. A dedicated worker that answers "not ready" costs 20 s. Then the serverless endpoint may need its cold start (up to 900 s of waiting) and a proof. Keep the backend's job limit (1800 s by default) above that sum.
 
 Reaching a dedicated pod: the RunPod HTTP proxy of a pod (`https://<pod>-<port>.proxy.runpod.net`) ends a request after about 100 s, which is too short for a first proof on a new worker (51 s to 94 s measured, more with a queue). Expose the worker port as a TCP port of the pod and use `http://<public IP>:<external port>`. That path has no TLS and no key check, so the entry has no `api_key_env`. A guest input is public chain data and every proof is verified locally, so a third party on the path can delay a job but cannot get a bad proof accepted. Anyone who finds the port can send jobs to the worker, though, which would queue our jobs behind theirs. Keep the port unpublished, and add a key check in front of the worker before the address becomes known.
+
+### GPU tiers
+
+The owner's words: "can we get smarter about the gpus we grab? are there any others? can we iterate through a list?"; "i am fine with waiting 30s to start, but lets put all of these decisions into configurations".
+
+A tier is one RunPod serverless endpoint with one price band of GPU types. The list holds the tiers cheapest first. Each tier but the last has a start wait:
+
+```toml
+[prover]
+backend = "remote"
+remote_timeout_seconds = 360
+remote_attempts = 3
+
+[[prover.remote_endpoints]]
+label = "gpu-24gb"                    # RTX 4090, L4, RTX 3090
+url = "https://TIER1_IDENTIFIER.api.runpod.ai"
+api_key_env = "RUNPOD_API_KEY"
+start_wait_seconds = 30
+
+[[prover.remote_endpoints]]
+label = "gpu-32gb"                    # RTX 5090
+url = "https://TIER2_IDENTIFIER.api.runpod.ai"
+api_key_env = "RUNPOD_API_KEY"
+start_wait_seconds = 30
+
+[[prover.remote_endpoints]]
+label = "gpu-48gb"                    # L40S, RTX 6000 Ada
+url = "https://TIER3_IDENTIFIER.api.runpod.ai"
+api_key_env = "RUNPOD_API_KEY"        # no start wait: the full cold-start wait
+```
+
+Before the prover sends a job (a light-client update or a fork observation) to a tier with a start wait, it asks `GET /ping` of that tier every 2 s, with the tier's key. The worker answers 204 while it starts and 200 when it is ready (`src/worker.rs`).
+
+- A tier that answers 200 within its start wait gets the job at once.
+- A tier that is not ready after its start wait stays in the race, and the next tier joins it. The prover pings both and sends the job to the first that answers 200. When both answer 200 in the same round, the earlier tier gets the job. The started cheap worker is not thrown away: it may still win.
+- The next tier brings in the one after it the same way, after its own start wait. A tier without a start wait that joins the race is pinged too. A tier without a start wait that comes up when no tier is pinged gets the job at once, as without tiers.
+- A 503 of `/ping` means a refused or broken worker. RunPod replaces it, so the prover counts it as "not ready" and keeps pinging. So does a ping without an answer, a 5xx and a 204.
+- A 401, 403, 404 or 405 of `/ping` means the endpoint turned the request away. The prover gives that tier up at once, and the next tier joins at once.
+- Each tier is pinged for at most its ready wait (`ready_wait_seconds`, or `remote_cold_start_wait_seconds`), counted from when it joined. Then it is given up. When every tier is given up, the job fails with one line per tier, as above.
+- The prover sends the job to one tier only. When that tier then fails in a way another endpoint can help (the table above), the prover goes on with the tiers not given up yet: the ones still pinged, then the next in the list.
+- After the 200 the rules of the table above apply to the job. A tier that then answers `/prove` with "not ready" (another job took the worker) is awaited up to its ready wait again, counted from that request.
+
+The backend's warm-up pings only the first tier, so in the usual case the cheap worker is ready when the job comes.
+
+Log lines: `remote_tier_escalate` (`from_endpoint_index`, `from_endpoint`, `to_endpoint_index`, `to_endpoint`, `waited_seconds`) when a tier brings in the next, and `remote_tier_chosen` (`endpoint_index`, `endpoint`, `start_wait_ms`) when a tier answers 200 and gets the job. A tier that is given up while pinged writes `remote_endpoint_failover`. The pings are not counted in `not_ready_count`. The `prove_timing` line carries `start_wait_ms`: the time spent pinging before the job was sent. `failover_count` counts the tiers given up, not the tiers still pinged when another one won. No line shows a URL or a key.
 
 The backend and the bots write this file from their JSON configuration (`explorer/backend/README.md`, "Proving endpoints"; `explorer/bots/README.md`).
 
@@ -316,7 +362,7 @@ One `prove_step` line per step, each with `elapsed_ms`:
 | `build` | producer | The beacon reads and the assembly of the update (`plan_update`). |
 | `native` | producer | The native run of the program on the update and the checks that it starts at the stored head. |
 | `prover_native` | remote backend | The native run before the request (the backend runs the program again on the guest input). |
-| `wait_worker` | remote backend | From the first request until the start of the request that the worker accepted: every cold-start wait, every pause, every failed attempt, and the time spent on endpoints that were given up. Also carries `not_ready_count` (answers that said no worker was ready), `retry_count` (ordinary failures that were sent again), `endpoint` (the label of the endpoint that gave the proof) and `failover_count` (endpoints given up before it). The counts add up over every endpoint. |
+| `wait_worker` | remote backend | From the first request until the start of the request that the worker accepted: every cold-start wait, every pause, every failed attempt, and the time spent on endpoints that were given up. Also carries `start_wait_ms` (the part spent pinging GPU tiers, see "GPU tiers"), `not_ready_count` (answers to `/prove` that said no worker was ready), `retry_count` (ordinary failures that were sent again), `endpoint` (the label of the endpoint that gave the proof) and `failover_count` (endpoints given up before it). The counts add up over every endpoint. |
 | `remote` | remote backend | The accepted request, from the first byte sent to the last byte read. |
 | `worker` | remote backend | What the worker reported (the `worker_*` keys below), or `worker_timings=none`. |
 | `verify` | remote backend | The local Groth16 verification of the returned proof. |
@@ -325,7 +371,7 @@ One `prove_step` line per step, each with `elapsed_ms`:
 At the end of a run that produced a proof, one `prove_timing` line carries all of them:
 
 ```
-ts=1793500000 level=info event=prove_timing build_ms=1200 native_ms=610 wait_worker_ms=60060 not_ready_count=2 retry_count=0 endpoint=serverless failover_count=1 remote_ms=43000 verify_ms=10 prove_ms=103700 total_ms=105100 worker_timings=reported worker_queue_ms=3 worker_native_ms=400 worker_prove_ms=41000 worker_verify_ms=20 worker_total_ms=41500 remote_overhead_ms=1500 worker_gpu="NVIDIA GeForce RTX 4090" worker_cpu_model="AMD EPYC 9354 32-Core Processor" worker_cpu_count=32
+ts=1793500000 level=info event=prove_timing build_ms=1200 native_ms=610 wait_worker_ms=60060 start_wait_ms=0 not_ready_count=2 retry_count=0 endpoint=serverless failover_count=1 remote_ms=43000 verify_ms=10 prove_ms=103700 total_ms=105100 worker_timings=reported worker_queue_ms=3 worker_native_ms=400 worker_prove_ms=41000 worker_verify_ms=20 worker_total_ms=41500 remote_overhead_ms=1500 worker_gpu="NVIDIA GeForce RTX 4090" worker_cpu_model="AMD EPYC 9354 32-Core Processor" worker_cpu_count=32
 ```
 
 | Key | Meaning |
@@ -334,6 +380,7 @@ ts=1793500000 level=info event=prove_timing build_ms=1200 native_ms=610 wait_wor
 | `native_ms` | `native` plus `prover_native`. |
 | `wait_worker_ms`, `not_ready_count`, `retry_count`, `remote_ms` | The remote steps above. Only for the remote backend. |
 | `endpoint`, `failover_count` | The label of the endpoint that gave the proof, and how many endpoints were given up before it (`0` when the first answered). Only for the remote backend. A single `remote_url` has the label `remote`. |
+| `start_wait_ms` | The time spent pinging GPU tiers before the job was sent (part of `wait_worker_ms`). `0` when no endpoint has a start wait. Only for the remote backend. |
 | `verify_ms` | `verify` plus `check`. |
 | `prove_ms` | The whole call of the backend (`native` of the backend, the wait, the request and the verification). For the local SP1 backend it is the proof. |
 | `total_ms` | The whole run, from the program key check to the checked proof. It does not include the handoff. |

@@ -735,6 +735,7 @@ fn a_run_ends_with_one_timing_summary() {
             verify_ms: 3,
             remote: Some(RemoteTimings {
                 wait_worker_ms: 90_000,
+                start_wait_ms: 0,
                 not_ready_count: 4,
                 retry_count: 0,
                 endpoint: "dedicated".into(),

@@ -174,8 +174,22 @@ is in `docs/gpu-prover.md`, "Endpoint list".
 | `readyWaitSeconds` | Optional. The longest wait for a worker that answers "not ready". Default 900. Keep it short for a dedicated worker. |
 | `timeoutSeconds` | Optional. One request. Default 360. |
 | `attempts` | Optional. Requests after ordinary failures before the prover moves on. Default 3. |
+| `startWaitSeconds` | Optional. The start wait of a GPU tier. The prover pings the endpoint until a worker is ready, then sends the job. After this many seconds it pings the next endpoint too and sends the job to the first that is ready, the earlier one when both are. A whole number of 1 or more, below `readyWaitSeconds` (900 when unset). The backend writes it as `start_wait_seconds`. |
 
-The `prove_timing` fields of `job_proved` carry `endpoint` (the label that gave the proof) and `failover_count`.
+GPU tiers: one RunPod endpoint per price band, cheapest first, each with a start wait but the last.
+
+```json
+"remote": {
+  "endpoints": [
+    { "label": "gpu-24gb", "url": "https://TIER1_IDENTIFIER.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY", "startWaitSeconds": 30 },
+    { "label": "gpu-32gb", "url": "https://TIER2_IDENTIFIER.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY", "startWaitSeconds": 30 },
+    { "label": "gpu-48gb", "url": "https://TIER3_IDENTIFIER.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY" }
+  ]
+}
+```
+
+The `prove_timing` fields of `job_proved` carry `endpoint` (the label that gave the proof), `failover_count` and
+`start_wait_ms` (the time spent pinging GPU tiers before the job was sent).
 The warm-up ping goes to the first endpoint only, with its key when it has one: a ping of the serverless fallback would
 start a paid worker that a healthy dedicated worker never needs. With the older `remote.endpoint`, the label is `remote`.
 
