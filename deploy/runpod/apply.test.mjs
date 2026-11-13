@@ -132,13 +132,13 @@ test("diffEndpoint compares GPU ids as an ordered list, and warns about a templa
   assert.deepEqual(diffEndpoint(tier, null, "hsj330cqpf"), { exists: false, changes: diffEndpoint(tier, null, "hsj330cqpf").changes, warnings: [] });
 });
 
-test("saveEndpointQuery writes scalerType as text and flashBootType and type as bare enum values; no id creates", () => {
+test("saveEndpointQuery writes scalerType and type as text and flashBootType as a bare enum value; no id creates", () => {
   const [first, second] = config().endpoints;
   const update = saveEndpointQuery(first, { id: first.id, templateId: "hsj330cqpf" });
   assert.match(update, /scalerType: "REQUEST_COUNT"/);
   assert.match(update, /flashBootType: FLASHBOOT[,\s]/);
   assert.doesNotMatch(update, /"FLASHBOOT"/);
-  assert.match(update, /type: LB,/);
+  assert.match(update, /type: "LB",/);
   assert.match(update, /id: "43nsvfb8svkosr"/);
   assert.match(update, /gpuIds: "ADA_24,AMPERE_24,-NVIDIA RTX A5000"/);
   assert.match(update, /gpuCount: 1/);

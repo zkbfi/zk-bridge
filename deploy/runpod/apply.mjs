@@ -185,7 +185,7 @@ function literal(value) {
 
 /**
  * The saveEndpoint mutation of a tier, as one query text (no variables: the input type of saveEndpoint is not
- * published). RunPod takes `scalerType` as text ("REQUEST_COUNT") and `flashBootType` as an enum (FLASHBOOT), which is
+ * published). RunPod takes `scalerType` and `type` as text ("REQUEST_COUNT", "LB") and `flashBootType` as an enum (FLASHBOOT), which is
  * why a literal is built by hand. `id` is left out to create.
  */
 export function saveEndpointQuery(tier, { id, templateId }) {
@@ -195,7 +195,7 @@ export function saveEndpointQuery(tier, { id, templateId }) {
     `templateId: ${literal(templateId)}`,
     `gpuIds: ${literal(tier.gpuIds.join(GPU_IDS_SEPARATOR))}`,
     "gpuCount: 1",
-    `type: ${tier.type}`,
+    `type: ${literal(tier.type)}`,
     `workersMin: ${literal(tier.workersMin)}`,
     `workersMax: ${literal(tier.workersMax)}`,
     `idleTimeout: ${literal(tier.idleTimeout)}`,
