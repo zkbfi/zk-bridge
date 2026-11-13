@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// Brings RunPod to the state that endpoints.json declares: one shared template and one serverless endpoint per tier.
+// Brings RunPod to the state that endpoints.json declares: the shared template settings, one template and one serverless endpoint per tier (RunPod binds a template to one endpoint).
 // No dependencies; Node 22. It talks to RunPod's GraphQL API (the REST API has a small daily limit).
 //
 //   RUNPOD_API_KEY=... node deploy/runpod/apply.mjs                    dry run: prints what would change
-//   RUNPOD_API_KEY=... node deploy/runpod/apply.mjs --apply            saves the template and each endpoint that differs
+//   RUNPOD_API_KEY=... node deploy/runpod/apply.mjs --apply            saves each tier template and endpoint that differs
 //   ... --apply --delete-retired                                        also deletes the endpoints listed under "retired"
 //   ... --config <file>|-                                               another file, or the JSON on standard input
 //
@@ -21,6 +21,10 @@ const ENDPOINT_FIELDS = ["name", "gpuIds", "workersMin", "workersMax", "idleTime
 /** The read query: every endpoint of the account with its template. */
 export const ENDPOINTS_QUERY =
   "{ myself { endpoints { id name gpuIds gpuCount idleTimeout locations networkVolumeId scalerType scalerValue templateId type workersMin workersMax flashBootType executionTimeoutMs template { id name imageName isServerless containerDiskInGb volumeInGb volumeMountPath dockerArgs ports startJupyter startSsh readme containerRegistryAuthId env { key value } } } } }";
+
+/** The read query of the account's templates: one that an earlier run created for an endpoint that then failed is found here. */
+export const TEMPLATES_QUERY =
+  "{ myself { podTemplates { id name imageName isServerless containerDiskInGb volumeInGb volumeMountPath dockerArgs ports startJupyter startSsh readme containerRegistryAuthId env { key value } } } }";
 
 export const SAVE_TEMPLATE_QUERY = "mutation SaveTemplate($input: SaveTemplateInput!) { saveTemplate(input: $input) { id name imageName } }";
 export const DELETE_ENDPOINT_QUERY = "mutation DeleteEndpoint($id: String!) { deleteEndpoint(id: $id) }";
@@ -54,11 +58,14 @@ export function parseConfig(text) {
   if (!object(config)) fail("must be an object");
   const { template, endpoints, retired = [] } = config;
   if (!object(template)) fail('needs a "template" object');
-  for (const key of ["id", "name", "imageName", "ports"]) if (typeof template[key] !== "string" || template[key] === "") fail(`template needs a text "${key}"`);
+  for (const key of ["imageName", "ports"]) if (typeof template[key] !== "string" || template[key] === "") fail(`template needs a text "${key}"`);
+  for (const key of ["id", "name"]) if (template[key] !== undefined) fail(`template holds the settings every tier shares; "${key}" belongs in the template of each endpoint`);
   if (!Array.isArray(endpoints) || endpoints.length === 0) fail('needs a non-empty "endpoints" list');
   if (!Array.isArray(retired) || retired.some((id) => typeof id !== "string")) fail('"retired" must be a list of endpoint ids');
   const names = new Set();
   const ids = new Set();
+  const templateNames = new Set();
+  const templateIds = new Set();
   for (const endpoint of endpoints) {
     if (!object(endpoint)) fail("has an endpoint that is not an object");
     for (const key of ["label", "name", "flashBootType", "scalerType", "type"]) if (typeof endpoint[key] !== "string" || endpoint[key] === "") fail(`endpoint needs a text "${key}"`);
@@ -66,6 +73,11 @@ export function parseConfig(text) {
     for (const key of ["workersMin", "workersMax", "idleTimeout", "scalerValue", "executionTimeoutMs"]) if (!Number.isInteger(endpoint[key])) fail(`endpoint ${endpoint.label} needs a whole number "${key}"`);
     if (names.has(endpoint.name)) fail(`names the endpoint "${endpoint.name}" twice`);
     names.add(endpoint.name);
+    if (!object(endpoint.template) || typeof endpoint.template.name !== "string" || endpoint.template.name === "") fail(`endpoint ${endpoint.label} needs a "template" with a text "name"`);
+    if (endpoint.template.id !== undefined && typeof endpoint.template.id !== "string") fail(`endpoint ${endpoint.label} has a template "id" that is not text`);
+    if (templateNames.has(endpoint.template.name) || (endpoint.template.id !== undefined && templateIds.has(endpoint.template.id))) fail(`gives one template to two endpoints (RunPod binds a template to one endpoint): ${endpoint.template.name}`);
+    templateNames.add(endpoint.template.name);
+    if (endpoint.template.id !== undefined) templateIds.add(endpoint.template.id);
     if (endpoint.id !== undefined) {
       if (typeof endpoint.id !== "string" || ids.has(endpoint.id)) fail(`endpoint ${endpoint.label} has an "id" that is not text or is used twice`);
       ids.add(endpoint.id);
@@ -78,16 +90,23 @@ export function parseConfig(text) {
 // ---------------------------------------------------------------------------------------------------------------------
 // The state at RunPod
 
-/** The endpoints of the account, as the query returns them. */
+/** The endpoints and the templates of the account, as the queries return them. */
 export async function readLive(post) {
-  const data = await post(ENDPOINTS_QUERY);
-  return data?.myself?.endpoints ?? [];
+  const endpoints = (await post(ENDPOINTS_QUERY))?.myself?.endpoints ?? [];
+  const templates = (await post(TEMPLATES_QUERY))?.myself?.podTemplates ?? [];
+  return { endpoints, templates };
 }
 
-/** The live template that `id` names, read from the endpoints that use it, or null when none shows it. */
-export function liveTemplateOf(live, id) {
-  const holder = live.find((endpoint) => endpoint.template?.id === id || endpoint.templateId === id);
-  return holder?.template ?? null;
+/**
+ * The live template of a tier, or null. In order: the one its `template.id` names, the one its live endpoint is bound
+ * to, the one with its `template.name` (a template that an earlier run made before the endpoint failed). Each is looked
+ * for among the endpoints' templates first, then among all templates.
+ */
+export function liveTemplateOf(live, tier, liveEndpoint) {
+  const all = [...live.endpoints.map((endpoint) => endpoint.template).filter(Boolean), ...live.templates];
+  const byId = (id) => all.find((template) => template.id === id) ?? null;
+  const byName = (name) => all.find((template) => template.name === name) ?? null;
+  return (tier.template.id === undefined ? null : byId(tier.template.id)) ?? (liveEndpoint === null ? null : (liveEndpoint.template ?? byId(liveEndpoint.templateId))) ?? byName(tier.template.name);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -107,7 +126,7 @@ function changedFields(fields, wanted, current) {
   return changes;
 }
 
-/** The differences of the template. `live` is null when RunPod shows no such template. Environment values are masked. */
+/** The differences of one tier's template against the shared settings and its name. `live` is null when RunPod shows none. Environment values are masked. */
 export function diffTemplate(wanted, live) {
   const changes = changedFields(TEMPLATE_FIELDS, wanted, live);
   const have = envOf(live?.env);
@@ -127,8 +146,8 @@ export function diffEndpoint(wanted, live, templateId) {
   const current = live === null ? null : { ...live, gpuIds: gpuIdsOf(live.gpuIds) };
   const changes = changedFields(ENDPOINT_FIELDS, wanted, current);
   const warnings = [];
-  if (live !== null && live.templateId !== templateId) {
-    warnings.push(`uses template ${live.templateId}, not ${templateId}; RunPod ignores a template change on an existing endpoint, so delete and create it to move it`);
+  if (live !== null && templateId !== undefined && live.templateId !== templateId) {
+    warnings.push(`is bound to template ${live.templateId}, not ${templateId}; RunPod ignores a template change on an existing endpoint, so delete and create it to move it`);
   }
   return { exists: live !== null, changes, warnings };
 }
@@ -139,38 +158,41 @@ export function findLive(live, tier) {
   return live.find((endpoint) => endpoint.name === tier.name) ?? null;
 }
 
-/** Everything the run would do. Pure. */
+/** Everything the run would do. Pure. `live` is what {@link readLive} returns. */
 export function planChanges(config, live) {
-  const liveTemplate = liveTemplateOf(live, config.template.id);
-  const template = { wanted: config.template, live: liveTemplate, ...diffTemplate(config.template, liveTemplate) };
   const taken = new Set();
-  const endpoints = config.endpoints.map((tier) => {
-    const current = findLive(live, tier);
+  const tiers = config.endpoints.map((tier) => {
+    const current = findLive(live.endpoints, tier);
     if (current !== null) taken.add(current.id);
-    return { tier, live: current, ...diffEndpoint(tier, current, config.template.id) };
+    const liveTemplate = liveTemplateOf(live, tier, current);
+    const wanted = { ...config.template, name: tier.template.name, id: tier.template.id ?? liveTemplate?.id };
+    const template = { wanted, live: liveTemplate, ...diffTemplate(wanted, liveTemplate) };
+    return { tier, template, live: current, ...diffEndpoint(tier, current, wanted.id) };
   });
   const retired = config.retired.map((id) => {
-    const current = live.find((endpoint) => endpoint.id === id) ?? null;
+    const current = live.endpoints.find((endpoint) => endpoint.id === id) ?? null;
     if (current !== null) taken.add(current.id);
     return { id, live: current };
   });
-  const unmanaged = live.filter((endpoint) => !taken.has(endpoint.id)).map((endpoint) => ({ id: endpoint.id, name: endpoint.name }));
-  return { template, endpoints, retired, unmanaged };
+  const unmanaged = live.endpoints.filter((endpoint) => !taken.has(endpoint.id)).map((endpoint) => ({ id: endpoint.id, name: endpoint.name }));
+  return { endpoints: tiers, retired, unmanaged };
 }
 
-/** The report of a plan as lines of text. */
+/** The report of a plan as lines of text: for each tier its template, then its endpoint. */
 export function describePlan(plan) {
   const lines = [];
   const list = (changes) => changes.map(({ field, from, to }) => `    ${field}: ${from === undefined ? "(none)" : show(from)} -> ${show(to)}`);
-  const { template } = plan;
-  lines.push(`template ${template.wanted.id} (${template.wanted.name}): ${!template.exists ? "not visible at RunPod, will be saved" : template.changes.length === 0 ? "no change" : "changes"}`);
-  lines.push(...list(template.changes));
-  for (const { tier, exists, changes, warnings } of plan.endpoints) {
+  for (const { tier, template, exists, changes, warnings } of plan.endpoints) {
+    const { wanted } = template;
+    lines.push(`template of ${tier.label} (${wanted.name}${wanted.id === undefined ? "" : `, ${wanted.id}`}): ${!template.exists ? "does not exist, will be created" : template.changes.length === 0 ? "no change" : "changes"}`);
+    lines.push(...list(template.exists ? template.changes : []));
     lines.push(`endpoint ${tier.label} (${tier.name}${tier.id === undefined ? "" : `, ${tier.id}`}): ${!exists ? "does not exist, will be created" : changes.length === 0 ? "no change" : "changes"}`);
     lines.push(...list(exists ? changes : []));
     for (const warning of warnings) lines.push(`    warning: ${warning}`);
   }
-  for (const { id, live } of plan.retired) lines.push(live === null ? `retired ${id}: already gone` : `retired ${id} (${live.name}): still exists; deleted only with --apply --delete-retired`);
+  for (const { id, live } of plan.retired) {
+    lines.push(live === null ? `retired ${id}: already gone` : `retired ${id} (${live.name}): still exists; deleted only with --apply --delete-retired; its template ${live.templateId} stays in place`);
+  }
   for (const { id, name } of plan.unmanaged) lines.push(`not in the file, left alone: ${id} (${name})`);
   return lines;
 }
@@ -207,11 +229,11 @@ export function saveEndpointQuery(tier, { id, templateId }) {
   return `mutation { saveEndpoint(input: { ${input.join(", ")} }) { id name } }`;
 }
 
-/** The variables of saveTemplate: the file's fields on top of what RunPod holds for the fields the file does not name. */
+/** The variables of saveTemplate: the file's fields on top of what RunPod holds for the fields the file does not name. Without an id it creates. */
 export function saveTemplateVariables(wanted, live) {
   return {
     input: {
-      id: wanted.id,
+      ...(wanted.id === undefined ? {} : { id: wanted.id }),
       name: wanted.name,
       imageName: wanted.imageName,
       containerDiskInGb: wanted.containerDiskInGb,
@@ -233,20 +255,21 @@ export function saveTemplateVariables(wanted, live) {
 // Doing it
 
 /**
- * Makes the plan true. The template goes first (an endpoint needs it), then each endpoint that differs, then the
- * retired ones when `deleteRetired`. Returns the lines that say what was done.
+ * Makes the plan true, tier by tier: the tier's template (saved to update, or created and its id read from the answer),
+ * then its endpoint when it differs, bound to that template. Retired endpoints are deleted last, when `deleteRetired`;
+ * their templates stay. Returns the lines that say what was done.
  */
 export async function applyPlan(plan, post, { deleteRetired }) {
   const done = [];
-  const { template } = plan;
-  if (!template.exists || template.changes.length > 0) {
-    await post(SAVE_TEMPLATE_QUERY, saveTemplateVariables(template.wanted, template.live));
-    done.push(`saved template ${template.wanted.id}`);
-  }
-  for (const { tier, live, exists, changes } of plan.endpoints) {
+  for (const { tier, template, live, exists, changes } of plan.endpoints) {
+    let templateId = template.wanted.id;
+    if (!template.exists || template.changes.length > 0) {
+      const saved = await post(SAVE_TEMPLATE_QUERY, saveTemplateVariables(template.wanted, template.live));
+      templateId = templateId ?? saved?.saveTemplate?.id;
+      done.push(`${template.exists ? "saved" : "created"} template of ${tier.label} (${templateId})`);
+    }
     if (exists && changes.length === 0) continue;
-    const templateId = live?.templateId ?? plan.template.wanted.id;
-    const saved = await post(saveEndpointQuery(tier, { id: live?.id, templateId }));
+    const saved = await post(saveEndpointQuery(tier, { id: live?.id, templateId: live?.templateId ?? templateId }));
     done.push(`${exists ? "saved" : "created"} endpoint ${tier.label} (${live?.id ?? saved?.saveEndpoint?.id})`);
   }
   if (deleteRetired) {
@@ -258,7 +281,7 @@ export async function applyPlan(plan, post, { deleteRetired }) {
         await post(saveEndpointQuery(idle, { id, templateId: live.templateId }));
       }
       await post(DELETE_ENDPOINT_QUERY, { id });
-      done.push(`deleted retired endpoint ${id}`);
+      done.push(`deleted retired endpoint ${id}; left its template ${live.templateId} in place`);
     }
   }
   return done;
