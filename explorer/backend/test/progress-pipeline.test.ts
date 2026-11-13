@@ -9,7 +9,7 @@ import { NO_ESTIMATES } from "../src/progress/progress.ts";
 const NOW = 2_000_000;
 const job = (overrides: Partial<Job> = {}): Job => ({ id: "j", direction: "first-to-second", status: "proving", createdAt: NOW - 30_000, updatedAt: NOW - 30_000, startSlot: null, newSlot: null, error: null, ...overrides });
 const decision = (overrides: Partial<WatchDecision> = {}): WatchDecision => ({ at: NOW, finalizedSlot: 200, headSlot: 100, genesisTime: 0, secondsPerSlot: 12, due: false, why: "nothing-due", detail: "fresh", ...overrides });
-const rule = { minIntervalSeconds: 3600, lookaheadSeconds: 768, profitMargin: 1.5, proofCostUsd: "0.025000", priced: false };
+const rule = { minIntervalSeconds: 3600, lookaheadSeconds: 768, profitMargin: 1.5, proofCostUsd: "0.025000", priced: false, unpricedAtMaximumPays: true };
 const base = { direction: "first-to-second" as const, rule, activeJob: null, latestJob: null, proofs: [], head: null, decision: null, workerWarm: false, estimates: NO_ESTIMATES, now: NOW };
 
 describe("the proofs the backend has, with where they are (2026-11-01)", () => {
@@ -54,9 +54,10 @@ describe("the proofs the backend has, with where they are (2026-11-01)", () => {
 
 describe("the rule of a direction (2026-11-07)", () => {
   it("the interval, the lookahead, the margin as a number and the proof cost as text, and whether fees can be priced", () => {
-    const resolved = { minIntervalSeconds: 3600, lookaheadSeconds: 768, marginWad: 1_500_000_000_000_000_000n };
+    const resolved = { minIntervalSeconds: 3600, lookaheadSeconds: 768, marginWad: 1_500_000_000_000_000_000n, unpricedAtMaximumPays: true };
     expect(pipelineRuleOf(resolved, false)).toEqual(rule);
     expect(pipelineRuleOf({ ...resolved, minIntervalSeconds: 0, marginWad: 10n ** 18n }, true)).toEqual({ ...rule, minIntervalSeconds: 0, profitMargin: 1, priced: true });
+    expect(pipelineRuleOf({ ...resolved, unpricedAtMaximumPays: false }, false).unpricedAtMaximumPays).toBe(false);
     expect(buildPipeline(base).rule).toBe(rule);
   });
 });

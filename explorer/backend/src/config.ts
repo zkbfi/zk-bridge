@@ -31,6 +31,11 @@ const batchFields = {
   lookaheadSeconds: nonNegativeInteger.optional(),
   /** The fees must reach the cost (the proof and the deliveries) times this before a batch proves early. */
   profitMargin: z.number().positive().max(1000).optional(),
+  /**
+   * Whether a message whose token has no price and whose tip is at the automatic maximum makes its batch pay at once.
+   * Default `true`. `false`: such a message waits for `minIntervalSeconds` like any other (priced fees still count).
+   */
+  unpricedAtMaximumPays: z.boolean().optional(),
 };
 
 /** The batching of one direction of a pair. */

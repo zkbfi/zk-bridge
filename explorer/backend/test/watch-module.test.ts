@@ -269,7 +269,7 @@ describe("startWatch", () => {
     const stop = await startWatch({ context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true, chainClient: () => chain } });
     await flush();
     expect(run.named("config_deprecated")).toMatchObject([{ level: "warn", key: "watch.pairs.eth-pls.maxWaitSeconds" }]);
-    expect(run.named("watch_started")).toMatchObject([{ batch: { "first-to-second": { minIntervalSeconds: 600, lookaheadSeconds: 384, profitMargin: 1 } } }]);
+    expect(run.named("watch_started")).toMatchObject([{ batch: { "first-to-second": { minIntervalSeconds: 600, lookaheadSeconds: 384, profitMargin: 1, unpricedAtMaximumPays: true } } }]);
     const sent = HEAD + 100;
     const messageId = `0x${"ab".repeat(32)}`;
     run.beacon.set(FEED, { items: [{ messageId, sent: { timestamp: GENESIS + sent * SLOT }, transfer: { destinationToken: null } }] });

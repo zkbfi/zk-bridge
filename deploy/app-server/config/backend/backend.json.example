@@ -9,8 +9,13 @@
   "modules": ["requests", "webhook", "msgboard-indexer", "archive"],
   "publicUrl": "https://webhook.example.org",
   "prover": { "binary": "/opt/zk-bridge/current/bin/zk-bridge-prover", "timeoutSeconds": 1800 },
-  "remote": { "endpoint": "https://example.api.runpod.ai" },
-  "runpodApiKeyVariable": "RUNPOD_API_KEY",
+  "remote": {
+    "endpoints": [
+      { "label": "gpu-24gb", "url": "https://ENDPOINT_ID_24GB.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY", "startWaitSeconds": 30 },
+      { "label": "gpu-32gb", "url": "https://ENDPOINT_ID_32GB.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY", "startWaitSeconds": 30 },
+      { "label": "gpu-48gb", "url": "https://ENDPOINT_ID_48GB.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY" }
+    ]
+  },
   "webhookBearerVariable": "BACKEND_WEBHOOK_BEARER",
   "rpcUrls": {
     "1": "https://ethereum-rpc.example.org",
@@ -34,5 +39,10 @@
     "gpuBudgetUsdPerDirectionPerDay": 5,
     "keepAliveSeconds": 43200
   },
-  "indexerUrl": "http://127.0.0.1:42069"
+  "indexerUrl": "http://127.0.0.1:42069",
+  "watch": {
+    "pairs": {
+      "sepolia-pls943": { "minIntervalSeconds": 3600, "unpricedAtMaximumPays": false }
+    }
+  }
 }

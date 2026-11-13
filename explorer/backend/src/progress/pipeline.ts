@@ -23,16 +23,19 @@ export type PipelineRule = {
   /** The proof's share of the cost of one message, in dollars, as text ("0.025000"). */
   readonly proofCostUsd: string;
   readonly priced: boolean;
+  /** `watch...unpricedAtMaximumPays`: whether a tip at the automatic maximum on a token with no price makes a batch pay. */
+  readonly unpricedAtMaximumPays: boolean;
 };
 
 /** The rule of a direction as the answer shows it. */
-export function pipelineRuleOf(rule: { readonly minIntervalSeconds: number; readonly lookaheadSeconds: number; readonly marginWad: bigint }, priced: boolean): PipelineRule {
+export function pipelineRuleOf(rule: { readonly minIntervalSeconds: number; readonly lookaheadSeconds: number; readonly marginWad: bigint; readonly unpricedAtMaximumPays: boolean }, priced: boolean): PipelineRule {
   return {
     minIntervalSeconds: rule.minIntervalSeconds,
     lookaheadSeconds: rule.lookaheadSeconds,
     profitMargin: marginOfWad(rule.marginWad),
     proofCostUsd: `${PROOF_COST_USD / USD}.${(PROOF_COST_USD % USD).toString().padStart(18, "0").slice(0, 6)}`,
     priced,
+    unpricedAtMaximumPays: rule.unpricedAtMaximumPays,
   };
 }
 

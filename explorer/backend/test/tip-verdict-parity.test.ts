@@ -46,7 +46,7 @@ async function backendOf(entry: TipCase) {
     { messageId: MESSAGE, destinationToken: { address: token.address, decimals: token.decimals, isBridgedCopy: token.origin !== null, homeChainId: token.origin?.chainId ?? null, homeToken: token.origin?.address ?? null } },
   ]);
   // Final now, the last proof ten minutes ago: inside the hour, so only a batch that pays proves now.
-  const rule: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 384, marginWad: WAD };
+  const rule: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 384, marginWad: WAD, unpricedAtMaximumPays: true };
   const plan = planBatch({ messages: [{ messageId: MESSAGE, slot: 400, finalAt: NOW - 10 }], finalizedSlot: 500, nowSeconds: NOW, rule, economics, lastProofAt: NOW - 600 });
   return { economics, plan };
 }

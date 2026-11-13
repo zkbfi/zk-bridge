@@ -54,7 +54,7 @@ describe("the chain's timing, as the backend computes it (vectors)", () => {
         messages: [{ messageId: "0x01", slot: message.slot, finalAt: expectedFinalityAt(message.slot, message.clock) }],
         finalizedSlot: message.slot,
         nowSeconds: message.expectedFinalityAt,
-        rule: { minIntervalSeconds: entry.minIntervalSeconds, lookaheadSeconds: 384, marginWad: WAD },
+        rule: { minIntervalSeconds: entry.minIntervalSeconds, lookaheadSeconds: 384, marginWad: WAD, unpricedAtMaximumPays: true },
         economics: { kind: "unknown", why: "testnet" },
         lastProofAt: entry.lastProofAt,
       });
@@ -70,7 +70,7 @@ describe("the chain's timing, as the backend computes it (vectors)", () => {
       expect({ headPeriod: deadline.headPeriod, lastKnownPeriod: deadline.lastKnownPeriod, strandPeriod: deadline.strandPeriod, deadlineSeconds: deadline.deadlineSeconds }).toEqual(entry.deadline);
       for (const hours of entry.hours) {
         const decision = { at: hours.nowMs, finalizedSlot: 1, headSlot: entry.headSlot, genesisTime: 0, secondsPerSlot: 12, due: false, why: "nothing-due", detail: "", deadline: { at: deadline.deadlineSeconds * 1000, period: deadline.strandPeriod, headPeriod: deadline.headPeriod, lastKnownPeriod: deadline.lastKnownPeriod } } as const;
-        const pipeline = buildPipeline({ direction: "first-to-second", rule: { minIntervalSeconds: 0, lookaheadSeconds: 0, profitMargin: 1, proofCostUsd: "0", priced: false }, activeJob: null, latestJob: null, proofs: [], head: null, decision, workerWarm: false, estimates: NO_ESTIMATES, now: hours.nowMs });
+        const pipeline = buildPipeline({ direction: "first-to-second", rule: { minIntervalSeconds: 0, lookaheadSeconds: 0, profitMargin: 1, proofCostUsd: "0", priced: false, unpricedAtMaximumPays: true }, activeJob: null, latestJob: null, proofs: [], head: null, decision, workerWarm: false, estimates: NO_ESTIMATES, now: hours.nowMs });
         expect(pipeline.deadline?.hoursLeft).toBe(hours.hoursUntilRounded);
       }
     }
@@ -135,7 +135,7 @@ describe("the live case through the backend's routes (vectors)", () => {
       expect({ total: steps.total.medianMs, webhookToBoard: steps.webhookToBoard.medianMs, proofToOnChain: steps.proofToOnChain.medianMs }).toEqual({ total: bench.total.medianMs, webhookToBoard: bench.webhookToBoard.medianMs, proofToOnChain: bench.proofToOnChain.medianMs });
       expect([steps.total.p90Ms, steps.webhookToBoard.p90Ms, steps.proofToOnChain.p90Ms, steps.coveredToDelivered.medianMs, steps.coveredToDelivered.p90Ms]).toEqual([bench.total.p90Ms, bench.webhookToBoard.p90Ms, bench.proofToOnChain.p90Ms, bench.coveredToDelivered.medianMs, bench.coveredToDelivered.p90Ms]);
       const wire = (await get(`/directions/${name}/pipeline`)).rule;
-      expect(wire).toEqual({ minIntervalSeconds: live.rule.minIntervalSeconds, lookaheadSeconds: epochSeconds(direction.sourceChainId), profitMargin: live.rule.profitMargin, proofCostUsd: "0.025000", priced: live.rule.priced });
+      expect(wire).toEqual({ minIntervalSeconds: live.rule.minIntervalSeconds, lookaheadSeconds: epochSeconds(direction.sourceChainId), profitMargin: live.rule.profitMargin, proofCostUsd: "0.025000", priced: live.rule.priced, unpricedAtMaximumPays: true });
       const rule: ProofRule = { minIntervalSeconds: wire.minIntervalSeconds, profitMargin: wire.profitMargin, proofCostUsd: Number(wire.proofCostUsd), priced: wire.priced };
       const proving = provingRangeOf(provingPartsOf(steps));
       close(proving as { typical: number; worst: number }, live.proving);

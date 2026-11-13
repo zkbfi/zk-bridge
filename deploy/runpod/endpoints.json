@@ -1,0 +1,58 @@
+{
+  "template": {
+    "id": "hsj330cqpf",
+    "name": "zk-bridge-prover-gpu-template",
+    "imageName": "ghcr.io/zkbfi/zk-bridge-prover-gpu-worker@sha256:3e790341daa3969148cfc0d446f862fd3c770142e233d262049f0e158b4061d7",
+    "containerDiskInGb": 40,
+    "volumeInGb": 0,
+    "volumeMountPath": "/workspace",
+    "ports": "8000/http",
+    "startSsh": true,
+    "startJupyter": false,
+    "containerRegistryAuthId": "cmvts6161003dsycaos24r5wg",
+    "env": { "PORT": "8000", "PORT_HEALTH": "8000" }
+  },
+  "endpoints": [
+    {
+      "label": "gpu-24gb",
+      "id": "43nsvfb8svkosr",
+      "name": "zk-bridge-prover-gpu",
+      "gpuIds": ["ADA_24", "AMPERE_24", "-NVIDIA RTX A5000"],
+      "workersMin": 0,
+      "workersMax": 1,
+      "idleTimeout": 5,
+      "flashBootType": "FLASHBOOT",
+      "scalerType": "REQUEST_COUNT",
+      "scalerValue": 1,
+      "executionTimeoutMs": 600000,
+      "type": "LB"
+    },
+    {
+      "label": "gpu-32gb",
+      "name": "zk-bridge-prover-gpu-32gb",
+      "gpuIds": ["ADA_32_PRO"],
+      "workersMin": 0,
+      "workersMax": 1,
+      "idleTimeout": 5,
+      "flashBootType": "FLASHBOOT",
+      "scalerType": "REQUEST_COUNT",
+      "scalerValue": 1,
+      "executionTimeoutMs": 600000,
+      "type": "LB"
+    },
+    {
+      "label": "gpu-48gb",
+      "name": "zk-bridge-prover-gpu-48gb",
+      "gpuIds": ["ADA_48_PRO", "-NVIDIA L40"],
+      "workersMin": 0,
+      "workersMax": 1,
+      "idleTimeout": 5,
+      "flashBootType": "FLASHBOOT",
+      "scalerType": "REQUEST_COUNT",
+      "scalerValue": 1,
+      "executionTimeoutMs": 600000,
+      "type": "LB"
+    }
+  ],
+  "retired": ["zmp5owbxu73fc2"]
+}

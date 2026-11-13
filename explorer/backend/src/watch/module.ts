@@ -239,7 +239,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
     sse: config.watch.sse,
     warmup: ping !== null,
     lead: warmupStore.lead(warmup),
-    batch: Object.fromEntries(Object.entries(batches).map(([direction, rule]) => [direction, { minIntervalSeconds: rule.minIntervalSeconds, lookaheadSeconds: rule.lookaheadSeconds, profitMargin: Number(rule.marginWad) / 1e18 }])),
+    batch: Object.fromEntries(Object.entries(batches).map(([direction, rule]) => [direction, { minIntervalSeconds: rule.minIntervalSeconds, lookaheadSeconds: rule.lookaheadSeconds, profitMargin: Number(rule.marginWad) / 1e18, unpricedAtMaximumPays: rule.unpricedAtMaximumPays }])),
   });
   return async () => {
     await Promise.all(stoppers.map((stop) => stop()));

@@ -351,6 +351,70 @@ Log lines: `remote_tier_escalate` (`from_endpoint_index`, `from_endpoint`, `to_e
 
 The backend and the bots write this file from their JSON configuration (`explorer/backend/README.md`, "Proving endpoints"; `explorer/bots/README.md`).
 
+## RunPod endpoints in configuration
+
+Owner, 2026-11-13: "lets put all of these decisions into configurations". The RunPod side of the GPU tiers is a file in
+the repository, `deploy/runpod/endpoints.json`, and a script, `deploy/runpod/apply.mjs`, that makes RunPod match it. The
+design is in `docs/superpowers/specs/2026-11-13-gpu-tiers-design.md`. The file holds no secret.
+
+The file has three parts:
+
+- `template`: the one RunPod template that every tier shares. It holds the worker image by digest (`imageName`), the
+  container disk, the exposed port, the registry credential id (`containerRegistryAuthId`, an id, not a password) and the
+  environment (`PORT`, `PORT_HEALTH`). Change the image here, once. RunPod ignores a new `templateId` on an endpoint that
+  exists, so the shared template is how a new image reaches every tier.
+- `endpoints`: the tiers in the order the prover tries them. Each has a `label`, a RunPod `name`, `gpuIds` (an ordered list
+  of RunPod GPU group ids; an id that starts with `-`, such as `-NVIDIA L40`, excludes that card), `workersMin`,
+  `workersMax`, `idleTimeout` (seconds), `flashBootType`, `scalerType`, `scalerValue`, `executionTimeoutMs` and `type`
+  (`LB`, load balancing). `id` is the RunPod endpoint id. Leave it out for a tier that does not exist yet: the script
+  creates it (matching by `name` on later runs) and prints the new id, which you then put in the file and in `backend.json`.
+- `retired`: ids of endpoints that should be gone. The script deletes them only with `--apply --delete-retired`.
+
+The tiers (planner's first choice, owner may change): `gpu-24gb` (`ADA_24`, `AMPERE_24`, no RTX A5000), `gpu-32gb`
+(`ADA_32_PRO`) and `gpu-48gb` (`ADA_48_PRO`, no L40). No 80 GB tier.
+
+To change RunPod:
+
+1. Edit `deploy/runpod/endpoints.json` and commit it.
+2. Dry run. It reads RunPod and prints, for the template and each tier, the fields that differ as `old -> new`. Environment
+   values show as `(set)`. It also lists endpoints that exist at RunPod but are not in the file and not retired. It never
+   touches those. It changes nothing.
+
+   ```
+   RUNPOD_API_KEY=... node deploy/runpod/apply.mjs
+   ```
+
+3. Apply. It saves the template when it differs, then each tier that differs, and creates each tier that is missing.
+
+   ```
+   RUNPOD_API_KEY=... node deploy/runpod/apply.mjs --apply
+   ```
+
+4. Add `--delete-retired` to delete the endpoints under `retired` (it sets their workers to 0 first). This path has not
+   been run against RunPod yet.
+
+The key is read from the environment only, never from an argument, and the script prints neither the key nor a request.
+It uses RunPod's GraphQL API, because the REST API has a small daily limit. A RunPod error prints its message and the exit
+code is 1. `--config <path>` reads another file. `--config -` reads the JSON from standard input.
+
+The key lives on the server, in `/etc/zk-bridge/backend/backend.env`. To run from there, copy the script and the file, and
+source the environment file inside the root shell:
+
+```
+ssh zkbfi-app 'cat > /tmp/apply.mjs' < deploy/runpod/apply.mjs
+ssh zkbfi-app 'sudo bash -c "set -a; . /etc/zk-bridge/backend/backend.env; set +a; node /tmp/apply.mjs --config -"' < deploy/runpod/endpoints.json
+ssh zkbfi-app 'sudo bash -c "set -a; . /etc/zk-bridge/backend/backend.env; set +a; node /tmp/apply.mjs --config - --apply"' < deploy/runpod/endpoints.json
+ssh zkbfi-app 'rm /tmp/apply.mjs'
+```
+
+The second line is the dry run and the third applies. The tests run with `node --test deploy/runpod`. They send no
+request to RunPod.
+
+The prover's own list of tiers is `remote.endpoints` in `backend.json` (`explorer/backend/README.md`, "Proving endpoints"),
+one entry per tier in the same order, with the endpoint ids from RunPod in the URLs
+(`deploy/app-server/config/backend/backend.json.example`). `startWaitSeconds` there sets how long the prover waits for a
+tier to answer ready before it also wakes the next tier.
+
 ## Timing logs
 
 The producer measures each step of a proof run, so that "how long does one proof take" and "would a faster GPU help" have an answer from real runs. Every line goes to standard error in the usual style (`ts=... level=info event=... key=value`). No line holds a URL, a key or a token.
