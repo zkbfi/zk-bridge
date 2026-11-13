@@ -6,7 +6,7 @@ import { loadPair, type Pair } from "../src/index.js";
 import type { CommandExecutor } from "../src/prover/execute-command.js";
 import { createProverBinary } from "../src/prover/prover-binary.js";
 import { describeRoute, renderProverConfig, type BackendSection } from "../src/prover/prover-config.js";
-import { MAX_REMOTE_ENDPOINTS, SINGLE_ENDPOINT_LABEL, endpointKeyVariables, remoteEndpointListSchema, remoteEndpointSchema } from "../src/prover/remote-endpoints.js";
+import { DEFAULT_READY_WAIT_SECONDS, MAX_REMOTE_ENDPOINTS, SINGLE_ENDPOINT_LABEL, endpointKeyVariables, remoteEndpointListSchema, remoteEndpointSchema } from "../src/prover/remote-endpoints.js";
 import { memoryLogger } from "./support/prover-builders.js";
 
 function section(chainId: number, seed: number) {
@@ -34,6 +34,11 @@ describe("the endpoint list schema", () => {
     expect(remoteEndpointSchema.parse({ label: "zero-wait", url: "https://x.example.org", readyWaitSeconds: 0 }).readyWaitSeconds).toBe(0);
   });
 
+  it("accepts a start wait below the ready wait of the endpoint, or below the default ready wait without one", () => {
+    expect(remoteEndpointSchema.parse({ ...serverless, startWaitSeconds: 30, readyWaitSeconds: 600 }).startWaitSeconds).toBe(30);
+    expect(remoteEndpointSchema.parse({ ...serverless, startWaitSeconds: DEFAULT_READY_WAIT_SECONDS - 1 }).startWaitSeconds).toBe(899);
+  });
+
   it.each([
     ["a key over plain http to another machine", { ...serverless, url: "http://abc123.api.runpod.ai" }, "must use https"],
     ["a label in capitals", { ...dedicated, label: "Dedicated" }, "lower case"],
@@ -45,6 +50,10 @@ describe("the endpoint list schema", () => {
     ["a zero timeout", { ...dedicated, timeoutSeconds: 0 }, ""],
     ["a negative wait", { ...dedicated, readyWaitSeconds: -1 }, ""],
     ["an unknown key", { ...dedicated, weight: 2 }, ""],
+    ["a zero start wait", { ...serverless, startWaitSeconds: 0 }, ""],
+    ["a start wait that is not whole", { ...serverless, startWaitSeconds: 1.5 }, ""],
+    ["a start wait at the ready wait", { ...dedicated, startWaitSeconds: 20 }, "must be below the ready wait"],
+    ["a start wait at the default ready wait", { ...serverless, startWaitSeconds: DEFAULT_READY_WAIT_SECONDS }, "must be below the ready wait"],
   ])("refuses %s", (_name, entry, message) => {
     const result = remoteEndpointSchema.safeParse(entry);
     expect(result.success).toBe(false);
@@ -98,10 +107,24 @@ describe("the prover configuration with an endpoint list", () => {
     expect(text).toContain('targets = ["stdout", "webhook"]');
   });
 
+  it("writes the start wait of a GPU tier as start_wait_seconds", () => {
+    const tiers: BackendSection = {
+      kind: "remote",
+      mode: { mode: "load-balancing" },
+      endpoints: [
+        { label: "gpu-24gb", url: "https://a.api.runpod.ai", apiKeyVariable: "RUNPOD_API_KEY", startWaitSeconds: 30 },
+        { label: "gpu-48gb", url: "https://c.api.runpod.ai", apiKeyVariable: "RUNPOD_API_KEY" },
+      ],
+    };
+    const text = renderProverConfig(route, tiers);
+    expect(text).toContain('[[prover.remote_endpoints]]\nlabel = "gpu-24gb"\nurl = "https://a.api.runpod.ai"\napi_key_env = "RUNPOD_API_KEY"\nstart_wait_seconds = 30\n');
+    expect(text.match(/start_wait_seconds/g)).toHaveLength(1);
+  });
+
   it("refuses a value that the file cannot carry", () => {
     const quote: BackendSection = { kind: "remote", mode: { mode: "load-balancing" }, endpoints: [{ label: 'a"b', url: "https://x.example.org" }] };
     expect(() => renderProverConfig(route, quote)).toThrow("remote endpoint label holds a character");
-    for (const bad of [{ attempts: 1.5 }, { timeoutSeconds: -1 }, { readyWaitSeconds: Number.NaN }]) {
+    for (const bad of [{ attempts: 1.5 }, { timeoutSeconds: -1 }, { readyWaitSeconds: Number.NaN }, { startWaitSeconds: -3 }]) {
       const backend: BackendSection = { kind: "remote", mode: { mode: "load-balancing" }, endpoints: [{ label: "x", url: "https://x.example.org", ...bad }] };
       expect(() => renderProverConfig(route, backend)).toThrow("must be a whole number");
     }

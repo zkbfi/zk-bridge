@@ -34,6 +34,7 @@ describe("the endpoint list in the configuration", () => {
     ["a label used twice", { remote: { endpoints: [DEDICATED, { ...SERVERLESS, label: "dedicated" }] } }, "its own label"],
     ["an empty list", { remote: { endpoints: [] } }, "remote.endpoints"],
     ["an unknown key in an entry", { remote: { endpoints: [{ ...DEDICATED, weight: 1 }] } }, "remote.endpoints.0"],
+    ["a start wait at the ready wait", { remote: { endpoints: [{ ...DEDICATED, startWaitSeconds: 20 }] } }, "must be below the ready wait"],
   ])("refuses %s", (_name, overrides, message) => {
     expect(() => makeConfig(overrides)).toThrow(message);
   });
@@ -82,6 +83,34 @@ describe("the secrets of an endpoint list", () => {
     }) as unknown as typeof fetch;
     expect(await createProverPing({ endpoint: DEDICATED.url, apiKey: null, fetchFunction: () => fetchFunction })()).toBe(200);
     expect(seen).toEqual([null]);
+  });
+});
+
+describe("GPU tiers in the configuration", () => {
+  const TIERS = [
+    { label: "gpu-24gb", url: "https://a.api.runpod.ai", apiKeyVariable: "RUNPOD_API_KEY", startWaitSeconds: 30 },
+    { label: "gpu-32gb", url: "https://b.api.runpod.ai", apiKeyVariable: "RUNPOD_API_KEY", startWaitSeconds: 30 },
+    { label: "gpu-48gb", url: "https://c.api.runpod.ai", apiKeyVariable: "RUNPOD_API_KEY" },
+  ];
+
+  it("loads startWaitSeconds per tier and still warms up the first tier only", () => {
+    const config = listConfig(TIERS);
+    expect(remoteEndpoints(config).map((endpoint) => endpoint.startWaitSeconds)).toEqual([30, 30, undefined]);
+    expect(warmupTarget(config, READ_SECRETS)).toEqual({ endpoint: "https://a.api.runpod.ai", apiKey: SECRETS.runpodApiKey });
+  });
+
+  it("writes start_wait_seconds into the prover file for the tiers that have one", async () => {
+    const files: string[] = [];
+    const executor = async (spec: CommandSpec) => {
+      files.push(readFileSync(spec.args[1] as string, "utf8"));
+      return { code: 3, stdout: "", stderr: "" };
+    };
+    const factories = createProverFactories({ config: listConfig(TIERS), pair: PAIR, executor, secrets: READ_SECRETS, path: "/usr/bin", logger: memoryLogger().logger });
+    await factories.proverForJob("job-2").prove({ direction: "first-to-second" });
+    const file = files[0]!;
+    expect(file).toContain('label = "gpu-24gb"\nurl = "https://a.api.runpod.ai"\napi_key_env = "RUNPOD_API_KEY"\nstart_wait_seconds = 30\n');
+    expect(file).toContain('label = "gpu-32gb"\nurl = "https://b.api.runpod.ai"\napi_key_env = "RUNPOD_API_KEY"\nstart_wait_seconds = 30\n');
+    expect(file.match(/start_wait_seconds/g)).toHaveLength(2);
   });
 });
 

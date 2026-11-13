@@ -19,6 +19,10 @@
 //! is not a proof, and a proof that fails the checks above end the job: no other endpoint proves it again. The logs name
 //! an endpoint by its position and label, never by its URL.
 //!
+//! An endpoint with a start wait (a GPU tier, `start_wait_seconds`) gets the job only after its `GET /ping` answers 200.
+//! When it is not ready within its start wait, the next endpoint is pinged too, and the first that is ready gets the
+//! job, the earlier one when both are (`docs/gpu-prover.md`, "GPU tiers").
+//!
 //! An API key comes from an environment variable that the configuration names. It never appears in a file, in a log
 //! line or in an error text. An endpoint without a key (a worker reached directly) gets no `Authorization` header.
 
@@ -46,6 +50,12 @@ const MAX_ANSWER_BYTES: u64 = 1024 * 1024;
 
 /// The longest single wait between two requests to a worker that is not ready yet.
 const MAX_COLD_START_STEP: Duration = Duration::from_secs(60);
+
+/// The pause between two rounds of `GET /ping` while the backend waits for a GPU tier to start.
+const PING_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The longest single `GET /ping`. A ping that takes longer counts as "not ready", like a 204.
+const PING_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The `detail` of the RunPod load balancer's 400 when no worker became ready within its own wait for one request.
 const RUNPOD_NO_READY_WORKER: &str = "timed out waiting for worker";
@@ -100,6 +110,10 @@ pub struct RemoteSettings {
     /// request to it. No new request starts after it. Zero turns the wait off: the first such answer ends the
     /// endpoint.
     pub cold_start_wait: Duration,
+    /// The start wait of the endpoint (a GPU tier), or `None` to send the job at once. With it, the backend asks
+    /// `GET /ping` until a worker answers 200 before it sends the job; after this long it also pings the next endpoint.
+    /// See [`RemoteProver::request_proof_timed`].
+    pub start_wait: Option<Duration>,
 }
 
 impl std::fmt::Debug for RemoteSettings {
@@ -113,6 +127,7 @@ impl std::fmt::Debug for RemoteSettings {
             .field("attempts", &self.attempts)
             .field("retry_delay", &self.retry_delay)
             .field("cold_start_wait", &self.cold_start_wait)
+            .field("start_wait", &self.start_wait)
             .finish()
     }
 }
@@ -153,10 +168,34 @@ struct Counters {
     retries: u32,
 }
 
-/// One endpoint with the HTTP agent that carries its timeout.
+/// One endpoint with the HTTP agents that carry its timeouts.
 struct Endpoint {
     settings: RemoteSettings,
     agent: ureq::Agent,
+    /// The agent for `GET /ping`: the endpoint's timeout, at most [`PING_TIMEOUT`].
+    ping_agent: ureq::Agent,
+}
+
+/// Where an endpoint stands in one job.
+#[derive(Clone, Copy)]
+enum Slot {
+    /// Not asked yet, or chosen and being sent the job.
+    Waiting,
+    /// Asked with `GET /ping` since `joined`: the backend waits for a worker of this endpoint to start.
+    Racing { joined: Instant },
+    /// Given up: it gave no proof and gets no more requests for this job.
+    Failed,
+}
+
+/// What one `GET /ping` said.
+enum Ping {
+    /// 200: a worker is ready.
+    Ready,
+    /// Anything else that may change: 204 (starting), 503 (a worker that is refused or broken, which RunPod
+    /// replaces), another error, no answer.
+    NotReady(String),
+    /// The endpoint turned the request away (401, 403, 404, 405): a key it does not take or a wrong URL.
+    Unusable(String),
 }
 
 /// The remote proving backend. See the module documentation.
@@ -165,6 +204,8 @@ pub struct RemoteProver {
     logger: Logger,
     /// The timings of the last `prove`, for `Prover::take_timings`.
     last_timings: Mutex<Option<ProverTimings>>,
+    /// The pause between two rounds of `GET /ping`.
+    ping_interval: Duration,
 }
 
 impl RemoteProver {
@@ -180,6 +221,7 @@ impl RemoteProver {
             .into_iter()
             .map(|settings| Endpoint {
                 agent: build_agent(settings.timeout, USER_AGENT),
+                ping_agent: build_agent(settings.timeout.min(PING_TIMEOUT), USER_AGENT),
                 settings,
             })
             .collect();
@@ -187,7 +229,15 @@ impl RemoteProver {
             endpoints,
             logger,
             last_timings: Mutex::new(None),
+            ping_interval: PING_INTERVAL,
         }
+    }
+
+    /// The same backend with another pause between two rounds of `GET /ping` (2 s by default). For tests.
+    #[must_use]
+    pub fn with_ping_interval(mut self, interval: Duration) -> Self {
+        self.ping_interval = interval;
+        self
     }
 
     /// The settings of each endpoint, in the order they are tried.
@@ -238,6 +288,14 @@ impl RemoteProver {
     /// that is not a proof ends the job at once: no other endpoint is asked. The job never goes to two endpoints at
     /// the same time.
     ///
+    /// An endpoint with a `start_wait` (a GPU tier) gets the job only once its `GET /ping` answers 200. Until then the
+    /// backend pings it every `ping_interval`, for at most its `cold_start_wait`. When it is not ready after its start
+    /// wait, the next endpoint joins: the backend pings both and sends the job to the first that answers 200, the
+    /// earlier one when both do in the same round. The endpoint that joined last brings in the next one after its own
+    /// start wait, or at once when it is given up. An endpoint without a start wait that comes next while no other
+    /// endpoint is pinged gets the job at once, as before. After the job is sent, the rules above hold: when the
+    /// endpoint fails in a way another endpoint can help, the backend goes on with the endpoints not given up yet.
+    ///
     /// # Errors
     /// The errors of [`Self::request_proof`].
     pub fn request_proof_timed(
@@ -246,22 +304,64 @@ impl RemoteProver {
     ) -> Result<(ProveResponseBody, RemoteTimings)> {
         let started = Instant::now();
         let mut counters = Counters::default();
-        let mut failures: Vec<String> = Vec::new();
         let count = self.endpoints.len();
-        for (index, endpoint) in self.endpoints.iter().enumerate() {
-            let position = index + 1;
+        let mut slots = vec![Slot::Waiting; count];
+        // The failures by endpoint index, in the order they happened.
+        let mut failures: Vec<(usize, Error)> = Vec::new();
+        // The index of the next endpoint that has not been asked yet.
+        let mut next = 0;
+        let mut start_wait = Duration::ZERO;
+        loop {
+            self.escalate(&mut slots, &mut next);
+            let chosen = if is_racing(&slots) {
+                let round_started = Instant::now();
+                let ready = self.ping_round(&mut slots, &mut failures);
+                if let Some(index) = ready {
+                    start_wait += round_started.elapsed();
+                    self.logger.info(
+                        "remote_tier_chosen",
+                        &[
+                            ("endpoint_index", (index + 1).to_string()),
+                            ("endpoint", self.endpoints[index].settings.label.clone()),
+                            ("start_wait_ms", millis(start_wait).to_string()),
+                        ],
+                    );
+                    index
+                } else {
+                    if is_racing(&slots) {
+                        std::thread::sleep(self.ping_interval);
+                    }
+                    start_wait += round_started.elapsed();
+                    continue;
+                }
+            } else {
+                if next == count {
+                    break;
+                }
+                let index = next;
+                next += 1;
+                if self.endpoints[index].settings.start_wait.is_some() {
+                    slots[index] = Slot::Racing {
+                        joined: Instant::now(),
+                    };
+                    continue;
+                }
+                index
+            };
+            let endpoint = &self.endpoints[chosen];
             let label = &endpoint.settings.label;
-            match self.try_endpoint(position, endpoint, request_body, &mut counters) {
+            match self.try_endpoint(chosen + 1, endpoint, request_body, &mut counters) {
                 EndpointResult::Proof {
                     answer,
                     accepted_at,
                 } => {
                     let timings = RemoteTimings {
                         wait_worker_ms: millis(accepted_at.duration_since(started)),
+                        start_wait_ms: millis(start_wait),
                         not_ready_count: counters.not_ready,
                         retry_count: counters.retries,
                         endpoint: label.clone(),
-                        failover_count: u32::try_from(index).unwrap_or(u32::MAX),
+                        failover_count: u32::try_from(failures.len()).unwrap_or(u32::MAX),
                         remote_ms: millis(accepted_at.elapsed()),
                         worker: answer.timings.as_ref().and_then(WorkerTimings::from_value),
                     };
@@ -271,7 +371,7 @@ impl RemoteProver {
                     self.logger.error(
                         "remote_job_refused",
                         &[
-                            ("endpoint_index", position.to_string()),
+                            ("endpoint_index", (chosen + 1).to_string()),
                             ("endpoint", label.clone()),
                             ("reason", error.to_string()),
                         ],
@@ -279,34 +379,141 @@ impl RemoteProver {
                     return Err(error);
                 }
                 EndpointResult::Failed(error) => {
-                    if count == 1 {
-                        return Err(error);
-                    }
-                    let reason = error.to_string();
-                    if let Some(next) = self.endpoints.get(position) {
-                        self.logger.warn(
-                            "remote_endpoint_failover",
-                            &[
-                                ("endpoint_index", position.to_string()),
-                                ("endpoint", label.clone()),
-                                ("next_endpoint_index", (position + 1).to_string()),
-                                ("next_endpoint", next.settings.label.clone()),
-                                ("reason", reason.clone()),
-                            ],
-                        );
-                    }
-                    failures.push(format!("endpoint {position} ({label}): {reason}"));
+                    self.give_up(chosen, error, &mut slots, &mut failures);
                 }
+            }
+        }
+        if count == 1 {
+            if let Some((_, error)) = failures.pop() {
+                return Err(error);
             }
         }
         self.logger.error(
             "remote_endpoints_exhausted",
             &[("endpoint_count", count.to_string())],
         );
+        failures.sort_by_key(|(index, _)| *index);
+        let lines: Vec<String> = failures
+            .iter()
+            .map(|(index, error)| {
+                format!(
+                    "endpoint {} ({}): {error}",
+                    index + 1,
+                    self.endpoints[*index].settings.label
+                )
+            })
+            .collect();
         Err(Error::Prover(format!(
             "no remote endpoint gave a proof ({count} tried); {}",
-            failures.join("; ")
+            lines.join("; ")
         )))
+    }
+
+    /// Brings the next endpoint into the race of `GET /ping` while another endpoint is pinged: when the endpoint that
+    /// joined last has been pinged for its start wait, or was given up. With no endpoint pinged it does nothing: then
+    /// the caller asks the next endpoint itself.
+    fn escalate(&self, slots: &mut [Slot], next: &mut usize) {
+        if *next == 0 || *next == slots.len() || !is_racing(slots) {
+            return;
+        }
+        let last = *next - 1;
+        let join = match slots[last] {
+            Slot::Failed => true,
+            Slot::Racing { joined } => {
+                let waited = joined.elapsed();
+                let due = self.endpoints[last]
+                    .settings
+                    .start_wait
+                    .is_some_and(|wait| waited >= wait);
+                if due {
+                    self.logger.warn(
+                        "remote_tier_escalate",
+                        &[
+                            ("from_endpoint_index", (last + 1).to_string()),
+                            ("from_endpoint", self.endpoints[last].settings.label.clone()),
+                            ("to_endpoint_index", (last + 2).to_string()),
+                            (
+                                "to_endpoint",
+                                self.endpoints[last + 1].settings.label.clone(),
+                            ),
+                            ("waited_seconds", waited.as_secs().to_string()),
+                        ],
+                    );
+                }
+                due
+            }
+            Slot::Waiting => false,
+        };
+        if join {
+            slots[*next] = Slot::Racing {
+                joined: Instant::now(),
+            };
+            *next += 1;
+        }
+    }
+
+    /// Pings every endpoint in the race once, in list order, and returns the first that is ready. An endpoint that is
+    /// still not ready after its `cold_start_wait`, or that turns the request away, is given up.
+    fn ping_round(&self, slots: &mut [Slot], failures: &mut Vec<(usize, Error)>) -> Option<usize> {
+        for index in 0..slots.len() {
+            let Slot::Racing { joined } = slots[index] else {
+                continue;
+            };
+            let endpoint = &self.endpoints[index];
+            match ping_once(endpoint) {
+                Ping::Ready => {
+                    slots[index] = Slot::Waiting;
+                    return Some(index);
+                }
+                Ping::Unusable(reason) => {
+                    let error =
+                        Error::Prover(format!("the endpoint turned the ping away: {reason}"));
+                    self.give_up(index, error, slots, failures);
+                }
+                Ping::NotReady(reason) => {
+                    let waited = joined.elapsed();
+                    let limit = endpoint.settings.cold_start_wait;
+                    if waited >= limit {
+                        let error = Error::Prover(format!(
+                            "the remote worker was not ready after {} s of waiting, the limit of the endpoint's wait ({} s, prover.remote_cold_start_wait_seconds or its ready_wait_seconds); last ping: {reason}",
+                            waited.as_secs(),
+                            limit.as_secs()
+                        ));
+                        self.give_up(index, error, slots, failures);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Marks an endpoint as given up, keeps its reason for the final error and logs the failover to the endpoint that
+    /// comes next: the first one after it that is not given up, else the first one before it.
+    fn give_up(
+        &self,
+        index: usize,
+        error: Error,
+        slots: &mut [Slot],
+        failures: &mut Vec<(usize, Error)>,
+    ) {
+        slots[index] = Slot::Failed;
+        let open = |other: &usize| !matches!(slots[*other], Slot::Failed);
+        let following = (index + 1..slots.len())
+            .find(open)
+            .or_else(|| (0..index).find(open));
+        if let Some(next) = following {
+            self.logger.warn(
+                "remote_endpoint_failover",
+                &[
+                    ("endpoint_index", (index + 1).to_string()),
+                    ("endpoint", self.endpoints[index].settings.label.clone()),
+                    ("next_endpoint_index", (next + 1).to_string()),
+                    ("next_endpoint", self.endpoints[next].settings.label.clone()),
+                    ("reason", error.to_string()),
+                ],
+            );
+        }
+        failures.push((index, error));
     }
 
     /// Works on one endpoint until it gives an answer, a refusal, or no more hope.
@@ -387,6 +594,42 @@ impl RemoteProver {
                 }
             }
         }
+    }
+}
+
+/// Whether any endpoint is pinged right now.
+fn is_racing(slots: &[Slot]) -> bool {
+    slots.iter().any(|slot| matches!(slot, Slot::Racing { .. }))
+}
+
+/// Asks `GET /ping` of one endpoint, with its key like `/prove`.
+fn ping_once(endpoint: &Endpoint) -> Ping {
+    let settings = &endpoint.settings;
+    let url = format!("{}/ping", settings.endpoint_url.trim_end_matches('/'));
+    let mut request = endpoint.ping_agent.get(&url);
+    if let Some(key) = &settings.api_key {
+        request = request.header("Authorization", &format!("Bearer {key}"));
+    }
+    let scrub = |text: String| scrub_endpoint(&text, &settings.endpoint_url);
+    let mut response = match request.call() {
+        Ok(response) => response,
+        Err(error) => return Ping::NotReady(scrub(format!("no answer: {error}"))),
+    };
+    let status = response.status().as_u16();
+    if status == 200 {
+        return Ping::Ready;
+    }
+    let text = response
+        .body_mut()
+        .with_config()
+        .limit(MAX_ANSWER_BYTES)
+        .read_to_string()
+        .unwrap_or_default();
+    let reason = scrub(format!("status {status}: {}", error_text(&text)));
+    if is_endpoint_refusal(status) {
+        Ping::Unusable(reason)
+    } else {
+        Ping::NotReady(reason)
     }
 }
 
@@ -497,6 +740,7 @@ pub fn remote_settings(
             attempts: config.remote_attempts,
             retry_delay,
             cold_start_wait: Duration::from_secs(config.remote_cold_start_wait_seconds),
+            start_wait: None,
         }]);
     }
     config
@@ -530,6 +774,7 @@ pub fn remote_settings(
                         .ready_wait_seconds
                         .unwrap_or(config.remote_cold_start_wait_seconds),
                 ),
+                start_wait: entry.start_wait_seconds.map(Duration::from_secs),
             })
         })
         .collect()
@@ -815,6 +1060,23 @@ fn validate_endpoint_list(config: &ProverConfig) -> Result<()> {
                 key("timeout_seconds")
             )));
         }
+        if let Some(start_wait) = entry.start_wait_seconds {
+            let ready_wait = entry
+                .ready_wait_seconds
+                .unwrap_or(config.remote_cold_start_wait_seconds);
+            if start_wait == 0 {
+                return Err(Error::Config(format!(
+                    "{} must be at least 1",
+                    key("start_wait_seconds")
+                )));
+            }
+            if start_wait >= ready_wait {
+                return Err(Error::Config(format!(
+                    "{} ({start_wait} s) must be below the endpoint's ready wait ({ready_wait} s, its ready_wait_seconds or prover.remote_cold_start_wait_seconds): the prover waits for a worker of the endpoint at most that long",
+                    key("start_wait_seconds")
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -1027,6 +1289,45 @@ api_key_env = "RUNPOD_API_KEY"
         assert!(remote_config(&format!("{GOOD}\nremote_timeout_seconds = 0")).is_err());
         let plain_local_key = LIST.replace("https://worker.example.org", "http://127.0.0.1:8000");
         assert!(remote_config(&plain_local_key).is_ok());
+    }
+
+    /// Claim: `start_wait_seconds` loads as the start wait of its endpoint; an endpoint without it has none, and so has
+    /// the single `remote_url`. A start wait of zero, or one that is not below the endpoint's ready wait (its own or the
+    /// section's), is refused. The last endpoint may have one.
+    /// Why it matters: a start wait at or past the ready wait would give up the tier before it brings in the next one.
+    #[test]
+    fn a_start_wait_loads_and_must_be_below_the_ready_wait() {
+        let tiers = LIST.replace("attempts = 2\n", "attempts = 2\nstart_wait_seconds = 15\n");
+        let config = remote_config(&tiers).unwrap();
+        let settings = remote_settings(config.prover_config().unwrap(), &keys).unwrap();
+        assert_eq!(settings[0].start_wait, Some(Duration::from_secs(15)));
+        assert_eq!(settings[1].start_wait, None);
+        let single = remote_config(GOOD).unwrap();
+        assert_eq!(
+            remote_settings(single.prover_config().unwrap(), &keys).unwrap()[0].start_wait,
+            None
+        );
+        let last = format!("{LIST}start_wait_seconds = 599\n");
+        assert!(remote_config(&last).is_ok());
+        let error = |extra: &str| remote_config(extra).unwrap_err().to_string();
+        let zero = LIST.replace("attempts = 2\n", "attempts = 2\nstart_wait_seconds = 0\n");
+        assert!(
+            error(&zero).contains("remote_endpoints[0].start_wait_seconds must be at least 1"),
+            "{}",
+            error(&zero)
+        );
+        let at_ready = LIST.replace("attempts = 2\n", "attempts = 2\nstart_wait_seconds = 20\n");
+        assert!(
+            error(&at_ready).contains("remote_endpoints[0].start_wait_seconds (20 s) must be below the endpoint's ready wait (20 s"),
+            "{}",
+            error(&at_ready)
+        );
+        let past_section = format!("{LIST}start_wait_seconds = 600\n");
+        assert!(
+            error(&past_section).contains("remote_endpoints[1].start_wait_seconds (600 s)"),
+            "{}",
+            error(&past_section)
+        );
     }
 
     /// Claim: the endpoint's URL and host are taken out of a reason, and other text stays.

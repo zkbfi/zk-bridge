@@ -133,6 +133,7 @@ function endpointLines(endpoint: RemoteEndpoint): readonly string[] {
   ];
   if (endpoint.apiKeyVariable !== undefined) lines.push(`api_key_env = ${quoted(endpoint.apiKeyVariable, "remote key variable")}`);
   if (endpoint.readyWaitSeconds !== undefined) lines.push(`ready_wait_seconds = ${wholeNumber(endpoint.readyWaitSeconds, "ready wait")}`);
+  if (endpoint.startWaitSeconds !== undefined) lines.push(`start_wait_seconds = ${wholeNumber(endpoint.startWaitSeconds, "start wait")}`);
   if (endpoint.timeoutSeconds !== undefined) lines.push(`timeout_seconds = ${wholeNumber(endpoint.timeoutSeconds, "timeout")}`);
   if (endpoint.attempts !== undefined) lines.push(`attempts = ${wholeNumber(endpoint.attempts, "attempts")}`);
   return lines;
