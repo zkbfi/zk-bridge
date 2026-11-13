@@ -17,7 +17,7 @@ const GPU: GpuView = { warmMs: 60_000, coldMs: 240_000, workerWarm: false, budge
 const pipeline = (direction: ProofDirection, overrides: Partial<Pipeline> = {}): Pipeline => ({
   direction,
   now: NOW,
-  rule: { minIntervalSeconds: 3600, lookaheadSeconds: 0, profitMargin: 1, proofCostUsd: "0.025000", priced: false },
+  rule: { minIntervalSeconds: 3600, lookaheadSeconds: 0, profitMargin: 1, proofCostUsd: "0.025000", priced: false, unpricedAtMaximumPays: true },
   batch: null,
   job: null,
   latestJob: null,

@@ -50,7 +50,7 @@ function recordJob(storage: Storage, jobId: string, now: number): void {
 }
 
 /** No minimum interval: a message proves at the first finality that covers it. */
-const NO_WAIT: BatchRule = { minIntervalSeconds: 0, lookaheadSeconds: 384, marginWad: 10n ** 18n };
+const NO_WAIT: BatchRule = { minIntervalSeconds: 0, lookaheadSeconds: 384, marginWad: 10n ** 18n, unpricedAtMaximumPays: true };
 
 function setup(
   options: {
@@ -504,7 +504,7 @@ describe("the direction watcher, warm-ups", () => {
   });
 
   it("a minimum interval since the last proof: no warm-up for a finality that decideProof would refuse", async () => {
-    const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 384, marginWad: 10n ** 18n };
+    const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 384, marginWad: 10n ** 18n, unpricedAtMaximumPays: true };
     const run = setup({ messages: [listed(SENT)], batchRule: WAIT, lastProofAt: expected - 10 * 60_000, ping: async () => 200 });
     vi.setSystemTime(expected - LEAD);
     await run.watcher.scan();
@@ -899,7 +899,7 @@ describe("the direction watcher, warm-ups", () => {
 });
 
 describe("the direction watcher, with a minimum interval since the last proof (2026-11-01)", () => {
-  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n };
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n, unpricedAtMaximumPays: true };
   const USD = 10n ** 18n;
   const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(), why: null, block: "7" });
   const finalAt = (slot: number) => expectedFinalityAt(slot, facts()) * 1000;
@@ -1148,7 +1148,7 @@ describe("the direction watcher, with a proof we have (2026-11-01)", () => {
 });
 
 describe("the direction watcher reports its decisions (2026-11-01)", () => {
-  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n };
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n, unpricedAtMaximumPays: true };
   const LAST = slotStart(HEAD + 100);
   const USD = 10n ** 18n;
   const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(), why: null, block: "7" });
@@ -1230,7 +1230,7 @@ describe("the direction watcher reports its decisions (2026-11-01)", () => {
 describe("the direction watcher, while the destination bridge waits for deposits to open (2026-11-07)", () => {
   // Owner: "if the contract needs to be pushed forward in order to accept deposits, then, if a user requests a proof then
   // it should be given one if the finality is new".
-  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n };
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: 10n ** 18n, unpricedAtMaximumPays: true };
   const locked = async (): Promise<DepositsFacts> => ({ open: false, remoteHasHead: true });
 
   it("proves at the first new finality under the 3600 s rule, with no waiting message, and says why", async () => {

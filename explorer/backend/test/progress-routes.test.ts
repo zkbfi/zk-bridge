@@ -194,7 +194,7 @@ describe("GET /directions/:direction/pipeline (2026-11-01)", () => {
     registerProgressRoutes(app, backend.context, { indexer: null, callerOf: () => "10.0.0.1" });
     const rule = async (direction: string) => ((await (await app.request(`/directions/${direction}/pipeline`)).json()) as { rule: unknown }).rule;
     // PAIR has a PulseChain mainnet side, so prices exist; the epoch of Ethereum is 32 x 12 s.
-    expect(await rule("first-to-second")).toEqual({ minIntervalSeconds: 3600, lookaheadSeconds: 384, profitMargin: 1.5, proofCostUsd: "0.025000", priced: true });
+    expect(await rule("first-to-second")).toEqual({ minIntervalSeconds: 3600, lookaheadSeconds: 384, profitMargin: 1.5, proofCostUsd: "0.025000", priced: true, unpricedAtMaximumPays: true });
     expect(await rule("second-to-first")).toMatchObject({ minIntervalSeconds: 0, lookaheadSeconds: 320 });
     // A testnet pair has no PulseChain mainnet side: nothing can be priced.
     const [first, second] = backend.context.pair.sides;

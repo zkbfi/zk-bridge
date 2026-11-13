@@ -16,7 +16,9 @@
  *
  * A message whose token has no price cannot be valued; its tip pays when it is at least the frontend's automatic
  * maximum, 1% of the amount (`tipVerdict` of `@zkb/core`, the rule the runner and the dapp use too), and such a message
- * makes its batch pay: the batch proves at its finality (owner, 2026-11-09: "yes, deliver straight away").
+ * makes its batch pay: the batch proves at its finality (owner, 2026-11-09: "yes, deliver straight away"). With
+ * `unpricedAtMaximumPays: false` (owner, 2026-11-13: testnet transfers share one light-client update an hour) such a
+ * message does not make its batch pay; it waits for the interval like any other.
  */
 import { USD, batchCostUsd, batchDueAt, intervalAllows, marginWadOf, type ProofDirection } from "@zk-bridge/shared";
 import type { BackendConfig } from "../config.ts";
@@ -32,10 +34,15 @@ export type BatchRule = {
   readonly lookaheadSeconds: number;
   /** The fees must reach the cost times this (1e18 = 1). */
   readonly marginWad: bigint;
+  /**
+   * Whether a message with no price for its token and a tip at the automatic maximum makes the batch pay. False: it
+   * counts as any unpriced message and the batch waits for `minIntervalSeconds`. Priced fees count either way.
+   */
+  readonly unpricedAtMaximumPays: boolean;
 };
 
 /** The batch fields of one level of `watch`: the global ones, a pair's, or a direction's. */
-type BatchLevel = { readonly minIntervalSeconds?: number | undefined; readonly maxWaitSeconds?: number | undefined; readonly lookaheadSeconds?: number | undefined; readonly profitMargin?: number | undefined };
+type BatchLevel = { readonly minIntervalSeconds?: number | undefined; readonly maxWaitSeconds?: number | undefined; readonly lookaheadSeconds?: number | undefined; readonly profitMargin?: number | undefined; readonly unpricedAtMaximumPays?: boolean | undefined };
 
 /** The minimum interval a level names: `minIntervalSeconds`, else its deprecated alias `maxWaitSeconds`. */
 const intervalOf = (level: BatchLevel | undefined) => level?.minIntervalSeconds ?? level?.maxWaitSeconds;
@@ -50,11 +57,12 @@ const intervalOf = (level: BatchLevel | undefined) => level?.minIntervalSeconds 
 export function batchRuleFor(watch: BackendConfig["watch"], pairName: string, direction: ProofDirection, epochSeconds: number): BatchRule {
   const pair = watch.pairs[pairName];
   const own = pair?.directions?.[direction];
-  const pick = <Key extends "lookaheadSeconds" | "profitMargin">(key: Key) => own?.[key] ?? pair?.[key] ?? watch[key];
+  const pick = <Key extends "lookaheadSeconds" | "profitMargin" | "unpricedAtMaximumPays">(key: Key) => own?.[key] ?? pair?.[key] ?? watch[key];
   return {
     minIntervalSeconds: intervalOf(own) ?? intervalOf(pair) ?? intervalOf(watch) ?? 0,
     lookaheadSeconds: pick("lookaheadSeconds") ?? epochSeconds,
     marginWad: marginWadOf(pick("profitMargin") ?? 1),
+    unpricedAtMaximumPays: pick("unpricedAtMaximumPays") ?? true,
   };
 }
 
@@ -171,7 +179,7 @@ export function planBatch(input: BatchInput): BatchPlan | null {
   const dueAt = batchDueAt(oldestFinalAt, input.lastProofAt, rule.minIntervalSeconds);
   const known = economics.kind === "known" ? economics : null;
   const priced = known !== null && known.deliveryUsd !== null ? { feesUsd: known.feesUsd, deliveryUsd: known.deliveryUsd } : null;
-  const atMaximum = (message: BatchMessage): boolean => known?.atMaximum.has(message.messageId) === true;
+  const atMaximum = (message: BatchMessage): boolean => rule.unpricedAtMaximumPays && known?.atMaximum.has(message.messageId) === true;
   const feeOf = (message: BatchMessage) => priced?.feesUsd.get(message.messageId) ?? 0n;
   const costOf = (count: number) => (priced === null ? null : batchCostUsd(count, priced.deliveryUsd, rule.marginWad));
   const feesUsd = priced === null ? null : ready.reduce((sum, message) => sum + feeOf(message), 0n);

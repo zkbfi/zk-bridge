@@ -7,7 +7,7 @@ import { createEconomicsReader, type DestinationToken } from "../src/watch/econo
 
 /** The gas of one delivery that these tests count at. */
 const DELIVERY_GAS = 500_000n;
-const RULE: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 384, marginWad: WAD };
+const RULE: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 384, marginWad: WAD, unpricedAtMaximumPays: true };
 const NOW = 1_000_000;
 const FINALIZED = 500;
 /** The direction's last proof started ten minutes ago: well inside the hour. */
@@ -21,9 +21,9 @@ describe("batchRuleFor", () => {
     const watch = makeConfig({
       watch: { minIntervalSeconds: 60, profitMargin: 1.5, pairs: { "sepolia-pls943": { minIntervalSeconds: 3600, lookaheadSeconds: 100, directions: { "first-to-second": { minIntervalSeconds: 1800 } } } } },
     }).watch;
-    expect(batchRuleFor(watch, "sepolia-pls943", "first-to-second", 384)).toEqual({ minIntervalSeconds: 1800, lookaheadSeconds: 100, marginWad: (WAD * 3n) / 2n });
-    expect(batchRuleFor(watch, "sepolia-pls943", "second-to-first", 320)).toEqual({ minIntervalSeconds: 3600, lookaheadSeconds: 100, marginWad: (WAD * 3n) / 2n });
-    expect(batchRuleFor(watch, "eth-pls", "first-to-second", 384)).toEqual({ minIntervalSeconds: 60, lookaheadSeconds: 384, marginWad: (WAD * 3n) / 2n });
+    expect(batchRuleFor(watch, "sepolia-pls943", "first-to-second", 384)).toEqual({ minIntervalSeconds: 1800, lookaheadSeconds: 100, marginWad: (WAD * 3n) / 2n, unpricedAtMaximumPays: true });
+    expect(batchRuleFor(watch, "sepolia-pls943", "second-to-first", 320)).toEqual({ minIntervalSeconds: 3600, lookaheadSeconds: 100, marginWad: (WAD * 3n) / 2n, unpricedAtMaximumPays: true });
+    expect(batchRuleFor(watch, "eth-pls", "first-to-second", 384)).toEqual({ minIntervalSeconds: 60, lookaheadSeconds: 384, marginWad: (WAD * 3n) / 2n, unpricedAtMaximumPays: true });
     // A direction's 0 beats its pair's hour: no minimum.
     const zero = makeConfig({ watch: { pairs: { "sepolia-pls943": { minIntervalSeconds: 3600, directions: { "second-to-first": { minIntervalSeconds: 0 } } } } } }).watch;
     expect(batchRuleFor(zero, "sepolia-pls943", "second-to-first", 320).minIntervalSeconds).toBe(0);
@@ -46,8 +46,21 @@ describe("batchRuleFor", () => {
   });
 
   it("defaults to no minimum interval, one epoch of lookahead and a margin of 1", () => {
-    expect(batchRuleFor(makeConfig().watch, "eth-pls", "first-to-second", 320)).toEqual({ minIntervalSeconds: 0, lookaheadSeconds: 320, marginWad: WAD });
+    expect(batchRuleFor(makeConfig().watch, "eth-pls", "first-to-second", 320)).toEqual({ minIntervalSeconds: 0, lookaheadSeconds: 320, marginWad: WAD, unpricedAtMaximumPays: true });
     expect(marginWadOf(1.25)).toBe((WAD * 5n) / 4n);
+  });
+
+  it("resolves unpricedAtMaximumPays like the interval: the direction's own, else its pair's, else the global one, else true", () => {
+    const watch = makeConfig({
+      watch: { unpricedAtMaximumPays: false, pairs: { "sepolia-pls943": { unpricedAtMaximumPays: true, directions: { "second-to-first": { unpricedAtMaximumPays: false } } }, "eth-pls": {} } },
+    }).watch;
+    expect(batchRuleFor(watch, "sepolia-pls943", "first-to-second", 384).unpricedAtMaximumPays).toBe(true);
+    expect(batchRuleFor(watch, "sepolia-pls943", "second-to-first", 320).unpricedAtMaximumPays).toBe(false);
+    expect(batchRuleFor(watch, "eth-pls", "first-to-second", 384).unpricedAtMaximumPays).toBe(false);
+    const testnetOnly = makeConfig({ watch: { pairs: { "sepolia-pls943": { unpricedAtMaximumPays: false } } } }).watch;
+    expect(batchRuleFor(testnetOnly, "sepolia-pls943", "first-to-second", 384).unpricedAtMaximumPays).toBe(false);
+    expect(batchRuleFor(testnetOnly, "eth-pls", "first-to-second", 384).unpricedAtMaximumPays).toBe(true);
+    expect(() => makeConfig({ watch: { unpricedAtMaximumPays: "no" } })).toThrow(/unpricedAtMaximumPays/);
   });
 
   it("refuses an unknown pair or direction and a negative interval", () => {
@@ -143,6 +156,20 @@ describe("planBatch: is there a bridge? is it profitable? has it been an hour si
     // On a priced chain it pays its batch beside the fees of the others.
     const mixed: Economics = { kind: "known", feesUsd: new Map([["a", 1n]]), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(["b"]), why: null, block: "1" };
     expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule: RULE, economics: mixed, lastProofAt: RECENT })).toMatchObject({ due: true, trigger: "profit", feesUsd: 1n, costUsd: PROOF_COST_USD, atMaximum: 1 });
+  });
+
+  it("with unpricedAtMaximumPays false, a tip at the maximum no longer pays: the batch waits for the interval, priced fees still count", () => {
+    const rule: BatchRule = { ...RULE, unpricedAtMaximumPays: false };
+    const testnet: Economics = { kind: "known", feesUsd: new Map(), deliveryUsd: null, unpriced: 1, atMaximum: new Set(["b"]), why: "testnet tokens have no price", block: null };
+    const messages = [msg("a", 400, NOW - 10), msg("b", 450, NOW - 5)];
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule, economics: testnet, lastProofAt: RECENT })).toMatchObject({ due: false, startWhy: "interval", dueAt: RECENT + 3600 });
+    // The interval ends: it is due for that reason, with no message counted at the maximum.
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule, economics: testnet, lastProofAt: NOW - 3600 })).toMatchObject({ due: true, trigger: "interval", atMaximum: 0 });
+    // Not final yet: it does not pull the expected start forward either.
+    expect(planBatch({ messages: [msg("a", 400, NOW - 10), msg("b", 600, NOW + 100)], finalizedSlot: FINALIZED, nowSeconds: NOW, rule, economics: testnet, lastProofAt: RECENT })).toMatchObject({ due: false, startWhy: "interval" });
+    // Priced fees that cover the cost still pay.
+    const mixed: Economics = { kind: "known", feesUsd: new Map([["a", PROOF_COST_USD]]), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(["b"]), why: null, block: "1" };
+    expect(planBatch({ messages, finalizedSlot: FINALIZED, nowSeconds: NOW, rule, economics: mixed, lastProofAt: RECENT })).toMatchObject({ due: true, trigger: "profit", atMaximum: 0 });
   });
 
   it("with nothing final yet, expects the proof no earlier than the first finality, ordering equal times by identifier", () => {

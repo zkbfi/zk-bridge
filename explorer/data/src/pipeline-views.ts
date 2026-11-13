@@ -77,7 +77,7 @@ export const directionPipelineSchema = z
     now: z.number(),
     /** How a proof of the direction starts (absent from an older backend). */
     rule: z
-      .object({ minIntervalSeconds: z.number(), lookaheadSeconds: z.number(), profitMargin: z.number(), proofCostUsd: z.string(), priced: z.boolean() })
+      .object({ minIntervalSeconds: z.number(), lookaheadSeconds: z.number(), profitMargin: z.number(), proofCostUsd: z.string(), priced: z.boolean(), unpricedAtMaximumPays: z.boolean().optional() })
       .passthrough()
       .optional(),
     batch: z

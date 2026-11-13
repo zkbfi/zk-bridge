@@ -293,7 +293,7 @@ describe("warmupPlan", () => {
 });
 
 describe("decideProof with a minimum interval since the last proof (2026-11-01)", () => {
-  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD, unpricedAtMaximumPays: true };
   const unknown: Economics = { kind: "unknown", why: "testnet tokens have no price" };
   const priced = (fees: Record<string, bigint>): Economics => ({ kind: "known", feesUsd: new Map(Object.entries(fees)), deliveryUsd: 0n, unpriced: 0, atMaximum: new Set(), why: null, block: "9" });
   const hex = (digit: string) => `0x${digit.repeat(64)}`;
@@ -415,7 +415,7 @@ describe("decideProof with a proof we have (2026-11-01)", () => {
 });
 
 describe("warmupPlan with a minimum interval", () => {
-  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD, unpricedAtMaximumPays: true };
   const hex = (digit: string) => `0x${digit.repeat(64)}`;
   const base = { facts: facts(HEAD), finalizedSlot: FINALIZED, pendingProof: null, history: { kind: "not-needed" } as const, policy: DEFAULT_POLICY, nowSeconds: at(NOW_SLOT), horizonSeconds: 90 };
   const recent = at(NOW_SLOT) - 600;
@@ -446,7 +446,7 @@ describe("warmupPlan with a minimum interval", () => {
 describe("urgent reasons: a proof before the minimum interval ends (2026-11-07)", () => {
   // Owner: "3600 is fine for a minimum, but we should have code in place that can say, oh, yes, we should create a
   // proof for this situation - especially when we are waiting for deposits to be enabled".
-  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD };
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 1200, marginWad: WAD, unpricedAtMaximumPays: true };
   const unknown: Economics = { kind: "unknown", why: "testnet tokens have no price" };
   const now = at(NOW_SLOT);
   const locked = { open: false, remoteHasHead: true } as const;

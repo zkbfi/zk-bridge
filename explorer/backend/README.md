@@ -403,6 +403,7 @@ Settings, all optional (`watch` in the configuration file):
 | `maxWaitSeconds` | none | Deprecated: the old name of `minIntervalSeconds`, read as it on the same level (`minIntervalSeconds` wins when a level names both). The start log warns (`config_deprecated`) with the key to rename. |
 | `lookaheadSeconds` | one epoch of the source chain (384 s, 320 s on PulseChain) | How far ahead messages that are not final yet count toward the time a batch is expected to pay. |
 | `profitMargin` | 1.0 | A batch proves early when its fees reach the cost times this. |
+| `unpricedAtMaximumPays` | `true` | Whether a message whose token has no price and whose tip is at the automatic maximum (1% of the amount) makes its batch pay at once. `false`: such a message waits for `minIntervalSeconds` like any other; priced fees still count. Resolved like `minIntervalSeconds`: a direction's value beats its pair's, a pair's beats the global one. The testnet pair sets it to `false`, so the traffic bot's transfers share one light-client update an hour per direction. |
 | `pairs` | none | Overrides per pair and per direction: `{ "sepolia-pls943": { "minIntervalSeconds": 3600, "directions": { "first-to-second": { "minIntervalSeconds": 1800 } } } }`. A direction's field beats its pair's, a pair's beats the global one. Unknown pair names and directions are refused. |
 | `warmup.enabled` | `true` | `false` sends no ping. |
 | `warmup.leadP`, `leadObservations`, `leadMarginSeconds` | 0.75, 20, 5 | The quantile of the newest observations that the lead time takes, and the seconds added to it. A higher quantile or margin spares the proof a wait and costs idle GPU time. |
@@ -482,7 +483,9 @@ was in a previous hour"):
   a tip of 1% of the amount or more proves at its finality; for the others a direction gets at most one message proof
   per rolling hour: a message after a quiet hour proves at its finality, and the ones that follow
   within the hour wait for its end and go together. Quiet hours prove nothing; a handoff still proves on time. On
-  mainnet `minIntervalSeconds: 0` with the profit rule proves every waiting message at its finality.
+  mainnet `minIntervalSeconds: 0` with the profit rule proves every waiting message at its finality. With
+  `unpricedAtMaximumPays: false` on that testnet pair, even a tip of 1% or more waits for the interval. The rule appears as `unpricedAtMaximumPays` in the `watch_started` log, and in the `rule`
+  of `GET /directions/:direction/pipeline`.
 - **The wire keeps its first names.** `GET /directions/:direction/pipeline` reports a batch that waits for the interval
   as `trigger: "max-wait"` with `fallbackAt` (the `dueAt`), and `GET /progress/:messageId` as the service
   `batch-max-wait`, so the web app's readers stay as they are. The `decision` object carries the new names.
