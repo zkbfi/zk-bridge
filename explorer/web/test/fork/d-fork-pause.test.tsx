@@ -11,9 +11,9 @@ describe("forkPauseOf", () => {
     expect(forkPauseOf(view, "Ethereum")).toEqual({ label: "Ethereum sends paused for the Fulu fork", detail: "Sends resume after the fork." });
   });
 
-  it("adds the copy of the schedule that the pause was decided from", () => {
+  it("leaves out the copy of the schedule that the pause was decided from (Explore's fork section names it)", () => {
     const view = { sourceChainId: 1, destinationChainId: 2, verdict: paused, text: { headline: "Paused.", countdown: null, sendable: false, scheduleNote: "From a copy." }, nowSeconds: 0 } as const;
-    expect(forkPauseOf(view, "Ethereum")).toEqual({ label: "Ethereum sends paused for the Fulu fork", detail: "Paused. From a copy." });
+    expect(forkPauseOf(view, "Ethereum")).toEqual({ label: "Ethereum sends paused for the Fulu fork", detail: "Paused." });
   });
 
   it("names the wait for a fork schedule on the button when no schedule can be used", () => {
