@@ -2,7 +2,7 @@ import { z } from "zod";
 import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, beaconVariableName, headerRpcVariableName, handoffUrlsVariableName, loadPair, rpcVariableName, stateUrlsVariableName, urlSecrets, type Pair } from "@zk-bridge/shared";
 import { SINGLE_ENDPOINT_LABEL, endpointKeyVariables, remoteEndpointListSchema, type ProverSecret, type RemoteEndpoint } from "@zk-bridge/shared/prover";
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
-import { DEFAULT_WARMUP, holdIntervalFor } from "./watch/warmup.ts";
+import { DEFAULT_WARMUP } from "./watch/warmup.ts";
 import { signerSchema } from "../../bots/src/config/bot-config.ts";
 
 /** The modules that the backend can run, in the order that the example file lists them. */
@@ -208,6 +208,15 @@ export const backendConfigSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * How often the backend reads RunPod's billing (REST, two requests per endpoint) and the balance (GraphQL). RunPod's
+     * REST API has a daily request limit, so the default is slow. After a failure it tries again after `retrySeconds`; after
+     * a 429 it waits for the next refresh.
+     */
+    billing: z
+      .object({ refreshSeconds: positiveInteger.default(3600), retrySeconds: positiveInteger.default(900) })
+      .strict()
+      .prefault({}),
     /** The msgboard node (`ws://`, `wss://`, `http://` or `https://`). Needed by the webhook and the msgboard indexer. It can carry a key. */
     msgboardUrl: z.string().regex(/^(wss?|https?):\/\/\S+$/, "must be a ws, wss, http or https address").optional(),
     /**
@@ -259,19 +268,20 @@ export const backendConfigSchema = z
             maxLeadSeconds: positiveInteger.default(DEFAULT_WARMUP.maxLeadSeconds),
             /**
              * Ping a warm worker again this long after its last ready answer. Must be below `idleTimeoutSeconds`.
-             * Default: `idleTimeoutSeconds - 2`, at least 1 (3 with the default idle timeout of 5).
+             * Default: derived at run time as the endpoint's idle timeout minus 2, at least 1 (3 for an idle timeout of 5).
              */
             holdIntervalSeconds: positiveInteger.optional(),
             /** Ping again this often while no worker is ready. */
             intervalSeconds: positiveInteger.default(DEFAULT_WARMUP.intervalSeconds),
             graceSeconds: positiveInteger.default(DEFAULT_WARMUP.graceSeconds),
             /**
-             * The RunPod endpoint's idle timeout, owned here: a worker is billed this long after its last request. With
-             * `syncIdleTimeout` the backend sets the endpoint to this value at start-up. Also the cost estimate.
+             * The fallback for the RunPod endpoint's idle timeout, used until the backend has read the real one (it reads
+             * it at start-up and every `billing.refreshSeconds`). The value itself is set only in
+             * `deploy/runpod/endpoints.json`; the backend never writes it.
              */
             idleTimeoutSeconds: z.number().int().min(1).max(3600).default(DEFAULT_WARMUP.idleTimeoutSeconds),
-            /** Set the RunPod endpoint's idle timeout to `idleTimeoutSeconds` at start-up when it differs. */
-            syncIdleTimeout: z.boolean().default(DEFAULT_WARMUP.syncIdleTimeout),
+            /** Removed on 2026-11-13: the idle timeout is set only by `deploy/runpod/endpoints.json`. Still accepted so an older file loads; it does nothing and the backend logs `config_deprecated`. */
+            syncIdleTimeout: z.boolean().optional(),
             /** What the remote GPU costs per hour, in USD (the cost estimate). */
             gpuUsdPerHour: z.number().min(0).max(1000).default(DEFAULT_WARMUP.gpuUsdPerHour),
             minGapSeconds: positiveInteger.default(DEFAULT_WARMUP.minGapSeconds),
@@ -283,9 +293,8 @@ export const backendConfigSchema = z
             leadSeconds: positiveInteger.optional(),
           })
           .strict()
-          .transform((warmup) => ({ ...warmup, holdIntervalSeconds: warmup.holdIntervalSeconds ?? holdIntervalFor(warmup.idleTimeoutSeconds) }))
           .refine((warmup) => warmup.minLeadSeconds <= warmup.maxLeadSeconds, { message: "minLeadSeconds must not be above maxLeadSeconds", path: ["minLeadSeconds"] })
-          .refine((warmup) => warmup.holdIntervalSeconds < warmup.idleTimeoutSeconds, {
+          .refine((warmup) => warmup.holdIntervalSeconds === undefined || warmup.holdIntervalSeconds < warmup.idleTimeoutSeconds, {
             message: "holdIntervalSeconds must be below idleTimeoutSeconds, or the worker stops between two holds and every hold cold-starts it (leave holdIntervalSeconds out to derive it)",
             path: ["holdIntervalSeconds"],
           })

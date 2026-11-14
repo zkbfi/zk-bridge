@@ -386,9 +386,10 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
     ones left open.
   - *Cost cap:* at most `dailyCapSeconds` (1 hour) of sessions in any 24 hours, both directions together. Over it, no
     session starts (`warmup_capped`, once per target) and a warm one stops at its next hold.
-  - *The idle timeout is owned here.* `idleTimeoutSeconds` (default 5) is the one place to set it: at start-up the backend reads
-    each RunPod endpoint's settings and, when `idleTimeout` differs, sets it (see "Tuning the idle timeout"). The backend
-    never changes `workersMin` or `workersMax`.
+  - *The idle timeout is read, not written.* `deploy/runpod/endpoints.json` (applied with `deploy/runpod/apply.mjs`) is the
+    only place that sets it. The backend reads it from RunPod at start-up and every `billing.refreshSeconds` (see "Tuning
+    the idle timeout") and uses RunPod's value; `idleTimeoutSeconds` (default 5) is only the fallback until it is read. The
+    backend never changes the endpoints.
 - **The log.** `finality_seen` (slot, `source` sse or poll, `latencyMs` from the start of the signature slot),
   `proof_due` (why; for a message `trigger` profit or interval, `batch`, `waitedSeconds`, `feesUsd`, `costUsd`; for a
   handoff or keep-alive that took waiting messages along, `riders`), `proof_not_due` (why, at debug level unless
@@ -422,11 +423,13 @@ Settings, all optional (`watch` in the configuration file):
 | `warmup.enabled` | `true` | `false` sends no ping. |
 | `warmup.leadP`, `leadObservations`, `leadMarginSeconds` | 0.75, 20, 5 | The quantile of the newest observations that the lead time takes, and the seconds added to it. A higher quantile or margin spares the proof a wait and costs idle GPU time. |
 | `warmup.defaultLeadSeconds`, `minLeadSeconds`, `maxLeadSeconds` | 90, 20, 600 | The lead time without observations, and its bounds. |
-| `warmup.holdIntervalSeconds` | `idleTimeoutSeconds - 2`, at least 1 (3) | The ping that keeps a warm worker, after its last ready answer. Must be below `idleTimeoutSeconds` (the start-up refuses the file otherwise); leave it out and it follows the idle timeout. |
+| `warmup.holdIntervalSeconds` | the idle timeout in use minus 2, at least 1 (3) | The ping that keeps a warm worker, after its last ready answer. When set, it must be below `idleTimeoutSeconds` (the start-up refuses the file otherwise). Leave it out and it follows RunPod's idle timeout, worked out at run time. |
 | `warmup.intervalSeconds`, `graceSeconds`, `minGapSeconds` | 30, 45, 300 | Ping again while no worker is ready; end after the due time; the pause after a timed-out ping. |
-| `warmup.idleTimeoutSeconds` | 5 | The RunPod endpoint's idle timeout in whole seconds (1 to 3600): a worker is billed this long after its last request. The backend sets the endpoint to it at start-up; the billing breakdown uses it too. |
-| `warmup.syncIdleTimeout` | `true` | `false` only reads the endpoint's idle timeout and warns (`runpod_idle_timeout_differs`) when it differs; nothing is changed at RunPod. |
+| `warmup.idleTimeoutSeconds` | 5 | The fallback for the RunPod endpoint's idle timeout in whole seconds (1 to 3600), used only until the backend has read the real one. The real one is set in `deploy/runpod/endpoints.json`. |
+| `warmup.syncIdleTimeout` | none | Removed on 2026-11-13. A file that still has it loads; the key does nothing and the backend logs `config_deprecated`. Remove it. |
 | `warmup.gpuUsdPerHour` | 2.25 | The GPU price, for the unused-worker cost of `/billing` when RunPod's billing cannot be read. |
+| `billing.refreshSeconds` | 3600 | How often RunPod's billing (REST, two requests per endpoint) and the balance (GraphQL) are read. RunPod's REST API has a daily request limit, so this is slow. `/billing` never calls RunPod. |
+| `billing.retrySeconds` | 900 | How long to wait after a failed read. After a 429 (the daily limit) the backend waits for the next refresh instead. |
 | `warmup.dailyCapSeconds` | 3600 | The most warm-up seconds in any 24 hours, both directions together. |
 | `warmup.pingTimeoutSeconds` | 300 | How long one ping may wait for a cold worker. |
 | `warmup.leadSeconds` | none | The fixed lead time of before 2026-11-01. Still accepted; it does nothing and the start log warns (`config_ignored`). |
@@ -642,15 +645,18 @@ trades two costs. A long timeout pays for the tail after every proof: with 60 s 
 job" was $3.22 of $11.54 in 7 days. A short one risks a cold start for the next request: a worker that stopped takes
 about 49 s to answer ready (observed), during which a proof waits.
 
-To change it, set `watch.warmup.idleTimeoutSeconds` in the backend config and restart. At start-up the backend reads each
-RunPod endpoint (the same endpoints and key as the billing reads), and when `idleTimeout` differs it sets it, logging
-`runpod_idle_timeout_set` (`endpointId` first 6 characters, `from`, `to`); when it already matches it logs
-`runpod_idle_timeout_ok`. If RunPod cannot be reached the backend logs `runpod_idle_timeout_failed` (the reason, never the
-key) and starts anyway. Nothing else needs to change: `holdIntervalSeconds` follows (`idleTimeoutSeconds - 2`, at least 1),
-so a warm worker is pinged 2 s before it would stop. A hold interval of `idleTimeoutSeconds` or more is refused at
-start-up. `syncIdleTimeout: false` stops the backend from changing the endpoint. `/billing` shows both numbers
-(`assumptions.idleTimeoutSeconds`, `assumptions.endpointIdleTimeoutSeconds`, null while unknown) and the status check
-"GPU billing" is degraded when they differ.
+To change it, edit `idleTimeout` of the endpoints in `deploy/runpod/endpoints.json` and apply the file with
+`deploy/runpod/apply.mjs`. The backend never writes it. It reads the idle timeout of every configured endpoint with one
+GraphQL request at start-up and then every `billing.refreshSeconds`, and logs `runpod_idle_timeout_read` per endpoint
+(`endpointId` first 6 characters, `idleTimeoutSeconds`). If the tiers differ it logs `runpod_idle_timeout_differs_between_tiers`
+(info; this is allowed). If RunPod cannot be reached it logs `runpod_idle_timeout_unread` (the reason, never the key),
+keeps the last value and starts anyway. The first endpoint's value is the one in use. Until it is read, the backend
+uses `watch.warmup.idleTimeoutSeconds` as a fallback. Everything that uses the idle timeout follows the value in use:
+`holdIntervalSeconds` when it is not set (the idle timeout minus 2, at least 1, so a warm worker is pinged 2 s before it
+would stop), the idle seconds stored when a warm-up session ends, and the billing estimates. `/billing` shows
+`assumptions.idleTimeoutSeconds` (the value in use), `assumptions.idleTimeoutSource` (`runpod` or `fallback`),
+`assumptions.endpointIdleTimeoutSeconds` (what RunPod reported, null while unknown) and
+`assumptions.fallbackIdleTimeoutSeconds` (the configured fallback).
 
 A rough rule for mainnet: raise the timeout when proofs arrive closer together than the idle timeout plus a cold start (about 5 s
 plus 49 s now, so about a minute). Then the gap between two proofs is shorter than what a stop and a restart cost, and
@@ -663,13 +669,13 @@ cold worker. The 2 s margin between a hold and the stop must cover the ping's ro
 late, the worker restarts between them, and `warmup_held` followed by a slow `warmup_ready` shows it; raise the idle timeout then.
 The billing breakdown applies the idle timeout that was in effect when each job ended: the backend keeps the endpoint's
 timeout over time in the `idle_timeout_history` table (`at`, `seconds`). A migration seeds it: 60 s from the beginning, and
-5 s from 2026-11-08T01:59:00Z, when the timeout was set to 5 s by hand (a PATCH on the endpoint); at start-up the sync
-adds a row whenever the timeout it reads (or sets) differs from the latest row. `warmup_sessions.billed_seconds` stays as
+5 s from 2026-11-08T01:59:00Z, when the timeout was set to 5 s by hand (a PATCH on the endpoint); each read
+adds a row whenever the timeout it reads differs from the latest row. `warmup_sessions.billed_seconds` stays as
 it was stored.
 
 ### `GET /billing?days=7`
 
-GPU billing in general, per UTC day and in total: what RunPod billed, the billed seconds, the effective price of a GPU
+GPU billing in general (RunPod is read every `billing.refreshSeconds`, one hour by default; `assumptions.billingRefreshSeconds` and `assumptions.billingRetrySeconds` show the times), per UTC day and in total: what RunPod billed, the billed seconds, the effective price of a GPU
 hour, the last 24 hours and where the rate comes from. `days` is a whole number from 1 to 30 (default 7); anything else
 is a 400. It names no host and no key. The account (`account`: balance, spend limit, spend now, days left) is filled
 only for a direct local request, such as the status service on 127.0.0.1; a request that came through Caddy (it has
@@ -678,7 +684,7 @@ only for a direct local request, such as the status service on 127.0.0.1; a requ
 ```json
 {
   "days": 7, "rateSource": "runpod", "usdPerHour": 0.76,
-  "assumptions": { "idleTimeoutSeconds": 5, "endpointIdleTimeoutSeconds": 5, "gpuUsdPerHour": 2.25, "gpuUsdPerHourIsFallback": true, "dailyCapSeconds": 3600 },
+  "assumptions": { "idleTimeoutSeconds": 5, "idleTimeoutSource": "runpod", "fallbackIdleTimeoutSeconds": 5, "endpointIdleTimeoutSeconds": 5, "gpuUsdPerHour": 2.25, "gpuUsdPerHourIsFallback": true, "dailyCapSeconds": 3600, "billingRefreshSeconds": 3600, "billingRetrySeconds": 900 },
   "available": true, "ageSeconds": 90,
   "last24h": { "billedUsd": 1.18, "billedSeconds": 5400, "breakdown": { "...": "as in total" } }, "effectiveUsdPerHour": 0.76, "averageDailyUsd7d": 1.7,
   "account": { "balanceUsd": 153.38, "balanceAgeSeconds": 30, "spendNowUsdPerHour": 0, "spendLimitUsd": 80, "daysLeft": 90.2 },

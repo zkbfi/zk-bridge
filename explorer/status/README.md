@@ -24,7 +24,7 @@ Each check has a timeout and ends as `ok`, `degraded` or `down`, with a latency 
 | Proving pipeline | `pipeline-benchmarks` | backend `/benchmarks`: last proof and median time per direction |
 | | `pipeline-<direction>` | backend `/directions/<direction>/pipeline`: running job, failed job, held proof |
 | | `pipeline-deliveries` | indexer: last delivery per direction, transfers in 24 h, oldest undelivered transfer |
-| | `prover-runpod` | RunPod REST API `GET /endpoints/<id>`: workers, min and max, GPUs. The endpoint's own `/ping` and `/prove` are never called: they start paid workers |
+| | `prover-runpod` | RunPod GraphQL `myself { endpoints }`, one request per run for all configured endpoints: per endpoint its label, running workers, min and max, GPUs. Degraded when an endpoint has max 0 or is missing from the answer; down on a refused key, an HTTP error or GraphQL errors. RunPod's REST API has a daily request limit, so it is not used here. The endpoint's own `/ping` and `/prove` are never called: they start paid workers |
 | Wallets | `wallet-<name>-<chain>` | native balance against the minimum in the configuration |
 
 States: a service that answers slower than `slowSeconds` is degraded; a light client past its keep-alive age or inside its margin is degraded, past its deadline or stranded is down; a transfer undelivered for more than `maxUndeliveredAgeSeconds` is degraded, three times that is down; a wallet under its minimum is degraded and an empty one is down.
@@ -76,7 +76,7 @@ CORS allows GET, HEAD and OPTIONS from any origin. No answer holds a secret.
 
 ## Configuration
 
-`--config <file>` (JSON, `deploy/app-server/config/status/status.json.example`). Endpoints and keys are `env:NAME` references; the values are in `status.env`. The service has its own copies of the RPC and beacon endpoints and the RunPod key so it reads no other service's files. The chains and contracts come from the deployment file. `lightClients` also takes `deadlineDegradedSeconds` and `deadlineDownSeconds` (above); the optional `alerts` section is described under Alerts.
+`--config <file>` (JSON, `deploy/app-server/config/status/status.json.example`). Endpoints and keys are `env:NAME` references; the values are in `status.env`. The service has its own copies of the RPC and beacon endpoints and the RunPod key so it reads no other service's files. The chains and contracts come from the deployment file. `runpod` lists the endpoints as `"endpoints": [{ "id": "...", "label": "gpu-24gb" }]` (the label is optional), or `endpointIds`, or the old single `endpointId`, and has `graphqlUrl` (default `https://api.runpod.io/graphql`). The old `apiBase` (a REST address) is ignored and a warning `runpod_api_base_ignored` is logged. `lightClients` also takes `deadlineDegradedSeconds` and `deadlineDownSeconds` (above); the optional `alerts` section is described under Alerts.
 
 ## Run and test
 

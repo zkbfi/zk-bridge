@@ -228,7 +228,11 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     if (days < 1 || days > 30) return { refused: request.json({ error: "days is a whole number from 1 to 30" }, 400) };
     const refused = limited(request);
     if (refused !== null) return { refused };
-    const { idleTimeoutSeconds, gpuUsdPerHour, dailyCapSeconds } = context.config.watch.warmup;
+    const { idleTimeoutSeconds: fallbackIdleTimeoutSeconds, gpuUsdPerHour, dailyCapSeconds } = context.config.watch.warmup;
+    // RunPod's idle timeout when the backend has read it, else the configured fallback.
+    const endpointIdleTimeoutSeconds = context.endpointIdleTimeoutSeconds?.() ?? null;
+    const idleTimeoutSeconds = endpointIdleTimeoutSeconds ?? fallbackIdleTimeoutSeconds;
+    const { refreshSeconds: billingRefreshSeconds, retrySeconds: billingRetrySeconds } = context.config.billing;
     const at = now();
     const snapshot = context.billing === undefined ? { spend: null, balance: null } : await context.billing.read();
     const figures = figuresOf(snapshot, at);
@@ -246,7 +250,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     // never sees them; the backend listens on 127.0.0.1 only.
     const local = request.req.header("x-forwarded-for") === undefined;
     const shown = figures;
-    return { days, at, snapshot, figures, shown, local, rateSource, usdPerHour, sessionDays, timeline, assumptions: { idleTimeoutSeconds, endpointIdleTimeoutSeconds: context.endpointIdleTimeoutSeconds?.() ?? null, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds } };
+    return { days, at, snapshot, figures, shown, local, rateSource, usdPerHour, sessionDays, timeline, assumptions: { idleTimeoutSeconds, idleTimeoutSource: endpointIdleTimeoutSeconds === null ? ("fallback" as const) : ("runpod" as const), fallbackIdleTimeoutSeconds, endpointIdleTimeoutSeconds, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds, billingRefreshSeconds, billingRetrySeconds } };
   }
 
   const money = (value: number) => Math.round(value * 10_000) / 10_000;

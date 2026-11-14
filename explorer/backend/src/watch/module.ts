@@ -22,6 +22,7 @@ import { createFinalityFeed } from "./feed.ts";
 import { createDepositsReader } from "./deposits.ts";
 import { decisionBoardOf } from "./decisions.ts";
 import { createDirectionWatcher, type ListedMessage } from "./watcher.ts";
+import { resolveWarmup } from "./warmup.ts";
 import { createWarmupStore } from "./warmup-store.ts";
 
 /** How long one beacon or indexer read of the watcher may take, in milliseconds. Short: the watcher races the clock. */
@@ -141,7 +142,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
   const get: JsonGet = (url) => fetchJsonGet(fetchFunction(), WATCH_READ_TIMEOUT_MILLISECONDS)(url);
   const readFacts = input.dependencies?.readLightClient ?? ((side: PairSide) => readLightClient(createPublicClient({ transport: http(side.rpcUrl) }), side.contracts.lightClient));
   const ping = config.watch.warmup.enabled ? (context.pingProver ?? null) : null;
-  const { leadSeconds: ignoredLead, ...warmup } = config.watch.warmup;
+  const { leadSeconds: ignoredLead, syncIdleTimeout: _ignoredSync, ...warmup } = config.watch.warmup;
   if (ignoredLead !== undefined) logger.warn("config_ignored", { key: "watch.warmup.leadSeconds", detail: "the lead time is learned now; set defaultLeadSeconds, minLeadSeconds and maxLeadSeconds instead" });
   for (const key of deprecatedBatchKeys(config.watch)) {
     logger.warn("config_deprecated", { key, detail: `read as ${key.replace(/maxWaitSeconds$/, "minIntervalSeconds")}, the minimum time from the direction's last proof; rename it` });
@@ -201,6 +202,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
       policy: { ...DEFAULT_POLICY, keepAliveSeconds: config.limits.keepAliveSeconds },
       minParticipants: MIN_PARTICIPANTS,
       warmup,
+      observedIdleSeconds: () => context.endpointIdleTimeoutSeconds?.() ?? null,
       warmupStore,
       maxRetrySeconds: MAX_RETRY_SECONDS,
       logger,
@@ -238,7 +240,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
     directions,
     sse: config.watch.sse,
     warmup: ping !== null,
-    lead: warmupStore.lead(warmup),
+    lead: warmupStore.lead(resolveWarmup(warmup, context.endpointIdleTimeoutSeconds?.() ?? null)),
     batch: Object.fromEntries(Object.entries(batches).map(([direction, rule]) => [direction, { minIntervalSeconds: rule.minIntervalSeconds, lookaheadSeconds: rule.lookaheadSeconds, profitMargin: Number(rule.marginWad) / 1e18, unpricedAtMaximumPays: rule.unpricedAtMaximumPays }])),
   });
   return async () => {

@@ -12,6 +12,7 @@ export class StatusConfigError extends Error {
 const positiveInteger = z.number().int().positive();
 /** A value that is either a literal or `env:NAME`, the name of a variable that holds it. */
 const reference = z.string().min(1);
+const runpodId = z.string().regex(/^[A-Za-z0-9]+$/);
 const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/, "must be a 20 byte hex address");
 const decimal = z.string().regex(/^\d+(\.\d+)?$/, "must be a decimal number such as 0.05");
 
@@ -122,10 +123,29 @@ export const statusConfigSchema = z
       })
       .strict()
       .default({ maxUndeliveredAgeSeconds: 7200, maxJobSeconds: 3600 }),
-    /** The proving endpoint at RunPod. Read through RunPod's REST API only: the endpoint itself is never called. */
+    /**
+     * The proving endpoints at RunPod, read with one GraphQL request per run. List them as `endpoints: [{ id, label? }]`, or as
+     * `endpointIds: [...]`, or (old form) as one `endpointId`; all three are merged. `apiBase` (the old REST address) is
+     * accepted and ignored, and a warning is logged at start-up. The endpoints themselves are never called.
+     */
     runpod: z
-      .object({ endpointId: z.string().regex(/^[A-Za-z0-9]+$/), apiKey: reference, apiBase: z.url().default("https://rest.runpod.io/v1") })
+      .object({
+        endpoints: z.array(z.object({ id: runpodId, label: z.string().min(1).optional() }).strict()).default([]),
+        endpointIds: z.array(runpodId).default([]),
+        endpointId: runpodId.optional(),
+        apiKey: reference,
+        graphqlUrl: z.url().default("https://api.runpod.io/graphql"),
+        apiBase: z.string().optional(),
+      })
       .strict()
+      .transform((value, context) => {
+        const endpoints = [...value.endpoints, ...value.endpointIds.map((id) => ({ id })), ...(value.endpointId === undefined ? [] : [{ id: value.endpointId }])].map((entry) => ({
+          id: entry.id,
+          label: ("label" in entry ? entry.label : undefined) ?? entry.id,
+        }));
+        if (endpoints.length === 0) context.addIssue({ code: "custom", message: "needs at least one endpoint (endpoints, endpointIds or endpointId)" });
+        return { endpoints, apiKey: value.apiKey, graphqlUrl: value.graphqlUrl, apiBase: value.apiBase };
+      })
       .optional(),
     /** The wallets to watch, with the balance under which each one is low, per chain, in the native token. */
     wallets: z

@@ -165,17 +165,18 @@ describe("gpuBillingCheck", () => {
     expect((await run({ body: noRest })).detail).not.toContain("caught up");
   });
 
-  it("is degraded when the idle timeout RunPod reports differs from the backend's configuration, and says both numbers", async () => {
-    const idle = (configured: number | null, endpoint: number | null) => base({ assumptions: { idleTimeoutSeconds: configured, endpointIdleTimeoutSeconds: endpoint } });
-    const differs = await run({ body: idle(5, 60) });
-    expect(differs.state).toBe("degraded");
-    expect(differs.detail).toContain("RunPod idle timeout is 60 s, the backend config says 5 s; balance $153");
-    expect(differs.detail.length).toBeLessThanOrEqual(200);
-    // Equal, unknown (null: the backend could not read the endpoint) or missing: nothing to say.
-    for (const body of [idle(5, 5), idle(5, null), idle(null, 60), base()]) {
-      const same = await run({ body });
-      expect(same.state).toBe("ok");
-      expect(same.detail).not.toContain("idle timeout");
+  it("is degraded while the backend could not read RunPod's idle timeout and uses its fallback, and says the fallback", async () => {
+    const idle = (source: string | null, seconds: number | null) => base({ assumptions: { idleTimeoutSeconds: seconds, idleTimeoutSource: source } });
+    const unread = await run({ body: idle("fallback", 5) });
+    expect(unread.state).toBe("degraded");
+    expect(unread.detail).toContain("RunPod idle timeout not read, the backend uses its fallback of 5 s; balance $153");
+    expect(unread.detail.length).toBeLessThanOrEqual(200);
+    expect((await run({ body: idle("fallback", null) })).detail).toContain("the backend uses its fallback; balance");
+    // Read from RunPod, or an older backend without the field: nothing to say.
+    for (const body of [idle("runpod", 5), idle(null, 5), base()]) {
+      const read = await run({ body });
+      expect(read.state).toBe("ok");
+      expect(read.detail).not.toContain("idle timeout");
     }
   });
 

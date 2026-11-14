@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_WARMUP, IDLE, holdIntervalFor, leadFrom, nextHoldAt, predictionOf, warmupStep, type WarmupSession, type WarmupStepInput, type WarmupTarget } from "../src/watch/warmup.ts";
+import { DEFAULT_WARMUP, IDLE, holdIntervalFor, leadFrom, resolveWarmup, nextHoldAt, predictionOf, warmupStep, type WarmupSession, type WarmupStepInput, type WarmupTarget } from "../src/watch/warmup.ts";
 
 /** The settings before 2026-11-08 (hold 40 s under a 60 s idle timeout): the scenarios of these tests rest on them. */
 const config = { ...DEFAULT_WARMUP, holdIntervalSeconds: 40, idleTimeoutSeconds: 60 };
@@ -145,13 +145,20 @@ describe("holding with the default idle timeout of 5 s", () => {
   const step = (session: WarmupSession, nowSeconds: number) =>
     warmupStep({ nowSeconds, targets: [target], live: new Set(["a"]), session, config: fast, leadSeconds: 90, pingOutstanding: false, capReached: false, jobActive: false, predictionStarted: () => false });
 
+  it("resolves the idle timeout and the hold interval at run time: RunPod's value first, the fallback until it is read", () => {
+    const { holdIntervalSeconds: _hold, ...settings } = DEFAULT_WARMUP;
+    expect(resolveWarmup(settings, null)).toMatchObject({ idleTimeoutSeconds: 5, holdIntervalSeconds: 3 });
+    expect(resolveWarmup(settings, 60)).toMatchObject({ idleTimeoutSeconds: 60, holdIntervalSeconds: 58 });
+    expect(resolveWarmup(settings, 1).holdIntervalSeconds).toBe(1);
+    expect(resolveWarmup({ ...settings, holdIntervalSeconds: 40 }, 60)).toMatchObject({ idleTimeoutSeconds: 60, holdIntervalSeconds: 40 });
+  });
+
   it("derives a 3 s hold under the 5 s idle timeout", () => {
     expect(fast.idleTimeoutSeconds).toBe(5);
     expect(fast.holdIntervalSeconds).toBe(3);
     expect(fast.holdIntervalSeconds).toBe(holdIntervalFor(fast.idleTimeoutSeconds));
     expect(holdIntervalFor(60)).toBe(58);
     expect(holdIntervalFor(1)).toBe(1);
-    expect(fast.syncIdleTimeout).toBe(true);
   });
 
   it("pings a ready worker 3 s after its last ready answer, before the 5 s timeout stops it", () => {

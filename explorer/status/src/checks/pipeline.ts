@@ -127,13 +127,13 @@ export const gpuBillingCheck = (backendBase: string): Spec => ({
       const clock = through.toISOString().slice(11, 16);
       tail.push(`billing caught up to ${through.toISOString().slice(0, 10) === new Date(run.now()).toISOString().slice(0, 10) ? "" : `${through.toISOString().slice(5, 10)} `}${clock} UTC`);
     }
-    // The backend sets the endpoint to its configured idle timeout at start-up; a difference means that did not happen or was undone.
+    // The idle timeout is set only by deploy/runpod/endpoints.json; the backend reads it from RunPod. While it cannot, it
+    // estimates with its fallback, so the warm-up timing and the billing estimates may be off.
     const assumptions = record(body.assumptions);
-    const configured = number(assumptions?.idleTimeoutSeconds);
-    const endpointIdle = number(assumptions?.endpointIdleTimeoutSeconds);
-    if (configured !== null && endpointIdle !== null && configured !== endpointIdle) {
+    const fallback = number(assumptions?.idleTimeoutSeconds);
+    if (assumptions?.idleTimeoutSource === "fallback") {
       state = "degraded";
-      tail.push(`RunPod idle timeout is ${endpointIdle} s, the backend config says ${configured} s`);
+      tail.push(`RunPod idle timeout not read, the backend uses its fallback${fallback === null ? "" : ` of ${fallback} s`}`);
     }
     const age = number(body.ageSeconds);
     if (spendKnown && age !== null && age > BILLING_STALE_SECONDS) tail.push(`RunPod figures are ${duration(age)} old`);

@@ -39,7 +39,7 @@ export const config = parseStatusConfig(
       "11155111": { label: "Sepolia", symbol: "ETH", rpcUrl: "https://rpc-a.example.org/key-a", beaconUrl: "https://beacon-a.example.org/key-a" },
       "943": { label: "PulseChain testnet", symbol: "tPLS", rpcUrl: "https://rpc-b.example.org/key-b", beaconUrl: "https://beacon-b.example.org/key-b" },
     },
-    runpod: { endpointId: "ep1", apiKey: "rp_key" },
+    runpod: { endpoints: [{ id: "ep1", label: "gpu-24gb" }, { id: "ep2", label: "gpu-32gb" }], apiKey: "rp_key" },
     wallets: [{ name: "runner", address: addr("9"), low: { "11155111": "0.05", "943": "1000" } }],
   }),
 );

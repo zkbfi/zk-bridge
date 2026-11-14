@@ -6,9 +6,9 @@ export type Answer = { readonly status: number; readonly ms: number; readonly te
  * One GET. Throws when the request fails or takes longer than the request timeout. With `body: false` the body is not
  * read (a gateway may answer a large file).
  */
-export async function get(deps: Deps, url: string, options: { headers?: Record<string, string>; body?: boolean } = {}): Promise<Answer> {
+export async function get(deps: Deps, url: string, options: { headers?: Record<string, string>; body?: boolean; method?: string; requestBody?: string } = {}): Promise<Answer> {
   const started = deps.now();
-  const response = await deps.fetch(url, { headers: { accept: "application/json", ...options.headers }, signal: AbortSignal.timeout(deps.requestTimeoutMilliseconds) });
+  const response = await deps.fetch(url, { method: options.method, body: options.requestBody, headers: { accept: "application/json", ...options.headers }, signal: AbortSignal.timeout(deps.requestTimeoutMilliseconds) });
   let text = "";
   if (options.body === false) await response.body?.cancel();
   else text = await response.text();

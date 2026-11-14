@@ -31,8 +31,9 @@ export type WarmupConfig = {
   readonly minLeadSeconds: number;
   readonly maxLeadSeconds: number;
   /**
-   * After a ready answer, ping again this long after it to keep the worker. It must stay below `idleTimeoutSeconds`
-   * by a margin that covers a slow answer; the configuration derives it as `idleTimeoutSeconds - 2` (at least 1).
+   * After a ready answer, ping again this long after it to keep the worker. It must stay below the idle timeout
+   * by a margin that covers a slow answer; when the configuration does not set it, it is derived at run time as the idle
+   * timeout in use minus 2 (at least 1), see {@link resolveWarmup}.
    */
   readonly holdIntervalSeconds: number;
   /** While no worker is ready (the endpoint answered 204, or the ping failed), ping again this often. */
@@ -40,13 +41,11 @@ export type WarmupConfig = {
   /** A session ends this long after its due time when no job started. */
   readonly graceSeconds: number;
   /**
-   * The endpoint's idle timeout: a worker stays up, and billed, this long after its last request. The backend is its
-   * owner: at start-up it sets the RunPod endpoint's `idleTimeout` to this value (`syncIdleTimeout`), and the cost
-   * estimate uses it.
+   * The endpoint's idle timeout: a worker stays up, and billed, this long after its last request. RunPod's value, read by
+   * the backend (`idle-timeout.ts`), is used when known; in the configuration this is only the fallback for until it is
+   * read. The value itself is set in `deploy/runpod/endpoints.json`.
    */
   readonly idleTimeoutSeconds: number;
-  /** Whether the backend pushes `idleTimeoutSeconds` to the RunPod endpoints at start-up (`runpod_idle_timeout_set`). */
-  readonly syncIdleTimeout: boolean;
   /** What the remote GPU costs per hour, in USD, for the cost estimate. */
   readonly gpuUsdPerHour: number;
   /** No new session starts within this long of a ping that timed out. */
@@ -62,6 +61,18 @@ export function holdIntervalFor(idleTimeoutSeconds: number): number {
   return Math.max(1, idleTimeoutSeconds - 2);
 }
 
+/** The settings of the configuration: as {@link WarmupConfig}, but the hold interval may be left out. */
+export type WarmupSettings = Omit<WarmupConfig, "holdIntervalSeconds"> & { readonly holdIntervalSeconds?: number | undefined };
+
+/**
+ * The configuration at run time: the idle timeout RunPod reported (`observedIdleSeconds`, null while unknown) replaces the
+ * fallback of the settings, and a hold interval that the settings leave out follows it.
+ */
+export function resolveWarmup(settings: WarmupSettings, observedIdleSeconds: number | null): WarmupConfig {
+  const idleTimeoutSeconds = observedIdleSeconds ?? settings.idleTimeoutSeconds;
+  return { ...settings, idleTimeoutSeconds, holdIntervalSeconds: settings.holdIntervalSeconds ?? holdIntervalFor(idleTimeoutSeconds) };
+}
+
 /** The defaults. */
 export const DEFAULT_WARMUP: WarmupConfig = {
   leadP: 0.75,
@@ -74,7 +85,6 @@ export const DEFAULT_WARMUP: WarmupConfig = {
   intervalSeconds: 30,
   graceSeconds: 45,
   idleTimeoutSeconds: 5,
-  syncIdleTimeout: true,
   gpuUsdPerHour: 2.25,
   minGapSeconds: 300,
   dailyCapSeconds: 3600,

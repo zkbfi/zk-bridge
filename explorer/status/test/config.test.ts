@@ -20,6 +20,25 @@ const base = {
 };
 const environment = { RPC_A: "https://sepolia.example.org/secretkey", BEACON_A: "https://beacon-a.example.org/k", RUNPOD_API_KEY: "rp_secret_value" };
 
+describe("runpod section", () => {
+  const parse = (runpod: unknown) => parseStatusConfig(JSON.stringify({ ...base, runpod })).runpod;
+  it("reads endpoints with labels, a list of ids, and the old single id, merged, label defaulting to the id", () => {
+    expect(parse({ endpoints: [{ id: "a1", label: "gpu-24gb" }], endpointIds: ["b2"], endpointId: "c3", apiKey: "k" })).toEqual({
+      endpoints: [{ id: "a1", label: "gpu-24gb" }, { id: "b2", label: "b2" }, { id: "c3", label: "c3" }],
+      apiKey: "k",
+      graphqlUrl: "https://api.runpod.io/graphql",
+      apiBase: undefined,
+    });
+  });
+  it("ignores the old REST apiBase and says so", () => {
+    expect(parse({ endpointId: "a1", apiKey: "k", apiBase: "https://rest.runpod.io/v1" })).toMatchObject({ apiBase: "https://rest.runpod.io/v1" });
+    expect(parse({ endpointIds: ["a1"], apiKey: "k", graphqlUrl: "https://example.org/graphql" })).toMatchObject({ graphqlUrl: "https://example.org/graphql" });
+  });
+  it("needs an endpoint", () => {
+    expect(() => parse({ apiKey: "k" })).toThrow(/needs at least one endpoint/);
+  });
+});
+
 describe("parseStatusConfig", () => {
   it("fills the defaults", () => {
     const config = parseStatusConfig(JSON.stringify(base));
