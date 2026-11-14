@@ -8,6 +8,8 @@ const RULES: ChainRules = {
   chainId: 943,
   methods: new Set(DEFAULT_RPC_METHODS),
   contracts: new Set([BRIDGE]),
+  tokens: new Set(),
+  maxCallGas: 30_000_000n,
   multicall3: MULTICALL3_ADDRESS.toLowerCase(),
   anyAddressSelectors: selectorsOf(DEFAULT_ANY_ADDRESS_FUNCTIONS),
 };
@@ -95,7 +97,7 @@ describe("handleRpc: what is refused before eRPC", () => {
     expect(other).toEqual({
       jsonrpc: "2.0",
       id: 1,
-      error: { code: -32602, message: "rpc.zkb.fi refused this batch because another request in it was refused: eth_getLogs must name its addresses, all of them zkb.fi contracts of chain 943" },
+      error: { code: -32602, message: "rpc.zkb.fi refused this batch because another request in it was refused: eth_getLogs must name its addresses, all of them zkb.fi contracts or bridged tokens of chain 943" },
     });
     expect(erpc.sent).toHaveLength(0);
   });
@@ -109,7 +111,21 @@ describe("handleRpc: passing to eRPC", () => {
     expect(answer).toEqual({ status: 200, body: JSON.stringify({ jsonrpc: "2.0", id: 4, result: "0x1" }), headers: { "content-type": "application/json" } });
     expect(erpc.sent[0]?.url).toBe(UPSTREAM);
     expect(erpc.sent[0]?.init.headers).toEqual({ "content-type": "application/json", "x-forwarded-for": "203.0.113.7" });
-    expect(parse(String(erpc.sent[0]?.init.body))).toEqual(rpc(4, "eth_chainId"));
+    expect(parse(String(erpc.sent[0]?.init.body))).toEqual(rpc(4, "eth_chainId", []));
+  });
+
+  it("forwards the request rebuilt from what was checked, never the visitor's bytes (duplicate keys, extra fields)", async () => {
+    const erpc = fakeErpc(echo);
+    const outsider = "0x7777777777777777777777777777777777777777";
+    // JSON.parse keeps the last "to"; the filter checks that one, and only that one is forwarded.
+    const text = `{"jsonrpc":"2.0","id":1,"method":"eth_call","extra":1,"params":[{"to":"${outsider}","to":"${BRIDGE}","data":"0x","nonsense":true},"latest"]}`;
+    const { outcome } = await handleRpc(input(text, erpc.fetchFunction));
+    expect(outcome).toBe("served");
+    const sent = String(erpc.sent[0]?.init.body);
+    expect(sent).toBe(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: BRIDGE, data: "0x" }, "latest"] }));
+    expect(sent).not.toContain(outsider);
+    const refused = await handleRpc(input(text.replace(`"to":"${BRIDGE}"`, `"TO":"${BRIDGE}"`), erpc.fetchFunction));
+    expect(refused.outcome).toBe("refused");
   });
 
   it("passes a batch, and sends no forwarded header for an unknown visitor", async () => {
@@ -118,7 +134,7 @@ describe("handleRpc: passing to eRPC", () => {
     const { answer } = await handleRpc(input(JSON.stringify(batch), erpc.fetchFunction, { visitorIp: null }));
     expect((parse(answer.body) as unknown[]).length).toBe(2);
     expect(erpc.sent[0]?.init.headers).toEqual({ "content-type": "application/json" });
-    expect(parse(String(erpc.sent[0]?.init.body))).toEqual(batch);
+    expect(parse(String(erpc.sent[0]?.init.body))).toEqual([rpc(1, "eth_chainId", []), rpc(2, "eth_getLogs", [{ address: BRIDGE }])]);
   });
 
   it("keeps eRPC's status and Retry-After, and cleans every error: no URL, data only when it is revert data", async () => {

@@ -1,9 +1,10 @@
-import { refusalOf, type ChainRules, type JsonRpcRequest, type Refusal } from "./rules.ts";
+import { checkRequest, type ChainRules, type JsonRpcRequest, type Refusal } from "./rules.ts";
 
 /**
  * One POST to rpc.zkb.fi: parse the body (one request or a batch), check every request (`rules.ts`), and either refuse
  * it or pass it to eRPC and return eRPC's answer. One refused request refuses its whole batch: each request gets a
- * JSON-RPC error with its own id, HTTP 200. Nothing of eRPC's configuration (its upstream URLs, keys or headers) reaches
+ * JSON-RPC error with its own id, HTTP 200. What goes to eRPC is rebuilt from the checked fields, never the visitor's
+ * bytes. Nothing of eRPC's configuration (its upstream URLs, keys or headers) reaches
  * the visitor: error messages lose every URL, and error data is kept only when it is revert data (hex).
  */
 
@@ -117,7 +118,8 @@ export async function handleRpc(input: ProxyInput): Promise<{ readonly answer: P
     return { answer: answer(200, errorsFor(entries, batch, (entry) => errorOf(idOf(entry), INVALID_REQUEST, message))), outcome: "invalid" };
   }
   const checked = requests as JsonRpcRequest[];
-  const refusals = checked.map((request) => refusalOf(request, input.rules));
+  const outcomes = checked.map((request) => checkRequest(request, input.rules));
+  const refusals = outcomes.map((outcome) => (outcome.ok ? null : outcome.refusal));
   const first = refusals.find((refusal): refusal is Refusal => refusal !== null);
   if (first !== undefined) {
     const body = errorsFor(checked, batch, ({ id, method }, index) => {
@@ -128,7 +130,8 @@ export async function handleRpc(input: ProxyInput): Promise<{ readonly answer: P
     });
     return { answer: answer(200, body), outcome: "refused" };
   }
-  return forward(input, checked, batch);
+  // Only the rebuilt requests go on: fresh objects with the checked fields, never the visitor's bytes.
+  return forward(input, outcomes.map((outcome) => (outcome as { readonly request: JsonRpcRequest }).request), batch);
 }
 
 /** Passes the checked requests to eRPC and returns its answer, cleaned. */

@@ -129,12 +129,15 @@ describe("createAddressBook", () => {
     });
     expect(await book.refresh()).toEqual([]);
     expect(book.contractsOf(943).has(LIGHT_CLIENT)).toBe(true);
-    expect(book.contractsOf(943).has(TOKEN)).toBe(true);
-    expect(book.contractsOf(11155111).has(TOKEN)).toBe(false);
+    // A token is kept apart: never a trusted contract.
+    expect(book.contractsOf(943).has(TOKEN)).toBe(false);
+    expect(book.tokensOf(943).has(TOKEN)).toBe(true);
+    expect(book.tokensOf(11155111).has(TOKEN)).toBe(false);
+    expect(book.tokensOf(5).size).toBe(0);
     fail = true;
     expect(await book.refresh()).toEqual(["chain 11155111: eRPC is down", "chain 943: eRPC is down", "indexer tokens: indexer is down"]);
     expect(book.contractsOf(943).has(LIGHT_CLIENT)).toBe(true);
-    expect(book.contractsOf(943).has(TOKEN)).toBe(true);
+    expect(book.tokensOf(943).has(TOKEN)).toBe(true);
   });
 
   it("asks nothing of a chain whose deployment names no gate or registry, and reads no tokens without an indexer", async () => {

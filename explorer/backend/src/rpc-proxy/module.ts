@@ -74,7 +74,15 @@ export function register(app: Hono, context: BackendModuleContext): void {
       const chainId = /^\d+$/.test(text) ? Number(text) : Number.NaN;
       if (!chains.includes(chainId)) return request.json({ error: `rpc.zkb.fi serves the chains ${chains.join(", ")}` }, 404);
       const state = stateOf(context);
-      const rules: ChainRules = { chainId, methods, contracts: state.book?.contractsOf(chainId) ?? new Set(), multicall3, anyAddressSelectors };
+      const rules: ChainRules = {
+        chainId,
+        methods,
+        contracts: state.book?.contractsOf(chainId) ?? new Set(),
+        tokens: state.book?.tokensOf(chainId) ?? new Set(),
+        multicall3,
+        anyAddressSelectors,
+        maxCallGas: BigInt(settings.maxCallGas),
+      };
       const { answer, outcome } = await handleRpc({
         bodyText: await request.req.text(),
         rules,
@@ -143,11 +151,11 @@ export function health(context: BackendModuleContext): ModuleHealth {
   const state = stateOf(context);
   const { served, refused, invalid } = state.counts;
   const contracts = servedChains(context)
-    .map((chainId) => `${chainId}: ${state.book?.contractsOf(chainId).size ?? 0}`)
+    .map((chainId) => `${chainId}: ${state.book?.contractsOf(chainId).size ?? 0}+${state.book?.tokensOf(chainId).size ?? 0}`)
     .join(", ");
   const refresh = state.lastFailures === null ? "not yet" : state.lastFailures.length === 0 ? "ok" : `failed (${state.lastFailures.join("; ")})`;
   return {
     state: "running",
-    detail: `${served} served, ${refused} refused, ${invalid} invalid, ${state.counts["upstream-failed"]} without an answer from eRPC; contracts by chain ${contracts}; last refresh ${refresh}`,
+    detail: `${served} served, ${refused} refused, ${invalid} invalid, ${state.counts["upstream-failed"]} without an answer from eRPC; contracts+tokens by chain ${contracts}; last refresh ${refresh}`,
   };
 }

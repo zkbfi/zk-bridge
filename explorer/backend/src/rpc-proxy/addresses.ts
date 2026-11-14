@@ -8,7 +8,8 @@ import { z } from "zod";
  *   gate, light client, fork registry, msgboard, and whatever a later deployment adds), read once at start;
  * - the chain: what a gate names (its fork registry and its beacon roots contract) and what a fork registry names (its
  *   own light client), read again every refresh, because a fork registry can be replaced without a new deployment file;
- * - the indexer: every token it knows (`GET /api/tokens`), so a bridged token's reads and logs pass.
+ * - the indexer: every token it knows (`GET /api/tokens`). These are kept APART ({@link AddressBook.tokensOf}): a token is
+ *   not a zkb.fi contract, and only its Transfer and Approval logs pass (`rules.ts`); a token read passes on any address.
  *
  * A source that fails keeps what it gave last time; the deployment files never go away.
  */
@@ -125,8 +126,10 @@ export type AddressBookInput = {
 
 /** The current contracts of each chain, and the refresh that reads the chain and the indexer again. */
 export type AddressBook = {
-  /** The zkb.fi contracts of a served chain, lower case. */
+  /** The zkb.fi contracts of a served chain (deployment, discovered, extra), lower case. */
   contractsOf(chainId: number): ReadonlySet<string>;
+  /** The tokens the indexer knows on a served chain, lower case. Not trusted as contracts. */
+  tokensOf(chainId: number): ReadonlySet<string>;
   /** Reads the gates, the registries and the indexer again. Resolves with the sources that failed (empty when none did). */
   refresh(): Promise<string[]>;
 };
@@ -141,12 +144,17 @@ export function createAddressBook(input: AddressBookInput): AddressBook {
   const discovered = new Map<number, readonly string[]>();
   let tokens = new Map<number, string[]>();
   const merged = new Map<number, Set<string>>();
+  const tokenSets = new Map<number, Set<string>>();
   const merge = () => {
-    for (const chainId of input.chainIds) merged.set(chainId, new Set([...(fixed.get(chainId) as Set<string>), ...(discovered.get(chainId) ?? []), ...(tokens.get(chainId) ?? [])]));
+    for (const chainId of input.chainIds) {
+      merged.set(chainId, new Set([...(fixed.get(chainId) as Set<string>), ...(discovered.get(chainId) ?? [])]));
+      tokenSets.set(chainId, new Set(tokens.get(chainId) ?? []));
+    }
   };
   merge();
   return {
     contractsOf: (chainId) => merged.get(chainId) ?? new Set(),
+    tokensOf: (chainId) => tokenSets.get(chainId) ?? new Set(),
     async refresh() {
       const failed: string[] = [];
       for (const chain of input.deployment.filter((candidate) => input.chainIds.includes(candidate.chainId))) {

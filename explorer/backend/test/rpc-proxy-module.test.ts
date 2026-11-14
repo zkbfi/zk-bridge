@@ -68,6 +68,14 @@ describe("the rpc-proxy settings", () => {
     expect(settings.multicall3).toBe(MULTICALL3_ADDRESS);
     expect(settings.maxBatchLength).toBe(50);
     expect(() => makeConfig({ rpcProxy: { upstreamUrl: "http://127.0.0.1:8792/zkb/evm/943" } })).toThrow(/must hold \{chainId\}/);
+    expect(settings.maxCallGas).toBe(30_000_000);
+  });
+
+  it("takes any-address functions with static arguments only, so each has one exact length", () => {
+    expect(makeConfig({ rpcProxy: { anyAddressFunctions: ["f(uint256,bytes32,bool)", "g()"] } }).rpcProxy.anyAddressFunctions).toHaveLength(2);
+    for (const signature of ["name(string)", "f(bytes)", "f(uint256[])", "f((address))", "f(uint7)"]) {
+      expect(() => makeConfig({ rpcProxy: { anyAddressFunctions: [signature] } })).toThrow(/static arguments/);
+    }
   });
 
   it("the server's example runs the module against eRPC on its local port", () => {
@@ -111,7 +119,7 @@ describe("POST /rpc/:chainId", () => {
     expect(network.sent[1]?.headers["x-forwarded-for"]).toBe("2001:db8:1:2::");
     await app.request("/rpc/943", post({ jsonrpc: "2.0", id: 3, method: "eth_chainId" }, { "x-forwarded-for": "not an address" }));
     expect(network.sent[2]?.headers["x-forwarded-for"]).toBeUndefined();
-    expect(rpcProxy.health(context).detail).toBe("3 served, 0 refused, 0 invalid, 0 without an answer from eRPC; contracts by chain 1: 0, 369: 0, 943: 0, 11155111: 0; last refresh not yet");
+    expect(rpcProxy.health(context).detail).toBe("3 served, 0 refused, 0 invalid, 0 without an answer from eRPC; contracts+tokens by chain 1: 0+0, 369: 0+0, 943: 0+0, 11155111: 0+0; last refresh not yet");
   });
 
   it("knows no zkb.fi contract before start, and after start the deployment's, the registry's light client and the indexer's tokens", async () => {
@@ -120,11 +128,15 @@ describe("POST /rpc/:chainId", () => {
     const send = async (to: string) => (await (await app.request("/rpc/943", post(balanceCall(to)))).json()) as { error?: { code: number } };
     expect((await send(GATE)).error?.code).toBe(-32602);
     const stop = await rpcProxy.start(context);
-    for (const to of [GATE, REGISTRY_LIGHT_CLIENT, TOKEN]) expect((await send(to)).error).toBeUndefined();
+    for (const to of [GATE, REGISTRY_LIGHT_CLIENT]) expect((await send(to)).error).toBeUndefined();
+    // The indexer's token: its Transfer logs pass, any other call to it does not.
+    expect((await send(TOKEN)).error?.code).toBe(-32602);
+    const transferLogs = { jsonrpc: "2.0", id: 2, method: "eth_getLogs", params: [{ address: TOKEN, topics: ["0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"] }] };
+    expect(((await (await app.request("/rpc/943", post(transferLogs))).json()) as { error?: unknown }).error).toBeUndefined();
     expect((await send(OUTSIDER)).error?.code).toBe(-32602);
     // The refresh read the gate and registry views through eRPC, from the backend itself (no forwarded header).
     expect(network.sent[0]).toMatchObject({ url: "http://127.0.0.1:8792/zkb/evm/943", headers: { "content-type": "application/json" } });
-    expect(rpcProxy.health(context).detail).toMatch(/3 served, 2 refused, 0 invalid, 0 without an answer from eRPC; contracts by chain 1: 1, 369: 4, 943: 6, 11155111: 1; last refresh ok$/);
+    expect(rpcProxy.health(context).detail).toMatch(/3 served, 3 refused, 0 invalid, 0 without an answer from eRPC; contracts\+tokens by chain 1: 1\+0, 369: 4\+0, 943: 5\+1, 11155111: 1\+0; last refresh ok$/);
     await stop();
   });
 
@@ -170,7 +182,7 @@ describe("the refresh", () => {
     const file = deploymentFile();
     const { context } = makeBackend({ config: config({ indexerUrl: undefined, rpcProxy: { deploymentFiles: [file], chains: { "943": {} } } }), enabled: ["rpc-proxy"] });
     const stop = await rpcProxy.start(context);
-    expect(rpcProxy.health(context).detail).toMatch(/contracts by chain 943: 5; last refresh ok$/);
+    expect(rpcProxy.health(context).detail).toMatch(/contracts\+tokens by chain 943: 5\+0; last refresh ok$/);
     expect(network.sent.every((sent) => !sent.url.includes("indexer"))).toBe(true);
     await stop();
   });

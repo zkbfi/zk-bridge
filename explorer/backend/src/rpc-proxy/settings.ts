@@ -45,7 +45,8 @@ export const DEFAULT_RPC_METHODS: readonly string[] = [
 ];
 
 /**
- * The functions that `eth_call` and `eth_estimateGas` may call on any address, not only a zkb.fi contract: the ERC-20
+ * The functions that `eth_call` and `eth_estimateGas` may call on any address, not only a zkb.fi contract, with calldata
+ * of exactly the ABI length (the selector and one word per argument): the ERC-20
  * reads, so a custom token loads (web/bridge/custom-token, data/token-facts, the balances and allowances of the account
  * panel), and the two pool reads of the PulseChain prices (core/token-pricing reads `getReserves()` and `token0()` of a
  * PulseX pair, whose address the factory gives).
@@ -78,7 +79,9 @@ export const PULSECHAIN_PRICE_CONTRACTS: readonly string[] = [
 ];
 
 const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/, "must be an address (0x and 40 hex digits)");
-const functionSignature = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*\([A-Za-z0-9_,[\]()]*\)$/, "must be a function signature such as balanceOf(address)");
+const STATIC_TYPE = "(?:address|bool|u?int(?:8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)?|bytes(?:[1-9]|[12][0-9]|3[0-2]))";
+/** A function with static arguments only, so its calldata has one exact length (the filter checks it). */
+const functionSignature = z.string().regex(new RegExp(`^[A-Za-z_][A-Za-z0-9_]*\\((?:${STATIC_TYPE}(?:,${STATIC_TYPE})*)?\\)$`), "must be a function signature with static arguments, such as balanceOf(address)");
 const chainSettings = z.object({ extraContracts: z.array(address).default([]) }).strict();
 
 /** The chains served by default: Ethereum, PulseChain, Sepolia and PulseChain testnet v4. */
@@ -110,6 +113,8 @@ export const rpcProxySchema = z
     methods: z.array(z.string().regex(/^[a-z0-9]+_[A-Za-z0-9]+$/, "must be a JSON-RPC method name")).min(1).default([...DEFAULT_RPC_METHODS]),
     /** The functions callable on any address. See {@link DEFAULT_ANY_ADDRESS_FUNCTIONS}. */
     anyAddressFunctions: z.array(functionSignature).default([...DEFAULT_ANY_ADDRESS_FUNCTIONS]),
+    /** The most gas an eth_call or eth_estimateGas may name (the dapp names none; nodes cap a call at about 50 million). */
+    maxCallGas: z.number().int().min(21_000).max(1_000_000_000).default(30_000_000),
     /** Multicall3: every call inside an `aggregate3` (or `aggregate`, `tryAggregate`) call is checked like a call of its own. */
     multicall3: address.default(MULTICALL3_ADDRESS),
     /** Contracts allowed on every served chain, besides those of the deployment files. */
