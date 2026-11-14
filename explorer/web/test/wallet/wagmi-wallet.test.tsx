@@ -14,9 +14,14 @@ describe("createWalletConfig", () => {
     expect(config.chains.map((chain) => chain.nativeCurrency.symbol)).toEqual(["ETH", "PLS"]);
   });
 
-  it("offers the wallet in the browser and nothing else: no key, no WalletConnect without a project identifier", () => {
-    const config = createWalletConfig(FIXTURE_PAIR, RPC_URLS);
-    expect(config.connectors.map((connector) => connector.type)).toEqual(["injected"]);
+  it("registers the generic injected connector only when the page has window.ethereum, and never WalletConnect", () => {
+    expect(createWalletConfig(FIXTURE_PAIR, RPC_URLS).connectors.map((connector) => connector.type)).toEqual([]);
+    (window as { ethereum?: unknown }).ethereum = {};
+    try {
+      expect(createWalletConfig(FIXTURE_PAIR, RPC_URLS).connectors.map((connector) => connector.type)).toEqual(["injected"]);
+    } finally {
+      delete (window as { ethereum?: unknown }).ethereum;
+    }
   });
 });
 

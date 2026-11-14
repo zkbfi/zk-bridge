@@ -91,9 +91,13 @@ describe("the account panel of a wallet that is not connected", () => {
     expect(screen.getByRole("button", { name: "Connecting…" })).toBeDisabled();
   });
 
-  it("disables the button and says why when the browser has no wallet", () => {
-    panel(disconnectedWallet({ walletAvailable: false }));
-    expect(screen.getByRole("button", { name: "Connect wallet" })).toBeDisabled();
-    expect(screen.getByText("No wallet was found in this browser.")).toBeInTheDocument();
+  it("keeps the button on when the browser has no wallet, and says that Connect lists where to get one", async () => {
+    const connect = vi.fn().mockResolvedValue(undefined);
+    panel(disconnectedWallet({ walletAvailable: false, connect }));
+    const button = screen.getByRole("button", { name: "Connect wallet" });
+    expect(button).toBeEnabled();
+    expect(screen.getByText("No wallet was found in this browser. Connect lists where to get one.")).toBeInTheDocument();
+    await userEvent.click(button);
+    expect(connect).toHaveBeenCalledTimes(1);
   });
 });
