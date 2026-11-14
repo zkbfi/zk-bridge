@@ -6,7 +6,7 @@
   "listen": { "host": "127.0.0.1", "port": 8787 },
   "trustForwardedHeader": true,
   "trustedProxyHops": 1,
-  "modules": ["requests", "webhook", "msgboard-indexer", "archive"],
+  "modules": ["requests", "webhook", "msgboard-indexer", "archive", "rpc-proxy"],
   "publicUrl": "https://webhook.example.org",
   "prover": { "binary": "/opt/zk-bridge/current/bin/zk-bridge-prover", "timeoutSeconds": 1800 },
   "remote": {
@@ -41,6 +41,13 @@
     "keepAliveSeconds": 43200
   },
   "indexerUrl": "http://127.0.0.1:42069",
+  "rpcProxy": {
+    "upstreamUrl": "http://127.0.0.1:8792/zkb/evm/{chainId}",
+    "timeoutSeconds": 30,
+    "maxBodyBytes": 262144,
+    "maxBatchLength": 50,
+    "refreshSeconds": 300
+  },
   "watch": {
     "pairs": {
       "sepolia-pls943": { "minIntervalSeconds": 3600, "unpricedAtMaximumPays": false }

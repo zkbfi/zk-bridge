@@ -1,6 +1,6 @@
 # zk-bridge backend
 
-The backend is one open-source service with four modules. Each module can run alone.
+The backend is one open-source service with six modules. Each module can run alone.
 
 | Module | What it does | Routes |
 | --- | --- | --- |
@@ -8,13 +8,15 @@ The backend is one open-source service with four modules. Each module can run al
 | `webhook` | Receives the proof package from the prover, checks it, and posts it to the msgboard. | `POST /webhook/jobs/:jobId` |
 | `msgboard-indexer` | Keeps the latest valid proof of each direction. | `GET /proofs/latest/:direction` |
 | `archive` | Builds and keeps evidence for messages that are sent and not yet delivered. | `GET /evidence/:messageId` |
+| `seal` | Seals the deposit gates, proves fork observations and keeps the registry light client alive. See "Sealing a gate". | none |
+| `rpc-proxy` | rpc.zkb.fi: passes the dapp's chain reads to eRPC on this server and refuses everything else. See "rpc.zkb.fi". | `POST /rpc/:chainId` |
 
 `GET /health` always answers. It lists each running module with the state `running`, `degraded` or `not built`.
 
 Run it with:
 
 ```
-node bin/zk-bridge-backend.mjs --config backend.config.json [--modules requests,webhook,msgboard-indexer,archive]
+node bin/zk-bridge-backend.mjs --config backend.config.json [--modules requests,webhook,msgboard-indexer,archive,seal,rpc-proxy]
 ```
 
 Without `--modules`, the `modules` field of the file decides.
@@ -51,6 +53,7 @@ The backend reads no endpoint from the environment.
 | `trustForwardedHeader`, `trustedProxyHops` | See "Callers and limits". |
 | `limits` | See "Callers and limits". |
 | `seal` | Optional; needed by the `seal` module. `{ signer, receiptTimeoutSeconds: 180, observation, registryKeepAlive }`. See "Sealing a gate" and "The registry light client's keep-alive". |
+| `rpcProxy` | The `rpc-proxy` module: eRPC's address, the served chains and methods, and every limit (body bytes, batch length, answer bytes, timeout, refresh). All have defaults. See "rpc.zkb.fi". |
 
 ## Sealing a gate
 
@@ -134,6 +137,18 @@ committee period (`seal/registry-watch.ts`, owner's planner call of 2026-11-11: 
   `registry_keepalive_send_failed` also write an `alert` line.
 - **Switch.** `"seal": { ..., "registryKeepAlive": { "enabled": false } }` turns it off. It needs the proving endpoints
   (`remote`), like the observations.
+
+## rpc.zkb.fi
+
+The `rpc-proxy` module (`src/rpc-proxy/`) answers `POST /rpc/<chainId>`, which Caddy serves as
+`https://rpc.zkb.fi/<chainId>`. It reads the body (one request or a batch), checks every request, and passes what it
+accepts to eRPC on this server (`rpcProxy.upstreamUrl`, localhost), which holds the RPC key. One refused request refuses
+its whole batch: each request gets a JSON-RPC error with its own id and a sentence that says why, HTTP 200. The visitor's
+address goes to eRPC in `X-Forwarded-For` (from the trusted forwarded entry, as in "Callers and limits"; an IPv6 visitor
+as its /64), so eRPC's per-IP limits count visitors and not the backend.
+
+The rules, the method list with the reason for each method, the limits and the deploy steps are in
+[docs/rpc-proxy.md](../../docs/rpc-proxy.md). `GET /health` shows the module's counters and the contracts it knows per chain.
 
 ## Secrets
 

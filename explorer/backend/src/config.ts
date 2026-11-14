@@ -4,9 +4,10 @@ import { SINGLE_ENDPOINT_LABEL, endpointKeyVariables, remoteEndpointListSchema, 
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
 import { DEFAULT_WARMUP } from "./watch/warmup.ts";
 import { signerSchema } from "../../bots/src/config/bot-config.ts";
+import { rpcProxySchema } from "./rpc-proxy/settings.ts";
 
 /** The modules that the backend can run, in the order that the example file lists them. */
-export const MODULE_NAMES = ["requests", "webhook", "msgboard-indexer", "archive", "seal"] as const;
+export const MODULE_NAMES = ["requests", "webhook", "msgboard-indexer", "archive", "seal", "rpc-proxy"] as const;
 
 /** The name of one module. */
 export type ModuleName = (typeof MODULE_NAMES)[number];
@@ -217,6 +218,11 @@ export const backendConfigSchema = z
       .object({ refreshSeconds: positiveInteger.default(3600), retrySeconds: positiveInteger.default(900) })
       .strict()
       .prefault({}),
+    /**
+     * The `rpc-proxy` module: the filter behind `https://rpc.zkb.fi/<chainId>` that passes the dapp's reads to eRPC on
+     * this server and refuses everything else (`rpc-proxy/settings.ts`, docs/rpc-proxy.md). Every limit has a default.
+     */
+    rpcProxy: rpcProxySchema.prefault({}),
     /** The msgboard node (`ws://`, `wss://`, `http://` or `https://`). Needed by the webhook and the msgboard indexer. It can carry a key. */
     msgboardUrl: z.string().regex(/^(wss?|https?):\/\/\S+$/, "must be a ws, wss, http or https address").optional(),
     /**

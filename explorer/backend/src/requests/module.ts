@@ -99,13 +99,21 @@ type SocketBindings = { incoming?: { socket?: { remoteAddress?: string } } };
  * unknown bucket, which has a low limit.
  */
 export function callerOf(request: Context, config: { trustForwardedHeader: boolean; trustedProxyHops: number }): string {
+  const address = callerAddressOf(request, config);
+  return address === undefined ? UNKNOWN_CALLER : callerKey(address);
+}
+
+/**
+ * The address of the caller as written (the forwarded entry or the socket address), before {@link callerKey} turns it
+ * into a key; undefined when there is none. The rules are those of {@link callerOf}.
+ */
+export function callerAddressOf(request: Context, config: { trustForwardedHeader: boolean; trustedProxyHops: number }): string | undefined {
   const entries = (request.req.header("x-forwarded-for") ?? "")
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry !== "");
   const forwarded = config.trustForwardedHeader ? entries[entries.length - config.trustedProxyHops] : undefined;
-  const address = forwarded ?? (request.env as SocketBindings | undefined)?.incoming?.socket?.remoteAddress;
-  return address === undefined ? UNKNOWN_CALLER : callerKey(address);
+  return forwarded ?? (request.env as SocketBindings | undefined)?.incoming?.socket?.remoteAddress;
 }
 
 function describeJob(job: Job) {
