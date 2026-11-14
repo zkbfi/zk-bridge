@@ -134,7 +134,7 @@ const checkUrl = (target: ConnectionTarget, text: string, pageProtocol: "https:"
 
 /**
  * What each field holds when the user sets nothing: the build's value, else the registry's (the deployment's RPC, the
- * public RPC, the standard indexer address, the valve.city beacon route), else nothing.
+ * public RPC, the standard indexer address, the public beacon node), else nothing.
  *
  * @param input The fields, the pair, the configuration and the pair in its shared form (a live page has it).
  */

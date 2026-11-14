@@ -12,6 +12,8 @@
 #   webhook   the prover's callback; the backend's publicUrl names this host
 #   archive   evidence for messages that are sent and not yet delivered
 #   status    the status page and API of explorer/status (not an upstream snippet: one process, no green)
+#   rpc       rpc.zkb.fi/<chainId>: the dapp's chain reads, through the backend's rpc-proxy module to eRPC on this server
+#             (docs/rpc-proxy.md)
 #   indexer   the explorer indexer (Ponder): the read API and GraphQL, and at / a live page of its data (JSON on
 #             request). /sql, /metrics and /status stay private.
 
@@ -57,6 +59,26 @@ import /etc/caddy/upstreams/indexer.caddy
 {$ZKB_ARCHIVE_HOST} {
 	@routes path /health /evidence/*
 	handle @routes {
+		import backend
+	}
+	import not_found
+}
+
+# The dapp's RPC: rpc.zkb.fi/<chainId> (docs/rpc-proxy.md). The backend's rpc-proxy module answers /rpc/<chainId>: it
+# checks every request (methods, and that the addresses are zkb.fi contracts) and passes it to eRPC on 127.0.0.1, which
+# holds the RPC key. CORS is the backend's (any origin: nothing here reads a login). A body over 1 MB stops here; the
+# backend's own limit (rpcProxy.maxBodyBytes, 256 KB) is lower.
+{$ZKB_RPC_HOST:rpc.zkb.fi} {
+	@rpc path_regexp ^/[0-9]+$
+	handle @rpc {
+		request_body {
+			max_size 1MB
+		}
+		rewrite * /rpc{path}
+		import backend
+	}
+	@health path /health
+	handle @health {
 		import backend
 	}
 	import not_found

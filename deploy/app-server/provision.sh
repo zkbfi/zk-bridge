@@ -113,6 +113,8 @@ ensure_user zkb_traffic /var/lib/zk-bridge-traffic
 # Owns no data: it runs the on-demand TLS check for the IPFS subdomains (step 7).
 id zkb_tlsask >/dev/null 2>&1 || useradd --system --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin zkb_tlsask
 ensure_user zkb_status /var/lib/zk-bridge-status
+# eRPC behind the dapp's RPC host (deploy/ansible/erpc.yml installs the binary and the unit; docs/rpc-proxy.md).
+ensure_user zkb_erpc /var/lib/zk-bridge-erpc
 
 # Code: owned by root, readable by the services, written only by the deploy step.
 install -d -m 0755 -o root -g root /opt/zk-bridge
@@ -125,6 +127,7 @@ install -d -m 0750 -o root -g zkb_runner /etc/zk-bridge/runner
 install -d -m 0750 -o root -g zkb_traffic /etc/zk-bridge/traffic
 # The status service has its own copy of the endpoints it reads; it needs no access to the other services' files.
 install -d -m 0750 -o root -g zkb_status /etc/zk-bridge/status
+install -d -m 0750 -o root -g zkb_erpc /etc/zk-bridge/erpc
 
 # Before 2026-10-29 both bots shared the user zkb_bots. Remove it while it holds nothing; refuse to guess otherwise.
 if id zkb_bots >/dev/null 2>&1; then

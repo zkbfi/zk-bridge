@@ -6,6 +6,7 @@ import {
   BENCH_MILLISECONDS,
   buildRpcTransport,
   isRateLimited,
+  isRefusedByZkbRpc,
   resetEndpointState,
   rpcChain,
 } from '../../src/chain/rpc-transport'
@@ -40,6 +41,7 @@ function fakeFetch(answer: (host: string) => Response) {
 
 const sepolia = defaultRpcUrls(11155111)
 const hosts = sepolia.map((url) => new URL(url).host)
+// The first host of a default list is rpc.zkb.fi (the name kept from when it was valve.city's).
 const [valveHost, publicHost] = hosts as [string, string]
 const pulse = defaultRpcUrls(943)
 
@@ -47,6 +49,12 @@ describe('rpcChain', () => {
   test('sets Multicall3 on each supported chain and not on an unknown one', () => {
     for (const id of [1, 369, 11155111, 943]) expect(rpcChain({ id, name: 'x', symbol: 'X' }).contracts?.multicall3?.address).toBe(MULTICALL3_ADDRESS)
     expect(rpcChain({ id: 31337, name: 'x', symbol: 'X' }).contracts).toBeUndefined()
+  })
+
+  test('gives a wallet the public RPCs for the default rpc.zkb.fi, and a chosen URL as it is', () => {
+    expect(rpcChain({ id: 943, name: 'x', symbol: 'X', rpcUrl: pulse[0] }).rpcUrls.default.http).toEqual(pulse.slice(1))
+    expect(rpcChain({ id: 943, name: 'x', symbol: 'X', rpcUrl: 'https://example.org/rpc' }).rpcUrls.default.http).toEqual(['https://example.org/rpc'])
+    expect(rpcChain({ id: 943, name: 'x', symbol: 'X' }).rpcUrls.default.http).toEqual([])
   })
 })
 
@@ -57,7 +65,8 @@ function steppingClock() {
 }
 
 describe('default lists', () => {
-  test('valve first, then the public RPCs and publicnode', () => {
+  test('rpc.zkb.fi first, then the public RPCs and publicnode', () => {
+    expect(defaultRpcUrls(943)[0]).toBe('https://rpc.zkb.fi/943')
     expect(defaultRpcUrls(369).slice(1)).toEqual(['https://rpc.pulsechain.com', 'https://pulsechain-rpc.publicnode.com'])
     expect(defaultRpcUrls(943).slice(1)).toEqual(['https://rpc.v4.testnet.pulsechain.com', 'https://pulsechain-testnet-rpc.publicnode.com'])
     expect(defaultRpcUrls(1).slice(1)).toEqual(['https://ethereum-rpc.publicnode.com'])
@@ -70,14 +79,50 @@ describe('buildRpcTransport', () => {
     expect(buildRpcTransport('https://example.org/rpc')({ retryCount: 0 }).config.type).toBe('http')
   })
 
-  test('separate requests are spread round-robin over every endpoint of the pool', async () => {
+  test('rpc.zkb.fi takes every request while it answers', async () => {
     const requests = fakeFetch(() => new Response('', { status: 200 }))
     const transport = buildRpcTransport(pulse[0], { now: steppingClock() })({ retryCount: 0 })
-    for (let index = 0; index < 6; index += 1) await transport.request({ method: 'eth_chainId' })
-    const seen = requests.map((request) => request.host)
-    expect(new Set(seen).size).toBe(3)
-    expect(seen.slice(0, 3)).toEqual(pulse.map((url) => new URL(url).host))
-    expect(seen.slice(3)).toEqual(seen.slice(0, 3))
+    for (let index = 0; index < 4; index += 1) await transport.request({ method: 'eth_chainId' })
+    expect(new Set(requests.map((request) => request.host))).toEqual(new Set(['rpc.zkb.fi']))
+  })
+
+  test('while rpc.zkb.fi is benched, the public RPCs take turns by burst', async () => {
+    const pulseHosts = pulse.map((url) => new URL(url).host)
+    const requests = fakeFetch((host) => (host === 'rpc.zkb.fi' ? new Response('slow down', { status: 429 }) : new Response('', { status: 200 })))
+    const transport = buildRpcTransport(pulse[0], { now: steppingClock() })({ retryCount: 0 })
+    for (let index = 0; index < 5; index += 1) await transport.request({ method: 'eth_chainId' })
+    expect(requests.map((request) => request.host)).toEqual(['rpc.zkb.fi', ...[1, 2, 1, 2, 1].map((index) => pulseHosts[index] as string)])
+  })
+
+  test('a request that rpc.zkb.fi refuses goes to the next endpoint at once, and rpc.zkb.fi stays in the pool', async () => {
+    const requests = fakeFetch(() => new Response('', { status: 200 }))
+    const real = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const host = new URL(String(input)).host
+      const body = JSON.parse(String(init?.body))
+      const calls = (Array.isArray(body) ? body : [body]) as { id: number; method: string }[]
+      if (host === 'rpc.zkb.fi' && calls[0]?.method === 'eth_sendRawTransaction') {
+        requests.push({ host, methods: calls.map((call) => call.method) })
+        const errors = calls.map((call) => ({ jsonrpc: '2.0', id: call.id, error: { code: -32601, message: 'rpc.zkb.fi refused eth_sendRawTransaction: not served' } }))
+        return new Response(JSON.stringify(Array.isArray(body) ? errors : errors[0]), { status: 200 })
+      }
+      return real(input, init)
+    }) as typeof fetch
+    const transport = buildRpcTransport(sepolia[0], { now: steppingClock() })({ retryCount: 0 })
+    expect((await transport.request({ method: 'eth_sendRawTransaction', params: ['0x00'] })) as unknown).toBe('0x1')
+    await transport.request({ method: 'eth_chainId' })
+    expect(requests.map((request) => request.host)).toEqual([valveHost, publicHost, valveHost])
+  })
+
+  test('a refusal on every endpoint is thrown', async () => {
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      const calls = (Array.isArray(body) ? body : [body]) as { id: number }[]
+      const errors = calls.map((call) => ({ jsonrpc: '2.0', id: call.id, error: { code: -32602, message: 'rpc.zkb.fi refused eth_call: no' } }))
+      return new Response(JSON.stringify(Array.isArray(body) ? errors : errors[0]), { status: 200 })
+    }) as typeof fetch
+    const transport = buildRpcTransport(sepolia[0], { now: steppingClock() })({ retryCount: 0 })
+    await expect(transport.request({ method: 'eth_call' })).rejects.toThrow(/rpc.zkb.fi refused/)
   })
 
   test('calls made together are one HTTP request to one endpoint', async () => {
@@ -140,6 +185,15 @@ describe('buildRpcTransport', () => {
     valveDown = true
     for (let index = 0; index < 3; index += 1) await transport.request({ method: 'eth_chainId' })
     expect(requests.slice(4).map((request) => request.host)).toEqual([valveHost, publicHost, publicHost, publicHost])
+  })
+})
+
+describe('isRefusedByZkbRpc', () => {
+  test('finds the refusal of rpc.zkb.fi in the message or details of the error or its causes', () => {
+    expect(isRefusedByZkbRpc({ cause: { details: 'rpc.zkb.fi refused eth_call: x' } })).toBe(true)
+    expect(isRefusedByZkbRpc(new Error('rpc.zkb.fi refused this batch'))).toBe(true)
+    expect(isRefusedByZkbRpc(new Error('execution reverted'))).toBe(false)
+    expect(isRefusedByZkbRpc({ details: 42 })).toBe(false)
   })
 })
 

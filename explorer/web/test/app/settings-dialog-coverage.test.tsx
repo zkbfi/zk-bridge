@@ -69,7 +69,7 @@ describe("the msgboard nodes in Settings (owner, quote 87)", () => {
 });
 
 describe("the beacon endpoints in Settings", () => {
-  it("shows one beacon API per chain with its icon and the valve.city default, and checks each against its own chain", async () => {
+  it("shows one beacon API per chain with its icon and its public default, and checks each against its own chain", async () => {
     const calls: string[] = [];
     const probe: Prober = async (url, kind) => {
       calls.push(`${url} ${kind.kind} ${"chainId" in kind ? kind.chainId : "-"}`);

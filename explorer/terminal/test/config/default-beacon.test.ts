@@ -2,11 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import { DEFAULT_BEACON_CHAIN_IDS, GENESIS_VALIDATORS_ROOTS, beaconUrlsFor, defaultBeaconUrl, defaultBeaconUrls } from '../../src/config/default-beacon'
 
 describe('defaultBeaconUrls', () => {
-  test('puts the public keyless node first and the valve.city demo beacon route next, while valve.city refuses its demo key for beacon', () => {
-    expect(defaultBeaconUrls(11155111)).toEqual(['https://lodestar-sepolia.chainsafe.io', 'https://one.valve.city/beacon/vk_demo/11155111'])
-    expect(defaultBeaconUrls(943)).toEqual(['https://rpc-testnet-pulsechain.g4mm4.io/beacon-api', 'https://one.valve.city/beacon/vk_demo/943'])
-    expect(defaultBeaconUrls(369)).toEqual(['https://rpc-pulsechain.g4mm4.io/beacon-api', 'https://one.valve.city/beacon/vk_demo/369'])
-    expect(defaultBeaconUrls(1)).toEqual(['https://ethereum-beacon-api.publicnode.com', 'https://one.valve.city/beacon/vk_demo/1'])
+  test('is the public keyless node of each chain; the valve.city demo key is gone', () => {
+    expect(defaultBeaconUrls(11155111)).toEqual(['https://lodestar-sepolia.chainsafe.io'])
+    expect(defaultBeaconUrls(943)).toEqual(['https://rpc-testnet-pulsechain.g4mm4.io/beacon-api'])
+    expect(defaultBeaconUrls(369)).toEqual(['https://rpc-pulsechain.g4mm4.io/beacon-api'])
+    expect(defaultBeaconUrls(1)).toEqual(['https://ethereum-beacon-api.publicnode.com'])
   })
 
   test('the first default is the public node, and a chain without defaults has none', () => {

@@ -95,6 +95,49 @@ lacks zk-bridge-traffic.service 'runner\.env'
 has_line zk-bridge-indexer.service "Environment=DATABASE_URL=postgresql:///zkb_indexer?host=/var/run/postgresql"
 if grep -q '^ExecStart=.*--hostname 127\.0\.0\.1' "$DIR/zk-bridge-indexer.service"; then pass "indexer listens on 127.0.0.1"; else fail "indexer: ExecStart lacks --hostname 127.0.0.1"; fi
 
+# --- eRPC (deploy/ansible/erpc.yml, docs/rpc-proxy.md) -------------------------------------------------------------
+# Its own user, nothing writable but its state directory, its key only from its own file, and a memory ceiling.
+ERPC_UNIT=erpc/zk-bridge-erpc.service
+for setting in User=zkb_erpc Group=zkb_erpc ReadWritePaths=/var/lib/zk-bridge-erpc EnvironmentFile=/etc/zk-bridge/erpc/erpc.env \
+  Restart=on-failure NoNewPrivileges=yes ProtectSystem=strict ProtectHome=yes PrivateTmp=yes PrivateDevices=yes \
+  CapabilityBoundingSet= RestrictSUIDSGID=yes MemoryDenyWriteExecute=yes SystemCallFilter=@system-service UMask=0077 \
+  MemoryMax=512M Environment=GOMEMLIMIT=448MiB; do
+  has_line "$ERPC_UNIT" "$setting"
+done
+lacks "$ERPC_UNIT" 'zkb\.fi'
+if [ -f "$DIR/config/erpc/erpc.env.example" ]; then pass "$ERPC_UNIT: template for erpc.env"; else fail "$ERPC_UNIT: no template for erpc.env"; fi
+ERPC_YAML=$DIR/config/erpc/erpc.yaml.example
+# Localhost only, on the port the backend's rpcProxy.upstreamUrl names.
+if grep -qx '  httpHostV4: 127.0.0.1' "$ERPC_YAML" && grep -qx '  httpPortV4: 8792' "$ERPC_YAML" && grep -qx '  listenV6: false' "$ERPC_YAML"; then
+  pass "eRPC listens on 127.0.0.1:8792 only"
+else
+  fail "eRPC must listen on 127.0.0.1:8792 only"
+fi
+if grep -q '"upstreamUrl": "http://127.0.0.1:8792/zkb/evm/{chainId}"' "$DIR/config/backend/backend.json.example"; then pass "the backend example points at eRPC"; else fail "the backend example does not point at eRPC"; fi
+# The key comes from the environment: the one dollar sign in the file is ${VALVE_RPC_KEY} (eRPC expands the whole file).
+if [ "$(grep -o '\$' "$ERPC_YAML" | wc -l | tr -d ' ')" = "$(grep -o '\${VALVE_RPC_KEY}' "$ERPC_YAML" | wc -l | tr -d ' ')" ]; then
+  pass "erpc.yaml.example: every \$ is \${VALVE_RPC_KEY}"
+else
+  fail "erpc.yaml.example: a \$ that is not \${VALVE_RPC_KEY}"
+fi
+# An allowlist (ignore everything, allow a list), and the list equals the backend's DEFAULT_RPC_METHODS.
+if grep -qx '    ignoreMethods: \["\*"\]' "$ERPC_YAML"; then pass "eRPC ignores every method not allowed"; else fail "eRPC lacks ignoreMethods [\"*\"]"; fi
+ERPC_METHODS=$(sed -n '/^    allowMethods:$/,/^    [a-zA-Z]/s/^      - //p' "$ERPC_YAML" | sort)
+FILTER_METHODS=$(sed -n '/^export const DEFAULT_RPC_METHODS/,/^];/s/^  "\(.*\)",$/\1/p' "$DIR/../../explorer/backend/src/rpc-proxy/settings.ts" | sort)
+if [ -n "$ERPC_METHODS" ] && [ "$ERPC_METHODS" = "$FILTER_METHODS" ]; then pass "eRPC's allowMethods mirror the backend's methods"; else fail "eRPC's allowMethods differ from the backend's DEFAULT_RPC_METHODS"; fi
+# Caddy: /<chainId> of the RPC host goes to the backend's /rpc/<chainId>, through the blue/green snippet.
+if grep -qxF '{$ZKB_RPC_HOST:rpc.zkb.fi} {' "$DIR/Caddyfile" && grep -qxF '	@rpc path_regexp ^/[0-9]+$' "$DIR/Caddyfile" && grep -qxF '		rewrite * /rpc{path}' "$DIR/Caddyfile"; then
+  pass "Caddyfile: the RPC host routes /<chainId> to the backend's /rpc/<chainId>"
+else
+  fail "Caddyfile: the RPC host does not route /<chainId> to /rpc/<chainId>"
+fi
+# The playbook pins a version and its SHA-256, and checks the download against it.
+if grep -qE '^zkb_erpc_sha256: [0-9a-f]{64}$' "$DIR/../ansible/inventory/group_vars/zkbfi.yml" && grep -qF 'checksum: "sha256:{{ zkb_erpc_sha256 }}"' "$DIR/../ansible/erpc.yml"; then
+  pass "erpc.yml checks the pinned SHA-256"
+else
+  fail "erpc.yml does not check a pinned SHA-256"
+fi
+
 # --- Templates ----------------------------------------------------------------------------------------------------
 for example in "$DIR"/config/*/*.json.example; do
   name=${example#"$DIR"/}

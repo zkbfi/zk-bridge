@@ -23,6 +23,7 @@ import { createProverPing } from "./watch/ping.ts";
 import { watchedDirections } from "./watch/module.ts";
 import * as webhook from "./webhook/module.ts";
 import * as seal from "./seal/module.ts";
+import * as rpcProxy from "./rpc-proxy/module.ts";
 import { asBotLogger } from "./seal/module.ts";
 import { spawnRunner } from "@zk-bridge/shared/config";
 import { createSecretVault } from "../../bots/src/runtime/secrets.ts";
@@ -35,6 +36,7 @@ export const MODULES: ModuleTable = {
   "msgboard-indexer": msgboardIndexer,
   archive,
   seal,
+  "rpc-proxy": rpcProxy,
 };
 
 /** The prover reads the source chain of each direction from a beacon endpoint, so a request run needs both. */
@@ -221,7 +223,7 @@ function signalFromProcess(): AbortSignal {
 }
 
 /**
- * The entry point: `--config <file> [--modules requests,webhook,msgboard-indexer,archive]`.
+ * The entry point: `--config <file> [--modules requests,webhook,msgboard-indexer,archive,seal,rpc-proxy]`.
  *
  * @returns The exit code. 0 after a stop signal, 1 after a configuration error.
  */
