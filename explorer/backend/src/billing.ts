@@ -1,8 +1,9 @@
 /**
  * What RunPod billed, read from RunPod's own billing API: the per-day and per-hour endpoint billing
  * (`GET rest.runpod.io/v1/billing/endpoints`) and the account balance (GraphQL `myself`). One cached reader serves every
- * page view, so a request to `/billing` never reaches RunPod. A failed refresh keeps the last good value and the
- * age of it. The key is read from the environment by the caller, sent only in the Authorization header, and never logged.
+ * page view, so a request to `/billing` never reaches RunPod. The refresh and retry times are in the configuration
+ * (`billing`). A failed refresh keeps the last good value and the age of it; a 429 (RunPod's daily request limit) waits
+ * for the next refresh. The key is read from the environment by the caller, sent only in the Authorization header, and never logged.
  */
 import { remoteEndpoints, type BackendConfig, type BackendSecrets } from "./config.ts";
 import type { Logger } from "./logger.ts";
@@ -11,10 +12,10 @@ export const BILLING_URL = "https://rest.runpod.io/v1/billing/endpoints";
 export const GRAPHQL_URL = "https://api.runpod.io/graphql";
 const BALANCE_QUERY = "query { myself { clientBalance currentSpendPerHr spendLimit } }";
 
-/** How long one reading serves the page views, in milliseconds. */
-export const BILLING_TTL_MILLISECONDS = 10 * 60_000;
-/** After a failed refresh, how long to wait before trying again, in milliseconds. */
-export const BILLING_RETRY_MILLISECONDS = 60_000;
+/** How long one reading serves the page views, in milliseconds. The configuration (`billing.refreshSeconds`) sets it; this is its default. */
+export const BILLING_TTL_MILLISECONDS = 3600 * 1000;
+/** After a failed refresh, how long to wait before trying again, in milliseconds. The configuration (`billing.retrySeconds`) sets it; this is its default. */
+export const BILLING_RETRY_MILLISECONDS = 900 * 1000;
 /** The longest wait for one RunPod answer, in milliseconds. */
 export const BILLING_TIMEOUT_MILLISECONDS = 5_000;
 /** How many days of billing one reading holds. */
@@ -143,7 +144,7 @@ export function createBillingReader(input: {
 
   async function getJson(url: string, init: RequestInit & { headers: Record<string, string> }): Promise<unknown> {
     const answer = await doFetch()(url, { ...init, signal: AbortSignal.timeout(timeout) });
-    if (!answer.ok) throw new Error(`RunPod answered ${answer.status}`);
+    if (!answer.ok) throw Object.assign(new Error(`RunPod answered ${answer.status}`), { status: answer.status });
     return answer.json();
   }
 
@@ -179,7 +180,9 @@ export function createBillingReader(input: {
       spend: spendResult.status === "fulfilled" ? spendResult.value : snapshot.spend,
       balance: balanceResult.status === "fulfilled" ? balanceResult.value : snapshot.balance,
     };
-    nextTryAt = at + (spendResult.status === "fulfilled" && balanceResult.status === "fulfilled" ? ttl : Math.min(ttl, retry));
+    // RunPod's request limit is per day: after a 429 the next try waits for the next refresh, not the short retry.
+    const failures = [spendResult, balanceResult].filter((result) => result.status === "rejected").map((result) => (result as PromiseRejectedResult).reason as { status?: number });
+    nextTryAt = at + (failures.length === 0 || failures.some((failure) => failure.status === 429) ? ttl : Math.min(ttl, retry));
   }
 
   return {

@@ -427,6 +427,8 @@ Settings, all optional (`watch` in the configuration file):
 | `warmup.idleTimeoutSeconds` | 5 | The RunPod endpoint's idle timeout in whole seconds (1 to 3600): a worker is billed this long after its last request. The backend sets the endpoint to it at start-up; the billing breakdown uses it too. |
 | `warmup.syncIdleTimeout` | `true` | `false` only reads the endpoint's idle timeout and warns (`runpod_idle_timeout_differs`) when it differs; nothing is changed at RunPod. |
 | `warmup.gpuUsdPerHour` | 2.25 | The GPU price, for the unused-worker cost of `/billing` when RunPod's billing cannot be read. |
+| `billing.refreshSeconds` | 3600 | How often RunPod's billing (REST, two requests per endpoint) and the balance (GraphQL) are read. RunPod's REST API has a daily request limit, so this is slow. `/billing` never calls RunPod. |
+| `billing.retrySeconds` | 900 | How long to wait after a failed read. After a 429 (the daily limit) the backend waits for the next refresh instead. |
 | `warmup.dailyCapSeconds` | 3600 | The most warm-up seconds in any 24 hours, both directions together. |
 | `warmup.pingTimeoutSeconds` | 300 | How long one ping may wait for a cold worker. |
 | `warmup.leadSeconds` | none | The fixed lead time of before 2026-11-01. Still accepted; it does nothing and the start log warns (`config_ignored`). |
@@ -669,7 +671,7 @@ it was stored.
 
 ### `GET /billing?days=7`
 
-GPU billing in general, per UTC day and in total: what RunPod billed, the billed seconds, the effective price of a GPU
+GPU billing in general (RunPod is read every `billing.refreshSeconds`, one hour by default; `assumptions.billingRefreshSeconds` and `assumptions.billingRetrySeconds` show the times), per UTC day and in total: what RunPod billed, the billed seconds, the effective price of a GPU
 hour, the last 24 hours and where the rate comes from. `days` is a whole number from 1 to 30 (default 7); anything else
 is a 400. It names no host and no key. The account (`account`: balance, spend limit, spend now, days left) is filled
 only for a direct local request, such as the status service on 127.0.0.1; a request that came through Caddy (it has
@@ -678,7 +680,7 @@ only for a direct local request, such as the status service on 127.0.0.1; a requ
 ```json
 {
   "days": 7, "rateSource": "runpod", "usdPerHour": 0.76,
-  "assumptions": { "idleTimeoutSeconds": 5, "endpointIdleTimeoutSeconds": 5, "gpuUsdPerHour": 2.25, "gpuUsdPerHourIsFallback": true, "dailyCapSeconds": 3600 },
+  "assumptions": { "idleTimeoutSeconds": 5, "endpointIdleTimeoutSeconds": 5, "gpuUsdPerHour": 2.25, "gpuUsdPerHourIsFallback": true, "dailyCapSeconds": 3600, "billingRefreshSeconds": 3600, "billingRetrySeconds": 900 },
   "available": true, "ageSeconds": 90,
   "last24h": { "billedUsd": 1.18, "billedSeconds": 5400, "breakdown": { "...": "as in total" } }, "effectiveUsdPerHour": 0.76, "averageDailyUsd7d": 1.7,
   "account": { "balanceUsd": 153.38, "balanceAgeSeconds": 30, "spendNowUsdPerHour": 0, "spendLimitUsd": 80, "daysLeft": 90.2 },

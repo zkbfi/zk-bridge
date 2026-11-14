@@ -63,6 +63,7 @@ export async function main(argv: readonly string[], environment: Readonly<Record
     const deployment: unknown = JSON.parse(await readFile(config.deploymentFile, "utf8"));
     const pair = loadStatusPair(config, deployment, environment);
     const logger = createLogger({ write, now: Date.now, knownSecrets: () => secrets });
+    if (config.runpod?.apiBase !== undefined) logger.warn("runpod_api_base_ignored", { note: "runpod.apiBase is no longer used; the check reads GraphQL (runpod.graphqlUrl)" });
     const clients = new Map(pair.sides.map((side) => [side.chainId, (overrides.client ?? createChainClient)(side.rpcUrl, config.timeoutSeconds * 1000)] as const));
     const deps: Deps = {
       config,

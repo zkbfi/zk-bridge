@@ -42,7 +42,14 @@
   },
   "lightClients": { "keepAliveSeconds": 43200, "marginSeconds": 21600, "deadlineDegradedSeconds": 43200, "deadlineDownSeconds": 21600 },
   "pipeline": { "maxUndeliveredAgeSeconds": 7200, "maxJobSeconds": 3600 },
-  "runpod": { "endpointId": "yourendpointid", "apiKey": "env:RUNPOD_API_KEY" },
+  "runpod": {
+    "endpoints": [
+      { "id": "43nsvfb8svkosr", "label": "gpu-24gb" },
+      { "id": "muecz9pudncily", "label": "gpu-32gb" },
+      { "id": "nuax43o5zxyv9a", "label": "gpu-48gb" }
+    ],
+    "apiKey": "env:RUNPOD_API_KEY"
+  },
   "wallets": [
     { "name": "runner", "address": "0x0000000000000000000000000000000000000001", "low": { "11155111": "0.05", "943": "1000" } },
     { "name": "deployer", "address": "0x0000000000000000000000000000000000000002", "low": { "11155111": "0.05", "943": "1000" } },

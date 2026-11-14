@@ -231,6 +231,7 @@ describe("the idle timeout on /billing (2026-11-08)", () => {
   it("gives the configured idle timeout and what RunPod reports for the endpoint, null while unknown or without a RunPod endpoint", async () => {
     expect(((await setup().get("/billing")).body as Record<string, any>).assumptions).toMatchObject({ idleTimeoutSeconds: 60, endpointIdleTimeoutSeconds: null });
     expect(((await setup({ endpointIdle: () => null }).get("/billing")).body as Record<string, any>).assumptions.endpointIdleTimeoutSeconds).toBeNull();
+    expect(((await setup().get("/billing")).body as Record<string, any>).assumptions).toMatchObject({ billingRefreshSeconds: 3600, billingRetrySeconds: 900 });
     expect(((await setup({ endpointIdle: () => 5, idleTimeoutSeconds: 5 }).get("/billing")).body as Record<string, any>).assumptions).toMatchObject({ idleTimeoutSeconds: 5, endpointIdleTimeoutSeconds: 5 });
   });
 });

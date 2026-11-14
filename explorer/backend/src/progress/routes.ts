@@ -229,6 +229,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     const refused = limited(request);
     if (refused !== null) return { refused };
     const { idleTimeoutSeconds, gpuUsdPerHour, dailyCapSeconds } = context.config.watch.warmup;
+    const { refreshSeconds: billingRefreshSeconds, retrySeconds: billingRetrySeconds } = context.config.billing;
     const at = now();
     const snapshot = context.billing === undefined ? { spend: null, balance: null } : await context.billing.read();
     const figures = figuresOf(snapshot, at);
@@ -246,7 +247,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     // never sees them; the backend listens on 127.0.0.1 only.
     const local = request.req.header("x-forwarded-for") === undefined;
     const shown = figures;
-    return { days, at, snapshot, figures, shown, local, rateSource, usdPerHour, sessionDays, timeline, assumptions: { idleTimeoutSeconds, endpointIdleTimeoutSeconds: context.endpointIdleTimeoutSeconds?.() ?? null, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds } };
+    return { days, at, snapshot, figures, shown, local, rateSource, usdPerHour, sessionDays, timeline, assumptions: { idleTimeoutSeconds, endpointIdleTimeoutSeconds: context.endpointIdleTimeoutSeconds?.() ?? null, gpuUsdPerHour, gpuUsdPerHourIsFallback: true, dailyCapSeconds, billingRefreshSeconds, billingRetrySeconds } };
   }
 
   const money = (value: number) => Math.round(value * 10_000) / 10_000;

@@ -56,6 +56,13 @@ describe("watchedDirections", () => {
     expect(() => makeConfig({ watch: { unknown: 1 } })).toThrow(BackendConfigError);
   });
 
+  it("reads the billing refresh and retry times: an hour and 15 minutes by default", () => {
+    expect(makeConfig().billing).toEqual({ refreshSeconds: 3600, retrySeconds: 900 });
+    expect(makeConfig({ billing: { refreshSeconds: 7200 } }).billing).toEqual({ refreshSeconds: 7200, retrySeconds: 900 });
+    expect(() => makeConfig({ billing: { refreshSeconds: 0 } })).toThrow(BackendConfigError);
+    expect(() => makeConfig({ billing: { other: 1 } })).toThrow(BackendConfigError);
+  });
+
   it("owns the endpoint's idle timeout: the hold interval follows it and must stay below it", () => {
     const warmup = (settings: Record<string, unknown>) => makeConfig({ watch: { warmup: settings } }).watch.warmup;
     // Derived: two seconds under the idle timeout, at least 1.

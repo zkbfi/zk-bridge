@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BILLING_TTL_MILLISECONDS, BILLING_URL, GRAPHQL_URL, billingEndpoints, bucketRows, createBillingReader, figuresOf, parseBalance, parseBillingRows, runpodEndpointId, type BillingSnapshot } from "../src/billing.ts";
+import { BILLING_RETRY_MILLISECONDS, BILLING_TTL_MILLISECONDS, BILLING_URL, GRAPHQL_URL, billingEndpoints, bucketRows, createBillingReader, figuresOf, parseBalance, parseBillingRows, runpodEndpointId, type BillingSnapshot } from "../src/billing.ts";
 import { READ_SECRETS, makeConfig } from "./support.ts";
 
 const KEY = "fake-runpod-key-for-tests-0001";
@@ -115,7 +115,7 @@ describe("the reader", () => {
     expect(snapshot.spend?.days[1]).toMatchObject({ start: "2026-11-06", amountUsd: 2 * 1.3131631457808908 });
   });
 
-  it("serves the cache for ten minutes, then reads again", async () => {
+  it("serves the cache for the refresh time (an hour by default), then reads again", async () => {
     const { reader: billing, runpod, clock } = reader();
     await billing.read();
     const first = runpod.calls.length;
@@ -134,7 +134,7 @@ describe("the reader", () => {
     expect(runpod.calls.length).toBe(3);
   });
 
-  it("keeps the last good value after a failure, says how old it is, and retries after a minute", async () => {
+  it("keeps the last good value after a failure, says how old it is, and retries after the retry time (15 minutes by default)", async () => {
     const { reader: billing, runpod, clock, lines } = reader();
     await billing.read();
     runpod.state.day = new Error("network down");
@@ -143,16 +143,16 @@ describe("the reader", () => {
     const stale = await billing.read();
     expect(stale.spend?.readAt).toBe(NOW);
     expect(stale.balance?.readAt).toBe(NOW);
-    expect(figuresOf(stale, clock.now)).toMatchObject({ available: true, ageSeconds: 600, balanceAgeSeconds: 600, balanceUsd: 153.38 });
+    expect(figuresOf(stale, clock.now)).toMatchObject({ available: true, ageSeconds: 3600, balanceAgeSeconds: 3600, balanceUsd: 153.38 });
     expect(lines.join("\n")).toContain("billing_spend_unreadable");
     expect(lines.join("\n")).not.toContain(KEY);
     const calls = runpod.calls.length;
-    clock.now += 30_000;
+    clock.now += BILLING_RETRY_MILLISECONDS - 1;
     await billing.read();
     expect(runpod.calls.length).toBe(calls);
     runpod.state.day = DAY_ROWS;
     runpod.state.balance = BALANCE;
-    clock.now += 30_000;
+    clock.now += 1;
     expect((await billing.read()).spend?.readAt).toBe(clock.now);
   });
 
@@ -163,7 +163,7 @@ describe("the reader", () => {
     expect(first.balance?.balanceUsd).toBe(153.38);
     runpod.state.hour = HOUR_ROWS;
     runpod.state.balance = { data: { myself: {} } };
-    clock.now += 60_000;
+    clock.now += BILLING_RETRY_MILLISECONDS;
     const second = await billing.read();
     expect(second.spend).not.toBeNull();
     expect(second.balance?.readAt).toBe(NOW);
@@ -176,6 +176,35 @@ describe("the reader", () => {
     expect(await billing.read()).toEqual({ spend: null, balance: null });
     const bad = reader(fakeRunpod({ day: { oops: true } }));
     expect((await bad.reader.read()).spend).toBeNull();
+  });
+
+  it("waits for the next refresh after a 429, not for the retry time", async () => {
+    const runpod = fakeRunpod();
+    runpod.state.status = 429;
+    const { reader: billing, clock, lines } = reader(runpod);
+    await billing.read();
+    expect(lines.join("\n")).toContain("RunPod answered 429");
+    const calls = runpod.calls.length;
+    clock.now += BILLING_TTL_MILLISECONDS - 1;
+    await billing.read();
+    expect(runpod.calls.length).toBe(calls);
+    runpod.state.status = 200;
+    clock.now += 1;
+    expect((await billing.read()).spend).not.toBeNull();
+  });
+
+  it("takes the refresh and retry times from its input", async () => {
+    const runpod = fakeRunpod({ day: new Error("x") });
+    const clock = { now: NOW };
+    const billing = createBillingReader({ endpoints: [{ id: "abc123", apiKey: KEY }], now: () => clock.now, fetchFunction: runpod.fetchFunction, ttlMilliseconds: 10_000, retryMilliseconds: 2_000 });
+    await billing.read();
+    const calls = runpod.calls.length;
+    clock.now += 1_999;
+    await billing.read();
+    expect(runpod.calls.length).toBe(calls);
+    clock.now += 1;
+    await billing.read();
+    expect(runpod.calls.length).toBeGreaterThan(calls);
   });
 
   it("reads nothing without an endpoint", async () => {

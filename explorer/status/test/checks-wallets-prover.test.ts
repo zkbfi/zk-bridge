@@ -38,39 +38,54 @@ describe("walletChecks", () => {
 });
 
 describe("runpodCheck", () => {
-  const url = "https://rest.runpod.io/v1/endpoints/ep1?includeWorkers=true";
+  const url = "https://api.runpod.io/graphql";
   const check = runpodCheck;
+  const row = (extra: object) => ({ id: "ep1", name: "n", workersMin: 0, workersMax: 2, gpuIds: "ADA_24, AMPERE_24", pods: [{ desiredStatus: "RUNNING" }, { desiredStatus: "EXITED" }], ...extra });
+  const answer = (...rows: Array<object | null>) => ({ body: { data: { myself: { endpoints: rows } } } });
+  const row2 = { id: "ep2", workersMin: 1, workersMax: 3, gpuIds: "ADA_32", pods: [] };
 
-  it("reads the endpoint through the REST API with the key, and reports workers and GPUs", async () => {
+  it("asks GraphQL once with the key for all endpoints, and reports each one", async () => {
     const c = { now: 1 };
     let seen: RequestInit | undefined;
-    const fetch = fakeFetch({ [url]: (_u, init) => ((seen = init), { body: { id: "ep1", workersMin: 0, workersMax: 2, gpuTypeIds: ["NVIDIA RTX A6000", "NVIDIA L40S"], workers: [{ id: "w1" }] } }) }, c);
+    const fetch = fakeFetch({ [url]: (_u, init) => ((seen = init), answer(row({}), row2)) }, c);
     const deps = makeDeps({ clock: c, fetch });
-    expect(await check.run(deps)).toEqual({ state: "ok", detail: "1 worker running now (min 0, max 2), GPUs NVIDIA RTX A6000, NVIDIA L40S" });
-    expect((seen?.headers as Record<string, string>).authorization).toBe("Bearer rp_key");
-  });
-
-  it("handles an endpoint with no workers listed and no GPU list", async () => {
-    const c = { now: 1 };
-    const deps = makeDeps({ clock: c, fetch: fakeFetch({ [url]: { body: { workersMin: 1, workersMax: 1 } } }, c) });
-    expect(await check.run(deps)).toEqual({ state: "ok", detail: "0 workers running now (min 1, max 1), no GPU list" });
-  });
-
-  it("shows no minimum as zero", async () => {
-    const c = { now: 1 };
-    const deps = makeDeps({ clock: c, fetch: fakeFetch({ [url]: { body: { workersMax: 3, workers: [{}, {}] } } }, c) });
-    expect(await check.run(deps)).toEqual({ state: "ok", detail: "2 workers running now (min 0, max 3), no GPU list" });
-  });
-
-  it("is down when RunPod refuses the key or cannot find the endpoint, and degraded when it cannot prove", async () => {
-    const c = { now: 1 };
-    expect(await check.run(makeDeps({ clock: c, fetch: fakeFetch({ [url]: { status: 401 } }, c) }))).toEqual({ state: "down", detail: "RunPod refused the API key (401)" });
-    expect(await check.run(makeDeps({ clock: c, fetch: fakeFetch({ [url]: { status: 404 } }, c) }))).toEqual({ state: "down", detail: "RunPod has no endpoint with this id (404)" });
-    expect(await check.run(makeDeps({ clock: c, fetch: fakeFetch({ [url]: { status: 500 } }, c) }))).toEqual({ state: "down", detail: "RunPod answered 500" });
-    expect(await check.run(makeDeps({ clock: c, fetch: fakeFetch({ [url]: { body: { workersMin: 0, workersMax: 0, workers: [] } } }, c) }))).toEqual({
-      state: "degraded",
-      detail: "the largest number of workers is 0, so it cannot prove (min 0, max 0)",
+    expect(await check.run(deps)).toEqual({
+      state: "ok",
+      detail: "gpu-24gb: 1 running now (min 0, max 2), GPUs ADA_24, AMPERE_24; gpu-32gb: 0 running now (min 1, max 3), GPUs ADA_32",
     });
-    expect(await check.run(makeDeps({ clock: c, fetch: fakeFetch({ [url]: { text: "oops" } }, c) }))).toEqual({ state: "degraded", detail: "RunPod answered something that is not an endpoint" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(seen?.method).toBe("POST");
+    expect((seen?.headers as Record<string, string>).authorization).toBe("Bearer rp_key");
+    expect(String(seen?.body)).toContain("myself");
+  });
+
+  it("handles missing pods, minimum and GPU list", async () => {
+    const c = { now: 1 };
+    const deps = makeDeps({ clock: c, fetch: fakeFetch({ [url]: answer({ id: "ep1", workersMax: 3 }, { id: "ep2", workersMax: 1, gpuIds: "", pods: null }) }, c) });
+    expect(await check.run(deps)).toEqual({ state: "ok", detail: "gpu-24gb: 0 running now (min 0, max 3), no GPU list; gpu-32gb: 0 running now (min 0, max 1), no GPU list" });
+  });
+
+  it("is degraded when an endpoint cannot prove or is missing, naming it", async () => {
+    const c = { now: 1 };
+    const zero = makeDeps({ clock: c, fetch: fakeFetch({ [url]: answer(row({ workersMax: 0 }), row2) }, c) });
+    expect(await check.run(zero)).toEqual({ state: "degraded", detail: expect.stringContaining("gpu-24gb: the largest number of workers is 0, so it cannot prove (min 0, max 0); gpu-32gb: 0 running") });
+    const unset = makeDeps({ clock: c, fetch: fakeFetch({ [url]: answer(row({}), { id: "ep2" }) }, c) });
+    expect(await check.run(unset)).toEqual({ state: "degraded", detail: expect.stringContaining("gpu-32gb: the largest number of workers is 0") });
+    const missing = makeDeps({ clock: c, fetch: fakeFetch({ [url]: answer(row({}), null) }, c) });
+    expect(await check.run(missing)).toEqual({ state: "degraded", detail: expect.stringContaining("gpu-32gb: not in the RunPod answer") });
+    const odd = makeDeps({ clock: c, fetch: fakeFetch({ [url]: { body: { data: { myself: null } } } }, c) });
+    expect(await check.run(odd)).toEqual({ state: "degraded", detail: "RunPod answered something that is not a list of endpoints" });
+    const text = makeDeps({ clock: c, fetch: fakeFetch({ [url]: { text: "oops" } }, c) });
+    expect((await check.run(text)).state).toBe("degraded");
+  });
+
+  it("is down on a refused key, an HTTP error or GraphQL errors", async () => {
+    const c = { now: 1 };
+    const run = (reply: object) => check.run(makeDeps({ clock: c, fetch: fakeFetch({ [url]: reply }, c) }));
+    expect(await run({ status: 401 })).toEqual({ state: "down", detail: "RunPod refused the API key (401)" });
+    expect(await run({ status: 403 })).toEqual({ state: "down", detail: "RunPod refused the API key (403)" });
+    expect(await run({ status: 429 })).toEqual({ state: "down", detail: "RunPod answered 429" });
+    expect(await run({ body: { errors: [{ message: "bad field" }] } })).toEqual({ state: "down", detail: "RunPod GraphQL error: bad field" });
+    expect(await run({ body: { errors: [null] } })).toEqual({ state: "down", detail: "RunPod GraphQL error: no message" });
   });
 });

@@ -122,7 +122,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
   });
   const pingProver = createProverPing({ ...warmupTarget(config, secrets), timeoutMilliseconds: config.watch.warmup.pingTimeoutSeconds * 1000 });
   const runpodEndpoints = billingEndpoints(config, secrets);
-  const billing = runpodEndpoints.length === 0 ? undefined : createBillingReader({ endpoints: runpodEndpoints, now, logger });
+  const billing = runpodEndpoints.length === 0 ? undefined : createBillingReader({ endpoints: runpodEndpoints, now, logger, ttlMilliseconds: config.billing.refreshSeconds * 1000, retryMilliseconds: config.billing.retrySeconds * 1000 });
   const idleHistory = createIdleHistory(storage);
   const idleSync =
     runpodEndpoints.length === 0

@@ -208,6 +208,15 @@ export const backendConfigSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * How often the backend reads RunPod's billing (REST, two requests per endpoint) and the balance (GraphQL). RunPod's
+     * REST API has a daily request limit, so the default is slow. After a failure it tries again after `retrySeconds`; after
+     * a 429 it waits for the next refresh.
+     */
+    billing: z
+      .object({ refreshSeconds: positiveInteger.default(3600), retrySeconds: positiveInteger.default(900) })
+      .strict()
+      .prefault({}),
     /** The msgboard node (`ws://`, `wss://`, `http://` or `https://`). Needed by the webhook and the msgboard indexer. It can carry a key. */
     msgboardUrl: z.string().regex(/^(wss?|https?):\/\/\S+$/, "must be a ws, wss, http or https address").optional(),
     /**
