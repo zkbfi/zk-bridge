@@ -60,20 +60,31 @@ The theme also applies to these docs; their footer has the same choice.
 
 ### RPC endpoints
 
-One RPC endpoint for each chain of the pair. The app uses it to read balances, gas prices and token prices, and to send transactions. A new RPC endpoint must answer for its chain before Save keeps it. Each field shows a live check with its response time, or "down".
+One RPC endpoint for each chain of the pair. The app uses it to read balances, gas prices and token prices, and to check each transaction before your wallet sends it (the wallet sends through its own RPC). A new RPC endpoint must answer for its chain before Save keeps it. Each field shows a live check with its response time, or "down".
 
-### Beacon endpoints
-
-One beacon API for each chain of the pair: the chain's consensus layer, which a proof of that chain is made from. The default is valve.city's beacon route for the chain, with a public node behind it if valve.city does not answer:
+The default is zkb.fi's own RPC, `rpc.zkb.fi/<chain id>`, with the chain's public RPCs behind it:
 
 | Chain | Default | Then |
 |---|---|---|
-| Ethereum | `one.valve.city/beacon/vk_demo/1` | `ethereum-beacon-api.publicnode.com` |
-| PulseChain | `one.valve.city/beacon/vk_demo/369` | `rpc-pulsechain.g4mm4.io/beacon-api` |
-| Sepolia | `one.valve.city/beacon/vk_demo/11155111` | `lodestar-sepolia.chainsafe.io` |
-| PulseChain testnet v4 | `one.valve.city/beacon/vk_demo/943` | `rpc-testnet-pulsechain.g4mm4.io/beacon-api` |
+| Ethereum | `rpc.zkb.fi/1` | `ethereum-rpc.publicnode.com` |
+| PulseChain | `rpc.zkb.fi/369` | `rpc.pulsechain.com`, `pulsechain-rpc.publicnode.com` |
+| Sepolia | `rpc.zkb.fi/11155111` | `ethereum-sepolia-rpc.publicnode.com` |
+| PulseChain testnet v4 | `rpc.zkb.fi/943` | `rpc.v4.testnet.pulsechain.com`, `pulsechain-testnet-rpc.publicnode.com` |
 
-The live check asks the endpoint for its genesis (`/eth/v1/beacon/genesis`) and passes only when it is the genesis of that chain, so a beacon API of another chain shows "down"; hover the dot for the reason. A beacon API you set is used alone, without the fallback.
+rpc.zkb.fi answers only the reads this app makes around zkb.fi contracts. When it is busy or down, the app reads from the public RPCs; a request it does not serve goes to the next RPC of the list at once. An RPC you set is used alone, without the others.
+
+### Beacon endpoints
+
+One beacon API for each chain of the pair: the chain's consensus layer, which a proof of that chain is made from. The default is a public node of the chain:
+
+| Chain | Default |
+|---|---|
+| Ethereum | `ethereum-beacon-api.publicnode.com` |
+| PulseChain | `rpc-pulsechain.g4mm4.io/beacon-api` |
+| Sepolia | `lodestar-sepolia.chainsafe.io` |
+| PulseChain testnet v4 | `rpc-testnet-pulsechain.g4mm4.io/beacon-api` |
+
+The live check asks the endpoint for its genesis (`/eth/v1/beacon/genesis`) and passes only when it is the genesis of that chain, so a beacon API of another chain shows "down"; hover the dot for the reason. A beacon API you set replaces the default.
 
 ### Token and chain images
 

@@ -58,10 +58,10 @@ describe("the service probe", () => {
   it("posts eth_chainId to an RPC and passes only on the expected chain", async () => {
     const seen: HttpRequest[] = [];
     const probe = createProber({ http: answering(200, '{"jsonrpc":"2.0","id":1,"result":"0x171"}', seen), now: clock() });
-    expect(await probe("https://one.valve.city/rpc/vk_demo/evm/369", { kind: "rpc", chainId: 369 })).toEqual({ ok: true, ms: 21 });
+    expect(await probe("https://rpc.zkb.fi/369", { kind: "rpc", chainId: 369 })).toEqual({ ok: true, ms: 21 });
     expect(seen[0]).toMatchObject({ method: "POST", headers: { "Content-Type": "application/json" } });
     expect(JSON.parse(seen[0]!.body!)).toMatchObject({ method: "eth_chainId" });
-    const wrong = await probe("https://one.valve.city/rpc/vk_demo/evm/369", { kind: "rpc", chainId: 1 });
+    const wrong = await probe("https://rpc.zkb.fi/369", { kind: "rpc", chainId: 1 });
     expect(wrong).toEqual({ ok: false, reason: "The node is on chain 369, not chain 1." });
   });
 

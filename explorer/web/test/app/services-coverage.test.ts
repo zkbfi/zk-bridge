@@ -69,7 +69,7 @@ describe("createServices for a live page", () => {
     expect(() => services.chainAccess.flowClient(FIXTURE_PAIR.second.chainId)).not.toThrow();
   });
 
-  it("falls back to the valve.city demo RPC for a chain that has no RPC address, so the flow client works", () => {
+  it("falls back to the default RPC (rpc.zkb.fi) for a chain that has no RPC address, so the flow client works", () => {
     const configuration = readConfiguration({
       VITE_EXPLORER_DATA: "live",
       VITE_EXPLORER_DEPLOYMENT_URL: "https://example.org/deployment.json",

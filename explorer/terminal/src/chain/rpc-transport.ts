@@ -5,20 +5,25 @@
  * which answered 429 to more than half of them.
  *
  * What it does:
- * - A chain's default list (valve.city, then the public RPCs) is one pool. A URL the user or the build chose is used alone.
+ * - A chain's default list (rpc.zkb.fi, then the public RPCs) is one pool. A URL the user or the build chose is used alone.
  * - JSON-RPC requests made close together go out as one HTTP request (`batch`).
  * - {@link rpcChain} sets Multicall3 on the chain, so viem folds many `readContract` calls into one `aggregate3` call.
  * - Retries are modest and happen in one layer: inside the pool every endpoint is tried once (moving on is the retry), and
  *   a lone endpoint retries twice with viem's growing delay.
  *
- * Load balancing. The owner asked "are we even load balancing at all?" and then "we should be load balancing across
- * them". Reads are spread round-robin over every endpoint of the pool, starting at valve.city. Requests made in the same
- * burst (within the batch window) go to the same endpoint, so batching and multicall still make one HTTP request per
- * burst; the next burst goes to the next endpoint. An endpoint that answers 429, a 5xx, times out or cannot be reached is
- * benched for {@link BENCH_MILLISECONDS}: its requests go to the others at once, without sending anything to it, and it
- * rejoins afterwards. The bench is shared by every client in the page. A JSON-RPC answer (a revert, an invalid argument) is
- * the node's answer and is not retried elsewhere. viem's `fallback({ rank: true })` was not used: it pings every endpoint
- * in the background, which is extra traffic against the same quotas, and it ranks by speed, not by what an endpoint accepts.
+ * The first endpoint, then the fallbacks. Until 2026-11-14 every endpoint of the pool was a shared quota (the valve.city
+ * demo key and the public RPCs), so the owner asked to load balance across them ("we should be load balancing across
+ * them") and reads went round-robin. The first endpoint is now rpc.zkb.fi, which reads through the server's own key
+ * (docs/rpc-proxy.md), so it takes every read while it is available: spreading reads over the public RPCs would bring
+ * back the 429s it removes. The public RPCs are the fallbacks, and they still take turns among themselves: requests made
+ * in the same burst (within the batch window) go to the same fallback, so batching and multicall still make one HTTP
+ * request per burst, and the next burst goes to the next one. An endpoint that answers 429, a 5xx, times out or cannot be
+ * reached is benched for {@link BENCH_MILLISECONDS}: its requests go to the others at once, without sending anything to
+ * it, and it rejoins afterwards. The bench is shared by every client in the page. A JSON-RPC answer (a revert, an invalid
+ * argument) is the node's answer and is not retried elsewhere, with one exception: a request that rpc.zkb.fi refuses
+ * (it serves only the dapp's reads, {@link isRefusedByZkbRpc}) goes to the next endpoint at once, and rpc.zkb.fi is not
+ * benched for it. viem's `fallback({ rank: true })` was not used: it pings every endpoint in the background, which is
+ * extra traffic against the same quotas, and it ranks by speed, not by what an endpoint accepts.
  *
  * Sticky mode, for the transaction path (`sticky: true`). A node that has not seen the block of an approval yet reverts the
  * estimate of the next step ("Execution reverted for an unknown reason" in Estimate Gas Arguments). So the client the
@@ -26,7 +31,7 @@
  * leaves that endpoint only when the endpoint is benched, and then stays on the next one.
  */
 import { createTransport, defineChain, http, type Chain, type Transport } from 'viem'
-import { DEFAULT_RPC_CHAIN_IDS, defaultRpcUrls } from '../config/default-rpc'
+import { DEFAULT_RPC_CHAIN_IDS, defaultRpcUrls, publicRpcUrls } from '../config/default-rpc'
 
 /** Multicall3 has this address on every chain below (Ethereum, PulseChain, Sepolia, PulseChain testnet v4). */
 export const MULTICALL3_ADDRESS = '0xcA11bde05977b3631167028862bE2a173976CA11'
@@ -45,13 +50,20 @@ const MULTICALL3_CHAIN_IDS: readonly number[] = [1, 369, 11155111, 943]
 /** The `batch` option for a viem client: fold concurrent `readContract` calls into one `aggregate3` call. */
 export const CLIENT_BATCH = { multicall: { wait: BATCH_WAIT_MILLISECONDS } } as const
 
-/** Defines a chain for a viem client, with Multicall3 set where it is deployed so that batched reads work. */
+/**
+ * Defines a chain for a viem client, with Multicall3 set where it is deployed so that batched reads work. When the URL is
+ * the chain's default (rpc.zkb.fi), the chain names the public RPCs instead: a wallet that adds the chain
+ * (`wallet_addEthereumChain`) takes them from here and sends its transactions there, and rpc.zkb.fi serves reads only.
+ * The clients of the page read through their transport, which keeps rpc.zkb.fi first.
+ */
 export function rpcChain(input: { id: number; name: string; symbol: string; rpcUrl?: string }): Chain {
+  const isDefault = input.rpcUrl !== undefined && defaultRpcUrls(input.id)[0] === input.rpcUrl
+  const http = input.rpcUrl === undefined ? [] : isDefault ? [...publicRpcUrls(input.id)] : [input.rpcUrl]
   return defineChain({
     id: input.id,
     name: input.name,
     nativeCurrency: { name: input.symbol, symbol: input.symbol, decimals: 18 },
-    rpcUrls: { default: { http: input.rpcUrl === undefined ? [] : [input.rpcUrl] } },
+    rpcUrls: { default: { http } },
     ...(MULTICALL3_CHAIN_IDS.includes(input.id) ? { contracts: { multicall3: { address: MULTICALL3_ADDRESS as `0x${string}` } } } : {}),
   })
 }
@@ -61,13 +73,23 @@ export function isRateLimited(error: unknown): boolean {
   return causeChain(error).some((link) => link.status === 429 || link.code === -32005)
 }
 
+type Link = { status?: unknown; code?: unknown; name?: unknown; message?: unknown; details?: unknown }
+
 /** The error and its causes, outermost first. */
-function causeChain(error: unknown): { status?: unknown; code?: unknown; name?: unknown }[] {
-  const links: { status?: unknown; code?: unknown; name?: unknown }[] = []
+function causeChain(error: unknown): Link[] {
+  const links: Link[] = []
   for (let current: unknown = error; current !== null && typeof current === 'object' && links.length < 6; current = (current as { cause?: unknown }).cause) {
-    links.push(current as { status?: unknown; code?: unknown; name?: unknown })
+    links.push(current as Link)
   }
   return links
+}
+
+/**
+ * Whether rpc.zkb.fi refused the request: it serves only the dapp's reads around zkb.fi contracts, and answers anything
+ * else with a JSON-RPC error whose message starts "rpc.zkb.fi refused" (docs/rpc-proxy.md). Another endpoint may serve it.
+ */
+export function isRefusedByZkbRpc(error: unknown): boolean {
+  return causeChain(error).some((link) => [link.details, link.message].some((text) => typeof text === 'string' && text.includes('rpc.zkb.fi refused')))
 }
 
 /**
@@ -122,15 +144,22 @@ function pooled(urls: readonly string[], options: RpcTransportOptions): Transpor
         if (!available(stuckTo)) stuckTo = all.find(available) ?? stuckTo
         return [stuckTo, ...all.filter((index) => index !== stuckTo && available(index)), ...all.filter((index) => index !== stuckTo && !available(index))]
       }
+      // The fallbacks take turns by burst; the first endpoint goes before them while it is available.
+      const fallbacks = all.slice(1)
       const at = now()
       if (burstEndpoint < 0 || at - lastRequestAt > BATCH_WAIT_MILLISECONDS * 2 || !available(burstEndpoint)) {
         const turn = nextEndpoint.get(poolKey) ?? 0
-        burstEndpoint = all.map((_, offset) => (turn + offset) % all.length).find(available) ?? turn % all.length
-        nextEndpoint.set(poolKey, (burstEndpoint + 1) % all.length)
+        const offsets = fallbacks.map((_, offset) => (turn + offset) % fallbacks.length)
+        const chosen = offsets.find((offset) => available(fallbacks[offset] as number)) ?? turn % fallbacks.length
+        burstEndpoint = fallbacks[chosen] as number
+        nextEndpoint.set(poolKey, (chosen + 1) % fallbacks.length)
       }
       lastRequestAt = at
-      const rest = all.map((_, offset) => (burstEndpoint + offset) % all.length).slice(1)
-      return [burstEndpoint, ...rest.filter(available), ...rest.filter((index) => !available(index))]
+      const start = fallbacks.indexOf(burstEndpoint)
+      const rotated = fallbacks.map((_, offset) => fallbacks[(start + offset) % fallbacks.length] as number)
+      const ready = rotated.filter(available)
+      const benched = rotated.filter((index) => !available(index))
+      return available(0) ? [0, ...ready, ...benched] : [...ready, 0, ...benched]
     }
 
     return createTransport(
@@ -147,9 +176,11 @@ function pooled(urls: readonly string[], options: RpcTransportOptions): Transpor
             try {
               return await (endpoints[index] as ReturnType<ReturnType<typeof http>>).request(args as never)
             } catch (error) {
+              lastError = error
+              // A refusal of rpc.zkb.fi: the next endpoint may serve the request, and rpc.zkb.fi stays in the pool.
+              if (isRefusedByZkbRpc(error)) continue
               if (!isEndpointFailure(error)) throw error
               benchedUntil.set(urls[index] as string, now() + BENCH_MILLISECONDS)
-              lastError = error
             }
           }
           throw lastError
