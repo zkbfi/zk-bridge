@@ -94,29 +94,43 @@ describe("the Bridge button before a fork", () => {
     expect(screen.queryByTestId("fork-cutover-line")).toBeNull();
   });
 
-  it("decides from the saved copy when the beacon node did not answer, and says so", async () => {
+  it("decides from the saved copy when the beacon node did not answer, and leaves the copy to Explore's fork section", async () => {
     open(fromCopy(8 * 86_400));
-    const line = await screen.findByTestId("fork-cutover-line");
-    expect(within(line).getByTestId("fork-schedule-note")).toHaveTextContent("Ethereum's beacon node did not answer, so this uses the fork schedule saved by this app at");
-    expect(within(line).queryByTestId("fork-cutover-countdown")).toBeNull();
+    await screen.findByRole("button", { name: /Enter an amount|Bridge/ });
+    expect(screen.queryByTestId("fork-cutover-line")).toBeNull();
+    expect(screen.queryByText(/did not answer, so this uses the fork schedule/)).toBeNull();
     expect(screen.queryByRole("button", { name: /sends paused|sends wait/ })).toBeNull();
   });
 
-  it("names the copy under the countdown, and on the button of a pause decided from it", async () => {
+  it("shows the countdown without naming the copy, and the pause decided from it on the button", async () => {
     const first = open(fromCopy(14 * 3600));
     const line = await screen.findByTestId("fork-cutover-line");
     expect(within(line).getByTestId("fork-cutover-countdown")).toHaveTextContent("Sends pause in 2h 00m");
-    expect(within(line).getByTestId("fork-schedule-note")).toBeInTheDocument();
+    expect(line).not.toHaveTextContent(/did not answer/);
+    expect(line).not.toHaveClass("zb-warn-text");
     first.unmount();
     open(fromCopy(600));
     await screen.findByRole("button", { name: /Ethereum sends paused for the Fulu fork/ });
-    expect(screen.getByText(/Sends from Ethereum are paused since .* this uses the fork schedule saved by this app/)).toBeInTheDocument();
+    expect(screen.getByText(/Sends from Ethereum are paused since/)).toBeInTheDocument();
+    expect(screen.queryByText(/this uses the fork schedule saved by this app/)).toBeNull();
   });
 
   it("shows nothing when no facts are read", async () => {
     open(null);
     await screen.findByRole("button", { name: /Enter an amount|Bridge/ });
     expect(screen.queryByTestId("fork-cutover-line")).toBeNull();
+  });
+});
+
+describe("ForkCutoverLine for a light client head that could not be read", () => {
+  it("warns with the headline alone: no countdown and no copy of the schedule", () => {
+    const verdict = { kind: "unknown", reason: "light-client-unreadable", detail: "x" } as const;
+    render(<ForkCutoverLine view={{ sourceChainId: 1, destinationChainId: 2, verdict, text: { headline: "The light client head could not be read.", countdown: null, sendable: true, scheduleNote: "From a copy." }, nowSeconds: 0 }} />);
+    const line = screen.getByTestId("fork-cutover-line");
+    expect(line).toHaveClass("zb-warn-text");
+    expect(line).toHaveTextContent("The light client head could not be read.");
+    expect(line).not.toHaveTextContent("From a copy.");
+    expect(screen.queryByTestId("fork-cutover-countdown")).toBeNull();
   });
 });
 
