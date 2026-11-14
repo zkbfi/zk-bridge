@@ -227,10 +227,7 @@ describe("secrets in the log", () => {
       const url = String(input);
       if (!url.includes("runpod.")) return real(input, init);
       seen.push(`${url} ${new Headers(init?.headers).get("authorization")}`);
-      if (url.includes("/v1/endpoints/")) {
-        if ((init?.method ?? "GET") === "PATCH") return Response.json({ idleTimeout: 5 });
-        return Response.json({ idleTimeout: 60, workersMin: 0, workersMax: 1 });
-      }
+      if (url.includes("graphql") && String(init?.body).includes("idleTimeout")) return Response.json({ data: { myself: { endpoints: [{ id: "abc123", idleTimeout: 60 }] } } });
       if (url.includes("graphql")) return Response.json({ data: { myself: { clientBalance: 153.38, currentSpendPerHr: 0, spendLimit: 80 } } });
       const today = new Date().toISOString().slice(0, 10);
       return Response.json([{ time: `${today} 00:00:00`, amount: 0.76, timeBilledMs: 3_600_000 }]);
@@ -246,19 +243,18 @@ describe("secrets in the log", () => {
       await running.stop();
       vi.unstubAllGlobals();
     }
-    // The day and hour billing and the balance, and at start-up the endpoint's idle timeout: read, then set from 60 to 5.
-    expect(seen.length).toBe(5);
-    expect(seen.filter((entry) => entry.includes("/v1/endpoints/abc123 "))).toHaveLength(2);
+    // The day and hour billing, the balance, and the endpoint's idle timeout, read once and never written.
+    expect(seen.length).toBe(4);
     expect(seen.every((entry) => entry.endsWith(`Bearer ${SECRETS.runpodApiKey}`))).toBe(true);
-    expect(lines.join("\n")).toContain('"runpod_idle_timeout_set"');
-    expect(lines.join("\n")).toContain('"from":60,"to":5');
-    // The endpoint's timeout, as read and as set, went into the history that the billing breakdown reads.
+    expect(seen.some((entry) => entry.includes("/v1/endpoints/"))).toBe(false);
+    expect(lines.join("\n")).toContain('"runpod_idle_timeout_read"');
+    expect(lines.join("\n")).not.toContain("runpod_idle_timeout_set");
+    // The endpoint's timeout as read went into the history that the billing breakdown reads.
     const history = new DatabaseSync(config.databasePath);
     try {
       const rows = history.prepare("SELECT seconds FROM idle_timeout_history ORDER BY at").all() as Array<{ seconds: number }>;
       expect(rows.map((row) => row.seconds).slice(0, 2)).toEqual([60, 5]);
-      expect(rows.length).toBeGreaterThanOrEqual(3);
-      expect(rows[rows.length - 1]?.seconds).toBe(5);
+      expect(rows[rows.length - 1]?.seconds).toBe(60);
     } finally {
       history.close();
     }
@@ -273,7 +269,7 @@ describe("secrets in the log", () => {
       throw new TypeError(`fetch failed for ${url}`);
     });
     const lines: string[] = [];
-    const config = makeConfig({ ...configFor(workspace(), await needyIndexer()), remote: { endpoint: "https://abc123.api.runpod.ai" } });
+    const config = makeConfig({ ...configFor(workspace(), await needyIndexer()), remote: { endpoint: "https://abc123.api.runpod.ai" }, watch: { warmup: { syncIdleTimeout: false } } });
     const running = await startBackend({ config, pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, write: (line) => lines.push(line) });
     try {
       const body = (await (await real(`http://127.0.0.1:${running.port}/billing`)).json()) as { assumptions: { idleTimeoutSeconds: number; endpointIdleTimeoutSeconds: number | null } };
@@ -282,7 +278,9 @@ describe("secrets in the log", () => {
       await running.stop();
       vi.unstubAllGlobals();
     }
-    expect(lines.join("\n")).toContain('"runpod_idle_timeout_failed"');
+    expect(lines.join("\n")).toContain('"runpod_idle_timeout_unread"');
+    expect(lines.join("\n")).toContain('"config_deprecated"');
+    expect(lines.join("\n")).toContain("watch.warmup.syncIdleTimeout");
     expect(lines.join("\n")).not.toContain(SECRETS.runpodApiKey);
   });
 

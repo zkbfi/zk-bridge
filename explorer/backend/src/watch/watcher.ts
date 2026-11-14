@@ -17,7 +17,7 @@ import { decideProof, warmupPlan, type DecisionInput, type DepositsFacts, type P
 import type { DestinationToken } from "./economics.ts";
 import type { DecisionOutcome, WatchDecision } from "./decisions.ts";
 import type { FinalityObservation } from "./feed.ts";
-import { COLD_START_FLOOR_SECONDS, IDLE, nextHoldAt, predictionOf, warmupStep, type WarmupConfig, type WarmupEnd, type WarmupSession, type WarmupTarget } from "./warmup.ts";
+import { COLD_START_FLOOR_SECONDS, IDLE, nextHoldAt, predictionOf, warmupStep, resolveWarmup, type WarmupSettings, type WarmupEnd, type WarmupSession, type WarmupTarget } from "./warmup.ts";
 import type { WarmupStore } from "./warmup-store.ts";
 
 /** The caller key of the watcher's requests. The rate limits count it like any caller. */
@@ -78,7 +78,9 @@ export type DirectionWatcherInput = {
   readonly ping: (() => Promise<number>) | null;
   readonly policy: Policy;
   readonly minParticipants: number;
-  readonly warmup: WarmupConfig;
+  readonly warmup: WarmupSettings;
+  /** The idle timeout RunPod reported for the endpoint, null while unknown: replaces `warmup.idleTimeoutSeconds` and, when the hold interval is not set, derives it. */
+  readonly observedIdleSeconds?: () => number | null;
   /** The observed times to ready and the warm-up sessions, in the backend database. */
   readonly warmupStore: WarmupStore;
   /** A refusal with a longer wait than this is left to the next finalized header. */
@@ -117,6 +119,8 @@ const iso = (seconds: number) => new Date(seconds * 1000).toISOString();
 /** Builds the watcher of one direction. */
 export function createDirectionWatcher(input: DirectionWatcherInput): DirectionWatcher {
   const { direction, logger, now } = input;
+  /** The warm-up settings with RunPod's idle timeout in place of the fallback, when it is known. */
+  const currentWarmup = () => resolveWarmup(input.warmup, input.observedIdleSeconds?.() ?? null);
   /** The newest finalized slot for which a job started or joined: nothing at or below it starts another. */
   let doneSlot = -1;
   let running: Promise<void> | null = null;
@@ -405,7 +409,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
   /** Ends the running session. Only called while one runs. */
   function endSession(reason: WarmupEnd | "timeout", at: number): void {
     const ending = session as ActiveSession;
-    input.warmupStore.endSession(ending.id, reason, at * 1000, input.warmup.idleTimeoutSeconds);
+    input.warmupStore.endSession(ending.id, reason, at * 1000, currentWarmup().idleTimeoutSeconds);
     const warmSeconds = Math.round(at - ending.startedAt);
     const fields = { direction, why: ending.target.why, warmSeconds, ready: ending.phase === "warm", dueInSeconds: Math.round(ending.target.at - at) };
     if (reason === "used") logger.info("warmup_used", { ...fields, readyBeforeDueSeconds: ending.phase === "warm" ? Math.round(ending.target.at - ending.readyAt) : null });
@@ -417,7 +421,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
     if (holdTimer !== null) clearTimeout(holdTimer);
     holdTimer = null;
     if (session.phase !== "warm" || stopped) return;
-    const wait = Math.max(0, nextHoldAt(session, input.warmup) * 1000 - now());
+    const wait = Math.max(0, nextHoldAt(session, currentWarmup()) * 1000 - now());
     holdTimer = setTimeout(() => {
       holdTimer = null;
       void scan();
@@ -491,7 +495,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
       const messages = toWaiting(listed, facts);
       const batch = await batchOf(listed, facts);
       nowSeconds = now() / 1000;
-      lead = input.warmupStore.lead(input.warmup);
+      lead = input.warmupStore.lead(currentWarmup());
       // The same decision as the real proof, asked for the moments ahead: see warmupPlan.
       const plan = warmupPlan({
         facts,
@@ -511,7 +515,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
         ...(batch === undefined ? {} : { batch }),
       });
       const capReached = input.warmupStore.warmSecondsInWindow(nowSeconds * 1000) >= input.warmup.dailyCapSeconds;
-      action = warmupStep({ nowSeconds, targets: plan.targets, live: plan.live, session, config: input.warmup, leadSeconds: lead.seconds, jobActive: input.findActiveJob() !== null, pingOutstanding, capReached, predictionStarted: (target) => input.warmupStore.predictionStarted(direction, predictionOf(target)) });
+      action = warmupStep({ nowSeconds, targets: plan.targets, live: plan.live, session, config: currentWarmup(), leadSeconds: lead.seconds, jobActive: input.findActiveJob() !== null, pingOutstanding, capReached, predictionStarted: (target) => input.warmupStore.predictionStarted(direction, predictionOf(target)) });
       scanFailing = false;
     } catch (error) {
       if (!scanFailing) logger.warn("watch_scan_failed", { direction, error });

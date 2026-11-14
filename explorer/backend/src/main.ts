@@ -18,7 +18,7 @@ import { createProofNeedReader, withoutIndexer } from "./requests/proof-need.ts"
 import { openStorage } from "./storage.ts";
 import { billingEndpoints, createBillingReader } from "./billing.ts";
 import { createIdleHistory } from "./idle-history.ts";
-import { createIdleTimeoutSync } from "./idle-timeout.ts";
+import { createIdleTimeoutReader } from "./idle-timeout.ts";
 import { createProverPing } from "./watch/ping.ts";
 import { watchedDirections } from "./watch/module.ts";
 import * as webhook from "./webhook/module.ts";
@@ -124,10 +124,11 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
   const runpodEndpoints = billingEndpoints(config, secrets);
   const billing = runpodEndpoints.length === 0 ? undefined : createBillingReader({ endpoints: runpodEndpoints, now, logger, ttlMilliseconds: config.billing.refreshSeconds * 1000, retryMilliseconds: config.billing.retrySeconds * 1000 });
   const idleHistory = createIdleHistory(storage);
-  const idleSync =
-    runpodEndpoints.length === 0
-      ? undefined
-      : createIdleTimeoutSync({ endpoints: runpodEndpoints, idleTimeoutSeconds: config.watch.warmup.idleTimeoutSeconds, sync: config.watch.warmup.syncIdleTimeout, logger, onObserved: (seconds) => idleHistory.record(now(), seconds) });
+  const idleReader =
+    runpodEndpoints.length === 0 ? undefined : createIdleTimeoutReader({ endpoints: runpodEndpoints, logger, onObserved: (seconds) => idleHistory.record(now(), seconds) });
+  if (config.watch.warmup.syncIdleTimeout !== undefined) {
+    logger.warn("config_deprecated", { key: "watch.warmup.syncIdleTimeout", detail: "ignored: the backend no longer writes the idle timeout; it is set in deploy/runpod/endpoints.json. Remove the key" });
+  }
   // Before anything can be signed or ground: the webhook posts proofs with a proof of work. A failed engine is logged and
   // shown on /health, and the webhook refuses to grind; the other modules go on.
   const grindEngine = input.enabled.includes("webhook") ? await testGrindEngine(input.preflight ?? grindPreflight, logger) : undefined;
@@ -148,12 +149,12 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     ...(grindEngine === undefined ? {} : { grindEngine }),
     pingProver,
     ...(billing === undefined ? {} : { billing }),
-    ...(idleSync === undefined ? {} : { endpointIdleTimeoutSeconds: () => idleSync.endpointIdleTimeoutSeconds() }),
+    ...(idleReader === undefined ? {} : { endpointIdleTimeoutSeconds: () => idleReader.endpointIdleTimeoutSeconds() }),
     ...(sealSettings === undefined ? {} : { openSealSigner: () => openSigner({ settings: sealSettings.signer, vault, logger: asBotLogger(logger) }) }),
   };
   const app = createApp({ context, modules: MODULES, enabled: input.enabled });
-  // In the background: a slow or failing RunPod never delays start-up.
-  const idleSynced = idleSync?.run();
+  // In the background: a slow or failing RunPod never delays start-up. The idle timeout is read again with the billing.
+  const idleReading = idleReader?.start(config.billing.refreshSeconds * 1000);
   const stoppers = await Promise.all(input.enabled.map((name) => MODULES[name].start(context)));
   const server = await new Promise<ReturnType<typeof serve> & { port: number }>((resolve) => {
     const listening = serve({ fetch: app.fetch, hostname: config.listen.host, port: config.listen.port }, (address) => resolve(Object.assign(listening, { port: address.port })));
@@ -164,7 +165,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     async stop() {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await Promise.all(stoppers.map((stop) => stop()));
-      await idleSynced;
+      await idleReading?.stop();
       storage.close();
     },
   };
