@@ -34,7 +34,7 @@ export type WebConfiguration = {
   readonly deploymentJson: string | null;
   /** The URL of a deployment file, or null. */
   readonly deploymentUrl: string | null;
-  /** Reserved for a future WalletConnect connector. The connector is not wired in yet. */
+  /** The Reown project id: with it Connect opens the AppKit modal; without it only the wallets in the browser connect. */
   readonly walletConnectProjectId: string | null;
 };
 

@@ -14,9 +14,13 @@ describe("the action dialog without a wallet", () => {
     expect(connect).toHaveBeenCalledTimes(1);
   });
 
-  it("disables the button when the browser has no wallet", async () => {
-    renderWithWallet(<StatefulActionDialog dialog="bridge" onClose={() => undefined} />, { wallet: disconnectedWallet({ walletAvailable: false }) });
-    expect(await screen.findByRole("button", { name: "Connect wallet" })).toBeDisabled();
+  it("keeps the button on when the browser has no wallet: Connect lists where to get one", async () => {
+    const connect = vi.fn().mockResolvedValue(undefined);
+    renderWithWallet(<StatefulActionDialog dialog="bridge" onClose={() => undefined} />, { wallet: disconnectedWallet({ walletAvailable: false, connect }) });
+    const button = await screen.findByRole("button", { name: "Connect wallet" });
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+    expect(connect).toHaveBeenCalledTimes(1);
   });
 });
 

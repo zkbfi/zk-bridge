@@ -101,13 +101,6 @@ describe("the wallet port over wagmi: the actions", () => {
     expect(wagmi.connectAsync).toHaveBeenCalledWith({ connector: CONNECTOR });
   });
 
-  it("explains that no wallet exists, and does not try to connect, when the browser offers no connector", async () => {
-    wagmi.connectors = [];
-    const port = await mount();
-    await expect(port.connect()).rejects.toThrow("No wallet was found in this browser. Install a wallet extension, then reload the page.");
-    expect(wagmi.connectAsync).not.toHaveBeenCalled();
-  });
-
   it("disconnects and switches chain on request", async () => {
     const port = await mount();
     port.disconnect();

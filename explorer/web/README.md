@@ -53,7 +53,7 @@ Vite copies every `VITE_` variable into the page at build time, so all of them a
 | `VITE_EXPLORER_DEPLOYMENT_URL` | URL of the deployment JSON that `docker/deploy.sh` writes. | none |
 | `VITE_EXPLORER_DEPLOYMENT_JSON` | The same JSON, inline. Wins over the URL. | none |
 | `VITE_EXPLORER_RPC_URL_<chainId>` | Public RPC endpoint of each chain, for balances, allowances, gas and fees, and for the RPC fallback. A URL that you set on the connections page wins over it. The `rpc_url` of the deployment JSON is the weaker default. | none |
-| `VITE_WALLETCONNECT_PROJECT_ID` | Reserved. See "Wallets". | none |
+| `VITE_WALLETCONNECT_PROJECT_ID` | The Reown project id (made under the zkb.fi account at dashboard.reown.com). Set at release, at build time. See "Wallets". | none |
 
 A live page needs a deployment (URL or inline JSON). The page serves one pair, because the indexer serves one. The global view lists the known pairs and marks the others as not configured.
 
@@ -67,8 +67,9 @@ The page `#/settings` shows the indexer URL and the RPC URL of each chain, where
 
 ## Wallets
 
-- **Injected browser wallets** through wagmi and viem. Ledger and Trezor work through the browser wallet that holds them. The page has no direct USB access.
-- **WalletConnect is not wired in.** Its connector needs a project identifier and an extra package (`@walletconnect/ethereum-provider`), and a committed identifier is not acceptable. The variable `VITE_WALLETCONNECT_PROJECT_ID` is reserved for it. This is an open item.
+- **With a Reown project id** (`VITE_WALLETCONNECT_PROJECT_ID` set when the release is built), Connect opens Reown AppKit's modal (`@reown/appkit` with its wagmi adapter, exact versions in `package.json`). It lists the wallets in the browser, offers install links, and shows a QR code for a phone wallet. Its networks are the two chains of the pair, with the same transports as the rest of the page. Analytics, email and social login, swaps, on-ramp, history, send and receive are off. The modal follows the page's theme (the accent token, square corners, the page's font). AppKit is a separate chunk: the page imports it on the first Connect, and at load when the viewer connected here before. The project id is public by design (it ships in the bundle) and is limited by the allowed origins set in the Reown dashboard, so add every gateway host the dapp is served from there.
+- **Without a project id**, there is no AppKit. Connect uses the wallets in the browser: wallets that announce themselves (EIP-6963) and the generic `window.ethereum` connector when the page has one. One wallet connects at once; several open a short list to pick from; none opens a list of install links (MetaMask, Rabby, Coinbase Wallet, Rainbow) with "Install a wallet, then reload this page to connect." A failed connect shows its message in that list, never as an uncaught error. Ledger and Trezor work through the browser wallet that holds them. The page has no direct USB access.
+- The page sets no Content-Security-Policy. If a gateway adds one, AppKit needs `connect-src` for `https://api.web3modal.org`, `https://pulse.walletconnect.org` (named in the bundle; analytics is off), `https://rpc.walletconnect.org`, `https://verify.walletconnect.org` and `wss://relay.walletconnect.org`, `frame-src https://secure.walletconnect.org https://verify.walletconnect.org`, and `font-src https://fonts.reown.com`, and `img-src https://api.web3modal.org` for the wallet icons. These come from the built bundle and were not exercised against a real CSP.
 - The page never holds a key. The wallet signs and sends. The page asks the wallet to switch chain when a transaction is for the other chain.
 
 ## What is mocked

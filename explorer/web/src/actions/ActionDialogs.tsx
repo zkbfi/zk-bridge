@@ -51,7 +51,7 @@ export const ActionDialog = ({ dialog, overlay, onOverlay, linked, onClose }: Ac
       return (
         <Box>
           <Notice tone="info">Connect a wallet first. The page needs your account to read your balances.</Notice>
-          <Button marginTop="3" colorPalette="blue" disabled={!wallet.walletAvailable} onClick={() => void wallet.connect()}>
+          <Button marginTop="3" colorPalette="blue" onClick={() => void wallet.connect()}>
             Connect wallet
           </Button>
         </Box>

@@ -33,7 +33,7 @@ export const Providers = ({ services, children }: ProvidersProps) => {
     ) : configuration.dataMode === "fixture" ? (
       <FixtureWalletProvider initialChainId={pair.first.chainId}>{children}</FixtureWalletProvider>
     ) : (
-      <WagmiWalletProvider pair={pair} rpcUrls={configuration.rpcUrls}>
+      <WagmiWalletProvider pair={pair} rpcUrls={configuration.rpcUrls} walletConnectProjectId={configuration.walletConnectProjectId}>
         {children}
       </WagmiWalletProvider>
     );

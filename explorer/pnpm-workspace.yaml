@@ -16,8 +16,10 @@ packages:
 # Refuse any package version younger than 28 days (40320 minutes), direct or transitive.
 minimumReleaseAge: 40320
 # Run no install scripts except the two native USB modules the hardware wallets need.
+# @reown/appkit only has a postinstall that prints a version notice.
 # The esbuild binary comes from its platform package; keccak falls back to its JavaScript build.
 allowBuilds:
+  "@reown/appkit": false
   esbuild: false
   keccak: false
   node-hid: true

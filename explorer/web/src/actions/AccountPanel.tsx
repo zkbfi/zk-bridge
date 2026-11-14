@@ -49,10 +49,10 @@ export const AccountPanel = ({ pair, snapshots, snapshotError }: AccountPanelPro
           <Text fontSize="sm" color="fg.muted">
             Connect the wallet in your browser to see your balances and to bridge. A hardware wallet works through that wallet.
           </Text>
-          <Button marginTop="2" size="sm" colorPalette="blue" disabled={!wallet.walletAvailable || wallet.status === "connecting"} onClick={() => void wallet.connect()}>
+          <Button marginTop="2" size="sm" colorPalette="blue" disabled={wallet.status === "connecting"} onClick={() => void wallet.connect()}>
             {wallet.status === "connecting" ? "Connecting…" : "Connect wallet"}
           </Button>
-          {wallet.walletAvailable ? null : <Text fontSize="xs" color="fg.muted" marginTop="1">No wallet was found in this browser.</Text>}
+          {wallet.walletAvailable ? null : <Text fontSize="xs" color="fg.muted" marginTop="1">No wallet was found in this browser. Connect lists where to get one.</Text>}
         </Box>
       )}
 
