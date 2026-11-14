@@ -1,0 +1,177 @@
+---
+# Installs eRPC behind rpc.zkb.fi (docs/rpc-proxy.md): valve's fork of eRPC (github.com/valve-tech/erpc), one pinned
+# release for ARM64, checked against the SHA-256 that its release's SHA256SUMS lists (pinned below, in group_vars), as
+# /opt/zk-bridge/erpc/<version>/erpc, with /opt/zk-bridge/erpc/current pointing at it. Then the unit of the release
+# (deploy/app-server/erpc/zk-bridge-erpc.service), a check of the configuration as the service's user, a restart, and a
+# read of every chain through it.
+#
+#   cd deploy/ansible
+#   ansible-playbook erpc.yml -e commit=<hash>             # install or upgrade, restart, check
+#   ansible-playbook erpc.yml -e commit=<hash> --check     # what would change
+#
+# Before the first run, on the server (as root): the configuration and the key, from the templates of the release.
+#   install -m 0640 -o root -g zkb_erpc <release>/deploy/app-server/config/erpc/erpc.yaml.example /etc/zk-bridge/erpc/erpc.yaml
+#   install -m 0640 -o root -g zkb_erpc /dev/null /etc/zk-bridge/erpc/erpc.env   # then write VALVE_RPC_KEY=<key> into it
+# The playbook makes the user and the directory if they are missing, and stops when either file is missing.
+#
+# Rollback: set zkb_erpc_version and zkb_erpc_sha256 back (or -e them) and run it again; the old binary is still in its
+# version directory. The playbook never prints the key: the check of the configuration runs with no_log.
+- name: Install eRPC
+  hosts: zkbfi
+  gather_facts: false
+  vars:
+    zkb_erpc_binary: "{{ zkb_erpc_dir }}/{{ zkb_erpc_version }}/erpc"
+  tasks:
+    - name: Find the release
+      ansible.builtin.include_tasks: tasks/resolve_release.yml
+
+    - name: Read the machine type
+      ansible.builtin.command: uname -m
+      register: zkb_machine
+      changed_when: false
+      check_mode: false
+
+    - name: Stop unless the server is ARM64 (the pinned binary is erpc-linux-arm64)
+      ansible.builtin.assert:
+        that:
+          - zkb_machine.stdout == 'aarch64'
+        fail_msg: "eRPC is pinned for ARM64 (erpc-linux-arm64); this server is {{ zkb_machine.stdout }}. Pin the matching asset and its SHA-256 in group_vars."
+        quiet: true
+
+    - name: Make the group of eRPC
+      ansible.builtin.group:
+        name: "{{ zkb_erpc_user }}"
+        system: true
+
+    - name: Make the user of eRPC
+      ansible.builtin.user:
+        name: "{{ zkb_erpc_user }}"
+        group: "{{ zkb_erpc_user }}"
+        system: true
+        home: "{{ zkb_erpc_state }}"
+        create_home: false
+        shell: /usr/sbin/nologin
+
+    - name: Make its state directory
+      ansible.builtin.file:
+        path: "{{ zkb_erpc_state }}"
+        state: directory
+        owner: "{{ zkb_erpc_user }}"
+        group: "{{ zkb_erpc_user }}"
+        mode: "0700"
+
+    - name: Make its configuration directory (readable by its group only)
+      ansible.builtin.file:
+        path: "{{ zkb_etc }}/erpc"
+        state: directory
+        owner: root
+        group: "{{ zkb_erpc_user }}"
+        mode: "0750"
+
+    - name: Look for the configuration and the key
+      ansible.builtin.stat:
+        path: "{{ zkb_etc }}/erpc/{{ item }}"
+      loop:
+        - erpc.yaml
+        - erpc.env
+      register: zkb_erpc_files
+      check_mode: false
+
+    - name: Stop when a file is missing
+      ansible.builtin.assert:
+        that:
+          - zkb_erpc_files.results | rejectattr('stat.exists') | list | length == 0
+        fail_msg: "Missing in {{ zkb_etc }}/erpc: {{ zkb_erpc_files.results | rejectattr('stat.exists') | map(attribute='item') | join(', ') }}. Copy deploy/app-server/config/erpc/*.example (see the header of this playbook)."
+        quiet: true
+
+    - name: Make the directory of the version
+      ansible.builtin.file:
+        path: "{{ zkb_erpc_dir }}/{{ zkb_erpc_version }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Download the binary and check its SHA-256
+      ansible.builtin.get_url:
+        url: "https://github.com/valve-tech/erpc/releases/download/{{ zkb_erpc_version }}/erpc-linux-arm64"
+        dest: "{{ zkb_erpc_binary }}"
+        checksum: "sha256:{{ zkb_erpc_sha256 }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Check the configuration as the service's user, with its key (the report stays on the server)
+      ansible.builtin.command:
+        argv:
+          - systemd-run
+          - --wait
+          - --pipe
+          - --collect
+          - --quiet
+          - --property=User={{ zkb_erpc_user }}
+          - --property=EnvironmentFile={{ zkb_etc }}/erpc/erpc.env
+          - "{{ zkb_erpc_binary }}"
+          - validate
+          - "{{ zkb_etc }}/erpc/erpc.yaml"
+      register: zkb_erpc_validate
+      changed_when: false
+      failed_when: false
+      no_log: true
+      when: not ansible_check_mode
+
+    - name: Stop when the configuration is not valid
+      ansible.builtin.fail:
+        msg: >-
+          eRPC refuses {{ zkb_etc }}/erpc/erpc.yaml (exit {{ zkb_erpc_validate.rc }}). Read the report on the server, where
+          it stays: systemd-run --wait --pipe --collect -p User={{ zkb_erpc_user }} -p EnvironmentFile={{ zkb_etc }}/erpc/erpc.env
+          {{ zkb_erpc_binary }} validate {{ zkb_etc }}/erpc/erpc.yaml
+      when: not ansible_check_mode and zkb_erpc_validate.rc != 0
+
+    - name: Point current at the version
+      ansible.builtin.file:
+        src: "{{ zkb_erpc_dir }}/{{ zkb_erpc_version }}"
+        dest: "{{ zkb_erpc_dir }}/current"
+        state: link
+        force: true
+        owner: root
+        group: root
+
+    - name: Install the unit of the release
+      ansible.builtin.copy:
+        src: "{{ zkb_release }}/deploy/app-server/erpc/{{ zkb_erpc_unit }}.service"
+        dest: "{{ zkb_unit_dir }}/{{ zkb_erpc_unit }}.service"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Enable and restart eRPC
+      ansible.builtin.systemd_service:
+        name: "{{ zkb_erpc_unit }}"
+        daemon_reload: true
+        enabled: true
+        state: restarted
+
+    - name: Wait for its port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ zkb_erpc_port }}"
+        timeout: 30
+      when: not ansible_check_mode
+
+    - name: Read the chain id of every chain through eRPC
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ zkb_erpc_port }}/zkb/evm/{{ item }}"
+        method: POST
+        body_format: json
+        body: { jsonrpc: "2.0", id: 1, method: eth_chainId, params: [] }
+        return_content: true
+      loop: "{{ zkb_erpc_chains }}"
+      register: zkb_erpc_reads
+      failed_when: zkb_erpc_reads.json is not defined or (zkb_erpc_reads.json.result | default('0x0') | int(base=16)) != (item | int)
+      when: not ansible_check_mode
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "eRPC {{ zkb_erpc_version }} answers on 127.0.0.1:{{ zkb_erpc_port }} for chains {{ zkb_erpc_chains | join(', ') }}. Next: rpc-proxy in the backend's modules, the Caddyfile with ZKB_RPC_HOST, the DNS record (docs/rpc-proxy.md)."

@@ -23,6 +23,19 @@ zkb_proofs_mirror: "{{ zkb_proofs_dir }}/mirror"
 # deploy/operator/pull-proofs.sh (override with -e zkb_proofs_local_dir=...).
 zkb_proofs_local_dir: ~/zkb-backups/proofs
 
+# --- eRPC behind rpc.zkb.fi (erpc.yml, docs/rpc-proxy.md) -----------------------------------------------------------
+# valve's fork of eRPC, one pinned release. The SHA-256 is the line for erpc-linux-arm64 in the SHA256SUMS asset of
+# github.com/valve-tech/erpc/releases/tag/0.3.0.15-valve (published 2026-11-14). Change both together.
+zkb_erpc_version: 0.3.0.15-valve
+zkb_erpc_sha256: 8c285b3263671c0b73012b2534cadab5e37e3d727815089ab3ee70aa9be4a4bc
+zkb_erpc_dir: "{{ zkb_base }}/erpc"
+zkb_erpc_user: zkb_erpc
+zkb_erpc_state: /var/lib/zk-bridge-erpc
+zkb_erpc_unit: zk-bridge-erpc
+# Its local port (config/erpc/erpc.yaml.example, server.httpPortV4; the backend's rpcProxy.upstreamUrl).
+zkb_erpc_port: 8792
+zkb_erpc_chains: [1, 369, 11155111, 943]
+
 # --- Caddy ----------------------------------------------------------------------------------------------------------
 zkb_caddyfile: /etc/caddy/Caddyfile
 zkb_caddy_env: /etc/caddy/zkb.env

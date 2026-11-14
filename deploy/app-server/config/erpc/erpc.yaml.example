@@ -1,0 +1,195 @@
+# eRPC behind rpc.zkb.fi (docs/rpc-proxy.md). Copy to /etc/zk-bridge/erpc/erpc.yaml, mode 0640, owner root, group zkb_erpc.
+# eRPC is valve's fork (github.com/valve-tech/erpc, release 0.3.0.15-valve), installed by deploy/ansible/erpc.yml.
+#
+# Layers, outside in: Caddy (TLS for rpc.zkb.fi) -> the backend's rpc-proxy module (checks every request's method AND
+# parameters, explorer/backend/src/rpc-proxy) -> this eRPC on 127.0.0.1 -> the upstreams below. This file holds no key:
+# the valve.city key comes from the environment (VALVE_RPC_KEY in /etc/zk-bridge/erpc/erpc.env), and eRPC expands the
+# environment over the whole file when it reads it. So no dollar sign appears in this file except the one reference.
+logLevel: warn
+
+server:
+  # Localhost only: the backend is the one client. No IPv6 listener.
+  listenV4: true
+  httpHostV4: 127.0.0.1
+  httpPortV4: 8792
+  listenV6: false
+  maxTimeout: 30s
+  # The backend sends the visitor's address in X-Forwarded-For; trust it only from localhost (eRPC's default forwarders).
+  trustedIPForwarders: ["127.0.0.1/32", "::1/128"]
+  trustedIPHeaders: ["X-Forwarded-For"]
+  # No internal error details, and no X-ERPC-* headers (they name upstreams). The backend also strips every URL.
+  includeErrorDetails: false
+  executionHeaders: "off"
+
+metrics:
+  enabled: false
+
+database:
+  evmJsonRpcCache:
+    connectors:
+      # One in-memory cache, capped at 256 MB: the server (4 vCPU, shared with the indexer, Postgres, IPFS and the bots)
+      # gives eRPC 512 MB in all (GOMEMLIMIT and MemoryMax in zk-bridge-erpc.service).
+      - id: memory
+        driver: memory
+        memory:
+          maxItems: 100000
+          maxTotalSize: 256MB
+    policies:
+      # Finalized data never changes: keep it until the cache evicts it.
+      - network: "*"
+        method: "*"
+        finality: finalized
+        empty: allow
+        connector: memory
+        ttl: 0
+      # Recent blocks can still reorganize: a few seconds.
+      - network: "*"
+        method: "*"
+        finality: unfinalized
+        empty: ignore
+        connector: memory
+        ttl: 5s
+      # The head, fees and other reads that change every block.
+      - network: "*"
+        method: "*"
+        finality: realtime
+        empty: ignore
+        connector: memory
+        ttl: 2s
+      # Keyed by a transaction hash. A missing receipt (empty) is never kept: the dapp polls for it after each send.
+      - network: "*"
+        method: "*"
+        finality: unknown
+        empty: ignore
+        connector: memory
+        ttl: 30s
+
+rateLimiters:
+  budgets:
+    # Each visitor (the X-Forwarded-For address from the backend; an IPv6 visitor arrives as its /64). A credit rule
+    # without creditUnits counts every request as 1 and pools all methods, so maxCount is the visitor's total.
+    - id: per-visitor
+      rules:
+        - method: "*"
+          countMode: credit
+          maxCount: 1200
+          period: minute
+          perIP: true
+        - method: "*"
+          countMode: credit
+          maxCount: 60
+          period: second
+          perIP: true
+        # Log scans are the heavy reads: a fallback scan of the dapp is a few windows a page.
+        - method: eth_getLogs
+          countMode: request
+          maxCount: 120
+          period: minute
+          perIP: true
+    # Everyone together: a ceiling that protects the upstreams if many visitors (or one with many addresses) come at once.
+    - id: everyone
+      rules:
+        - method: "*"
+          countMode: credit
+          maxCount: 30000
+          period: minute
+
+projects:
+  - id: zkb
+    # The backend answers browsers (CORS) itself; eRPC is never reached by a browser.
+    cors:
+      allowedOrigins: ["http://127.0.0.1"]
+      allowCredentials: false
+    # The methods the dapp sends (explorer/backend/src/rpc-proxy/settings.ts, DEFAULT_RPC_METHODS), and nothing else.
+    # ignoreMethods "*" plus allowMethods makes the allowlist; allowMethods alone would serve every method.
+    ignoreMethods: ["*"]
+    allowMethods:
+      - eth_chainId
+      - eth_blockNumber
+      - eth_getBlockByNumber
+      - eth_getTransactionByHash
+      - eth_getTransactionReceipt
+      - eth_call
+      - eth_estimateGas
+      - eth_getLogs
+      - eth_getBalance
+      - eth_getCode
+      - eth_getTransactionCount
+      - eth_maxPriorityFeePerGas
+      - eth_gasPrice
+    rateLimitBudget: per-visitor
+    networkDefaults:
+      rateLimitBudget: everyone
+      # A request that every valve.city upstream of its chain failed goes on to the public RPCs (tier:fallback) at once.
+      failover:
+        onDefaultsExhausted: true
+      failsafe:
+        - matchMethod: "*"
+          timeout:
+            duration: 25s
+          retry:
+            maxAttempts: 2
+            delay: 300ms
+    networks:
+      - architecture: evm
+        evm:
+          chainId: 1
+          # The dapp's fallback log scan reads windows of up to 10,000 blocks (explorer/data/src/rpc/history-scan.ts)
+          # and halves a window that is refused for its size.
+          getLogsMaxAllowedRange: 10000
+      - architecture: evm
+        evm:
+          chainId: 369
+          getLogsMaxAllowedRange: 10000
+      - architecture: evm
+        evm:
+          chainId: 11155111
+          getLogsMaxAllowedRange: 10000
+      - architecture: evm
+        evm:
+          chainId: 943
+          getLogsMaxAllowedRange: 10000
+    upstreamDefaults:
+      evm:
+        # eRPC polls each upstream's head this often. Slow enough to be gentle with the public RPCs.
+        statePollerInterval: 30s
+    # valve.city with the server's key first. The public RPCs of the dapp's own default list (explorer/terminal/src/
+    # config/default-rpc.ts) are tagged tier:fallback: eRPC's default selection policy sends them traffic only when no
+    # valve.city upstream of the chain is healthy.
+    upstreams:
+      - id: valve-1
+        endpoint: https://one.valve.city/rpc/${VALVE_RPC_KEY}/evm/1
+        evm: { chainId: 1 }
+      - id: valve-369
+        endpoint: https://one.valve.city/rpc/${VALVE_RPC_KEY}/evm/369
+        evm: { chainId: 369 }
+      - id: valve-11155111
+        endpoint: https://one.valve.city/rpc/${VALVE_RPC_KEY}/evm/11155111
+        evm: { chainId: 11155111 }
+      - id: valve-943
+        endpoint: https://one.valve.city/rpc/${VALVE_RPC_KEY}/evm/943
+        evm: { chainId: 943 }
+      - id: publicnode-1
+        endpoint: https://ethereum-rpc.publicnode.com
+        evm: { chainId: 1 }
+        tags: ["tier:fallback"]
+      - id: pulsechain-369
+        endpoint: https://rpc.pulsechain.com
+        evm: { chainId: 369 }
+        tags: ["tier:fallback"]
+      - id: publicnode-369
+        endpoint: https://pulsechain-rpc.publicnode.com
+        evm: { chainId: 369 }
+        tags: ["tier:fallback"]
+      - id: publicnode-11155111
+        endpoint: https://ethereum-sepolia-rpc.publicnode.com
+        evm: { chainId: 11155111 }
+        tags: ["tier:fallback"]
+      - id: pulsechain-943
+        endpoint: https://rpc.v4.testnet.pulsechain.com
+        evm: { chainId: 943 }
+        tags: ["tier:fallback"]
+      - id: publicnode-943
+        endpoint: https://pulsechain-testnet-rpc.publicnode.com
+        evm: { chainId: 943 }
+        tags: ["tier:fallback"]

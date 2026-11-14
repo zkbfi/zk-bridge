@@ -1,0 +1,63 @@
+# eRPC behind the dapp's RPC host (docs/rpc-proxy.md): valve's fork of eRPC, between the backend's rpc-proxy module and the
+# chain RPCs. deploy/ansible/erpc.yml installs this file and the binary. It listens on 127.0.0.1 only; the backend is
+# its one client, and Caddy and the backend are the public side.
+#
+#   /etc/zk-bridge/erpc/erpc.yaml        upstreams, cache, rate limits, method allowlist (config/erpc/erpc.yaml.example)
+#   /etc/zk-bridge/erpc/erpc.env         secret: VALVE_RPC_KEY (config/erpc/erpc.env.example)
+#   /opt/zk-bridge/erpc/current/erpc     the binary, a link to /opt/zk-bridge/erpc/<version>/erpc (erpc.yml)
+#
+# It keeps nothing on disk: the cache and the rate limit counters are in memory.
+[Unit]
+Description=zk-bridge eRPC (the dapp's RPC, behind the backend's rpc-proxy module)
+Wants=network-online.target
+After=network-online.target
+Before=zk-bridge-backend.service
+ConditionPathExists=/etc/zk-bridge/erpc/erpc.yaml
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=zkb_erpc
+Group=zkb_erpc
+WorkingDirectory=/var/lib/zk-bridge-erpc
+EnvironmentFile=/etc/zk-bridge/erpc/erpc.env
+# The 256 MB cache plus the requests in flight: Go collects garbage harder near 448 MiB, and the kernel stops the
+# process at 512 MiB (then systemd starts it again).
+Environment=GOMEMLIMIT=448MiB
+ExecStart=/opt/zk-bridge/erpc/current/erpc --config /etc/zk-bridge/erpc/erpc.yaml --require-config
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+MemoryMax=512M
+
+# Sandbox. Writable: its own state directory only (eRPC writes nothing there today).
+ReadWritePaths=/var/lib/zk-bridge-erpc
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# A Go binary needs no writable and executable memory.
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
