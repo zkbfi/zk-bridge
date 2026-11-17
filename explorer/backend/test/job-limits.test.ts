@@ -175,23 +175,17 @@ describe("the GPU budget and an unpriced tip at the automatic maximum (review, 2
 });
 
 describe("the requests module and the job limits", () => {
-  const snapshot = (amountUsd: number, billedSeconds: number, at: number): BillingSnapshot => ({ spend: { days: [{ start: new Date(at).toISOString().slice(0, 10), amountUsd, billedSeconds }], hours: [], readAt: at }, balance: null });
+  const snapshot = (amountUsd: number, at: number): BillingSnapshot => ({ spend: { days: [{ start: new Date(at).toISOString().slice(0, 10), amountUsd }], hours: [], readAt: at }, balance: null });
 
-  it("prices the budget at RunPod's measured rate, else at the configured price", async () => {
+  it("prices the budget at the configured price, whatever dollars RunPod's billing shows (it gives no billed time to measure a rate from)", async () => {
     const backend = makeBackend();
     const now = backend.clock.now();
     provedJob(backend.storage, "a", now - HOUR, 3600);
-    // RunPod billed $6 for an hour: $6 an hour, over the $5 budget.
-    const measured = { ...backend.context, billing: { read: async () => snapshot(6, 3600, now) } };
-    const app = (await import("../src/app.ts")).createApp({ context: measured, modules: (await import("../src/main.ts")).MODULES, enabled: ["requests"] });
+    // RunPod's billing shows $6 for the day, but the hour of proving is priced at the configured $2.25 an hour, under the $5 budget.
+    const billed = { ...backend.context, billing: { read: async () => snapshot(6, now) } };
+    const app = (await import("../src/app.ts")).createApp({ context: billed, modules: (await import("../src/main.ts")).MODULES, enabled: ["requests"] });
     const { init, env } = postFrom("203.0.113.9");
-    const refused = await app.request("/requests", init, env);
-    expect(refused.status).toBe(429);
-    expect(await refused.json()).toMatchObject({ error: "rate-limited", why: "gpu-budget", detail: "the 24 h GPU budget of $5.00 for first-to-second is spent: $6.00" });
-    // No billed time: the configured price ($2.25 an hour) is under the budget.
-    const unbilled = { ...backend.context, billing: { read: async () => snapshot(0, 0, now) } };
-    const other = (await import("../src/app.ts")).createApp({ context: unbilled, modules: (await import("../src/main.ts")).MODULES, enabled: ["requests"] });
-    expect((await other.request("/requests", init, env)).status).toBe(202);
+    expect((await app.request("/requests", init, env)).status).toBe(202);
   });
 
   it("caps a day at the source chain's epochs: 225 from Ethereum, 270 from PulseChain", async () => {

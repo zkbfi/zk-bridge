@@ -23,7 +23,6 @@ import {
   type PairSide,
   type ProofDirection,
 } from "@zk-bridge/shared";
-import { figuresOf } from "../billing.ts";
 import { recentJobSeconds } from "../requests/jobs.ts";
 import { JOB_BUDGET_WINDOW_MILLISECONDS, gpuBudgetWait } from "../requests/rate-limit.ts";
 import { createObservationWatch, type BudgetState } from "./observe-watch.ts";
@@ -94,8 +93,7 @@ function directionFrom(context: BackendModuleContext, side: PairSide): ProofDire
 /** The GPU budget of a direction now, priced as the request service prices it. */
 async function budgetOf(context: BackendModuleContext, direction: ProofDirection): Promise<BudgetState> {
   const now = context.now();
-  const fallback = context.config.watch.warmup.gpuUsdPerHour;
-  const usdPerHour = context.billing === undefined ? fallback : (figuresOf(await context.billing.read(), now).effectiveUsdPerHour ?? fallback);
+  const usdPerHour = context.config.watch.warmup.gpuUsdPerHour;
   const budgetUsd = context.config.limits.gpuBudgetUsdPerDirectionPerDay;
   const spent = gpuBudgetWait({ jobs: recentJobSeconds(context.storage, direction, now - JOB_BUDGET_WINDOW_MILLISECONDS), usdPerHour, budgetUsd, now });
   return spent === null ? null : { ...spent, budgetUsd };

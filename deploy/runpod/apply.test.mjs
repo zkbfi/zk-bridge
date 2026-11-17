@@ -1,422 +1,497 @@
-// Tests of apply.mjs. No call reaches RunPod: the HTTP call is a stub. Run: node --test deploy/runpod
+// Tests of apply.mjs. No call reaches RunPod: the HTTP client is a stub. Run: node --test deploy/runpod
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   ApplyError,
-  DELETE_ENDPOINT_QUERY,
-  ENDPOINTS_QUERY,
-  GRAPHQL_URL,
-  SAVE_TEMPLATE_QUERY,
-  TEMPLATES_QUERY,
+  CREATE_FIELDS,
+  GPU_FIELDS,
+  PATCH_FIELDS,
+  RUNPOD_REST_URL,
+  WORKERS_FIELDS,
   applyPlan,
   describePlan,
   diffEndpoint,
-  diffTemplate,
-  gpuIdsOf,
-  makeGraphqlPost,
+  listAll,
+  makeRestClient,
   parseArguments,
   parseConfig,
   planChanges,
+  problemText,
+  readLive,
   run,
-  saveEndpointQuery,
-  saveTemplateVariables,
+  unusedTemplates,
+  wantedBody,
 } from "./apply.mjs";
 
 const fileText = readFileSync(new URL("./endpoints.json", import.meta.url), "utf8");
-/**
- * The file as it was before the 32 GB and 48 GB tiers existed: the tests build on that state (two tiers to create), so
- * the ids that the first apply wrote back into the file are taken out again here.
- */
-const beforeTiersText = () => {
-  const parsed = JSON.parse(fileText);
-  for (const tier of parsed.endpoints.slice(1)) {
-    delete tier.id;
-    delete tier.template.id;
-  }
-  return JSON.stringify(parsed);
+const config = () => parseConfig(fileText);
+const edit = (change) => {
+  const copy = JSON.parse(fileText);
+  change(copy);
+  return JSON.stringify(copy);
 };
-const config = () => parseConfig(beforeTiersText());
-/** The wanted template of the first tier: the shared settings with its name and id. */
-const wantedTemplate = () => ({ ...config().template, name: "zk-bridge-prover-gpu-template", id: "hsj330cqpf" });
 
-/** What RunPod returns for the file's own state (the live account of 2026-11-13, before the new tiers). */
-const liveTemplate = (over = {}) => ({
-  id: "hsj330cqpf",
-  name: "zk-bridge-prover-gpu-template",
-  imageName: config().template.imageName,
-  isServerless: true,
-  containerDiskInGb: 40,
-  volumeInGb: 0,
-  volumeMountPath: "/workspace",
-  dockerArgs: "--flag",
-  ports: "8000/http",
-  startJupyter: false,
-  startSsh: true,
-  readme: "notes",
-  containerRegistryAuthId: "cmvts6161003dsycaos24r5wg",
-  env: [
-    { key: "PORT", value: "8000" },
-    { key: "PORT_HEALTH", value: "8000" },
-  ],
-  ...over,
-});
+/** The account of 2026-11-16 as `GET /v2/serverless` lists it: the three tiers, with the one value that differs from the file (gpu-48gb minCudaVersion 12.0). */
 const liveEndpoint = (over = {}) => ({
   id: "43nsvfb8svkosr",
   name: "zk-bridge-prover-gpu",
-  gpuIds: "ADA_24,AMPERE_24,-NVIDIA RTX A5000",
-  gpuCount: 1,
-  idleTimeout: 5,
-  locations: null,
-  networkVolumeId: null,
-  scalerType: "REQUEST_COUNT",
-  scalerValue: 1,
-  templateId: "hsj330cqpf",
-  type: "LB",
-  workersMin: 0,
-  workersMax: 1,
-  flashBootType: "FLASHBOOT",
-  executionTimeoutMs: 600000,
-  template: liveTemplate(),
+  type: "LOAD_BALANCER",
+  image: config().container.image,
+  env: { PORT: "8000", PORT_HEALTH: "8000" },
+  disk: 40,
+  ports: ["8000/http"],
+  registry: "cmvts6161003dsycaos24r5wg",
+  gpu: { pools: ["AMPERE_24", "ADA_24"], excludedTypes: ["NVIDIA RTX A5000"], minCudaVersion: "12.8", allowedCudaVersions: [], count: 1 },
+  workers: { min: 0, max: 1, idleTimeout: 5 },
+  scaling: { type: "REQUEST_COUNT", requestCount: 1 },
+  dataCenterIds: ["EU-RO-1"],
+  networkVolumes: [],
+  mounts: [],
+  timeout: 600000,
+  flashboot: "FLASHBOOT",
+  createdAt: "2026-11-01T00:00:00Z",
   ...over,
 });
+const LIVE = [
+  liveEndpoint(),
+  liveEndpoint({ id: "muecz9pudncily", name: "zk-bridge-prover-gpu-32gb", gpu: { pools: ["ADA_32_PRO"], excludedTypes: [], minCudaVersion: "12.8", allowedCudaVersions: [], count: 1 } }),
+  liveEndpoint({ id: "nuax43o5zxyv9a", name: "zk-bridge-prover-gpu-48gb", gpu: { pools: ["ADA_48_PRO"], excludedTypes: ["NVIDIA L40"], minCudaVersion: "12.0", allowedCudaVersions: [], count: 1 } }),
+];
+const TEMPLATES = [
+  { id: "hsj330cqpf", name: "zk-bridge-prover-gpu-template", serverless: true, public: false },
+  { id: "10sn7k4j8q", name: "zk-bridge-prover-gpu-32gb-template", serverless: true, public: false },
+  { id: "pubtemplate1", name: "runpod-public", serverless: true, public: true },
+  { id: "podtemplate1", name: "a-pod", serverless: false, public: false },
+];
+
+/**
+ * A stub of the REST client. It answers GET /serverless and GET /templates (two pages for the endpoints, to test the cursor),
+ * records every request, and fails a path in `fail`.
+ */
+function fakeClient({ endpoints = LIVE, templates = TEMPLATES, fail = {} } = {}) {
+  const calls = [];
+  const client = {
+    async request(method, path, body) {
+      calls.push({ method, path, body });
+      const key = `${method} ${path.split("?")[0]}`;
+      if (fail[key] !== undefined) throw new ApplyError(fail[key]);
+      if (method === "GET" && path.startsWith("/serverless")) {
+        const url = new URL(path, "https://x.test");
+        const start = url.searchParams.get("cursor") === "page2" ? 1 : 0;
+        const page = start === 0 ? endpoints.slice(0, 1) : endpoints.slice(1);
+        return { endpoints: page, pagination: { nextCursor: start === 0 && endpoints.length > 1 ? "page2" : null, hasNextPage: start === 0 && endpoints.length > 1 } };
+      }
+      if (method === "GET" && path.startsWith("/templates")) return { templates, pagination: { nextCursor: null, hasNextPage: false } };
+      if (method === "POST") return { id: "newid123456789", ...body };
+      return null;
+    },
+  };
+  return { client, calls, writes: () => calls.filter((call) => call.method !== "GET") };
+}
 
 test("the file in the repository is valid and holds the three tiers in order, one retired endpoint and no secret", () => {
-  const { template, endpoints, retired } = config();
+  const { container, endpoints, retired } = config();
   assert.deepEqual(endpoints.map((tier) => tier.label), ["gpu-24gb", "gpu-32gb", "gpu-48gb"]);
-  assert.equal("id" in template || "name" in template, false, "the shared settings name no template");
-  assert.deepEqual(endpoints.map((tier) => tier.template), [{ id: "hsj330cqpf", name: "zk-bridge-prover-gpu-template" }, { name: "zk-bridge-prover-gpu-32gb-template" }, { name: "zk-bridge-prover-gpu-48gb-template" }]);
-  assert.deepEqual(endpoints[0].gpuIds, ["ADA_24", "AMPERE_24", "-NVIDIA RTX A5000"]);
-  assert.equal(endpoints[0].id, "43nsvfb8svkosr");
-  assert.equal(endpoints[1].id, undefined);
+  assert.deepEqual(endpoints.map((tier) => tier.id), ["43nsvfb8svkosr", "muecz9pudncily", "nuax43o5zxyv9a"]);
+  assert.deepEqual(endpoints.map((tier) => tier.gpu.pools), [["ADA_24", "AMPERE_24"], ["ADA_32_PRO"], ["ADA_48_PRO"]]);
+  assert.deepEqual(endpoints.map((tier) => tier.gpu.excludedTypes), [["NVIDIA RTX A5000"], [], ["NVIDIA L40"]]);
   assert.deepEqual(retired, ["zmp5owbxu73fc2"]);
-  assert.match(template.imageName, /@sha256:[0-9a-f]{64}$/);
+  assert.match(container.image, /@sha256:[0-9a-f]{64}$/);
+  assert.equal(container.registry, "cmvts6161003dsycaos24r5wg");
+  assert.deepEqual(container.env, { PORT: "8000", PORT_HEALTH: "8000" });
+  assert.deepEqual(container.ports, ["8000/http"]);
+  assert.equal(container.disk, 40);
+  assert.equal(JSON.parse(fileText).template, undefined, "there are no templates in REST v2");
   assert.doesNotMatch(fileText, /rpa_|api[_-]?key|secret|token/i);
 });
 
+test("every tier asks for CUDA 12.8, which the image needs (docker/Dockerfile: nvidia/cuda 12.8.2 runtime, driver 570 or newer)", () => {
+  assert.deepEqual(config().endpoints.map((tier) => tier.gpu.minCudaVersion), ["12.8", "12.8", "12.8"]);
+  const dockerfile = readFileSync(new URL("../../docker/Dockerfile", import.meta.url), "utf8");
+  assert.match(dockerfile, /nvidia\/cuda:12\.8\.\d+-runtime/);
+});
+
+test("the three tiers declare the live values of 2026-11-16: workers 0 to 1, idle timeout 5, FLASHBOOT, 600000 ms, REQUEST_COUNT 1, LOAD_BALANCER", () => {
+  for (const tier of config().endpoints) {
+    assert.deepEqual(tier.workers, { min: 0, max: 1 });
+    assert.equal(tier.idleTimeout, 5);
+    assert.equal(tier.flashboot, "FLASHBOOT");
+    assert.equal(tier.timeoutMs, 600000);
+    assert.deepEqual(tier.scaling, { type: "REQUEST_COUNT", requestCount: 1 });
+    assert.equal(tier.type, "LOAD_BALANCER");
+  }
+});
+
+test("against the live account the file differs only in minCudaVersion of gpu-48gb (12.0 live, 12.8 wanted)", () => {
+  const plan = planChanges(config(), { endpoints: LIVE, templates: [] });
+  const differences = plan.endpoints.flatMap(({ tier, changes }) => changes.map((change) => `${tier.label} ${change.field} ${change.from} -> ${change.to}`));
+  assert.deepEqual(differences, ["gpu-48gb gpu.minCudaVersion 12.0 -> 12.8"]);
+  assert.deepEqual(plan.endpoints[2].patch, { gpu: { pools: ["ADA_48_PRO"], excludedTypes: ["NVIDIA L40"], minCudaVersion: "12.8" } });
+  assert.equal(plan.endpoints[0].patch, null);
+  assert.equal(plan.endpoints[1].patch, null);
+  assert.deepEqual(plan.unmanaged, []);
+});
+
 test("parseConfig refuses a file that is not JSON or has the wrong shape", () => {
-  const edit = (change) => {
-    const copy = JSON.parse(fileText);
-    change(copy);
-    return JSON.stringify(copy);
-  };
   assert.throws(() => parseConfig("{"), /not valid JSON/);
   assert.throws(() => parseConfig("[]"), /must be an object/);
-  assert.throws(() => parseConfig(edit((c) => delete c.template)), /"template"/);
-  assert.throws(() => parseConfig(edit((c) => (c.template.imageName = ""))), /"imageName"/);
+  assert.throws(() => parseConfig(edit((c) => (c.template = {}))), /no per-tier templates/);
+  assert.throws(() => parseConfig(edit((c) => delete c.container)), /"container"/);
+  assert.throws(() => parseConfig(edit((c) => (c.container.image = ""))), /"image"/);
+  assert.throws(() => parseConfig(edit((c) => (c.container.disk = 0))), /"disk"/);
+  assert.throws(() => parseConfig(edit((c) => (c.container.ports = []))), /"ports"/);
+  assert.throws(() => parseConfig(edit((c) => (c.container.ports = [8000]))), /"ports"/);
+  assert.throws(() => parseConfig(edit((c) => (c.container.env = { PORT: 8000 }))), /"env"/);
+  assert.throws(() => parseConfig(edit((c) => (c.container.registry = 5))), /"registry"/);
   assert.throws(() => parseConfig(edit((c) => (c.endpoints = []))), /"endpoints"/);
-  assert.throws(() => parseConfig(edit((c) => (c.template.id = "x"))), /"id" belongs in the template of each endpoint/);
-  assert.throws(() => parseConfig(edit((c) => (c.template.name = "x"))), /"name" belongs in the template of each endpoint/);
-  assert.throws(() => parseConfig(edit((c) => delete c.endpoints[1].template)), /needs a "template"/);
-  assert.throws(() => parseConfig(edit((c) => (c.endpoints[1].template = { name: "" }))), /needs a "template"/);
-  assert.throws(() => parseConfig(edit((c) => (c.endpoints[1].template.id = 5))), /template "id" that is not text/);
-  assert.throws(() => parseConfig(edit((c) => (c.endpoints[1].template.name = c.endpoints[0].template.name))), /one template to two endpoints/);
-  assert.throws(() => parseConfig(edit((c) => (c.endpoints[1].template.id = "hsj330cqpf"))), /one template to two endpoints/);
   assert.throws(() => parseConfig(edit((c) => (c.retired = [1]))), /"retired"/);
+  assert.throws(() => parseConfig(edit((c) => (c.keepTemplates = [1]))), /"keepTemplates"/);
   assert.throws(() => parseConfig(edit((c) => (c.endpoints[0] = 5))), /not an object/);
   assert.throws(() => parseConfig(edit((c) => delete c.endpoints[0].name)), /"name"/);
-  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].gpuIds = []))), /"gpuIds"/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].type = "LB"))), /"type"/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].gpu.pools = []))), /"pools"/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].gpu.excludedTypes = ["-NVIDIA L40"]))), /excludedTypes/);
+  assert.throws(() => parseConfig(edit((c) => delete c.endpoints[0].gpu.excludedTypes)), /excludedTypes/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].gpu.minCudaVersion = "12"))), /minCudaVersion/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].gpu.minCudaVersion = 12.8))), /minCudaVersion/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].workers = { min: 2, max: 1 }))), /"workers"/);
   assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].idleTimeout = "5"))), /"idleTimeout"/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].idleTimeout = 0))), /"idleTimeout"/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].flashboot = "FLASHBOOT_ON"))), /"flashboot"/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].timeoutMs = "600000"))), /"timeoutMs"/);
+  assert.throws(() => parseConfig(edit((c) => delete c.endpoints[0].scaling)), /"scaling"/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].scaling = { type: "REQUEST_COUNT", requestCount: 0 }))), /requestCount/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].scaling = { type: "QUEUE_DELAY", queueDelay: 4 }))), /LOAD_BALANCER/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].scaling = { type: "SOMETHING" }))), /REQUEST_COUNT or QUEUE_DELAY/);
+  assert.throws(() => parseConfig(edit((c) => ((c.endpoints[0].type = "QUEUE"), (c.endpoints[0].scaling = { type: "QUEUE_DELAY", queueDelay: 0.1 })))), /queueDelay/);
   assert.throws(() => parseConfig(edit((c) => (c.endpoints[1].name = c.endpoints[0].name))), /twice/);
   assert.throws(() => parseConfig(edit((c) => (c.endpoints[1].id = c.endpoints[0].id))), /used twice/);
   assert.throws(() => parseConfig(edit((c) => (c.endpoints[1].id = 7))), /not text/);
   assert.throws(() => parseConfig(edit((c) => (c.retired = [c.endpoints[0].id]))), /both as an endpoint and as retired/);
   assert.deepEqual(parseConfig(edit((c) => delete c.retired)).retired, []);
+  assert.deepEqual(parseConfig(edit((c) => delete c.container.registry)).container.registry, undefined);
+  const queue = parseConfig(edit((c) => ((c.endpoints[0].type = "QUEUE"), (c.endpoints[0].scaling = { type: "QUEUE_DELAY", queueDelay: 4 }))));
+  assert.equal(queue.endpoints[0].type, "QUEUE");
 });
 
-test("gpuIdsOf reads RunPod's comma separated text, a list, or nothing", () => {
-  assert.deepEqual(gpuIdsOf("ADA_24, AMPERE_24,-NVIDIA RTX A5000"), ["ADA_24", "AMPERE_24", "-NVIDIA RTX A5000"]);
-  assert.deepEqual(gpuIdsOf(["A"]), ["A"]);
-  assert.deepEqual(gpuIdsOf(null), []);
+test("wantedBody holds the shared container settings and the tier's own, in the API's shape, with the idle timeout from the tier", () => {
+  const { container, endpoints } = config();
+  const body = wantedBody(container, endpoints[0]);
+  assert.deepEqual(body, {
+    name: "zk-bridge-prover-gpu",
+    type: "LOAD_BALANCER",
+    image: container.image,
+    disk: 40,
+    ports: ["8000/http"],
+    env: { PORT: "8000", PORT_HEALTH: "8000" },
+    registry: "cmvts6161003dsycaos24r5wg",
+    gpu: { pools: ["ADA_24", "AMPERE_24"], excludedTypes: ["NVIDIA RTX A5000"], minCudaVersion: "12.8" },
+    workers: { min: 0, max: 1, idleTimeout: 5 },
+    flashboot: "FLASHBOOT",
+    timeout: 600000,
+    scaling: { type: "REQUEST_COUNT", requestCount: 1 },
+  });
+  assert.equal("registry" in wantedBody({ ...container, registry: undefined }, endpoints[0]), false);
 });
 
-test("diffTemplate lists the fields that differ with old and new values, and masks every environment value", () => {
-  const same = diffTemplate(wantedTemplate(), liveTemplate());
-  assert.deepEqual(same, { exists: true, changes: [] });
-  const changed = diffTemplate(wantedTemplate(), liveTemplate({ imageName: "ghcr.io/x@sha256:old", containerDiskInGb: 20, env: [{ key: "PORT", value: "9999" }, { key: "EXTRA", value: "hunter2" }] }));
-  assert.deepEqual(changed.changes.map((change) => change.field), ["imageName", "containerDiskInGb", "env.EXTRA", "env.PORT", "env.PORT_HEALTH"]);
-  assert.deepEqual(changed.changes[0], { field: "imageName", from: "ghcr.io/x@sha256:old", to: config().template.imageName });
-  assert.deepEqual(changed.changes.slice(2), [
+test("diffEndpoint lists each field that differs with old and new values, masks environment values, ignores the order of lists", () => {
+  const { container, endpoints } = config();
+  const tier = endpoints[0];
+  assert.deepEqual(diffEndpoint(container, tier, liveEndpoint()), { exists: true, changes: [], patch: null, create: null, warnings: [] });
+  const changed = diffEndpoint(
+    container,
+    tier,
+    liveEndpoint({
+      image: "ghcr.io/x@sha256:old",
+      disk: 20,
+      ports: ["8000/tcp"],
+      registry: null,
+      env: { PORT: "9999", EXTRA: "hunter2" },
+      gpu: { pools: ["ADA_24"], excludedTypes: [], minCudaVersion: null },
+      workers: { min: 1, max: 2, idleTimeout: 60 },
+      flashboot: "OFF",
+      timeout: 300000,
+      scaling: { type: "REQUEST_COUNT", requestCount: 4 },
+      name: "old-name",
+    }),
+  );
+  assert.deepEqual(
+    changed.changes.map((change) => change.field),
+    ["name", "image", "disk", "registry", "flashboot", "timeout", "ports", "env.EXTRA", "env.PORT", "env.PORT_HEALTH", "gpu.pools", "gpu.excludedTypes", "gpu.minCudaVersion", "workers.min", "workers.max", "workers.idleTimeout", "scaling.requestCount"],
+  );
+  assert.deepEqual(changed.changes[1], { field: "image", from: "ghcr.io/x@sha256:old", to: container.image });
+  assert.deepEqual(changed.changes.slice(7, 10), [
     { field: "env.EXTRA", from: "(set)", to: "(removed)" },
     { field: "env.PORT", from: "(set)", to: "(set)" },
     { field: "env.PORT_HEALTH", from: undefined, to: "(set)" },
   ]);
-  assert.doesNotMatch(JSON.stringify(changed), /hunter2|9999/);
-  assert.equal(diffTemplate(wantedTemplate(), null).exists, false);
+  assert.equal(JSON.stringify(changed).includes("hunter2"), false);
+  assert.equal(JSON.stringify(changed).includes('"9999"'), false);
 });
 
-test("diffEndpoint compares GPU ids as an ordered list, and warns about a template that RunPod would not change", () => {
-  const [tier] = config().endpoints;
-  assert.deepEqual(diffEndpoint(tier, liveEndpoint(), "hsj330cqpf"), { exists: true, changes: [], warnings: [] });
-  const reordered = diffEndpoint(tier, liveEndpoint({ gpuIds: "AMPERE_24,ADA_24,-NVIDIA RTX A5000", idleTimeout: 60, templateId: "other" }), "hsj330cqpf");
-  assert.deepEqual(reordered.changes.map((change) => change.field), ["gpuIds", "idleTimeout"]);
-  assert.deepEqual(reordered.changes[0].from, ["AMPERE_24", "ADA_24", "-NVIDIA RTX A5000"]);
-  assert.equal(reordered.warnings.length, 1);
-  assert.match(reordered.warnings[0], /is bound to template other, not hsj330cqpf/);
-  assert.deepEqual(diffEndpoint(tier, null, "hsj330cqpf"), { exists: false, changes: diffEndpoint(tier, null, "hsj330cqpf").changes, warnings: [] });
+test("the patch carries the fields that differ and nothing else; gpu goes whole, workers by field, and only schema fields are sent", () => {
+  const { container, endpoints } = config();
+  const tier = endpoints[0];
+  assert.deepEqual(diffEndpoint(container, tier, liveEndpoint({ workers: { min: 0, max: 3, idleTimeout: 5 } })).patch, { workers: { max: 1 } });
+  assert.deepEqual(diffEndpoint(container, tier, liveEndpoint({ workers: { min: 0, max: 1, idleTimeout: 60 } })).patch, { workers: { idleTimeout: 5 } });
+  assert.deepEqual(diffEndpoint(container, tier, liveEndpoint({ image: "other" })).patch, { image: container.image });
+  assert.deepEqual(diffEndpoint(container, tier, liveEndpoint({ env: {} })).patch, { env: { PORT: "8000", PORT_HEALTH: "8000" } });
+  assert.deepEqual(diffEndpoint(container, tier, liveEndpoint({ scaling: { type: "QUEUE_DELAY", queueDelay: 4 } })).patch, { scaling: { type: "REQUEST_COUNT", requestCount: 1 } });
+  assert.deepEqual(diffEndpoint(container, tier, liveEndpoint({ gpu: { pools: ["AMPERE_24", "ADA_24"], excludedTypes: [], minCudaVersion: "12.8" } })).patch, {
+    gpu: { pools: ["ADA_24", "AMPERE_24"], excludedTypes: ["NVIDIA RTX A5000"], minCudaVersion: "12.8" },
+  });
+  const everything = diffEndpoint(container, tier, liveEndpoint({ name: "x", image: "x", disk: 1, ports: [], registry: "other", env: { A: "b" }, gpu: { pools: ["X"], excludedTypes: [], minCudaVersion: "9.0" }, workers: { min: 5, max: 5, idleTimeout: 9 }, flashboot: "OFF", timeout: 1, scaling: { type: "REQUEST_COUNT", requestCount: 9 } })).patch;
+  assert.deepEqual(Object.keys(everything).sort(), [...PATCH_FIELDS].sort());
+  assert.deepEqual(Object.keys(everything.gpu).sort(), [...GPU_FIELDS].sort());
+  assert.deepEqual(Object.keys(everything.workers).sort(), [...WORKERS_FIELDS].sort());
+  assert.equal("type" in everything, false, "an endpoint's type is not patchable");
+  // An id or a label of the file, or anything the live endpoint reports (dataCenterIds, createdAt...), never reaches RunPod.
+  for (const field of Object.keys(everything)) assert.ok(PATCH_FIELDS.includes(field));
 });
 
-test("saveEndpointQuery writes scalerType and type as text and flashBootType as a bare enum value; no id creates", () => {
-  const [first, second] = config().endpoints;
-  const update = saveEndpointQuery(first, { id: first.id, templateId: "hsj330cqpf" });
-  assert.match(update, /scalerType: "REQUEST_COUNT"/);
-  assert.match(update, /flashBootType: FLASHBOOT[,\s]/);
-  assert.doesNotMatch(update, /"FLASHBOOT"/);
-  assert.match(update, /type: "LB",/);
-  assert.match(update, /id: "43nsvfb8svkosr"/);
-  assert.match(update, /gpuIds: "ADA_24,AMPERE_24,-NVIDIA RTX A5000"/);
-  assert.match(update, /gpuCount: 1/);
-  assert.match(update, /workersMin: 0, workersMax: 1, idleTimeout: 5/);
-  const create = saveEndpointQuery(second, { id: undefined, templateId: "hsj330cqpf" });
-  assert.doesNotMatch(create, /\bid: "/);
-  assert.match(create, /name: "zk-bridge-prover-gpu-32gb"/);
-  assert.match(create, /templateId: "hsj330cqpf"/);
+test("a registry that the file does not name is left alone; the type of a live endpoint that differs is a warning, not a patch", () => {
+  const { container, endpoints } = config();
+  const noRegistry = { ...container };
+  delete noRegistry.registry;
+  assert.equal(diffEndpoint(noRegistry, endpoints[0], liveEndpoint({ registry: "something" })).patch, null);
+  const other = diffEndpoint(container, endpoints[0], liveEndpoint({ type: "QUEUE" }));
+  assert.equal(other.patch, null);
+  assert.match(other.warnings[0], /is a QUEUE endpoint at RunPod, not LOAD_BALANCER.*delete and create/);
 });
 
-test("saveTemplateVariables sends the file's fields, the environment as key and value pairs, and keeps the live docker arguments and readme", () => {
-  const { input } = saveTemplateVariables(wantedTemplate(), liveTemplate());
-  assert.equal(input.id, "hsj330cqpf");
-  assert.equal(input.isServerless, true);
-  assert.deepEqual(input.env, [{ key: "PORT", value: "8000" }, { key: "PORT_HEALTH", value: "8000" }]);
-  assert.equal(input.dockerArgs, "--flag");
-  assert.equal(input.readme, "notes");
-  const fresh = saveTemplateVariables({ ...wantedTemplate(), id: undefined, env: undefined }, null).input;
-  assert.deepEqual([fresh.dockerArgs, fresh.readme, fresh.env, "id" in fresh], ["", "", [], false]);
+test("a missing endpoint is created with schema fields, type and scaling included, and without the id or label", () => {
+  const { container, endpoints } = config();
+  const result = diffEndpoint(container, { ...endpoints[1], id: undefined }, null);
+  assert.equal(result.exists, false);
+  assert.deepEqual(Object.keys(result.create).sort(), [...CREATE_FIELDS].sort());
+  assert.equal(result.create.type, "LOAD_BALANCER");
+  assert.deepEqual(result.create.scaling, { type: "REQUEST_COUNT", requestCount: 1 });
+  assert.deepEqual(result.create.gpu, { pools: ["ADA_32_PRO"], excludedTypes: [], minCudaVersion: "12.8" });
+  assert.equal("id" in result.create || "label" in result.create, false);
 });
 
-/** What readLive returns: the endpoints, and the templates that no endpoint shows (the account's own list). */
-const account = (endpoints, templates = []) => ({ endpoints, templates });
-/** The live state of the three tiers, as the file declares them (each tier bound to its own template). */
-const settled = () => [
-  liveEndpoint(),
-  liveEndpoint({ id: "id-32", name: "zk-bridge-prover-gpu-32gb", gpuIds: "ADA_32_PRO", templateId: "tpl-32", template: liveTemplate({ id: "tpl-32", name: "zk-bridge-prover-gpu-32gb-template" }) }),
-  liveEndpoint({ id: "id-48", name: "zk-bridge-prover-gpu-48gb", gpuIds: "ADA_48_PRO,-NVIDIA L40", templateId: "tpl-48", template: liveTemplate({ id: "tpl-48", name: "zk-bridge-prover-gpu-48gb-template" }) }),
-];
-
-test("planChanges: each tier has its own template and endpoint; retired and unknown endpoints are told apart", () => {
-  const live = [liveEndpoint({ workersMax: 2 }), liveEndpoint({ id: "zmp5owbxu73fc2", name: "v9-test", templateId: "v9tpl", template: liveTemplate({ id: "v9tpl", name: "v9" }) }), liveEndpoint({ id: "stranger", name: "someone-elses", templateId: "s", template: liveTemplate({ id: "s", name: "s" }) })];
-  const plan = planChanges(config(), account(live));
-  const [first, second, third] = plan.endpoints;
-  assert.deepEqual([first.template.exists, first.template.changes, first.exists, first.changes.map((change) => change.field)], [true, [], true, ["workersMax"]]);
-  assert.equal(first.template.wanted.id, "hsj330cqpf");
-  assert.equal(first.template.wanted.name, "zk-bridge-prover-gpu-template");
-  assert.equal(first.template.wanted.imageName, config().template.imageName);
-  assert.deepEqual([second.template.exists, second.exists, second.template.wanted.id], [false, false, undefined]);
-  assert.deepEqual([third.template.exists, third.exists], [false, false]);
-  assert.equal(plan.retired[0].live.name, "v9-test");
-  assert.deepEqual(plan.unmanaged, [{ id: "stranger", name: "someone-elses" }]);
+test("planChanges finds a tier by id, or by name without an id; retired and unknown endpoints are told apart", () => {
+  const byName = parseConfig(edit((c) => c.endpoints.forEach((tier) => delete tier.id)));
+  const plan = planChanges(byName, { endpoints: [...LIVE, liveEndpoint({ id: "zmp5owbxu73fc2", name: "old" }), liveEndpoint({ id: "stray0000", name: "somebody-elses" })], templates: [] });
+  assert.deepEqual(plan.endpoints.map((entry) => entry.live?.id), ["43nsvfb8svkosr", "muecz9pudncily", "nuax43o5zxyv9a"]);
+  assert.deepEqual(plan.retired.map((entry) => [entry.id, entry.live?.name ?? null]), [["zmp5owbxu73fc2", "old"]]);
+  assert.deepEqual(plan.unmanaged, [{ id: "stray0000", name: "somebody-elses" }]);
+  const empty = planChanges(config(), { endpoints: [], templates: [] });
+  assert.deepEqual(empty.endpoints.map((entry) => entry.exists), [false, false, false]);
+  assert.deepEqual(empty.retired, [{ id: "zmp5owbxu73fc2", live: null }]);
 });
 
-test("a tier's template is found by its id, by its endpoint, or by its name (a template that an earlier run made before the endpoint failed)", () => {
-  const tier = { ...config().endpoints[1] };
-  const orphan = liveTemplate({ id: "orphan", name: "zk-bridge-prover-gpu-32gb-template", imageName: "ghcr.io/x@sha256:old" });
-  const byName = planChanges(config(), account([], [orphan])).endpoints[1];
-  assert.equal(byName.template.exists, true);
-  assert.equal(byName.template.wanted.id, "orphan", "reused, not duplicated");
-  assert.deepEqual(byName.template.changes.map((change) => change.field), ["imageName"]);
-  // The endpoint of the tier exists (found by name) and is bound to a template: that one counts, whatever it is called.
-  const bound = liveEndpoint({ id: "id-32", name: tier.name, templateId: "tpl-32", template: liveTemplate({ id: "tpl-32", name: "renamed" }) });
-  const byEndpoint = planChanges(config(), account([bound], [orphan])).endpoints[1];
-  assert.equal(byEndpoint.template.wanted.id, "tpl-32");
-  assert.deepEqual(byEndpoint.template.changes.map((change) => change.field), ["name"]);
-  // The endpoint shows no template object: it is read from the account's list by the endpoint's template id.
-  const bare = liveEndpoint({ id: "id-32", name: tier.name, templateId: "listed", template: null });
-  const byListed = planChanges(config(), account([bare], [liveTemplate({ id: "listed", name: "zk-bridge-prover-gpu-32gb-template" })])).endpoints[1];
-  assert.deepEqual([byListed.template.wanted.id, byListed.template.exists], ["listed", true]);
-  // A template named by id in the file, shown only in the account's list.
-  const named = parseConfig(JSON.stringify({ ...JSON.parse(beforeTiersText()), endpoints: JSON.parse(beforeTiersText()).endpoints.map((entry) => (entry.label === "gpu-32gb" ? { ...entry, template: { id: "pinned", name: "zk-bridge-prover-gpu-32gb-template" } } : entry)) }));
-  assert.equal(planChanges(named, account([], [liveTemplate({ id: "pinned", name: "other name" })])).endpoints[1].template.changes[0].field, "name");
-  // A tier without an id is matched by name.
-  const byTierName = planChanges(config(), account([liveEndpoint({ id: "new32", name: "zk-bridge-prover-gpu-32gb", gpuIds: "ADA_32_PRO", templateId: "tpl-32", template: liveTemplate({ id: "tpl-32" }) })]));
-  assert.equal(byTierName.endpoints[1].exists, true);
-  assert.equal(byTierName.endpoints[1].live.id, "new32");
-  assert.deepEqual(byTierName.unmanaged, []);
+test("unusedTemplates lists private serverless templates, skips public and pod ones and those in keepTemplates", () => {
+  assert.deepEqual(unusedTemplates(TEMPLATES, config()), [{ id: "hsj330cqpf", name: "zk-bridge-prover-gpu-template" }, { id: "10sn7k4j8q", name: "zk-bridge-prover-gpu-32gb-template" }]);
+  const kept = parseConfig(edit((c) => (c.keepTemplates = ["hsj330cqpf"])));
+  assert.deepEqual(unusedTemplates(TEMPLATES, kept).map((template) => template.id), ["10sn7k4j8q"]);
 });
 
-test("describePlan prints a template line and an endpoint line per tier, old and new values, never an environment value", () => {
-  const live = [
-    liveEndpoint({ idleTimeout: 60, template: liveTemplate({ env: [{ key: "PORT", value: "s3cret" }] }) }),
-    liveEndpoint({ id: "zmp5owbxu73fc2", name: "v9", templateId: "v9tpl", template: liveTemplate({ id: "v9tpl", name: "v9" }) }),
-    liveEndpoint({ id: "stranger", name: "other", templateId: "s", template: liveTemplate({ id: "s", name: "s" }) }),
-  ];
-  const text = describePlan(planChanges(config(), account(live))).join("\n");
-  assert.match(text, /template of gpu-24gb \(zk-bridge-prover-gpu-template, hsj330cqpf\): changes/);
-  assert.match(text, /env\.PORT: \(set\) -> \(set\)/);
-  assert.match(text, /env\.PORT_HEALTH: \(none\) -> \(set\)/);
-  assert.doesNotMatch(text, /s3cret/);
+test("describePlan prints a line per tier with old and new values, the retired, unknown and unused templates, and never an environment value", () => {
+  const live = [liveEndpoint({ env: { PORT: "hunter2" }, workers: { min: 0, max: 1, idleTimeout: 60 } }), LIVE[1], liveEndpoint({ id: "stray0000", name: "other" })];
+  const text = describePlan(planChanges(config(), { endpoints: [...live, LIVE[2]], templates: TEMPLATES })).join("\n");
   assert.match(text, /endpoint gpu-24gb \(zk-bridge-prover-gpu, 43nsvfb8svkosr\): changes/);
-  assert.match(text, /idleTimeout: 60 -> 5/);
-  assert.match(text, /template of gpu-32gb \(zk-bridge-prover-gpu-32gb-template\): does not exist, will be created/);
-  assert.match(text, /endpoint gpu-32gb \(zk-bridge-prover-gpu-32gb\): does not exist, will be created/);
-  assert.match(text, /retired zmp5owbxu73fc2 \(v9\): still exists; deleted only with --apply --delete-retired; its template v9tpl stays in place/);
-  assert.match(text, /not in the file, left alone: stranger \(other\)/);
-  const quiet = describePlan(planChanges(config(), account(settled()))).join("\n");
-  assert.equal((quiet.match(/: no change/g) ?? []).length, 6);
-  assert.match(quiet, /retired zmp5owbxu73fc2: already gone/);
-  const moved = describePlan(planChanges(config(), account([liveEndpoint({ templateId: "elsewhere" })]))).join("\n");
-  assert.match(moved, /warning: is bound to template elsewhere/);
+  assert.match(text, /workers\.idleTimeout: 60 -> 5/);
+  assert.match(text, /env\.PORT: \(set\) -> \(set\)/);
+  assert.match(text, /endpoint gpu-32gb \(zk-bridge-prover-gpu-32gb, muecz9pudncily\): no change/);
+  assert.match(text, /gpu\.minCudaVersion: "12\.0" -> "12\.8"/);
+  assert.match(text, /retired zmp5owbxu73fc2: already gone/);
+  assert.match(text, /not in the file, left alone: stray0000 \(other\)/);
+  assert.match(text, /templates that no tier needs[^\n]*--delete-unused-templates/);
+  assert.match(text, /hsj330cqpf \(zk-bridge-prover-gpu-template\)/);
+  assert.doesNotMatch(text, /hunter2|public|a-pod/);
+  const created = describePlan(planChanges(config(), { endpoints: [], templates: [] })).join("\n");
+  assert.match(created, /endpoint gpu-24gb \(zk-bridge-prover-gpu, 43nsvfb8svkosr\): does not exist, will be created/);
+  const present = describePlan(planChanges(config(), { endpoints: [...LIVE, liveEndpoint({ id: "zmp5owbxu73fc2", name: "old" })], templates: [] })).join("\n");
+  assert.match(present, /retired zmp5owbxu73fc2 \(old\): still exists; deleted only with --apply --delete-retired/);
+  const odd = describePlan(planChanges(config(), { endpoints: [liveEndpoint({ type: "QUEUE" }), LIVE[1], LIVE[2]], templates: [] })).join("\n");
+  assert.match(odd, /warning: is a QUEUE endpoint/);
 });
 
-/** A stub of the HTTP call that records every request and answers by its text. */
-function stub(endpoints, { templates = [], failOn } = {}) {
-  const calls = [];
-  const post = async (query, variables) => {
-    calls.push({ query, variables });
-    if (failOn !== undefined && query.includes(failOn)) throw new ApplyError("RunPod refused the request: nope");
-    if (query === ENDPOINTS_QUERY) return { myself: { endpoints } };
-    if (query === TEMPLATES_QUERY) return { myself: { podTemplates: templates } };
-    if (query === SAVE_TEMPLATE_QUERY) return { saveTemplate: { id: `made-${variables.input.name}` } };
-    if (query.includes("saveEndpoint")) return { saveEndpoint: { id: "created-id" } };
-    return {};
-  };
-  return { calls, post };
-}
+test("readLive follows the cursor through every page of the endpoints and reads the templates", async () => {
+  const { client, calls } = fakeClient();
+  const live = await readLive(client);
+  assert.deepEqual(live.endpoints.map((endpoint) => endpoint.id), ["43nsvfb8svkosr", "muecz9pudncily", "nuax43o5zxyv9a"]);
+  assert.equal(live.templates.length, 4);
+  assert.deepEqual(calls.map((call) => call.path), ["/serverless?limit=100", "/serverless?limit=100&cursor=page2", "/templates?limit=100"]);
+  await assert.rejects(listAll({ request: async () => ({ nope: true }) }, "/serverless", "endpoints"), /no "endpoints" list/);
+  await assert.rejects(listAll({ request: async () => ({ endpoints: [], pagination: { hasNextPage: true, nextCursor: "again" } }) }, "/serverless", "endpoints"), /too many pages/);
+});
 
-const quietly = { env: { RUNPOD_API_KEY: "k" }, readFile: () => beforeTiersText(), out: () => {} };
-
-test("a dry run reads the endpoints and the templates, prints the differences and sends no mutation", async () => {
-  const { calls, post } = stub([liveEndpoint({ idleTimeout: 60 })]);
-  const lines = [];
-  const code = await run({ ...quietly, argv: [], post, out: (line) => lines.push(line) });
+test("a dry run reads the account, prints the differences and sends nothing but GET requests", async () => {
+  const { client, calls } = fakeClient();
+  const out = [];
+  const code = await run({ argv: [], env: { RUNPOD_API_KEY: "k" }, client, out: (line) => out.push(line), err: () => assert.fail("no error expected") });
   assert.equal(code, 0);
-  assert.deepEqual(calls.map((call) => call.query), [ENDPOINTS_QUERY, TEMPLATES_QUERY]);
-  assert.match(lines.join("\n"), /dry run: nothing changed/);
+  assert.ok(calls.every((call) => call.method === "GET"));
+  assert.match(out.join("\n"), /gpu\.minCudaVersion: "12\.0" -> "12\.8"/);
+  assert.match(out.at(-1), /dry run: nothing changed/);
 });
 
-test("--apply: each tier saves its own template (update by id, create without one and read the new id), then its endpoint bound to it", async () => {
-  const live = [liveEndpoint({ idleTimeout: 60, template: liveTemplate({ imageName: "ghcr.io/x@sha256:old" }) })];
-  const { calls, post } = stub(live);
+test("--apply patches only the tier that differs, with only the field that differs, and nothing else", async () => {
+  const { client, writes } = fakeClient();
+  const out = [];
+  const code = await run({ argv: ["--apply"], env: { RUNPOD_API_KEY: "k" }, client, out: (line) => out.push(line) });
+  assert.equal(code, 0);
+  assert.deepEqual(writes(), [{ method: "PATCH", path: "/serverless/nuax43o5zxyv9a", body: { gpu: { pools: ["ADA_48_PRO"], excludedTypes: ["NVIDIA L40"], minCudaVersion: "12.8" } } }]);
+  assert.ok(out.includes("patched endpoint gpu-48gb (nuax43o5zxyv9a): gpu"));
+  assert.equal(out.at(-1), "done");
+});
+
+test("--apply with every endpoint settled writes nothing", async () => {
+  const settled = LIVE.map((endpoint) => (endpoint.id === "nuax43o5zxyv9a" ? { ...endpoint, gpu: { ...endpoint.gpu, minCudaVersion: "12.8" } } : endpoint));
+  const { client, writes } = fakeClient({ endpoints: settled });
+  assert.equal(await run({ argv: ["--apply", "--delete-retired"], env: { RUNPOD_API_KEY: "k" }, client, out: () => {} }), 0);
+  assert.deepEqual(writes(), []);
+});
+
+test("--apply creates a missing endpoint and says which id to put in the file", async () => {
+  const { client, writes } = fakeClient({ endpoints: [LIVE[0], LIVE[2]] });
+  const out = [];
+  assert.equal(await run({ argv: ["--apply"], env: { RUNPOD_API_KEY: "k" }, client, out: (line) => out.push(line) }), 0);
+  const [create, patch] = writes();
+  assert.equal(create.method, "POST");
+  assert.equal(create.path, "/serverless");
+  assert.equal(create.body.name, "zk-bridge-prover-gpu-32gb");
+  assert.deepEqual(Object.keys(create.body).sort(), [...CREATE_FIELDS].sort());
+  assert.equal(patch.method, "PATCH");
+  assert.ok(out.includes("created endpoint gpu-32gb (newid123456789); put this id in endpoints.json"));
+});
+
+test("retired endpoints are kept without --delete-retired, and deleted with it (scaled to zero first when they may run workers)", async () => {
+  const retired = liveEndpoint({ id: "zmp5owbxu73fc2", name: "old", workers: { min: 0, max: 1, idleTimeout: 5 } });
+  const settled = [LIVE[0], LIVE[1], { ...LIVE[2], gpu: { ...LIVE[2].gpu, minCudaVersion: "12.8" } }];
+  const kept = fakeClient({ endpoints: [...settled, retired] });
+  await run({ argv: ["--apply"], env: { RUNPOD_API_KEY: "k" }, client: kept.client, out: () => {} });
+  assert.deepEqual(kept.writes(), []);
+  const deleted = fakeClient({ endpoints: [...settled, retired] });
+  const out = [];
+  await run({ argv: ["--apply", "--delete-retired"], env: { RUNPOD_API_KEY: "k" }, client: deleted.client, out: (line) => out.push(line) });
+  assert.deepEqual(deleted.writes(), [
+    { method: "PATCH", path: "/serverless/zmp5owbxu73fc2", body: { workers: { min: 0, max: 0 } } },
+    { method: "DELETE", path: "/serverless/zmp5owbxu73fc2", body: undefined },
+  ]);
+  assert.ok(out.includes("deleted retired endpoint zmp5owbxu73fc2"));
+  const idle = fakeClient({ endpoints: [...settled, { ...retired, workers: { min: 0, max: 0, idleTimeout: 5 } }] });
+  await run({ argv: ["--apply", "--delete-retired"], env: { RUNPOD_API_KEY: "k" }, client: idle.client, out: () => {} });
+  assert.deepEqual(idle.writes().map((call) => call.method), ["DELETE"]);
+});
+
+test("unused templates are listed in every run and deleted only with --apply --delete-unused-templates", async () => {
+  const settled = LIVE.map((endpoint) => (endpoint.id === "nuax43o5zxyv9a" ? { ...endpoint, gpu: { ...endpoint.gpu, minCudaVersion: "12.8" } } : endpoint));
+  const listed = fakeClient({ endpoints: settled });
+  const out = [];
+  await run({ argv: ["--apply"], env: { RUNPOD_API_KEY: "k" }, client: listed.client, out: (line) => out.push(line) });
+  assert.deepEqual(listed.writes(), []);
+  assert.match(out.join("\n"), /hsj330cqpf \(zk-bridge-prover-gpu-template\)/);
+  const deleted = fakeClient({ endpoints: settled });
   const lines = [];
-  assert.equal(await run({ ...quietly, argv: ["--apply"], post, out: (line) => lines.push(line) }), 0);
-  const mutations = calls.slice(2);
-  assert.equal(mutations.length, 6);
-  assert.equal(mutations[0].query, SAVE_TEMPLATE_QUERY);
-  assert.equal(mutations[0].variables.input.id, "hsj330cqpf");
-  assert.equal(mutations[0].variables.input.imageName, config().template.imageName);
-  assert.match(mutations[1].query, /id: "43nsvfb8svkosr"/);
-  assert.match(mutations[1].query, /templateId: "hsj330cqpf"/);
-  assert.equal(mutations[2].query, SAVE_TEMPLATE_QUERY);
-  assert.equal("id" in mutations[2].variables.input, false, "a new template is created without an id");
-  assert.equal(mutations[2].variables.input.name, "zk-bridge-prover-gpu-32gb-template");
-  assert.equal(mutations[2].variables.input.isServerless, true);
-  assert.match(mutations[3].query, /name: "zk-bridge-prover-gpu-32gb"/);
-  assert.match(mutations[3].query, /templateId: "made-zk-bridge-prover-gpu-32gb-template"/);
-  assert.match(mutations[5].query, /templateId: "made-zk-bridge-prover-gpu-48gb-template"/);
-  const text = lines.join("\n");
-  assert.match(text, /saved template of gpu-24gb \(hsj330cqpf\)/);
-  assert.match(text, /created template of gpu-32gb \(made-zk-bridge-prover-gpu-32gb-template\)/);
-  assert.match(text, /saved endpoint gpu-24gb \(43nsvfb8svkosr\)/);
-  assert.match(text, /created endpoint gpu-32gb \(created-id\)/);
+  await run({ argv: ["--apply", "--delete-unused-templates"], env: { RUNPOD_API_KEY: "k" }, client: deleted.client, out: (line) => lines.push(line) });
+  assert.deepEqual(deleted.writes().map((call) => `${call.method} ${call.path}`), ["DELETE /templates/hsj330cqpf", "DELETE /templates/10sn7k4j8q"]);
+  assert.ok(lines.includes("deleted template hsj330cqpf (zk-bridge-prover-gpu-template)"));
 });
 
-test("--apply reuses a template left by an earlier failed run instead of creating another, and saves an endpoint only when it differs", async () => {
-  const orphan = liveTemplate({ id: "orphan", name: "zk-bridge-prover-gpu-32gb-template" });
-  const live = settled().filter((endpoint) => endpoint.id !== "id-32");
-  const { calls, post } = stub(live, { templates: [orphan] });
-  assert.equal(await run({ ...quietly, argv: ["--apply"], post }), 0);
-  const mutations = calls.slice(2);
-  assert.equal(mutations.length, 1, "the template matches; only the endpoint is created");
-  assert.match(mutations[0].query, /templateId: "orphan"/);
-  assert.equal(mutations[0].query.includes("saveEndpoint"), true);
-  // A template that differs on an endpoint that matches saves the template only.
-  const stale = settled();
-  stale[1].template = liveTemplate({ id: "tpl-32", name: "zk-bridge-prover-gpu-32gb-template", containerDiskInGb: 20 });
-  const second = stub(stale);
-  await run({ ...quietly, argv: ["--apply"], post: second.post });
-  assert.deepEqual(second.calls.slice(2).map((call) => call.query), [SAVE_TEMPLATE_QUERY]);
-  assert.equal(second.calls[2].variables.input.id, "tpl-32");
-});
-
-test("retired endpoints are kept without --delete-retired, and deleted with it (scaled to zero first when they may run workers); their templates stay", async () => {
-  const live = [...settled(), liveEndpoint({ id: "zmp5owbxu73fc2", name: "v9-test", templateId: "v9tpl", template: liveTemplate({ id: "v9tpl", name: "v9" }) }), liveEndpoint({ id: "idle-retired", name: "idle", workersMax: 0, templateId: "idletpl", template: liveTemplate({ id: "idletpl", name: "idle" }) })];
-  const keep = stub(live);
-  await run({ ...quietly, argv: ["--apply"], post: keep.post });
-  assert.equal(keep.calls.some((call) => call.query === DELETE_ENDPOINT_QUERY), false);
-
-  const drop = stub(live);
-  const retiredConfig = JSON.stringify({ ...JSON.parse(beforeTiersText()), retired: ["zmp5owbxu73fc2", "idle-retired", "gone-already"] });
-  const lines = [];
-  await run({ ...quietly, argv: ["--apply", "--delete-retired"], post: drop.post, readFile: () => retiredConfig, out: (line) => lines.push(line) });
-  const queries = drop.calls.map((call) => call.query);
-  const scaleDown = queries.findIndex((query) => query.includes('id: "zmp5owbxu73fc2"') && query.includes("workersMax: 0"));
-  assert.ok(scaleDown > 0 && scaleDown < queries.indexOf(DELETE_ENDPOINT_QUERY), "scaled to zero before the delete");
-  assert.deepEqual(drop.calls.filter((call) => call.query === DELETE_ENDPOINT_QUERY).map((call) => call.variables), [{ id: "zmp5owbxu73fc2" }, { id: "idle-retired" }]);
-  assert.equal(queries.filter((query) => query.includes('id: "idle-retired"')).length, 0, "an endpoint with no workers is not scaled");
-  assert.equal(drop.calls.some((call) => call.query === SAVE_TEMPLATE_QUERY), false, "no template is touched");
-  assert.match(lines.join("\n"), /deleted retired endpoint zmp5owbxu73fc2; left its template v9tpl in place/);
-});
-
-test("the command line: --delete-retired needs --apply, unknown arguments and a missing config path are refused", () => {
-  assert.deepEqual(parseArguments([]), { apply: false, deleteRetired: false, config: null });
-  assert.deepEqual(parseArguments(["--apply", "--delete-retired", "--config", "-"]), { apply: true, deleteRetired: true, config: "-" });
+test("the command line: the delete flags need --apply, unknown arguments and a missing config path are refused", () => {
+  assert.deepEqual(parseArguments([]), { apply: false, deleteRetired: false, deleteUnusedTemplates: false, config: null });
+  assert.deepEqual(parseArguments(["--apply", "--delete-retired", "--delete-unused-templates", "--config", "-"]), { apply: true, deleteRetired: true, deleteUnusedTemplates: true, config: "-" });
   assert.throws(() => parseArguments(["--delete-retired"]), /only with --apply/);
-  assert.throws(() => parseArguments(["--nope"]), /unknown argument/);
-  assert.throws(() => parseArguments(["--config"]), /needs a path/);
+  assert.throws(() => parseArguments(["--delete-unused-templates"]), /only with --apply/);
+  assert.throws(() => parseArguments(["--config"]), /--config needs a path/);
+  assert.throws(() => parseArguments(["--force"]), /unknown argument --force/);
 });
 
 test("run: the key must be in the environment; the configuration comes from a path, standard input (--config -) or the default file", async () => {
   const errors = [];
-  assert.equal(await run({ argv: [], env: {}, post: async () => ({}), err: (line) => errors.push(line) }), 1);
-  assert.match(errors[0], /RUNPOD_API_KEY/);
-  const { post } = stub([]);
-  const read = { stdin: 0, paths: [] };
-  const base = { env: { RUNPOD_API_KEY: "k" }, post, out: () => {}, readStdin: () => (read.stdin += 1, beforeTiersText()), readFile: (path) => (read.paths.push(path), beforeTiersText()) };
-  assert.equal(await run({ ...base, argv: ["--config", "-"] }), 0);
-  assert.equal(read.stdin, 1);
-  assert.equal(await run({ ...base, argv: ["--config", "/tmp/other.json"] }), 0);
-  assert.equal(await run({ ...base, argv: [] }), 0);
-  assert.deepEqual(read.paths[0], "/tmp/other.json");
-  assert.match(read.paths[1], /deploy\/runpod\/endpoints\.json$/);
+  assert.equal(await run({ argv: [], env: {}, client: fakeClient().client, err: (line) => errors.push(line) }), 1);
+  assert.match(errors[0], /set RUNPOD_API_KEY/);
+  const paths = [];
+  const readFile = (path) => (paths.push(path), fileText);
+  await run({ argv: ["--config", "other.json"], env: { RUNPOD_API_KEY: "k" }, client: fakeClient().client, readFile, out: () => {} });
+  await run({ argv: [], env: { RUNPOD_API_KEY: "k" }, client: fakeClient().client, readFile, out: () => {} });
+  assert.equal(paths[0], "other.json");
+  assert.match(paths[1], /endpoints\.json$/);
+  const fromStdin = [];
+  assert.equal(await run({ argv: ["--config", "-"], env: { RUNPOD_API_KEY: "k" }, client: fakeClient().client, readStdin: () => fileText, out: (line) => fromStdin.push(line) }), 0);
+  assert.ok(fromStdin.length > 0);
+  const bad = [];
+  assert.equal(await run({ argv: [], env: { RUNPOD_API_KEY: "k" }, client: fakeClient().client, readFile: () => "{", err: (line) => bad.push(line) }), 1);
+  assert.match(bad[0], /not valid JSON/);
 });
 
-test("a GraphQL error ends the run with a non-zero code and prints the message, never the key or the request", async () => {
+test("an error from RunPod ends the run with a non-zero code and prints its message, never the key or the request", async () => {
+  const key = "rpa_SECRET_KEY_VALUE";
+  const { client } = fakeClient({ fail: { "PATCH /serverless/nuax43o5zxyv9a": "RunPod refused PATCH /serverless/nuax43o5zxyv9a: HTTP 422: Unprocessable Entity: unknown field" } });
   const errors = [];
-  const key = "rpa_SECRETKEYVALUE";
-  const { post } = stub([liveEndpoint()], { failOn: "saveEndpoint" });
-  const code = await run({ argv: ["--apply"], env: { RUNPOD_API_KEY: key }, post, readFile: () => beforeTiersText(), out: () => {}, err: (line) => errors.push(line) });
-  assert.equal(code, 1);
-  assert.deepEqual(errors, ["RunPod refused the request: nope"]);
+  assert.equal(await run({ argv: ["--apply"], env: { RUNPOD_API_KEY: key }, client, out: () => {}, err: (line) => errors.push(line) }), 1);
+  assert.match(errors[0], /HTTP 422: Unprocessable Entity: unknown field/);
+  assert.equal(errors.join("").includes(key), false);
   const unexpected = [];
-  assert.equal(await run({ argv: [], env: { RUNPOD_API_KEY: key }, post: async () => { throw Object.assign(new Error(`boom ${key}`), { code: "EBOOM" }); }, readFile: () => beforeTiersText(), err: (line) => unexpected.push(line) }), 1);
-  assert.deepEqual(unexpected, ["failed: EBOOM"]);
-  const plain = [];
-  assert.equal(await run({ argv: [], env: { RUNPOD_API_KEY: key }, post: async () => { throw new Error(`boom ${key}`); }, readFile: () => fileText, err: (line) => plain.push(line) }), 1);
-  assert.deepEqual(plain, ["failed: unexpected error"]);
+  const broken = { request: async () => { throw Object.assign(new Error("boom"), { code: "EBROKEN" }); } };
+  assert.equal(await run({ argv: [], env: { RUNPOD_API_KEY: key }, client: broken, err: (line) => unexpected.push(line) }), 1);
+  assert.equal(unexpected[0], "failed: EBROKEN");
+  const plain = { request: async () => { throw new Error("boom"); } };
+  const other = [];
+  await run({ argv: [], env: { RUNPOD_API_KEY: key }, client: plain, err: (line) => other.push(line) });
+  assert.equal(other[0], "failed: unexpected error");
 });
 
-test("makeGraphqlPost sends the key as a bearer header and the query as JSON, returns data, and reports errors without the key or request", async () => {
-  const key = "rpa_SECRETKEYVALUE";
+test("makeRestClient sends the key as a bearer header to the v2 address, the body as JSON, and returns the answer", async () => {
   const seen = [];
-  const answer = (body, status = 200) => async (url, init) => (seen.push({ url, init }), { ok: status < 400, status, json: async () => body });
-  const post = makeGraphqlPost(key, answer({ data: { ok: 1 } }));
-  assert.deepEqual(await post("{ a }"), { ok: 1 });
-  assert.equal(seen[0].url, GRAPHQL_URL);
-  assert.equal(seen[0].init.headers.authorization, `Bearer ${key}`);
-  assert.deepEqual(JSON.parse(seen[0].init.body), { query: "{ a }" });
-  await makeGraphqlPost(key, answer({ data: {} }))("mutation { b }", { id: 1 });
-  assert.deepEqual(JSON.parse(seen[1].init.body), { query: "mutation { b }", variables: { id: 1 } });
-
-  const refusal = await makeGraphqlPost(key, answer({ errors: [{ message: "bad input" }, {}] }))("{ a }").catch((error) => error);
-  assert.ok(refusal instanceof ApplyError);
-  assert.equal(refusal.message, "RunPod refused the request: bad input; no message");
-  const http = await makeGraphqlPost(key, answer({}, 502))("{ a }").catch((error) => error);
-  assert.equal(http.message, "RunPod answered HTTP 502");
-  const noJson = await makeGraphqlPost(key, async () => ({ ok: false, status: 500, json: async () => { throw new Error("html"); } }))("{ a }").catch((error) => error);
-  assert.equal(noJson.message, "RunPod answered HTTP 500 with no JSON");
-  const down = await makeGraphqlPost(key, async () => { throw new Error(`connect ${key}`); })("{ a }").catch((error) => error);
-  assert.equal(down.message, "RunPod did not answer");
-  assert.equal([refusal, http, noJson, down].some((error) => error.message.includes(key) || error.message.includes("query")), false);
-  // An answer without data or an account without endpoints reads as no endpoints.
-  assert.equal(await makeGraphqlPost(key, answer({}))("{ a }"), undefined);
-    const { post: empty } = { post: async () => ({}) };
-  assert.deepEqual(planChanges(config(), account([])).unmanaged, []);
-  assert.equal((await run({ argv: [], env: { RUNPOD_API_KEY: "k" }, post: empty, readFile: () => fileText, out: () => {} })), 0);
+  const fetchFunction = async (url, init) => (seen.push({ url, init }), new Response(JSON.stringify({ id: "x" }), { status: 200 }));
+  const client = makeRestClient("rpa_KEY", fetchFunction);
+  assert.deepEqual(await client.request("PATCH", "/serverless/abc", { workers: { max: 1 } }), { id: "x" });
+  assert.equal(RUNPOD_REST_URL, "https://api.runpod.io/v2");
+  assert.equal(seen[0].url, "https://api.runpod.io/v2/serverless/abc");
+  assert.equal(seen[0].init.method, "PATCH");
+  assert.equal(seen[0].init.headers.authorization, "Bearer rpa_KEY");
+  assert.equal(seen[0].init.headers["content-type"], "application/json");
+  assert.equal(seen[0].init.body, JSON.stringify({ workers: { max: 1 } }));
+  await client.request("GET", "/serverless");
+  assert.equal(seen[1].init.body, undefined);
+  assert.equal("content-type" in seen[1].init.headers, false);
+  const other = makeRestClient("k", fetchFunction, "https://example.test/v2/");
+  await other.request("GET", "/templates");
+  assert.equal(seen[2].url, "https://example.test/v2/templates");
 });
 
+test("makeRestClient reads an empty answer (the 204 of a delete) as null", async () => {
+  const client = makeRestClient("k", async () => new Response(null, { status: 204 }));
+  assert.equal(await client.request("DELETE", "/serverless/abc"), null);
+});
 
-test("a run with every template and endpoint settled saves nothing", async () => {
-  const { calls, post } = stub(settled());
-  assert.equal(await run({ ...quietly, argv: ["--apply"], post }), 0);
-  assert.equal(calls.length, 2);
-  assert.deepEqual(await applyPlan({ endpoints: [], retired: [] }, post, { deleteRetired: true }), []);
+test("makeRestClient reports a problem answer (RFC 9457) with its status, title and detail, and never the key or the request body", async () => {
+  const problem = { type: "about:blank", title: "Unprocessable Entity", status: 422, detail: "body/gpu: unknown field 'foo'" };
+  const client = makeRestClient("rpa_KEY_VALUE", async () => new Response(JSON.stringify(problem), { status: 422, headers: { "content-type": "application/problem+json" } }));
+  await assert.rejects(client.request("PATCH", "/serverless/abc", { gpu: { foo: 1 }, secret: "rpa_KEY_VALUE" }), (error) => {
+    assert.ok(error instanceof ApplyError);
+    assert.equal(error.message, "RunPod refused PATCH /serverless/abc: HTTP 422: Unprocessable Entity: body/gpu: unknown field 'foo'");
+    assert.equal(error.message.includes("rpa_KEY_VALUE"), false);
+    return true;
+  });
+  const plain = makeRestClient("k", async () => new Response("<html>", { status: 502 }));
+  await assert.rejects(plain.request("GET", "/serverless"), /RunPod refused GET \/serverless: HTTP 502$/);
+  const empty = makeRestClient("k", async () => new Response(null, { status: 401 }));
+  await assert.rejects(empty.request("GET", "/serverless"), /HTTP 401$/);
+  const odd = makeRestClient("k", async () => new Response("<html>", { status: 200 }));
+  await assert.rejects(odd.request("GET", "/serverless"), /not JSON/);
+  const down = makeRestClient("k", async () => { throw new TypeError("fetch failed: rpa_k"); });
+  await assert.rejects(down.request("GET", "/serverless"), (error) => error.message === "RunPod did not answer GET /serverless");
+  const noBody = makeRestClient("k", async () => ({ ok: false, status: 500, text: async () => { throw new Error("x"); } }));
+  await assert.rejects(noBody.request("GET", "/x"), /HTTP 500$/);
+});
+
+test("problemText reads title and detail, trims long text and refuses what is not a problem document", () => {
+  assert.equal(problemText({ title: "Not Found", detail: "no such endpoint" }), "Not Found: no such endpoint");
+  assert.equal(problemText({ detail: "only detail" }), "only detail");
+  assert.equal(problemText({ title: "a".repeat(500) }).length, 300);
+  assert.equal(problemText("text"), null);
+  assert.equal(problemText({ status: 500 }), null);
+  assert.equal(problemText([]), null);
+});
+
+test("applyPlan with no flags and an empty plan writes nothing", async () => {
+  const { client, writes } = fakeClient();
+  assert.deepEqual(await applyPlan({ endpoints: [], retired: [], unmanaged: [], templates: [] }, client), []);
+  assert.deepEqual(writes(), []);
 });

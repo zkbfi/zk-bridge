@@ -26,11 +26,16 @@ describe("runpod section", () => {
     expect(parse({ endpoints: [{ id: "a1", label: "gpu-24gb" }], endpointIds: ["b2"], endpointId: "c3", apiKey: "k" })).toEqual({
       endpoints: [{ id: "a1", label: "gpu-24gb" }, { id: "b2", label: "b2" }, { id: "c3", label: "c3" }],
       apiKey: "k",
-      graphqlUrl: "https://api.runpod.io/graphql",
+      restUrl: "https://api.runpod.io/v2",
+      graphqlUrl: undefined,
       apiBase: undefined,
     });
   });
-  it("ignores the old REST apiBase and says so", () => {
+  it("takes the REST v2 address from restUrl", () => {
+    expect(parse({ endpointIds: ["a1"], apiKey: "k", restUrl: "https://example.org/v2" })).toMatchObject({ restUrl: "https://example.org/v2" });
+    expect(() => parse({ endpointIds: ["a1"], apiKey: "k", restUrl: "not a url" })).toThrow();
+  });
+  it("still accepts the old REST apiBase and graphqlUrl, which are ignored with a warning", () => {
     expect(parse({ endpointId: "a1", apiKey: "k", apiBase: "https://rest.runpod.io/v1" })).toMatchObject({ apiBase: "https://rest.runpod.io/v1" });
     expect(parse({ endpointIds: ["a1"], apiKey: "k", graphqlUrl: "https://example.org/graphql" })).toMatchObject({ graphqlUrl: "https://example.org/graphql" });
   });

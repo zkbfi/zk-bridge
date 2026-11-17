@@ -236,9 +236,9 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     const at = now();
     const snapshot = context.billing === undefined ? { spend: null, balance: null } : await context.billing.read();
     const figures = figuresOf(snapshot, at);
-    // The rate that RunPod billed; the configured price only when RunPod's billing cannot be read.
-    const rateSource = figures.effectiveUsdPerHour === null ? ("assumed" as const) : ("runpod" as const);
-    const usdPerHour = figures.effectiveUsdPerHour ?? gpuUsdPerHour;
+    // RunPod's serverless billing (REST v2) gives dollars and no billed time, so no rate can be measured from it: our own seconds are priced at the configured price.
+    const rateSource = "assumed" as const;
+    const usdPerHour = gpuUsdPerHour;
     const warmups = createWarmupStore(storage);
     const sessionDays = warmups.summary(at - days * 86_400_000, { idleTimeoutSeconds, gpuUsdPerHour: usdPerHour });
     // The records of the window plus a day before it, so that a tail or a session that crosses midnight is whole.
@@ -286,15 +286,14 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
         day,
         breakdown: breakdownOfSpans(timeline, [daySpan({ dayStart, row: billed, hours: snapshot.spend?.hours ?? [], billedThrough, fallbackUsdPerHour: usdPerHour })], billedThrough),
         billedUsd: billed === undefined ? null : money(billed.amountUsd),
-        billedSeconds: billed === undefined ? null : Math.round(billed.billedSeconds * 100) / 100,
-        effectiveUsdPerHour: billed !== undefined && billed.billedSeconds > 0 ? money(billed.amountUsd / (billed.billedSeconds / 3600)) : null,
+        billedSeconds: null,
+        effectiveUsdPerHour: null,
         earlyStarts: early(earlyOf.get(day)),
       };
     });
     const sum = (pick: (day: (typeof byDay)[number]) => number) => money(byDay.reduce((total, day) => total + pick(day), 0));
     const billedDays = byDay.filter((day) => day.billedUsd !== null);
     const billedUsd = billedDays.length === 0 ? null : sum((day) => day.billedUsd ?? 0);
-    const billedSeconds = billedDays.length === 0 ? null : sum((day) => day.billedSeconds ?? 0);
     const breakdownTotal = sumBreakdowns(byDay.map((day) => day.breakdown));
     const earlyTotal = {
       sessions: sum((day) => day.earlyStarts.sessions),
@@ -314,15 +313,17 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
       /** Whether RunPod's billing could be read, and how many seconds ago. */
       available: shown.available,
       ageSeconds: shown.ageSeconds,
-      last24h: { billedUsd: shown.last24hUsd, billedSeconds: shown.last24hBilledSeconds, breakdown: last24h },
-      effectiveUsdPerHour: shown.effectiveUsdPerHour,
+      last24h: { billedUsd: shown.last24hUsd, billedSeconds: null, breakdown: last24h },
+      effectiveUsdPerHour: null,
       averageDailyUsd7d: shown.averageDailyUsd7d,
+      /** RunPod's own count of cold starts per tier over the last 24 hours, from the billing reader's last reading (null when never read). */
+      coldStarts: snapshot.coldStarts == null ? null : { windowHours: 24, ageSeconds: Math.max(0, Math.round((at - snapshot.coldStarts.readAt) / 1000)), tiers: snapshot.coldStarts.tiers },
       // Left out, not nulled, for a request that came through Caddy.
       ...(local ? { account: { balanceUsd: shown.balanceUsd, balanceAgeSeconds: shown.balanceAgeSeconds, spendNowUsdPerHour: shown.currentSpendPerHr, spendLimitUsd: shown.spendLimit, daysLeft: shown.balanceDaysLeft } } : {}),
       total: {
         billedUsd,
-        billedSeconds,
-        effectiveUsdPerHour: billedUsd === null || billedSeconds === null || billedSeconds === 0 ? null : money(billedUsd / (billedSeconds / 3600)),
+        billedSeconds: null,
+        effectiveUsdPerHour: null,
         earlyStarts: earlyTotal,
         breakdown: breakdownTotal,
       },
@@ -341,8 +342,8 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
       return {
         ...day,
         billedUsd: billed === undefined ? null : Math.round(billed.amountUsd * 10_000) / 10_000,
-        runpodBilledSeconds: billed === undefined ? null : Math.round(billed.billedSeconds * 100) / 100,
-        effectiveUsdPerHour: billed !== undefined && billed.billedSeconds > 0 ? Math.round((billed.amountUsd / (billed.billedSeconds / 3600)) * 10_000) / 10_000 : null,
+        runpodBilledSeconds: null,
+        effectiveUsdPerHour: null,
       };
     });
     const sum = (pick: (day: (typeof byDay)[number]) => number) => Math.round(byDay.reduce((total, day) => total + pick(day), 0) * 10_000) / 10_000;
@@ -365,7 +366,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
         estimatedCostUsd: sum((day) => day.estimatedCostUsd),
         wastedCostUsd: sum((day) => day.wastedCostUsd),
         billedUsd: billedDays.length === 0 ? null : sum((day) => day.billedUsd as number),
-        runpodBilledSeconds: billedDays.length === 0 ? null : sum((day) => day.runpodBilledSeconds as number),
+        runpodBilledSeconds: null,
       },
       byDay,
     });

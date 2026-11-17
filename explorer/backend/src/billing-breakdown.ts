@@ -37,19 +37,20 @@
  * Because an instant counts once, an idle tail that a following job, a following session or another tail overlaps is
  * counted only up to where the next claim starts. The billed seconds of a used session are not taken as a whole: they
  * end with an idle timeout that the job's own proving and tail overlap, so only the start-up and the waiting count.
- * `unaccounted` is what RunPod billed minus all five. It holds what no record covers: failed jobs, local build time, the
- * worker overhead of a request, and billing granularity.
+ * `unaccounted` is what RunPod billed minus all five, in dollars. It holds what no record covers: failed jobs, local
+ * build time, the worker overhead of a request, and billing granularity.
  *
  * What is compared, and how it is priced (so that `unaccounted` means something):
  *
- *   - Each period is priced at its own RunPod effective rate (the bill of the period divided by its billed hours): a
- *     day at its day's rate, the last 24 hours hour by hour at each hour's rate. Seconds and dollars of every bucket,
- *     `unaccounted` included, then agree: usd = seconds x the rate of the period, within rounding. A total is the sum
- *     of its days. A period without a rate of its own (no billed time) uses the 7-day rate, else the configured price.
+ *   - RunPod's serverless billing (REST v2) gives dollars per endpoint and bucket (a UTC day or an hour) and no billed
+ *     time. So the seconds of RunPod's bill are unknown: `billed.seconds` and `unaccounted.seconds` are null. The buckets keep
+ *     our own recorded seconds, priced at the configured GPU price (`warmup.gpuUsdPerHour`, the `rateSource` "assumed" of
+ *     `/billing`), and `unaccounted.usd` is RunPod's dollars minus the dollars of the five buckets. It is only as good as
+ *     that price: a wrong configured price moves every bucket's dollars and `unaccounted` with them.
  *   - RunPod's bill lags. The latest hour bucket RunPod returns is taken as still filling: `billedThrough` is its start
  *     (or the start of the UTC day when RunPod returned no hour). Only time before it is compared; our records after
  *     it are `notYetBilled` (seconds, and dollars at the period's rate, an estimate), never part of `unaccounted`.
- *     `buckets + unaccounted` add up to `billed`, the bill up to `billedThrough`.
+ *     `buckets + unaccounted` add up to `billed`, the bill up to `billedThrough`, in dollars.
  *   - `unaccounted` can still be negative, from genuine disagreement between record and bill. The main cause is proving
  *     being an upper bound for a job whose worker reported no `worker_total_ms` (an image that predates the field):
  *     `remote_ms` is the whole accepted request, and when RunPod was slow to allocate a GPU the load balancer held the
@@ -216,8 +217,11 @@ export function totalSeconds(seconds: BucketSeconds): number {
   return BUCKETS.reduce((sum, bucket) => sum + seconds[bucket], 0);
 }
 
-/** Seconds and USD of one bucket. */
+/** Seconds and USD of one bucket: our own recorded seconds, priced at the configured GPU price. */
 export type Amount = { readonly seconds: number; readonly usd: number };
+
+/** What RunPod billed, in USD. RunPod's serverless billing (REST v2) has no billed time, so its seconds are unknown (null). */
+export type RunpodAmount = { readonly seconds: null; readonly usd: number };
 
 /**
  * The breakdown of a period, compared with the bill up to `billedThrough`. `billed` is that bill (null when RunPod has
@@ -225,8 +229,8 @@ export type Amount = { readonly seconds: number; readonly usd: number };
  * `billedThrough` (an estimate at the period's rate), and `billedThrough` is ISO or null when RunPod could not be read.
  */
 export type Breakdown = Readonly<Record<Bucket, Amount>> & {
-  readonly unaccounted: Amount | null;
-  readonly billed: Amount | null;
+  readonly unaccounted: RunpodAmount | null;
+  readonly billed: RunpodAmount | null;
   readonly notYetBilled: Amount;
   readonly billedThrough: string | null;
 };
@@ -239,11 +243,12 @@ export type Span = {
   readonly cutoff: number;
   readonly usdPerHour: number;
   /** The bill of [from, cutoff), or null when RunPod has no figure for it or the span is not billed yet. */
-  readonly billed: Amount | null;
+  readonly billed: RunpodAmount | null;
 };
 
 const roundTo = (value: number, places: number) => Math.round(value * 10 ** places) / 10 ** places;
 const zero: Amount = { seconds: 0, usd: 0 };
+const noBill: RunpodAmount = { seconds: null, usd: 0 };
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value));
@@ -254,63 +259,55 @@ const hourKey = (at: number) => new Date(at).toISOString().slice(0, 13);
 export type Spend = { readonly days: readonly BillingBucket[]; readonly hours: readonly BillingBucket[] };
 
 /**
- * How far RunPod's billing has reached, in milliseconds: the start of its latest hour bucket with billed time (that hour
+ * How far RunPod's billing has reached, in milliseconds: the start of its latest hour bucket with an amount (that hour
  * may still be filling, so it is not compared), else the start of the UTC day of `at`. Null when RunPod was not read.
  */
 export function billedThroughOf(spend: Spend | null, at: number): number | null {
   if (spend === null) return null;
-  const latest = spend.hours.filter((hour) => hour.billedSeconds > 0 || hour.amountUsd > 0).pop();
+  const latest = spend.hours.filter((hour) => hour.amountUsd > 0).pop();
   return latest === undefined ? Math.floor(at / DAY) * DAY : Date.parse(`${latest.start}:00:00Z`);
 }
 
-/** The span of a UTC day: its bill (the day's, less the hours after the cutoff when the cutoff falls inside it) at the day's own rate. */
+/** The span of a UTC day: RunPod's dollars of the day (less those of the hours after the cutoff when the cutoff falls inside it), priced at the configured rate `fallbackUsdPerHour`. */
 export function daySpan(input: { dayStart: number; row: BillingBucket | undefined; hours: readonly BillingBucket[]; billedThrough: number | null; fallbackUsdPerHour: number }): Span {
   const { dayStart, row, hours, billedThrough, fallbackUsdPerHour } = input;
   const to = dayStart + DAY;
   const cutoff = billedThrough === null ? to : clamp(billedThrough, dayStart, to);
-  const rate = row !== undefined && row.billedSeconds > 0 ? row.amountUsd / (row.billedSeconds / 3600) : fallbackUsdPerHour;
-  let billed: Amount | null = null;
+  let billed: RunpodAmount | null = null;
   if (row !== undefined && cutoff > dayStart) {
-    if (cutoff === to) billed = { seconds: roundTo(row.billedSeconds, 2), usd: roundTo(row.amountUsd, 4) };
+    if (cutoff === to) billed = { seconds: null, usd: roundTo(row.amountUsd, 4) };
     else {
-      const after = hours.filter((hour) => Date.parse(`${hour.start}:00:00Z`) >= cutoff && Date.parse(`${hour.start}:00:00Z`) < to).reduce((sum, hour) => sum + hour.billedSeconds, 0);
-      const seconds = Math.max(0, row.billedSeconds - after);
-      billed = { seconds: roundTo(seconds, 2), usd: roundTo((seconds / 3600) * rate, 4) };
+      const after = hours.filter((hour) => Date.parse(`${hour.start}:00:00Z`) >= cutoff && Date.parse(`${hour.start}:00:00Z`) < to).reduce((sum, hour) => sum + hour.amountUsd, 0);
+      billed = { seconds: null, usd: roundTo(Math.max(0, row.amountUsd - after), 4) };
     }
   }
-  return { from: dayStart, to, cutoff, usdPerHour: rate, billed };
+  return { from: dayStart, to, cutoff, usdPerHour: fallbackUsdPerHour, billed };
 }
 
 /**
- * The spans of the last 24 hours, one per hour from the hour that holds `at - 24 h` to the hour of `at`, each at its own
- * hour's rate (an hour with no billed time uses the rate of the whole window, else `fallbackUsdPerHour`). An hour before
- * `billedThrough` that RunPod has no row for was billed nothing.
+ * The spans of the last 24 hours, one per hour from the hour that holds `at - 24 h` to the hour of `at`, all priced at the
+ * configured rate `fallbackUsdPerHour`. An hour before `billedThrough` that RunPod has no row for was billed nothing.
  */
 export function hourSpans(input: { at: number; hours: readonly BillingBucket[]; billedThrough: number | null; fallbackUsdPerHour: number }): Span[] {
   const { at, hours, billedThrough, fallbackUsdPerHour } = input;
   const first = hourStart(at - DAY);
   const rows = new Map(hours.map((hour) => [hour.start, hour]));
-  const inWindow = [...rows.values()].filter((hour) => Date.parse(`${hour.start}:00:00Z`) >= first);
-  const seconds = inWindow.reduce((sum, hour) => sum + hour.billedSeconds, 0);
-  const windowRate = seconds > 0 ? inWindow.reduce((sum, hour) => sum + hour.amountUsd, 0) / (seconds / 3600) : fallbackUsdPerHour;
   const spans: Span[] = [];
   for (let from = first; from <= at; from += HOUR) {
     const to = from + HOUR;
     const row = rows.get(hourKey(from));
     const cutoff = billedThrough === null ? to : clamp(billedThrough, from, to);
-    const billed: Amount | null = billedThrough === null || cutoff < to ? null : row === undefined ? zero : { seconds: roundTo(row.billedSeconds, 2), usd: roundTo(row.amountUsd, 4) };
-    spans.push({ from, to, cutoff, usdPerHour: row !== undefined && row.billedSeconds > 0 ? row.amountUsd / (row.billedSeconds / 3600) : windowRate, billed });
+    const billed: RunpodAmount | null = billedThrough === null || cutoff < to ? null : row === undefined ? noBill : { seconds: null, usd: roundTo(row.amountUsd, 4) };
+    spans.push({ from, to, cutoff, usdPerHour: fallbackUsdPerHour, billed });
   }
   return spans;
 }
 
-/** The breakdown of spans: the buckets before each cutoff at the span's rate, `unaccounted` against the bill, the rest as `notYetBilled`. */
+/** The breakdown of spans: the buckets before each cutoff at the span's rate, `unaccounted` (dollars) against the bill, the rest as `notYetBilled`. */
 export function breakdownOfSpans(timeline: BucketTimeline, spans: readonly Span[], billedThrough: number | null): Breakdown {
   const seconds = Object.fromEntries(BUCKETS.map((bucket) => [bucket, 0])) as Record<Bucket, number>;
   const usd = { ...seconds };
-  let billedSeconds = 0;
   let billedUsd = 0;
-  let claimedSeconds = 0;
   let claimedUsd = 0;
   let anyBilled = false;
   let restSeconds = 0;
@@ -328,21 +325,19 @@ export function breakdownOfSpans(timeline: BucketTimeline, spans: readonly Span[
     }
     if (span.billed !== null) {
       anyBilled = true;
-      billedSeconds += span.billed.seconds;
       billedUsd += span.billed.usd;
-      claimedSeconds += claimed;
       claimedUsd += (claimed / 3600) * span.usdPerHour;
     }
   }
   const buckets = {} as Record<Bucket, Amount>;
   for (const bucket of BUCKETS) buckets[bucket] = { seconds: roundTo(seconds[bucket], 2), usd: roundTo(usd[bucket], 4) };
   // With every span billed the buckets add up to the bill as shown; otherwise only the billed spans count.
-  const shown = BUCKETS.reduce((sum, bucket) => ({ seconds: sum.seconds + buckets[bucket].seconds, usd: sum.usd + buckets[bucket].usd }), { seconds: 0, usd: 0 });
+  const shownUsd = BUCKETS.reduce((sum, bucket) => sum + buckets[bucket].usd, 0);
   const allBilled = spans.every((span) => span.billed !== null);
   return {
     ...buckets,
-    unaccounted: anyBilled ? (allBilled ? { seconds: roundTo(billedSeconds - shown.seconds, 2), usd: roundTo(billedUsd - shown.usd, 4) } : { seconds: roundTo(billedSeconds - claimedSeconds, 2), usd: roundTo(billedUsd - claimedUsd, 4) }) : null,
-    billed: anyBilled ? { seconds: roundTo(billedSeconds, 2), usd: roundTo(billedUsd, 4) } : null,
+    unaccounted: anyBilled ? { seconds: null, usd: roundTo(billedUsd - (allBilled ? shownUsd : claimedUsd), 4) } : null,
+    billed: anyBilled ? { seconds: null, usd: roundTo(billedUsd, 4) } : null,
     notYetBilled: { seconds: roundTo(restSeconds, 2), usd: roundTo(restUsd, 4) },
     billedThrough: billedThrough === null ? null : new Date(billedThrough).toISOString(),
   };
@@ -350,17 +345,21 @@ export function breakdownOfSpans(timeline: BucketTimeline, spans: readonly Span[
 
 /** Adds breakdowns (the days of a total). `unaccounted` and `billed` sum the days that have one, and are null when none does. */
 export function sumBreakdowns(parts: readonly Breakdown[]): Breakdown {
-  const add = (pick: (part: Breakdown) => Amount | null): Amount | null => {
-    const amounts = parts.map(pick).filter((entry): entry is Amount => entry !== null);
-    return amounts.length === 0 ? null : { seconds: roundTo(amounts.reduce((sum, entry) => sum + entry.seconds, 0), 2), usd: roundTo(amounts.reduce((sum, entry) => sum + entry.usd, 0), 4) };
+  const add = (pick: (part: Breakdown) => Amount): Amount => ({
+    seconds: roundTo(parts.reduce((sum, part) => sum + pick(part).seconds, 0), 2),
+    usd: roundTo(parts.reduce((sum, part) => sum + pick(part).usd, 0), 4),
+  });
+  const addBills = (pick: (part: Breakdown) => RunpodAmount | null): RunpodAmount | null => {
+    const amounts = parts.map(pick).filter((entry): entry is RunpodAmount => entry !== null);
+    return amounts.length === 0 ? null : { seconds: null, usd: roundTo(amounts.reduce((sum, entry) => sum + entry.usd, 0), 4) };
   };
   const total = {} as Record<Bucket, Amount>;
-  for (const bucket of BUCKETS) total[bucket] = add((part) => part[bucket]) ?? zero;
+  for (const bucket of BUCKETS) total[bucket] = add((part) => part[bucket]);
   return {
     ...total,
-    unaccounted: add((part) => part.unaccounted),
-    billed: add((part) => part.billed),
-    notYetBilled: add((part) => part.notYetBilled) ?? zero,
+    unaccounted: addBills((part) => part.unaccounted),
+    billed: addBills((part) => part.billed),
+    notYetBilled: add((part) => part.notYetBilled),
     billedThrough: parts.find((part) => part.billedThrough !== null)?.billedThrough ?? null,
   };
 }

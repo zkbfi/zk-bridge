@@ -210,8 +210,8 @@ export const backendConfigSchema = z
       .strict()
       .optional(),
     /**
-     * How often the backend reads RunPod's billing (REST, two requests per endpoint) and the balance (GraphQL). RunPod's
-     * REST API has a daily request limit, so the default is slow. After a failure it tries again after `retrySeconds`; after
+     * How often the backend reads RunPod's billing, cold starts and idle timeout (REST v2) and the balance (GraphQL, no REST v2
+     * read exists). RunPod limits API calls, so the default is slow. After a failure it tries again after `retrySeconds`; after
      * a 429 it waits for the next refresh.
      */
     billing: z
