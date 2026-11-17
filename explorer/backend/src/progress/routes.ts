@@ -235,7 +235,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
     const { refreshSeconds: billingRefreshSeconds, retrySeconds: billingRetrySeconds } = context.config.billing;
     const at = now();
     const snapshot = context.billing === undefined ? { spend: null, balance: null } : await context.billing.read();
-    const figures = figuresOf(snapshot, at);
+    const figures = figuresOf(snapshot, at, context.gpuGuardState?.());
     // RunPod's serverless billing (REST v2) gives dollars and no billed time, so no rate can be measured from it: our own seconds are priced at the configured price.
     const rateSource = "assumed" as const;
     const usdPerHour = gpuUsdPerHour;
@@ -319,7 +319,7 @@ export function registerProgressRoutes(app: Hono, context: BackendModuleContext,
       /** RunPod's own count of cold starts per tier over the last 24 hours, from the billing reader's last reading (null when never read). */
       coldStarts: snapshot.coldStarts == null ? null : { windowHours: 24, ageSeconds: Math.max(0, Math.round((at - snapshot.coldStarts.readAt) / 1000)), tiers: snapshot.coldStarts.tiers },
       // Left out, not nulled, for a request that came through Caddy.
-      ...(local ? { account: { balanceUsd: shown.balanceUsd, balanceAgeSeconds: shown.balanceAgeSeconds, spendNowUsdPerHour: shown.currentSpendPerHr, spendLimitUsd: shown.spendLimit, daysLeft: shown.balanceDaysLeft } } : {}),
+      ...(local ? { account: { balanceUsd: shown.balanceUsd, balanceAgeSeconds: shown.balanceAgeSeconds, spendNowUsdPerHour: shown.currentSpendPerHr, spendLimitUsd: shown.spendLimit, daysLeft: shown.balanceDaysLeft, ...(shown.gpuGuard === undefined ? {} : { gpuGuard: shown.gpuGuard }) } } : {}),
       total: {
         billedUsd,
         billedSeconds: null,

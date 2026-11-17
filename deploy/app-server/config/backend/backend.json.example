@@ -17,6 +17,7 @@
     ]
   },
   "billing": { "refreshSeconds": 3600, "retrySeconds": 900 },
+  "gpuGuard": { "enabled": true, "checkSeconds": 300, "stuckMinutes": 15, "spendCheckSeconds": 3600, "maxUsdPerHour": 0.5, "cooldownMinutes": 10, "maxTripsPerDay": 3 },
   "webhookBearerVariable": "BACKEND_WEBHOOK_BEARER",
   "rpcUrls": {
     "1": "https://ethereum-rpc.example.org",

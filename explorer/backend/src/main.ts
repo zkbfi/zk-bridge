@@ -17,6 +17,7 @@ import { createProverFactories } from "./requests/job-prover.ts";
 import { createProofNeedReader, withoutIndexer } from "./requests/proof-need.ts";
 import { openStorage } from "./storage.ts";
 import { billingEndpoints, createBillingReader } from "./billing.ts";
+import { createGpuGuard } from "./gpu-guard.ts";
 import { createIdleHistory } from "./idle-history.ts";
 import { createIdleTimeoutReader } from "./idle-timeout.ts";
 import { createProverPing } from "./watch/ping.ts";
@@ -128,6 +129,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
   const idleHistory = createIdleHistory(storage);
   const idleReader =
     runpodEndpoints.length === 0 ? undefined : createIdleTimeoutReader({ endpoints: runpodEndpoints, logger, onObserved: (seconds) => idleHistory.record(now(), seconds) });
+  const gpuGuard = runpodEndpoints.length === 0 || !config.gpuGuard.enabled ? undefined : createGpuGuard({ endpoints: runpodEndpoints, settings: config.gpuGuard, now, logger });
   if (config.watch.warmup.syncIdleTimeout !== undefined) {
     logger.warn("config_deprecated", { key: "watch.warmup.syncIdleTimeout", detail: "ignored: the backend no longer writes the idle timeout; it is set in deploy/runpod/endpoints.json. Remove the key" });
   }
@@ -151,12 +153,14 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     ...(grindEngine === undefined ? {} : { grindEngine }),
     pingProver,
     ...(billing === undefined ? {} : { billing }),
+    ...(gpuGuard === undefined ? {} : { gpuGuardState: () => gpuGuard.state() }),
     ...(idleReader === undefined ? {} : { endpointIdleTimeoutSeconds: () => idleReader.endpointIdleTimeoutSeconds() }),
     ...(sealSettings === undefined ? {} : { openSealSigner: () => openSigner({ settings: sealSettings.signer, vault, logger: asBotLogger(logger) }) }),
   };
   const app = createApp({ context, modules: MODULES, enabled: input.enabled });
   // In the background: a slow or failing RunPod never delays start-up. The idle timeout is read again with the billing.
   const idleReading = idleReader?.start(config.billing.refreshSeconds * 1000);
+  const guarding = gpuGuard?.start();
   const stoppers = await Promise.all(input.enabled.map((name) => MODULES[name].start(context)));
   const server = await new Promise<ReturnType<typeof serve> & { port: number }>((resolve) => {
     const listening = serve({ fetch: app.fetch, hostname: config.listen.host, port: config.listen.port }, (address) => resolve(Object.assign(listening, { port: address.port })));
@@ -168,6 +172,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await Promise.all(stoppers.map((stop) => stop()));
       await idleReading?.stop();
+      await guarding?.stop();
       storage.close();
     },
   };

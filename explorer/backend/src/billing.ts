@@ -13,6 +13,7 @@
  */
 import { remoteEndpoints, type BackendConfig, type BackendSecrets } from "./config.ts";
 import type { Logger } from "./logger.ts";
+import type { GpuGuardTierState } from "./gpu-guard.ts";
 
 /** The base address of RunPod's REST API v2. `createBillingReader` takes another one in `restUrl`. */
 export const RUNPOD_REST_URL = "https://api.runpod.io/v2";
@@ -307,12 +308,14 @@ export type BillingFigures = {
   readonly averageDailyUsd7d: number | null;
   /** The balance divided by that average; null when the average is 0 or either is unknown. */
   readonly balanceDaysLeft: number | null;
+  /** The state of each tier in the GPU spend guard (`gpu-guard.ts`); private, like the balance. Absent when the guard does not run. */
+  readonly gpuGuard?: readonly GpuGuardTierState[];
 };
 
 const round = (value: number, places = 4) => Math.round(value * 10 ** places) / 10 ** places;
 
 /** The windows of the summary from a snapshot. */
-export function figuresOf(snapshot: BillingSnapshot, at: number): BillingFigures {
+export function figuresOf(snapshot: BillingSnapshot, at: number, gpuGuard?: readonly GpuGuardTierState[]): BillingFigures {
   const { spend, balance } = snapshot;
   let last24hUsd: number | null = null;
   let average: number | null = null;
@@ -337,11 +340,12 @@ export function figuresOf(snapshot: BillingSnapshot, at: number): BillingFigures
     spendLimit: balance?.spendLimit ?? null,
     averageDailyUsd7d: average,
     balanceDaysLeft: balanceUsd !== null && average !== null && average > 0 ? round(balanceUsd / average, 1) : null,
+    ...(gpuGuard === undefined ? {} : { gpuGuard }),
   };
 }
 
-/** The billing figures without the account: what RunPod billed and the rate stay; the balance, its age, the spend limit, the spend now and the days the balance lasts are left out. */
-export function publicFiguresOf(figures: BillingFigures): Omit<BillingFigures, "balanceUsd" | "balanceAgeSeconds" | "currentSpendPerHr" | "spendLimit" | "balanceDaysLeft"> {
-  const { balanceUsd: _balance, balanceAgeSeconds: _age, currentSpendPerHr: _now, spendLimit: _limit, balanceDaysLeft: _days, ...rest } = figures;
+/** The billing figures without the account: what RunPod billed and the rate stay; the balance, its age, the spend limit, the spend now, the days the balance lasts and the state of the spend guard are left out. */
+export function publicFiguresOf(figures: BillingFigures): Omit<BillingFigures, "balanceUsd" | "balanceAgeSeconds" | "currentSpendPerHr" | "spendLimit" | "balanceDaysLeft" | "gpuGuard"> {
+  const { balanceUsd: _balance, balanceAgeSeconds: _age, currentSpendPerHr: _now, spendLimit: _limit, balanceDaysLeft: _days, gpuGuard: _guard, ...rest } = figures;
   return rest;
 }

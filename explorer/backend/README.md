@@ -445,6 +445,13 @@ Settings, all optional (`watch` in the configuration file):
 | `warmup.gpuUsdPerHour` | 2.25 | The GPU price, for the unused-worker cost of `/billing` when RunPod's billing cannot be read. |
 | `billing.refreshSeconds` | 3600 | How often RunPod is read: the billing (REST v2 `GET /v2/billing/serverless`, two requests per API key for all its endpoints), the cold starts (`GET /v2/serverless/{id}/metrics/cold-starts`, one request per endpoint), the balance (GraphQL, because REST v2 has no balance read) and the idle timeout (`GET /v2/serverless/{id}`, one per endpoint). RunPod limits API calls, so this is slow. `/billing` never calls RunPod. |
 | `billing.retrySeconds` | 900 | How long to wait after a failed read. After a 429 (the daily limit) the backend waits for the next refresh instead. |
+| `gpuGuard.enabled` | true | The GPU spend guard (see "GPU spend guard"). It runs when a RunPod endpoint with a key is configured. |
+| `gpuGuard.checkSeconds` | 300 | How often the guard reads the workers of each tier (`GET /v2/serverless/{id}/workers`, one request per tier). |
+| `gpuGuard.stuckMinutes` | 15 | A worker that is `RUNNING`, `INITIALIZING` or `UNHEALTHY` at every check for longer than this trips its tier. A proof takes 1 to 3 minutes. |
+| `gpuGuard.spendCheckSeconds` | 3600 | How often the guard reads the bill of the last 3 hours of each tier (`GET /v2/billing/serverless?serverlessId=...&bucketSize=hour`). |
+| `gpuGuard.maxUsdPerHour` | 0.5 | A completed hour billed above this trips its tier. Each hour is judged once. |
+| `gpuGuard.cooldownMinutes` | 10 | How long a tripped tier stays at 0 workers before its workers are put back (only if it still reads `max: 0`). |
+| `gpuGuard.maxTripsPerDay` | 3 | The trip that makes this many in 24 hours is held: the tier stays at 0 until `deploy/runpod/apply.mjs --apply` sets its workers again. |
 | `warmup.dailyCapSeconds` | 3600 | The most warm-up seconds in any 24 hours, both directions together. |
 | `warmup.pingTimeoutSeconds` | 300 | How long one ping may wait for a cold worker. |
 | `warmup.leadSeconds` | none | The fixed lead time of before 2026-11-01. Still accepted; it does nothing and the start log warns (`config_ignored`). |
@@ -688,10 +695,25 @@ timeout over time in the `idle_timeout_history` table (`at`, `seconds`). A migra
 adds a row whenever the timeout it reads differs from the latest row. `warmup_sessions.billed_seconds` stays as
 it was stored.
 
+### GPU spend guard
+
+Two RunPod tiers once billed a worker for days that answered nothing (about $143 in 3 days, 2026-11-14 to 11-17). The guard
+(`src/gpu-guard.ts`, design in `docs/superpowers/specs/2026-11-17-gpu-spend-guard-design.md`) stops a leaking tier without
+stopping the others. A tier is one configured RunPod endpoint. Two signals trip it: a worker that is `RUNNING`,
+`INITIALIZING` or `UNHEALTHY` at every check for longer than `gpuGuard.stuckMinutes`, and a completed hour whose bill is
+above `gpuGuard.maxUsdPerHour`. A trip reads the endpoint, remembers its `workers` and sets `{ min: 0, max: 0, idleTimeout }`
+with `PATCH /v2/serverless/{id}`, which ends the stuck worker; it logs `gpu_guard_tripped` at error level with the tier,
+the signal and the evidence. After `gpuGuard.cooldownMinutes` the remembered workers are put back
+(`gpu_guard_restored`), unless the endpoint no longer reads `max: 0` (someone else changed it). The trip that makes
+`gpuGuard.maxTripsPerDay` in 24 hours is held (`gpu_guard_held`): the tier stays at 0 until its live `max` is above 0
+again, which is what `deploy/runpod/apply.mjs --apply` does (`gpu_guard_released`). `deploy/runpod/endpoints.json` stays
+the owner of the worker counts; the guard is an emergency override. Its state per tier is `account.gpuGuard` of `/billing`
+and the `billing.gpuGuard` of `/warmup/summary`, for a direct local request only.
+
 ### `GET /billing?days=7`
 
 GPU billing in general (RunPod is read every `billing.refreshSeconds`, one hour by default; `assumptions.billingRefreshSeconds` and `assumptions.billingRetrySeconds` show the times), per UTC day and in total: what RunPod billed in dollars, the last 24 hours and the price used for our own seconds. RunPod's REST v2 billing (`GET /v2/billing/serverless`) gives dollars per endpoint and bucket and no billed time. So the seconds that RunPod billed and RunPod's effective price per hour are unknown: `billedSeconds` and `effectiveUsdPerHour` are always null, `billed.seconds` and `unaccounted.seconds` of a breakdown are null, and `rateSource` is always `assumed`: our own seconds are priced at the configured `warmup.gpuUsdPerHour` (`usdPerHour`). `coldStarts` holds RunPod's own count of cold starts per tier over the last 24 hours (`count`, `averageMs`, `maxMs`, `worstHourP95Ms`), read with the billing at `billing.refreshSeconds` and null until read; it shows whether the tiers' start times stay under the 30 s start wait. `days` is a whole number from 1 to 30 (default 7); anything else
-is a 400. It names no host and no key. The account (`account`: balance, spend limit, spend now, days left) is filled
+is a 400. It names no host and no key. The account (`account`: balance, spend limit, spend now, days left, and `gpuGuard`, the state of the spend guard) is filled
 only for a direct local request, such as the status service on 127.0.0.1; a request that came through Caddy (it has
 `X-Forwarded-For`) gets nulls.
 
@@ -701,7 +723,8 @@ only for a direct local request, such as the status service on 127.0.0.1; a requ
   "assumptions": { "idleTimeoutSeconds": 5, "idleTimeoutSource": "runpod", "fallbackIdleTimeoutSeconds": 5, "endpointIdleTimeoutSeconds": 5, "gpuUsdPerHour": 2.25, "gpuUsdPerHourIsFallback": true, "dailyCapSeconds": 3600, "billingRefreshSeconds": 3600, "billingRetrySeconds": 900 },
   "available": true, "ageSeconds": 90,
   "last24h": { "billedUsd": 1.18, "billedSeconds": null, "breakdown": { "...": "as in total" } }, "effectiveUsdPerHour": null, "averageDailyUsd7d": 1.7,
-  "account": { "balanceUsd": 153.38, "balanceAgeSeconds": 30, "spendNowUsdPerHour": 0, "spendLimitUsd": 80, "daysLeft": 90.2 },
+  "account": { "balanceUsd": 153.38, "balanceAgeSeconds": 30, "spendNowUsdPerHour": 0, "spendLimitUsd": 80, "daysLeft": 90.2,
+    "gpuGuard": [ { "tier": "gpu-24gb", "endpointId": "aaa111", "state": "ok", "until": null, "lastTrip": null, "tripsLast24h": 0 } ] },
   "total": { "billedUsd": 11.9, "billedSeconds": null, "effectiveUsdPerHour": null,
     "earlyStarts": { "sessions": 31, "used": 26, "unused": 5, "unusedSeconds": 420, "unusedUsd": 0.0887, "waitingSeconds": 380 },
     "breakdown": { "proving": { "seconds": 31000, "usd": 6.54 }, "startingUp": { "seconds": 4100, "usd": 0.87 }, "waitingForProof": { "seconds": 2200, "usd": 0.46 },

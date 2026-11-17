@@ -325,6 +325,16 @@ describe("GET /warmup/summary with RunPod billing (2026-11-07)", () => {
     expect(body.total).toMatchObject({ billedUsd: 0.76 });
   });
 
+  it("shows the state of the spend guard on a local request and not on one through Caddy", async () => {
+    const state = [{ tier: "gpu-24gb", endpointId: "aaa111", state: "tripped" as const, until: "2026-11-17T13:00:00.000Z", lastTrip: { at: "2026-11-17T12:50:00.000Z", signal: "spend" as const, evidence: "hour 2026-11-17T11:00:00Z billed $0.90" }, tripsLast24h: 1 }];
+    const run = withBilling(snapshot);
+    (run.context as { gpuGuardState?: () => typeof state }).gpuGuardState = () => state;
+    expect(((await run.get("/billing")).body as Record<string, any>).account.gpuGuard).toEqual(state);
+    expect(((await run.get("/warmup/summary")).body as Record<string, any>).billing.gpuGuard).toEqual(state);
+    expect(JSON.stringify((await run.get("/billing", { "x-forwarded-for": "203.0.113.7" })).body)).not.toContain("gpuGuard");
+    expect(((await run.get("/warmup/summary", { "x-forwarded-for": "203.0.113.7" })).body as Record<string, any>).billing).not.toHaveProperty("gpuGuard");
+  });
+
   it("reports the cold starts of each tier from the billing reader's last reading, without asking RunPod again", async () => {
     let reads = 0;
     const tiers = [{ label: "gpu-24gb", count: 3, averageMs: 19_667, maxMs: 31_000, worstHourP95Ms: 31_000 }];

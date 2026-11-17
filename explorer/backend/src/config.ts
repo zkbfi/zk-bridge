@@ -219,6 +219,23 @@ export const backendConfigSchema = z
       .strict()
       .prefault({}),
     /**
+     * The GPU spend guard (`gpu-guard.ts`): stops a RunPod tier whose worker stays busy for `stuckMinutes` or whose bill for
+     * one hour is above `maxUsdPerHour`, without stopping the other tiers, and puts its workers back after `cooldownMinutes`.
+     * A tier that trips `maxTripsPerDay` times in 24 hours stays stopped until `deploy/runpod/apply.mjs --apply` sets it again.
+     */
+    gpuGuard: z
+      .object({
+        enabled: z.boolean().default(true),
+        checkSeconds: positiveInteger.default(300),
+        stuckMinutes: positiveInteger.default(15),
+        spendCheckSeconds: positiveInteger.default(3600),
+        maxUsdPerHour: z.number().positive().default(0.5),
+        cooldownMinutes: positiveInteger.default(10),
+        maxTripsPerDay: positiveInteger.default(3),
+      })
+      .strict()
+      .prefault({}),
+    /**
      * The `rpc-proxy` module: the filter behind `https://rpc.zkb.fi/<chainId>` that passes the dapp's reads to eRPC on
      * this server and refuses everything else (`rpc-proxy/settings.ts`, docs/rpc-proxy.md). Every limit has a default.
      */

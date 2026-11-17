@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BILLING_RETRY_MILLISECONDS, BILLING_TTL_MILLISECONDS, BILLING_URL, GRAPHQL_URL, RUNPOD_REST_URL, billingEndpoints, bucketRows, createBillingReader, figuresOf, parseBalance, parseBillingRows, parseColdStarts, problemText, runpodEndpointId, type BillingSnapshot } from "../src/billing.ts";
+import { BILLING_RETRY_MILLISECONDS, BILLING_TTL_MILLISECONDS, BILLING_URL, GRAPHQL_URL, RUNPOD_REST_URL, billingEndpoints, bucketRows, createBillingReader, figuresOf, parseBalance, parseBillingRows, parseColdStarts, problemText, publicFiguresOf, runpodEndpointId, type BillingSnapshot } from "../src/billing.ts";
 import { READ_SECRETS, makeConfig } from "./support.ts";
 
 const KEY = "fake-runpod-key-for-tests-0001";
@@ -404,6 +404,14 @@ describe("the figures", () => {
     expect(figures.averageDailyUsd7d).toBeCloseTo((1.8 + 1.3131631457808908) / 7, 4);
     expect(figures.balanceDaysLeft).toBeCloseTo(153.38 / ((1.8 + 1.3131631457808908) / 7), 0);
     expect(figures.currentSpendPerHr).toBe(0);
+  });
+
+  it("carries the state of the spend guard when it is given, and has none otherwise; the public figures leave it out", () => {
+    const state = [{ tier: "gpu-24gb", endpointId: "aaa111", state: "held" as const, until: null, lastTrip: null, tripsLast24h: 3 }];
+    const snap = { spend: null, balance: null };
+    expect(figuresOf(snap, NOW, state).gpuGuard).toEqual(state);
+    expect(figuresOf(snap, NOW)).not.toHaveProperty("gpuGuard");
+    expect(publicFiguresOf(figuresOf(snap, NOW, state))).not.toHaveProperty("gpuGuard");
   });
 
   it("has no days left without spend, and no figures without a reading", () => {

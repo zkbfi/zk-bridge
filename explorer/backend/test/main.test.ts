@@ -235,7 +235,7 @@ describe("secrets in the log", () => {
     };
     vi.stubGlobal("fetch", runpod);
     const lines: string[] = [];
-    const config = makeConfig({ ...configFor(workspace(), await needyIndexer()), remote: { endpoint: "https://abc123.api.runpod.ai" } });
+    const config = makeConfig({ ...configFor(workspace(), await needyIndexer()), remote: { endpoint: "https://abc123.api.runpod.ai" }, gpuGuard: { enabled: false } });
     const running = await startBackend({ config, pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, write: (line) => lines.push(line) });
     try {
       const body = (await (await real(`http://127.0.0.1:${running.port}/warmup/summary`)).json()) as { rateSource: string; usdPerHour: number; billing: { balanceUsd: number; available: boolean } };
@@ -261,6 +261,36 @@ describe("secrets in the log", () => {
     } finally {
       history.close();
     }
+    expect(lines.join("\n")).not.toContain(SECRETS.runpodApiKey);
+  });
+
+  it("runs the GPU spend guard for a RunPod endpoint with a key: it reads the workers and the hour bill, shows its state on /billing to a local caller only, and stops with the backend", async () => {
+    const real = globalThis.fetch;
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes("runpod.")) return real(input, init);
+      seen.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.includes("graphql")) return Response.json({ data: { myself: { clientBalance: 10, currentSpendPerHr: 0, spendLimit: 80 } } });
+      if (url.endsWith("/serverless/abc123/workers")) return Response.json({ workers: [{ id: "w1", status: "RUNNING" }] });
+      if (url.endsWith("/serverless/abc123")) return Response.json({ id: "abc123", workers: { min: 0, max: 1, idleTimeout: 5 } });
+      return Response.json({ records: [] });
+    });
+    const lines: string[] = [];
+    const config = makeConfig({ ...configFor(workspace(), await needyIndexer()), remote: { endpoint: "https://abc123.api.runpod.ai" } });
+    const running = await startBackend({ config, pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, write: (line) => lines.push(line) });
+    try {
+      const local = (await (await real(`http://127.0.0.1:${running.port}/billing`)).json()) as { account: { gpuGuard: Array<{ tier: string; state: string }> } };
+      expect(local.account.gpuGuard).toMatchObject([{ state: "ok" }]);
+      const proxied = (await (await real(`http://127.0.0.1:${running.port}/billing`, { headers: { "x-forwarded-for": "203.0.113.7" } })).json()) as Record<string, unknown>;
+      expect(JSON.stringify(proxied)).not.toContain("gpuGuard");
+    } finally {
+      await running.stop();
+      vi.unstubAllGlobals();
+    }
+    expect(seen).toContain("GET https://api.runpod.io/v2/serverless/abc123/workers");
+    expect(seen.some((entry) => entry.includes("/billing/serverless?serverlessId=abc123&bucketSize=hour"))).toBe(true);
+    expect(seen.some((entry) => entry.startsWith("PATCH"))).toBe(false);
     expect(lines.join("\n")).not.toContain(SECRETS.runpodApiKey);
   });
 
