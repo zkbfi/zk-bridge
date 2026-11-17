@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import type { Pair } from "@zk-bridge/shared";
 import type { PreflightResult } from "@zk-bridge/shared/msgboard";
+import type { GpuGuardTierState } from "./gpu-guard.ts";
 import type { ForkObservationProver, ForkProofProver, HandoffProver, HeadProver, OpeningProver, ProverBinary } from "@zk-bridge/shared/prover";
 import type { StepChainReads } from "./steps/chain.ts";
 import type { BillingReader } from "./billing.ts";
@@ -35,6 +36,8 @@ export type BackendModuleContext = {
   readonly pingProver?: () => Promise<number>;
   /** What RunPod billed, cached. Absent when no endpoint is a RunPod endpoint with a key; the summary then uses the assumed rate. */
   readonly billing?: BillingReader;
+  /** The state of each RunPod tier in the GPU spend guard. Absent without a RunPod endpoint, or when `gpuGuard.enabled` is false. */
+  readonly gpuGuardState?: () => GpuGuardTierState[];
   /** The idle timeout that RunPod reports for the prover endpoint, from the start-up sync; null while unknown. Absent without a RunPod endpoint. */
   readonly endpointIdleTimeoutSeconds?: () => number | null;
   /** The `handoff-update` command, for the capture of the handoff archive (`archive/handoffs.ts`). Absent: no capture. */

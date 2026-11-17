@@ -56,7 +56,7 @@ describe("main", () => {
     const stop = new AbortController();
     let port = 0;
     const client = { getBlock: async () => { throw new Error("no chain here"); } } as unknown as ChainClient;
-    const exit = main(["--config", files({ runpod: { endpointId: "ep", apiKey: "env:RUNPOD", apiBase: "https://rest.runpod.io/v1" } })], environment, {
+    const exit = main(["--config", files({ runpod: { endpointId: "ep", apiKey: "env:RUNPOD", apiBase: "https://rest.runpod.io/v1", graphqlUrl: "https://api.runpod.io/graphql" } })], environment, {
       stopSignal: stop.signal,
       write: (line) => lines.push(line),
       fetch: (async () => new Response("", { status: 503 })) as unknown as typeof fetch,
@@ -73,6 +73,7 @@ describe("main", () => {
     expect(await exit).toBe(0);
     expect(lines.some((line) => line.includes("status_started"))).toBe(true);
     expect(lines.some((line) => line.includes("runpod_api_base_ignored"))).toBe(true);
+    expect(lines.some((line) => line.includes("runpod_graphql_url_ignored"))).toBe(true);
     expect(lines.join("\n")).not.toContain("hunter2-key-a");
   });
 

@@ -8,7 +8,7 @@
 #   /var/lib/zk-bridge-status             the SQLite history (30 days)
 #
 # It reads the state of the other units with `systemctl show`, which needs no privilege, and the other services over
-# HTTP. It never calls the prover endpoint at RunPod (that would start a paid worker), only RunPod's REST API.
+# HTTP. It never calls the prover endpoint at RunPod (that would start a paid worker), only RunPod's REST API v2.
 [Unit]
 Description=zk-bridge status service
 Wants=network-online.target

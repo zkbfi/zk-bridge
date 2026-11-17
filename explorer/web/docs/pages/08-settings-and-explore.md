@@ -60,9 +60,9 @@ The theme also applies to these docs; their footer has the same choice.
 
 ### RPC endpoints
 
-One RPC endpoint for each chain of the pair. The app uses it to read balances, gas prices and token prices, and to check each transaction before your wallet sends it (the wallet sends through its own RPC). A new RPC endpoint must answer for its chain before Save keeps it. Each field shows a live check with its response time, or "down".
+One RPC endpoint for each chain of the pair. The app uses it to read balances, gas prices and token prices, and to check each transaction before your wallet sends it (the wallet sends through its own RPC endpoint). A new RPC endpoint must answer for its chain before Save keeps it. Each field shows a live check with its response time, or "down".
 
-The default is zkb.fi's own RPC, `rpc.zkb.fi/<chain id>`, with the chain's public RPCs behind it:
+The default is zkb.fi's own RPC endpoint, `rpc.zkb.fi/<chain id>`, with the chain's public RPC endpoints behind it:
 
 | Chain | Default | Then |
 |---|---|---|
@@ -71,7 +71,7 @@ The default is zkb.fi's own RPC, `rpc.zkb.fi/<chain id>`, with the chain's publi
 | Sepolia | `rpc.zkb.fi/11155111` | `ethereum-sepolia-rpc.publicnode.com` |
 | PulseChain testnet v4 | `rpc.zkb.fi/943` | `rpc.v4.testnet.pulsechain.com`, `pulsechain-testnet-rpc.publicnode.com` |
 
-rpc.zkb.fi answers only the reads this app makes around zkb.fi contracts. When it is busy or down, the app reads from the public RPCs; a request it does not serve goes to the next RPC of the list at once. An RPC you set is used alone, without the others.
+rpc.zkb.fi answers only the reads this app makes around zkb.fi contracts. When it is busy or down, the app reads from the public RPC endpoints; a request it does not serve goes to the next RPC endpoint of the list at once. An RPC endpoint you set is used alone, without the others.
 
 ### Beacon endpoints
 

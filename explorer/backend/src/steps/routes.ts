@@ -6,7 +6,6 @@ import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { ROUTE_STEP_KINDS, REQUESTABLE_STEP_KINDS, type ProofDirection, type RouteStepKind, type RouteSteps, type StepProof } from "@zk-bridge/shared";
-import { figuresOf } from "../billing.ts";
 import type { BackendModuleContext } from "../module.ts";
 import { archiveServiceOf } from "../archive/module.ts";
 import { createReadLimiter, READS_PER_CALLER_PER_MINUTE, type ProgressReads } from "../progress/routes.ts";
@@ -36,11 +35,9 @@ function chainOf(context: BackendModuleContext): StepChainReads {
   return created;
 }
 
-/** The price of a GPU hour: RunPod's billed rate, else the configured price. */
+/** The price of a GPU hour: the configured price. RunPod's serverless billing (REST v2) gives dollars and no billed time, so no rate can be measured from it. */
 async function usdPerHourOf(context: BackendModuleContext): Promise<number> {
-  const fallback = context.config.watch.warmup.gpuUsdPerHour;
-  if (context.billing === undefined) return fallback;
-  return figuresOf(await context.billing.read(), context.now()).effectiveUsdPerHour ?? fallback;
+  return context.config.watch.warmup.gpuUsdPerHour;
 }
 
 /** How long a worker stays up after its last proof, in milliseconds. */

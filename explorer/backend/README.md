@@ -259,8 +259,8 @@ The job limits (owner, 2026-11-07: "yes to the job limit changes"):
   does not count.
 - `gpuBudgetUsdPerDirectionPerDay` (default 5): before a job starts, the spend of the direction's jobs proved in the
   last 24 hours must be under it. The spend is each job's worker seconds (`worker_total_ms`, else `remote_ms`, else
-  its start to its proof, plus the wait for a cold worker) at the GPU rate RunPod billed over the last 7 days
-  (`GET /billing`, `effectiveUsdPerHour`), or at `watch.warmup.gpuUsdPerHour` while that cannot be read. A spent budget
+  its start to its proof, plus the wait for a cold worker) at the configured GPU price `watch.warmup.gpuUsdPerHour`
+  (RunPod's billing gives dollars and no billed time, so no rate can be measured from it). A spent budget
   is refused with `why: "gpu-budget"` and a `detail` such as "the 24 h GPU budget of $5.00 for first-to-second is spent:
   $5.04", and logged as `gpu_budget_spent`. A handoff or a keep-alive of the age rule keeps the light client alive and
   goes past it, logged as `gpu_budget_bypassed`. Idle tails and unused warm-ups are not counted (see `GET /billing`).
@@ -443,8 +443,15 @@ Settings, all optional (`watch` in the configuration file):
 | `warmup.idleTimeoutSeconds` | 5 | The fallback for the RunPod endpoint's idle timeout in whole seconds (1 to 3600), used only until the backend has read the real one. The real one is set in `deploy/runpod/endpoints.json`. |
 | `warmup.syncIdleTimeout` | none | Removed on 2026-11-13. A file that still has it loads; the key does nothing and the backend logs `config_deprecated`. Remove it. |
 | `warmup.gpuUsdPerHour` | 2.25 | The GPU price, for the unused-worker cost of `/billing` when RunPod's billing cannot be read. |
-| `billing.refreshSeconds` | 3600 | How often RunPod's billing (REST, two requests per endpoint) and the balance (GraphQL) are read. RunPod's REST API has a daily request limit, so this is slow. `/billing` never calls RunPod. |
+| `billing.refreshSeconds` | 3600 | How often RunPod is read: the billing (REST v2 `GET /v2/billing/serverless`, two requests per API key for all its endpoints), the cold starts (`GET /v2/serverless/{id}/metrics/cold-starts`, one request per endpoint), the balance (GraphQL, because REST v2 has no balance read) and the idle timeout (`GET /v2/serverless/{id}`, one per endpoint). RunPod limits API calls, so this is slow. `/billing` never calls RunPod. |
 | `billing.retrySeconds` | 900 | How long to wait after a failed read. After a 429 (the daily limit) the backend waits for the next refresh instead. |
+| `gpuGuard.enabled` | true | The GPU spend guard (see "GPU spend guard"). It runs when a RunPod endpoint with a key is configured. |
+| `gpuGuard.checkSeconds` | 300 | How often the guard reads the workers of each tier (`GET /v2/serverless/{id}/workers`, one request per tier). |
+| `gpuGuard.stuckMinutes` | 15 | A worker that is `RUNNING`, `INITIALIZING` or `UNHEALTHY` at every check for longer than this trips its tier. A proof takes 1 to 3 minutes. |
+| `gpuGuard.spendCheckSeconds` | 3600 | How often the guard reads the bill of the last 3 hours of each tier (`GET /v2/billing/serverless?serverlessId=...&bucketSize=hour`). |
+| `gpuGuard.maxUsdPerHour` | 0.5 | A completed hour billed above this trips its tier. Each hour is judged once. |
+| `gpuGuard.cooldownMinutes` | 10 | How long a tripped tier stays at 0 workers before its workers are put back (only if it still reads `max: 0`). |
+| `gpuGuard.maxTripsPerDay` | 3 | The trip that makes this many in 24 hours is held: the tier stays at 0 until `deploy/runpod/apply.mjs --apply` sets its workers again. |
 | `warmup.dailyCapSeconds` | 3600 | The most warm-up seconds in any 24 hours, both directions together. |
 | `warmup.pingTimeoutSeconds` | 300 | How long one ping may wait for a cold worker. |
 | `warmup.leadSeconds` | none | The fixed lead time of before 2026-11-01. Still accepted; it does nothing and the start log warns (`config_ignored`). |
@@ -662,7 +669,7 @@ about 49 s to answer ready (observed), during which a proof waits.
 
 To change it, edit `idleTimeout` of the endpoints in `deploy/runpod/endpoints.json` and apply the file with
 `deploy/runpod/apply.mjs`. The backend never writes it. It reads the idle timeout of every configured endpoint with one
-GraphQL request at start-up and then every `billing.refreshSeconds`, and logs `runpod_idle_timeout_read` per endpoint
+REST v2 request each (`GET /v2/serverless/{id}`, field `workers.idleTimeout`) at start-up and then every `billing.refreshSeconds`, and logs `runpod_idle_timeout_read` per endpoint
 (`endpointId` first 6 characters, `idleTimeoutSeconds`). If the tiers differ it logs `runpod_idle_timeout_differs_between_tiers`
 (info; this is allowed). If RunPod cannot be reached it logs `runpod_idle_timeout_unread` (the reason, never the key),
 keeps the last value and starts anyway. The first endpoint's value is the one in use. Until it is read, the backend
@@ -688,52 +695,65 @@ timeout over time in the `idle_timeout_history` table (`at`, `seconds`). A migra
 adds a row whenever the timeout it reads differs from the latest row. `warmup_sessions.billed_seconds` stays as
 it was stored.
 
+### GPU spend guard
+
+Two RunPod tiers once billed a worker for days that answered nothing (about $143 in 3 days, 2026-11-14 to 11-17). The guard
+(`src/gpu-guard.ts`, design in `docs/superpowers/specs/2026-11-17-gpu-spend-guard-design.md`) stops a leaking tier without
+stopping the others. A tier is one configured RunPod endpoint. Two signals trip it: a worker that is `RUNNING`,
+`INITIALIZING` or `UNHEALTHY` at every check for longer than `gpuGuard.stuckMinutes`, and a completed hour whose bill is
+above `gpuGuard.maxUsdPerHour`. A trip reads the endpoint, remembers its `workers` and sets `{ min: 0, max: 0, idleTimeout }`
+with `PATCH /v2/serverless/{id}`, which ends the stuck worker; it logs `gpu_guard_tripped` at error level with the tier,
+the signal and the evidence. After `gpuGuard.cooldownMinutes` the remembered workers are put back
+(`gpu_guard_restored`), unless the endpoint no longer reads `max: 0` (someone else changed it). The trip that makes
+`gpuGuard.maxTripsPerDay` in 24 hours is held (`gpu_guard_held`): the tier stays at 0 until its live `max` is above 0
+again, which is what `deploy/runpod/apply.mjs --apply` does (`gpu_guard_released`). `deploy/runpod/endpoints.json` stays
+the owner of the worker counts; the guard is an emergency override. Its state per tier is `account.gpuGuard` of `/billing`
+and the `billing.gpuGuard` of `/warmup/summary`, for a direct local request only.
+
 ### `GET /billing?days=7`
 
-GPU billing in general (RunPod is read every `billing.refreshSeconds`, one hour by default; `assumptions.billingRefreshSeconds` and `assumptions.billingRetrySeconds` show the times), per UTC day and in total: what RunPod billed, the billed seconds, the effective price of a GPU
-hour, the last 24 hours and where the rate comes from. `days` is a whole number from 1 to 30 (default 7); anything else
-is a 400. It names no host and no key. The account (`account`: balance, spend limit, spend now, days left) is filled
+GPU billing in general (RunPod is read every `billing.refreshSeconds`, one hour by default; `assumptions.billingRefreshSeconds` and `assumptions.billingRetrySeconds` show the times), per UTC day and in total: what RunPod billed in dollars, the last 24 hours and the price used for our own seconds. RunPod's REST v2 billing (`GET /v2/billing/serverless`) gives dollars per endpoint and bucket and no billed time. So the seconds that RunPod billed and RunPod's effective price per hour are unknown: `billedSeconds` and `effectiveUsdPerHour` are always null, `billed.seconds` and `unaccounted.seconds` of a breakdown are null, and `rateSource` is always `assumed`: our own seconds are priced at the configured `warmup.gpuUsdPerHour` (`usdPerHour`). `coldStarts` holds RunPod's own count of cold starts per tier over the last 24 hours (`count`, `averageMs`, `maxMs`, `worstHourP95Ms`), read with the billing at `billing.refreshSeconds` and null until read; it shows whether the tiers' start times stay under the 30 s start wait. `days` is a whole number from 1 to 30 (default 7); anything else
+is a 400. It names no host and no key. The account (`account`: balance, spend limit, spend now, days left, and `gpuGuard`, the state of the spend guard) is filled
 only for a direct local request, such as the status service on 127.0.0.1; a request that came through Caddy (it has
 `X-Forwarded-For`) gets nulls.
 
 ```json
 {
-  "days": 7, "rateSource": "runpod", "usdPerHour": 0.76,
+  "days": 7, "rateSource": "assumed", "usdPerHour": 2.25,
   "assumptions": { "idleTimeoutSeconds": 5, "idleTimeoutSource": "runpod", "fallbackIdleTimeoutSeconds": 5, "endpointIdleTimeoutSeconds": 5, "gpuUsdPerHour": 2.25, "gpuUsdPerHourIsFallback": true, "dailyCapSeconds": 3600, "billingRefreshSeconds": 3600, "billingRetrySeconds": 900 },
   "available": true, "ageSeconds": 90,
-  "last24h": { "billedUsd": 1.18, "billedSeconds": 5400, "breakdown": { "...": "as in total" } }, "effectiveUsdPerHour": 0.76, "averageDailyUsd7d": 1.7,
-  "account": { "balanceUsd": 153.38, "balanceAgeSeconds": 30, "spendNowUsdPerHour": 0, "spendLimitUsd": 80, "daysLeft": 90.2 },
-  "total": { "billedUsd": 11.9, "billedSeconds": 52000, "effectiveUsdPerHour": 0.8238,
+  "last24h": { "billedUsd": 1.18, "billedSeconds": null, "breakdown": { "...": "as in total" } }, "effectiveUsdPerHour": null, "averageDailyUsd7d": 1.7,
+  "account": { "balanceUsd": 153.38, "balanceAgeSeconds": 30, "spendNowUsdPerHour": 0, "spendLimitUsd": 80, "daysLeft": 90.2,
+    "gpuGuard": [ { "tier": "gpu-24gb", "endpointId": "aaa111", "state": "ok", "until": null, "lastTrip": null, "tripsLast24h": 0 } ] },
+  "total": { "billedUsd": 11.9, "billedSeconds": null, "effectiveUsdPerHour": null,
     "earlyStarts": { "sessions": 31, "used": 26, "unused": 5, "unusedSeconds": 420, "unusedUsd": 0.0887, "waitingSeconds": 380 },
     "breakdown": { "proving": { "seconds": 31000, "usd": 6.54 }, "startingUp": { "seconds": 4100, "usd": 0.87 }, "waitingForProof": { "seconds": 2200, "usd": 0.46 },
-      "unusedEarlyStarts": { "seconds": 420, "usd": 0.0887 }, "idleAfterJob": { "seconds": 9300, "usd": 1.96 }, "unaccounted": { "seconds": 4980, "usd": 2.0 } } },
-  "byDay": [ { "day": "2026-11-06", "billedUsd": 1.7, "billedSeconds": 7600, "effectiveUsdPerHour": 0.8053,
+      "unusedEarlyStarts": { "seconds": 420, "usd": 0.0887 }, "idleAfterJob": { "seconds": 9300, "usd": 1.96 }, "unaccounted": { "seconds": null, "usd": 2.0 } } },
+  "byDay": [ { "day": "2026-11-06", "billedUsd": 1.7, "billedSeconds": null, "effectiveUsdPerHour": null,
     "earlyStarts": { "sessions": 5, "used": 4, "unused": 1, "unusedSeconds": 80, "unusedUsd": 0.0169, "waitingSeconds": 60 },
     "breakdown": { "...": "the six buckets of the day, each { seconds, usd }" } } ]
 }
 ```
 
-`rateSource` is `runpod` when the rate is measured from RunPod's billing (amount over billed hours, last 7 days) and
-`assumed` when it could not be read; then `usdPerHour` is the configured price. `billedUsd` and `billedSeconds` are null
-for a day RunPod has no figure for. `earlyStarts` is the part of it that workers started before a proof account for
+`rateSource` is `assumed` (the field stays for readers of the earlier shape, where `runpod` meant a rate measured from RunPod's billed hours); `usdPerHour` is the configured price. `billedUsd` is null for a day RunPod has no figure for. `earlyStarts` is the part of it that workers started before a proof account for
 (by the day a session started): `unused` counts the sessions that did not end `used`, `unusedSeconds` their billed time
 estimated from each session's start to its end plus the endpoint's idle timeout (a session that a restart ended has no
 idle part), `unusedUsd` that time at `usdPerHour`, and `readyBeforeDueSeconds` how long a worker sat ready before the due
 time in used sessions: the lead that was longer than it needed to be.
 
-`breakdown` (on each day, in `total` and in `last24h`) puts every billed second in one bucket, each `{ seconds, usd }` at
+`breakdown` (on each day, in `total` and in `last24h`) puts every second of our own records in one bucket, each `{ seconds, usd }` at
 `usdPerHour`: `proving` (the request on the worker, until the proof returned), `startingUp` (cold start before a worker
 can take work), `waitingForProof` (a started worker ready and idle until its proof began), `unusedEarlyStarts` (billed
 time of sessions with no proof), `idleAfterJob` (the idle timeout after each job, not counted again where a later job or
-session overlaps; its tail is the idle timeout of the time the job ended) and `unaccounted` (RunPod's bill minus the five;
+session overlaps; its tail is the idle timeout of the time the job ended) and `unaccounted` (RunPod's dollars minus the dollars of the five, `{ seconds: null, usd }`;
 null for a period without a RunPod figure). An instant counts in one bucket only; the boundaries and a worked example are
 in the header of `src/billing-breakdown.ts`. Session records are kept 7 days, so older days show no early starts.
 
-What makes `unaccounted` meaningful: each period is priced at its own RunPod rate (a day at its day's bill over its billed
-hours, the last 24 hours hour by hour), so its seconds and dollars agree and a total is the sum of its days. RunPod's bill
+What makes `unaccounted` meaningful: every bucket is priced at the same configured `usdPerHour`, and `unaccounted.usd` is RunPod's
+dollars for the period minus those dollars, so it is only as good as that price; a total is the sum of its days. RunPod's bill
 lags, so only time before `billedThrough` (ISO, the start of RunPod's latest hour bucket, which is still filling) is
-compared: the records after it are `notYetBilled` (`{ seconds, usd }`, an estimate at the period's rate), and `billed`
-is the bill that was compared, which the six buckets add up to. Each breakdown has `billedThrough`, `billed` and
+compared: the records after it are `notYetBilled` (`{ seconds, usd }`, our own seconds and an estimate at `usdPerHour`), and `billed`
+(`{ seconds: null, usd }`) is the bill that was compared; the dollars of the six buckets add up to it. Each breakdown has `billedThrough`, `billed` and
 `notYetBilled`. What remains negative is a real disagreement between record and bill, small ones mostly from proving
 being an upper bound: a job whose worker reported no `worker_total_ms` (an image that predates the field) is counted by
 `remote_ms`, the whole accepted request, which also holds the wait of RunPod's load balancer for a GPU that RunPod does

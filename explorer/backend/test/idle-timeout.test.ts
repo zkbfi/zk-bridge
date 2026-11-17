@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GRAPHQL_URL } from "../src/billing.ts";
+import { RUNPOD_REST_URL } from "../src/billing.ts";
 import { createIdleTimeoutReader } from "../src/idle-timeout.ts";
 
 const KEY = "fake-runpod-key-for-tests-0002";
@@ -7,21 +7,27 @@ const ENDPOINT = { id: "abc123def456", apiKey: KEY };
 const OTHER = { id: "other123", apiKey: KEY };
 
 type Call = { url: string; method: string; authorization: string | null; body: string | null };
+type Answer = { status?: number; body?: unknown; error?: Error };
 
-/** A RunPod GraphQL double. `answer` is the JSON body, a status number or an Error. */
-function fakeRunpod(answer: unknown = { data: { myself: { endpoints: [{ id: ENDPOINT.id, idleTimeout: 5 }, { id: OTHER.id, idleTimeout: 5 }] } } }) {
-  const state: { answer: unknown } = { answer };
+/** The endpoint as `GET /v2/serverless/{id}` answers it, cut to what is read. */
+const endpoint = (idleTimeout: unknown) => ({ id: "x", name: "n", workers: { min: 0, max: 1, ...(idleTimeout === undefined ? {} : { idleTimeout }) } });
+
+/** A RunPod v2 double: one answer per endpoint id (`answers`), or the same for all (`all`). */
+function fakeRunpod(answers: Record<string, Answer> = { [ENDPOINT.id]: { body: endpoint(5) }, [OTHER.id]: { body: endpoint(5) } }) {
+  const state: { answers: Record<string, Answer> } = { answers };
   const calls: Call[] = [];
   const fetchFunction = (async (input: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(input), method: init?.method ?? "GET", authorization: new Headers(init?.headers).get("authorization"), body: typeof init?.body === "string" ? init.body : null });
-    if (state.answer instanceof Error) throw state.answer;
-    if (typeof state.answer === "number") return new Response("{}", { status: state.answer });
-    return Response.json(state.answer);
+    const url = String(input);
+    calls.push({ url, method: init?.method ?? "GET", authorization: new Headers(init?.headers).get("authorization"), body: typeof init?.body === "string" ? init.body : null });
+    const id = url.slice(url.lastIndexOf("/") + 1);
+    const answer = state.answers[id] ?? { status: 404, body: { title: "Not Found", status: 404, detail: `no endpoint ${id}` } };
+    if (answer.error !== undefined) throw answer.error;
+    return Response.json(answer.body ?? {}, { status: answer.status ?? 200 });
   }) as typeof fetch;
   return { state, calls, fetchFunction: () => fetchFunction };
 }
 
-const rows = (...list: unknown[]) => ({ data: { myself: { endpoints: list } } });
+const both = (first: unknown, second: unknown = first): Record<string, Answer> => ({ [ENDPOINT.id]: { body: endpoint(first) }, [OTHER.id]: { body: endpoint(second) } });
 
 function make(runpod = fakeRunpod(), options: { endpoints?: Array<typeof ENDPOINT>; seen?: number[] } = {}) {
   const lines: string[] = [];
@@ -39,13 +45,13 @@ function make(runpod = fakeRunpod(), options: { endpoints?: Array<typeof ENDPOIN
 afterEach(() => vi.useRealTimers());
 
 describe("reading the idle timeout of the endpoints", () => {
-  it("reads every endpoint with one GraphQL request and never writes", async () => {
-    const { reader, runpod, lines } = make(fakeRunpod(rows({ id: ENDPOINT.id, idleTimeout: 60 }, { id: OTHER.id, idleTimeout: 60 })));
+  it("reads each endpoint with one GET of REST v2 (workers.idleTimeout) and never writes", async () => {
+    const { reader, runpod, lines } = make(fakeRunpod(both(60)));
     expect(reader.endpointIdleTimeoutSeconds()).toBeNull();
     await reader.run();
-    expect(runpod.calls).toHaveLength(1);
-    expect(runpod.calls[0]).toMatchObject({ url: GRAPHQL_URL, method: "POST", authorization: `Bearer ${KEY}` });
-    expect(runpod.calls[0]?.body).toContain("idleTimeout");
+    expect(runpod.calls.map((call) => call.url).sort()).toEqual([`${RUNPOD_REST_URL}/serverless/${OTHER.id}`, `${RUNPOD_REST_URL}/serverless/${ENDPOINT.id}`].sort());
+    for (const call of runpod.calls) expect(call).toMatchObject({ method: "GET", authorization: `Bearer ${KEY}`, body: null });
+    expect(runpod.calls.some((call) => call.url.includes("graphql"))).toBe(false);
     expect(reader.endpointIdleTimeoutSeconds()).toBe(60);
     expect(lines.filter((line) => line.includes("runpod_idle_timeout_read"))).toHaveLength(2);
     expect(lines.join("\n")).not.toContain(KEY);
@@ -54,7 +60,7 @@ describe("reading the idle timeout of the endpoints", () => {
 
   it("tells the first endpoint's value to onObserved and logs when the tiers differ", async () => {
     const seen: number[] = [];
-    const { reader, lines } = make(fakeRunpod(rows({ id: ENDPOINT.id, idleTimeout: 5 }, { id: OTHER.id, idleTimeout: 30 })), { seen });
+    const { reader, lines } = make(fakeRunpod(both(5, 30)), { seen });
     await reader.run();
     expect(seen).toEqual([5]);
     expect(lines.join("\n")).toContain('info runpod_idle_timeout_differs_between_tiers {"idleTimeoutSeconds":{"abc123":5,"other1":30}}');
@@ -62,36 +68,61 @@ describe("reading the idle timeout of the endpoints", () => {
 
   it("warns for an endpoint that is missing or has no idleTimeout, and keeps the others", async () => {
     const seen: number[] = [];
-    const { reader, lines } = make(fakeRunpod(rows({ id: ENDPOINT.id, idleTimeout: 5 }, { id: OTHER.id }, null)), { seen });
+    const { reader, lines } = make(fakeRunpod({ [ENDPOINT.id]: { body: endpoint(5) }, [OTHER.id]: { body: endpoint(undefined) } }), { seen });
     await reader.run();
     expect(lines.join("\n")).toContain("the endpoint has no idleTimeout");
     expect(reader.endpointIdleTimeoutSeconds()).toBe(5);
-    const missing = make(fakeRunpod(rows()), { seen });
+    const missing = make(fakeRunpod({}), { seen });
     await missing.reader.run();
-    expect(missing.lines.join("\n")).toContain("the endpoint is not in the answer");
+    expect(missing.lines.join("\n")).toContain("RunPod answered 404: Not Found: no endpoint abc123def456");
     expect(missing.reader.endpointIdleTimeoutSeconds()).toBeNull();
+    const nonsense = make(fakeRunpod({ [ENDPOINT.id]: { body: null }, [OTHER.id]: { body: "x" } }));
+    await nonsense.reader.run();
+    expect(nonsense.lines.join("\n")).toContain("the endpoint has no idleTimeout");
   });
 
-  it("warns and keeps the last value when the request fails, never with the key", async () => {
+  it("reads the other endpoints when one fails", async () => {
+    const { reader, lines } = make(fakeRunpod({ [ENDPOINT.id]: { status: 500, body: { title: "Internal Server Error" } }, [OTHER.id]: { body: endpoint(30) } }));
+    await reader.run();
+    expect(reader.endpointIdleTimeoutSeconds()).toBeNull();
+    expect(lines.filter((line) => line.includes("runpod_idle_timeout_unread"))).toHaveLength(1);
+    expect(lines.filter((line) => line.includes("runpod_idle_timeout_read"))).toHaveLength(1);
+  });
+
+  it("warns and keeps the last value when the request fails, with the title and detail of the problem answer, never with the key", async () => {
     const { reader, runpod, lines } = make();
     await reader.run();
-    for (const answer of [new Error("network down"), 429, { errors: [{ message: "x" }] }, { data: { myself: null } }, null]) {
-      runpod.state.answer = answer;
+    const failures: Answer[] = [
+      { error: new Error("network down") },
+      { status: 429, body: { title: "Too Many Requests", status: 429, detail: "slow down" } },
+      { status: 401, body: "not a problem document" },
+      { status: 502, body: null },
+    ];
+    for (const failure of failures) {
+      runpod.state.answers = { [ENDPOINT.id]: failure, [OTHER.id]: failure };
       await reader.run();
     }
     expect(reader.endpointIdleTimeoutSeconds()).toBe(5);
     const text = lines.join("\n");
     expect(text).toContain("warn runpod_idle_timeout_unread");
     expect(text).toContain("network down");
-    expect(text).toContain("RunPod answered 429");
-    expect(text).toContain("GraphQL errors");
-    expect(text).toContain("no endpoint list");
+    expect(text).toContain("RunPod answered 429: Too Many Requests: slow down");
+    expect(text).toContain('"RunPod answered 401"');
+    expect(text).toContain('"RunPod answered 502"');
     expect(text).not.toContain(KEY);
+  });
+
+  it("logs an error answer that is not JSON by its status alone", async () => {
+    const html = (async () => new Response("<html>", { status: 502 })) as unknown as typeof fetch;
+    const lines: string[] = [];
+    const logger = { debug() {}, info() {}, warn: (event: string, fields?: unknown) => void lines.push(`${event} ${JSON.stringify(fields)}`), error() {} };
+    await createIdleTimeoutReader({ endpoints: [ENDPOINT], logger, fetchFunction: () => html }).run();
+    expect(lines.join("\n")).toContain('"reason":"RunPod answered 502"');
   });
 
   it("names a network error by its name", async () => {
     const failure = new DOMException("timed out", "TimeoutError");
-    const { reader, lines } = make(fakeRunpod(failure as unknown as Error));
+    const { reader, lines } = make(fakeRunpod({ [ENDPOINT.id]: { error: failure }, [OTHER.id]: { error: failure } }));
     await reader.run();
     expect(lines.join("\n")).toContain("TimeoutError");
   });
@@ -108,11 +139,11 @@ describe("reading the idle timeout of the endpoints", () => {
     const { reader, runpod } = make();
     const reading = reader.start(1000);
     await vi.advanceTimersByTimeAsync(0);
-    expect(runpod.calls).toHaveLength(1);
+    expect(runpod.calls).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(2000);
-    expect(runpod.calls).toHaveLength(3);
+    expect(runpod.calls).toHaveLength(6);
     await reading.stop();
     await vi.advanceTimersByTimeAsync(5000);
-    expect(runpod.calls).toHaveLength(3);
+    expect(runpod.calls).toHaveLength(6);
   });
 });

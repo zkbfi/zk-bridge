@@ -2,7 +2,6 @@ import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { PROOF_DIRECTIONS, SLOTS_PER_EPOCH, secondsPerSlot, type ProofDirection } from "@zk-bridge/shared";
-import { figuresOf } from "../billing.ts";
 import { decisionBoardOf } from "../watch/decisions.ts";
 import { epochsPerDay } from "./rate-limit.ts";
 import type { BackendModuleContext } from "../module.ts";
@@ -65,12 +64,8 @@ function serviceFor(context: BackendModuleContext): RequestService {
       return { finalizedSlot: decision.finalizedSlot, headSlot: decision.headSlot, nextAt: decision.at + SLOTS_PER_EPOCH * decision.secondsPerSlot * 1000 };
     },
     jobsPerDayOf: (direction) => epochsPerDay(secondsPerSlot(sourceChainOf(context, direction))),
-    // The rate RunPod billed over the last 7 days; the configured price while it cannot be read.
-    readUsdPerHour: async () => {
-      const fallback = context.config.watch.warmup.gpuUsdPerHour;
-      if (context.billing === undefined) return fallback;
-      return figuresOf(await context.billing.read(), context.now()).effectiveUsdPerHour ?? fallback;
-    },
+    // The configured price of a GPU hour: RunPod's serverless billing (REST v2) gives dollars and no billed time, so no rate can be measured from it.
+    readUsdPerHour: async () => context.config.watch.warmup.gpuUsdPerHour,
     // The timings of every proof are kept for `GET /benchmarks` and the estimates of `GET /progress`. A job that met a
     // cold worker also tells the warm-up how long a cold start takes.
     onProved: (event) => {

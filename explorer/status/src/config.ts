@@ -124,9 +124,10 @@ export const statusConfigSchema = z
       .strict()
       .default({ maxUndeliveredAgeSeconds: 7200, maxJobSeconds: 3600 }),
     /**
-     * The proving endpoints at RunPod, read with one GraphQL request per run. List them as `endpoints: [{ id, label? }]`, or as
-     * `endpointIds: [...]`, or (old form) as one `endpointId`; all three are merged. `apiBase` (the old REST address) is
-     * accepted and ignored, and a warning is logged at start-up. The endpoints themselves are never called.
+     * The proving endpoints at RunPod, read from REST API v2 (`restUrl`, default `https://api.runpod.io/v2`). List them as
+     * `endpoints: [{ id, label? }]`, or as `endpointIds: [...]`, or (old form) as one `endpointId`; all three are merged.
+     * `apiBase` (the retired REST v1 address) and `graphqlUrl` (the check no longer reads GraphQL; the status page does not
+     * read the balance) are accepted and ignored, and a warning is logged at start-up. The endpoints themselves are never called.
      */
     runpod: z
       .object({
@@ -134,7 +135,8 @@ export const statusConfigSchema = z
         endpointIds: z.array(runpodId).default([]),
         endpointId: runpodId.optional(),
         apiKey: reference,
-        graphqlUrl: z.url().default("https://api.runpod.io/graphql"),
+        restUrl: z.url().default("https://api.runpod.io/v2"),
+        graphqlUrl: z.string().optional(),
         apiBase: z.string().optional(),
       })
       .strict()
@@ -144,7 +146,7 @@ export const statusConfigSchema = z
           label: ("label" in entry ? entry.label : undefined) ?? entry.id,
         }));
         if (endpoints.length === 0) context.addIssue({ code: "custom", message: "needs at least one endpoint (endpoints, endpointIds or endpointId)" });
-        return { endpoints, apiKey: value.apiKey, graphqlUrl: value.graphqlUrl, apiBase: value.apiBase };
+        return { endpoints, apiKey: value.apiKey, restUrl: value.restUrl, graphqlUrl: value.graphqlUrl, apiBase: value.apiBase };
       })
       .optional(),
     /** The wallets to watch, with the balance under which each one is low, per chain, in the native token. */

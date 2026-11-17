@@ -227,26 +227,29 @@ describe("secrets in the log", () => {
       const url = String(input);
       if (!url.includes("runpod.")) return real(input, init);
       seen.push(`${url} ${new Headers(init?.headers).get("authorization")}`);
-      if (url.includes("graphql") && String(init?.body).includes("idleTimeout")) return Response.json({ data: { myself: { endpoints: [{ id: "abc123", idleTimeout: 60 }] } } });
       if (url.includes("graphql")) return Response.json({ data: { myself: { clientBalance: 153.38, currentSpendPerHr: 0, spendLimit: 80 } } });
+      if (url.endsWith("/serverless/abc123")) return Response.json({ id: "abc123", workers: { min: 0, max: 1, idleTimeout: 60 } });
+      if (url.includes("/metrics/cold-starts")) return Response.json({ records: [], pagination: { nextCursor: null, hasNextPage: false } });
       const today = new Date().toISOString().slice(0, 10);
-      return Response.json([{ time: `${today} 00:00:00`, amount: 0.76, timeBilledMs: 3_600_000 }]);
+      return Response.json({ records: [{ startTime: `${today}T00:00:00Z`, endTime: `${today}T23:59:59Z`, serverlessId: "abc123", totalAmount: 0.76, gpuAmount: 0.75, cpuAmount: 0, diskAmount: 0.01, feeAmount: 0 }], metadata: {} });
     };
     vi.stubGlobal("fetch", runpod);
     const lines: string[] = [];
-    const config = makeConfig({ ...configFor(workspace(), await needyIndexer()), remote: { endpoint: "https://abc123.api.runpod.ai" } });
+    const config = makeConfig({ ...configFor(workspace(), await needyIndexer()), remote: { endpoint: "https://abc123.api.runpod.ai" }, gpuGuard: { enabled: false } });
     const running = await startBackend({ config, pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, write: (line) => lines.push(line) });
     try {
-      const body = (await (await real(`http://127.0.0.1:${running.port}/warmup/summary`)).json()) as { rateSource: string; usdPerHour: number; billing: { balanceUsd: number } };
-      expect(body).toMatchObject({ rateSource: "runpod", usdPerHour: 0.76, billing: { balanceUsd: 153.38 } });
+      const body = (await (await real(`http://127.0.0.1:${running.port}/warmup/summary`)).json()) as { rateSource: string; usdPerHour: number; billing: { balanceUsd: number; available: boolean } };
+      // RunPod v2 gives the amount without billed time, so the rate is the configured one and the amount is RunPod's.
+      expect(body).toMatchObject({ rateSource: "assumed", billing: { balanceUsd: 153.38, available: true } });
     } finally {
       await running.stop();
       vi.unstubAllGlobals();
     }
-    // The day and hour billing, the balance, and the endpoint's idle timeout, read once and never written.
-    expect(seen.length).toBe(4);
+    // The day and hour billing, the cold starts, the balance, and the endpoint's idle timeout, read once and never written.
+    expect(seen.length).toBe(5);
     expect(seen.every((entry) => entry.endsWith(`Bearer ${SECRETS.runpodApiKey}`))).toBe(true);
-    expect(seen.some((entry) => entry.includes("/v1/endpoints/"))).toBe(false);
+    expect(seen.some((entry) => entry.includes("rest.runpod.io") || entry.includes("/v1/"))).toBe(false);
+    expect(seen.filter((entry) => entry.includes("graphql"))).toHaveLength(1);
     expect(lines.join("\n")).toContain('"runpod_idle_timeout_read"');
     expect(lines.join("\n")).not.toContain("runpod_idle_timeout_set");
     // The endpoint's timeout as read went into the history that the billing breakdown reads.
@@ -258,6 +261,36 @@ describe("secrets in the log", () => {
     } finally {
       history.close();
     }
+    expect(lines.join("\n")).not.toContain(SECRETS.runpodApiKey);
+  });
+
+  it("runs the GPU spend guard for a RunPod endpoint with a key: it reads the workers and the hour bill, shows its state on /billing to a local caller only, and stops with the backend", async () => {
+    const real = globalThis.fetch;
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.includes("runpod.")) return real(input, init);
+      seen.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.includes("graphql")) return Response.json({ data: { myself: { clientBalance: 10, currentSpendPerHr: 0, spendLimit: 80 } } });
+      if (url.endsWith("/serverless/abc123/workers")) return Response.json({ workers: [{ id: "w1", status: "RUNNING" }] });
+      if (url.endsWith("/serverless/abc123")) return Response.json({ id: "abc123", workers: { min: 0, max: 1, idleTimeout: 5 } });
+      return Response.json({ records: [] });
+    });
+    const lines: string[] = [];
+    const config = makeConfig({ ...configFor(workspace(), await needyIndexer()), remote: { endpoint: "https://abc123.api.runpod.ai" } });
+    const running = await startBackend({ config, pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, write: (line) => lines.push(line) });
+    try {
+      const local = (await (await real(`http://127.0.0.1:${running.port}/billing`)).json()) as { account: { gpuGuard: Array<{ tier: string; state: string }> } };
+      expect(local.account.gpuGuard).toMatchObject([{ state: "ok" }]);
+      const proxied = (await (await real(`http://127.0.0.1:${running.port}/billing`, { headers: { "x-forwarded-for": "203.0.113.7" } })).json()) as Record<string, unknown>;
+      expect(JSON.stringify(proxied)).not.toContain("gpuGuard");
+    } finally {
+      await running.stop();
+      vi.unstubAllGlobals();
+    }
+    expect(seen).toContain("GET https://api.runpod.io/v2/serverless/abc123/workers");
+    expect(seen.some((entry) => entry.includes("/billing/serverless?serverlessId=abc123&bucketSize=hour"))).toBe(true);
+    expect(seen.some((entry) => entry.startsWith("PATCH"))).toBe(false);
     expect(lines.join("\n")).not.toContain(SECRETS.runpodApiKey);
   });
 

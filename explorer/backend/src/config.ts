@@ -210,12 +210,29 @@ export const backendConfigSchema = z
       .strict()
       .optional(),
     /**
-     * How often the backend reads RunPod's billing (REST, two requests per endpoint) and the balance (GraphQL). RunPod's
-     * REST API has a daily request limit, so the default is slow. After a failure it tries again after `retrySeconds`; after
+     * How often the backend reads RunPod's billing, cold starts and idle timeout (REST v2) and the balance (GraphQL, no REST v2
+     * read exists). RunPod limits API calls, so the default is slow. After a failure it tries again after `retrySeconds`; after
      * a 429 it waits for the next refresh.
      */
     billing: z
       .object({ refreshSeconds: positiveInteger.default(3600), retrySeconds: positiveInteger.default(900) })
+      .strict()
+      .prefault({}),
+    /**
+     * The GPU spend guard (`gpu-guard.ts`): stops a RunPod tier whose worker stays busy for `stuckMinutes` or whose bill for
+     * one hour is above `maxUsdPerHour`, without stopping the other tiers, and puts its workers back after `cooldownMinutes`.
+     * A tier that trips `maxTripsPerDay` times in 24 hours stays stopped until `deploy/runpod/apply.mjs --apply` sets it again.
+     */
+    gpuGuard: z
+      .object({
+        enabled: z.boolean().default(true),
+        checkSeconds: positiveInteger.default(300),
+        stuckMinutes: positiveInteger.default(15),
+        spendCheckSeconds: positiveInteger.default(3600),
+        maxUsdPerHour: z.number().positive().default(0.5),
+        cooldownMinutes: positiveInteger.default(10),
+        maxTripsPerDay: positiveInteger.default(3),
+      })
       .strict()
       .prefault({}),
     /**
