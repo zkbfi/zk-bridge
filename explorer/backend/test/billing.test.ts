@@ -137,6 +137,9 @@ describe("the reader", () => {
     expect(RUNPOD_REST_URL).toBe("https://api.runpod.io/v2");
     expect(urls.filter((url) => url.startsWith(`${BILLING_URL}?`) && url.includes("bucketSize=day") && url.includes("startTime=2026-10-07T00%3A00%3A00.000Z"))).toHaveLength(1);
     expect(urls.filter((url) => url.startsWith(`${BILLING_URL}?`) && url.includes("bucketSize=hour"))).toHaveLength(1);
+    // RunPod answers 400 "startTime and endTime must be provided together" to a start without an end (seen live 2026-11-17).
+    const billingUrls = urls.filter((url) => url.startsWith(`${BILLING_URL}?`));
+    expect(billingUrls.every((url) => url.includes("startTime=") && url.includes("endTime="))).toBe(true);
     expect(urls.some((url) => url.includes("serverlessId") || url.includes("rest.runpod.io"))).toBe(false);
     const graph = runpod.calls.find((call) => call.url === GRAPHQL_URL);
     expect(graph?.method).toBe("POST");

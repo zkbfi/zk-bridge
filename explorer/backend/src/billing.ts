@@ -221,7 +221,8 @@ export function createBillingReader(input: {
     const day = (offsetHours: number) => new Date(at - offsetHours * 3_600_000).toISOString();
     const startOfDay = new Date(at - BILLING_DAYS * 86_400_000);
     startOfDay.setUTCHours(0, 0, 0, 0);
-    const query = (bucket: "day" | "hour", start: string) => `${billingUrl}?bucketSize=${bucket}&startTime=${encodeURIComponent(start)}`;
+    // RunPod refuses a start without an end (400 "startTime and endTime must be provided together").
+    const query = (bucket: "day" | "hour", start: string) => `${billingUrl}?bucketSize=${bucket}&startTime=${encodeURIComponent(start)}&endTime=${encodeURIComponent(day(0))}`;
     // One request per bucket size and key returns every endpoint of the account; the records of ours are kept.
     const keys = [...new Set(input.endpoints.map((endpoint) => endpoint.apiKey))];
     const spend = async () => {
