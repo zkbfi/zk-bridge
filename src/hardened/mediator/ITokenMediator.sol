@@ -9,10 +9,11 @@ import {IAMB} from "../IAMB.sol";
 /// `relayTokensAndCall` takes one more argument than in OmniBridge: the gas of the callback, which the sender states
 /// because there is no default.
 interface ITokenMediator is IOmnibridge {
-    /// @notice Relays tokens of the caller to `receiver` and calls `onTokenBridged` on it on the other chain with exactly
-    /// `callbackGas`. Zero reverts.
-    /// @param callbackGas The gas of the callback on the other chain. The delivery reverts when it cannot give that
-    /// gas, and records `CallbackFailed` when the callback fails with it.
+    /// @notice Relays tokens of the caller to `receiver` and calls `onTokenBridged` on it on the other chain with
+    /// exactly `callbackGas`. Zero reverts, and so does a figure above `MAX_CALLBACK_GAS` of the mediator (10,468,731),
+    /// which no delivery could give.
+    /// @param callbackGas The gas of the callback on the other chain, from 1 to `MAX_CALLBACK_GAS`. The delivery
+    /// reverts when it cannot give that gas, and records `CallbackFailed` when the callback fails with it.
     function relayTokensAndCall(address token, address receiver, uint256 value, bytes calldata data, uint256 callbackGas)
         external;
 

@@ -275,6 +275,30 @@ contract RedeployLayersTest is WorldSupport {
         script.readKept(chainA);
     }
 
+    /// Claim: a send cutoff of the old bridge that has passed is refused before the run, and one that is unset or still
+    /// ahead is kept. Shows: a cutoff at the current time and one before it revert with `SendCutoffPassed`, the chain,
+    /// the cutoff and the time; zero and a later time pass; the check reads the cutoff that `readKept` copies from the
+    /// old bridge. Matters: the new bridge takes the cutoff as an immutable, and a bridge whose cutoff has passed
+    /// refuses every send (`SendCutoffReached`) for good, while the read-back of the deployment would find the value it
+    /// expects.
+    function test_aPassedSendCutoffIsRefusedBeforeTheRun() public {
+        vm.warp(1_000_000);
+        uint64 chainId = uint64(CHAIN_A);
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.SendCutoffPassed.selector, chainId, 1_000_000, 1_000_000));
+        script.requireSendsOpen(chainId, 1_000_000);
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.SendCutoffPassed.selector, chainId, 999_999, 1_000_000));
+        script.requireSendsOpen(chainId, 999_999);
+        script.requireSendsOpen(chainId, 0);
+        script.requireSendsOpen(chainId, 1_000_001);
+
+        RedeployLayers.ChainConfig memory chainA = _chain(chainId, NONCE_A, bridgeA, mediatorA, routerA);
+        vm.chainId(CHAIN_A);
+        vm.mockCall(address(bridgeA), abi.encodeWithSignature("sendCutoffTimestamp()"), abi.encode(uint64(999_999)));
+        RedeployLayers.Kept memory kept = script.readKept(chainA);
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.SendCutoffPassed.selector, chainId, 999_999, 1_000_000));
+        script.requireSendsOpen(chainId, kept.cutoffTimestamp);
+    }
+
     /// Claim: the router mode checks the code it deployed against the build output. Shows: the replaced router holds the
     /// compiled `DeliveryRouter`, immutables aside, so `requireBuiltCode` passes inside `deployRouter`.
     function test_aReplacedRouterIsTheBuiltCode() public {

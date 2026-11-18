@@ -54,7 +54,8 @@ import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 /// file: the light client, the remote light client, the gate, the Capella era and the send cutoff of the bridge (a new
 /// bridge takes no Gloas slot: each message proves the fork of its source state); the flow limiter and the home chain name of the mediator; the wrapped native token, the reward address
 /// and the failed delivery address of the router (in the `layers-and-gate` mode the gate is new, and only its registry
-/// is read from the old gate). After deployment the script reads every value back from the new
+/// is read from the old gate). Before anything is sent, the layer modes require that the kept send cutoff is zero or
+/// still ahead (`requireSendsOpen`). After deployment the script reads every value back from the new
 /// contracts and refuses a mismatch. The new bridges start locked and with no layout rows: see
 /// `docs/redeploy-2026-11-gas.md` for the steps after the deployment.
 ///
@@ -128,6 +129,7 @@ contract RedeployLayers is LinkedCode {
     error GateConfigOfAnotherChain(uint64 configured, uint64 gateConfigChainId);
     error GateMismatch(string field);
     error BeaconRootsHaveNoCode(uint64 chainId);
+    error SendCutoffPassed(uint64 chainId, uint64 cutoff, uint256 timestamp);
 
     function run() external {
         string memory json = vm.readFile(vm.envString("REDEPLOY_CONFIG"));
@@ -158,8 +160,10 @@ contract RedeployLayers is LinkedCode {
         ChainConfig memory chainB = readChain(json, ".chainB");
         uint256 forkA = _connect(chainA, deployer);
         Kept memory keptA = readKept(chainA);
+        requireSendsOpen(chainA.chainId, keptA.cutoffTimestamp);
         uint256 forkB = _connect(chainB, deployer);
         Kept memory keptB = readKept(chainB);
+        requireSendsOpen(chainB.chainId, keptB.cutoffTimestamp);
         Planned memory planA = plan(deployer, chainA.deployerNonce);
         Planned memory planB = plan(deployer, chainB.deployerNonce);
         _log("chain A", chainA, planA);
@@ -210,6 +214,7 @@ contract RedeployLayers is LinkedCode {
         side.gate = readGate(gateJson, prefix, side.chain.chainId);
         side.forkId = _connect(side.chain, deployer);
         side.kept = readKept(side.chain);
+        requireSendsOpen(side.chain.chainId, side.kept.cutoffTimestamp);
         side.gate.forkRegistry = readKeptRegistry(side.kept.gate, side.gate.mode);
         checkGateOnItsChain(side.gate, side.kept.gate, side.chain.chainId);
         side.plannedGate = vm.computeCreateAddress(deployer, side.chain.deployerNonce);
@@ -383,6 +388,14 @@ contract RedeployLayers is LinkedCode {
         kept.wrappedNative = address(router.wNative());
         kept.rewardAddress = router.rewardAddress();
         kept.failedDeliveryAddress = router.failedDeliveryAddress();
+    }
+
+    /// @notice Requires that a send cutoff copied from the old bridge leaves the new bridge open: zero (no cutoff) or a
+    /// time still ahead. The new bridge takes the cutoff as an immutable, and a cutoff that has passed would make it
+    /// refuse every send (`SendCutoffReached`, from `block.timestamp >= cutoff`) for good, while the read-back of the
+    /// deployment finds the value that it expects. It runs for both chains before anything is sent.
+    function requireSendsOpen(uint64 chainId, uint64 cutoff) public view {
+        if (cutoff != 0 && cutoff <= block.timestamp) revert SendCutoffPassed(chainId, cutoff, block.timestamp);
     }
 
     /// @notice The addresses of the new contracts of a chain, from the deployer and its nonce.

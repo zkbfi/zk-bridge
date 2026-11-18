@@ -66,15 +66,22 @@ contract TokenMediatorFuzzTest is MediatorFixture {
         assertEq(_firstMessage().value, held, "the message names what arrived");
     }
 
-    /// Claim: the callback gas that a sender states is carried as it is, and only zero is refused. Shows: for any
-    /// request, a relay with a call either reverts with `ZeroCallbackGas` (zero) or sends a message whose payload carries
-    /// exactly the request, while the gas asked of the bridge stays zero. Matters: the owner's rule, "the message
-    /// has to pass the gas limit. there should be no defaults".
+    /// Claim: the callback gas that a sender states is carried as it is, and only zero and a figure above
+    /// `MAX_CALLBACK_GAS` are refused. Shows: for any request, a relay with a call either reverts with
+    /// `ZeroCallbackGas` (zero) or `CallbackGasTooHigh` (above the maximum), or sends a message whose payload carries
+    /// exactly the request, while the gas asked of the bridge stays zero. Matters: the owner's rule, "the message has
+    /// to pass the gas limit. there should be no defaults", and no message that no transaction can deliver.
     function testFuzz_theCallbackGasIsCarriedAsItIs(uint256 request) public {
+        // Half of the runs inside the range, so both sides of the maximum are reached.
+        if (request % 2 == 0) request = bound(request, 0, mediatorA.MAX_CALLBACK_GAS());
+        uint256 maximum = mediatorA.MAX_CALLBACK_GAS();
         vm.prank(alice);
         if (request == 0) vm.expectRevert(TokenMediator.ZeroCallbackGas.selector);
+        if (request > maximum) {
+            vm.expectRevert(abi.encodeWithSelector(TokenMediator.CallbackGasTooHigh.selector, request, maximum));
+        }
         mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, hex"01", request);
-        if (request == 0) {
+        if (request == 0 || request > maximum) {
             assertEq(ambA.sentCount(), 0, "a refused relay sends nothing");
             return;
         }

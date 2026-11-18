@@ -11,6 +11,22 @@ import {MessageScenes} from "./utils/MessageScenes.sol";
 import {MessageFixtures} from "./utils/MessageFixtures.sol";
 import {MessageGate} from "./utils/MessageTargets.sol";
 
+/// @notice A message bridge that exposes the reading of the local chain identifier, so that a test can give it a chain
+/// identifier above 64 bits, which the test EVM cannot run on (`vm.chainId` refuses one).
+contract LocalChainIdHarness is MessageBridge {
+    constructor(
+        address lightClient,
+        uint64 remoteChainId,
+        address remoteBridgeAddress,
+        BridgeTerms memory terms,
+        address gate
+    ) MessageBridge(lightClient, remoteChainId, remoteBridgeAddress, terms, 0, gate) {}
+
+    function localChainIdOf(uint256 chainId) external pure returns (uint64) {
+        return _toLocalChainId(chainId);
+    }
+}
+
 /// @notice Tests of the sending side of the message bridge, of the deposit lock that guards it, and of the constructor.
 contract MessageBridgeSendTest is MessageScenes {
     event UserRequestForAffirmation(bytes32 indexed messageId, bytes encodedData);
@@ -277,6 +293,30 @@ contract MessageBridgeSendTest is MessageScenes {
         new MessageBridge(client, CHAIN_B, remote, _terms(remoteClient), 0, gate);
         MessageBridge built = new MessageBridge(client, CHAIN_A, remote, _terms(remoteClient), 758, gate);
         assertEq(built.localChainId(), CHAIN_B, "the local chain is block.chainid at deployment");
+    }
+
+    /// Claim: the local chain identifier is `block.chainid` whole, and a chain identifier above 64 bits is refused, not
+    /// cut. Shows: on the chain 2^64 - 1 the bridge deploys with that identifier; the reading of the identifier refuses
+    /// 2^64 with `LocalChainIdTooLarge` and the identifier. Matters: the message format holds the chain in 64 bits; a
+    /// cut identifier would name another chain in every message and every message identifier of this bridge.
+    /// @dev The test EVM refuses a chain identifier of 2^64 or more (`vm.chainId`), so the refusal is shown through the
+    /// harness, which runs the same function as the constructor.
+    function test_constructor_refusesAChainIdAboveSixtyFourBits() public {
+        address client = address(lightClientForB);
+        address remote = MessageFixtures.REMOTE_BRIDGE;
+        address gate = address(gateB);
+        vm.chainId(type(uint64).max);
+        MessageBridge built = new MessageBridge(client, CHAIN_A, remote, _terms(address(lightClientForA)), 0, gate);
+        assertEq(built.localChainId(), type(uint64).max, "the largest identifier is kept whole");
+
+        LocalChainIdHarness harness =
+            new LocalChainIdHarness(client, CHAIN_A, remote, _terms(address(lightClientForA)), gate);
+        assertEq(harness.localChainIdOf(type(uint64).max), type(uint64).max);
+        uint256 tooLarge = uint256(type(uint64).max) + 1;
+        vm.expectRevert(abi.encodeWithSelector(MessageBridge.LocalChainIdTooLarge.selector, tooLarge));
+        harness.localChainIdOf(tooLarge);
+        vm.expectRevert(abi.encodeWithSelector(MessageBridge.LocalChainIdTooLarge.selector, type(uint256).max));
+        harness.localChainIdOf(type(uint256).max);
     }
 
     // ================================================================ gas

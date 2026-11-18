@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {MessageBridge} from "../MessageBridge.sol";
 import {ITokenMediator} from "./ITokenMediator.sol";
 import {IWETH} from "./IWETH.sol";
@@ -68,6 +69,10 @@ import {ExactGasCall} from "./ExactGasCall.sol";
 ///   wrapped native token, and it never reverts for that reason.
 /// - Every delivery that pays its recipient emits `Delivered`, with what the router received, the fee, what the
 ///   recipient received and how. An explorer reads the fee from it, so the router keeps no record of its own.
+/// - The sender writes every word of the terms, so the fee is computed with no overflow for any words. A share with a
+///   `multiplier` of 1e18 or more is the whole value, and a smaller share is exact for any value. A gas based product
+///   that does not fit 256 bits counts as the largest number, so the fee is then the cap: `limit`, and never more than
+///   the value. `limit` is the ceiling that the sender signed, so the cap charges nothing the sender did not accept.
 ///
 /// Nothing is owed and nothing is recorded. The mediator calls `onTokenBridged` after it paid the router, and it keeps no
 /// hold on a failed call: the tokens stay with the router. So a revert in the callback would strand them, and the router
@@ -79,6 +84,9 @@ import {ExactGasCall} from "./ExactGasCall.sol";
 ///   terms, as for any delivery, and hands off the rest.
 /// - The data has no known shape: shorter than a director, or a recipient word with bits above 160, which `abi.decode`
 ///   would refuse. No tip can be computed, so the router hands off the whole value.
+/// - The terms ask for a call with a `callGas` above `MAX_CALL_GAS`, which no callback can carry. The gas based tip
+///   would count that `callGas`, so the router takes no tip, makes no payout and no call, and hands off the whole value
+///   as the token (no unwrap), with the reason `InvalidTerms`.
 /// - The data is a 20 byte legacy receiver, and the token is not the wrapped native token. The router pays the token to
 ///   that receiver, with no fee, and hands off the value when the token refuses the receiver.
 /// A hand-off that `failedDeliveryAddress` cannot take (a token that blocks it) stays in the router for good, and the
@@ -96,8 +104,9 @@ import {ExactGasCall} from "./ExactGasCall.sol";
 /// with fewer than 20 extra bytes, mean delivery only. When the router paid the recipient in full (the token, or the
 /// native coin, or the wrapped token that replaced a refused coin), it makes one call to the target from itself, with the
 /// call data and no native value. The target may differ from the recipient. The call gets exactly `callGas` of the
-/// director (`ExactGasCall`). When the gas left cannot give it `callGas` under the 63/64 rule plus `CALL_GAS_RESERVE`,
-/// which the router keeps to finish, the callback reverts: the mediator gave the callback the gas that the sender
+/// director (`ExactGasCall`), at most `MAX_CALL_GAS`: a larger `callGas` is handed off before any payout (above).
+/// When the gas left cannot give it `callGas` under the 63/64 rule plus `CALL_GAS_RESERVE`, which the router keeps to
+/// finish, the callback reverts: the mediator gave the callback the gas that the sender
 /// stated, so this means the sender's `callbackGas` is too small for its own `callGas`, and the mediator records
 /// `CallbackFailed` with the tokens left in the router (anyone may `sweep` them). A call that fails with its `callGas`
 /// never reverts the delivery and moves no tokens: the router emits `CallFailed`, and the recipient keeps the tokens.
@@ -122,7 +131,8 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @param limit The fixed tip, or the price ceiling of the gas based tip. A gas based tip is computed from the gas
     /// that the transaction of the deliverer makes available, which the deliverer chooses, so expect it to reach `limit`.
     /// @param multiplier Scaled by 1e18: the share of the value, or the factor on the gas cost.
-    /// @param callGas The gas that the follow-up call gets, exactly. It is read only when a call follows the director.
+    /// @param callGas The gas that the follow-up call gets, exactly, at most `MAX_CALL_GAS`. It is read only when a
+    /// call follows the director.
     struct FeeDirector {
         address recipient;
         uint256 settings;
@@ -181,6 +191,13 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @notice The gas that the router keeps for itself after the call that follows a delivery: the event of a failed
     /// call and the exit of the callback. The call needs this much gas left on top of `callGas` and its 63/64 share.
     uint256 public constant CALL_GAS_RESERVE = 10_000;
+
+    /// @notice The largest `callGas` that the terms of a call may name. A larger one is terms that cannot be honoured:
+    /// the router hands off the whole value with the reason `InvalidTerms`. The figure is the one of the frontends
+    /// (`MAX_CALL_GAS` of the explorer core). With the router's own work (300,000), its 63/64 share and
+    /// `CALL_GAS_RESERVE`, it makes `TokenMediator.MAX_CALLBACK_GAS` (10,468,731), the largest callback gas that a
+    /// relay may state, so a larger call could never run inside a callback.
+    uint256 public constant MAX_CALL_GAS = 10_000_000;
 
     /// @notice The slot that holds the starting gas (low 96 bits) while a message runs through `executeMessage`. It
     /// holds 1 at all other times, which means that no router delivery runs.
@@ -386,10 +403,14 @@ contract DeliveryRouter is ReentrancyGuard {
             return;
         }
         FeeDirector memory director = abi.decode(data, (FeeDirector));
+        CallRequest request = data.length >= CALL_DATA_OFFSET ? CallRequest.Requested : CallRequest.None;
+        if (request == CallRequest.Requested && director.callGas > MAX_CALL_GAS) {
+            _handOff(token, director.recipient, value, Reason.InvalidTerms);
+            return;
+        }
         Payout payout = director.settings & UNWRAP != 0 && token == address(wNative) ? Payout.Native : Payout.Token;
         if (payout == Payout.Native) wNative.withdraw(value);
 
-        CallRequest request = data.length >= CALL_DATA_OFFSET ? CallRequest.Requested : CallRequest.None;
         uint256 startingGas = _startingGas();
         uint256 toRecipient =
             startingGas > NOT_RUNNING ? _takeFee(token, payout, value, director, startingGas, request) : value;
@@ -505,8 +526,10 @@ contract DeliveryRouter is ReentrancyGuard {
         return firstWord >> 160 != 0;
     }
 
-    /// @dev The fee, never above the value. Fixed: `limit`. Share: `value * multiplier / 1e18`. Otherwise gas based:
-    /// the gas used, plus the overhead, times the multiplier and the gas price, with `limit` as the cap.
+    /// @dev The fee, never above the value, with no overflow for any terms. Fixed: `limit`. Share:
+    /// `value * multiplier / 1e18`, the whole value from a multiplier of 1e18. Otherwise gas based: the gas used, plus
+    /// the overhead, times the multiplier and the gas price, with `limit` as the cap; a product that does not fit 256
+    /// bits gives the cap.
     function _fee(uint256 value, uint256 gasUsed, FeeDirector memory director, uint256 overheadGas)
         private
         view
@@ -515,13 +538,22 @@ contract DeliveryRouter is ReentrancyGuard {
         if (director.settings & FIXED_FEE != 0) {
             fee = director.limit;
         } else if (director.settings & MULTIPLIER_OF_TOTAL != 0) {
-            fee = value * director.multiplier / 1 ether;
+            fee = director.multiplier >= 1 ether ? value : _share(value, director.multiplier);
         } else {
             GasPrice price = director.settings & EXCLUDE_PRIORITY != 0 ? GasPrice.BaseFee : GasPrice.Transaction;
-            fee = (gasUsed + overheadGas) * director.multiplier * _gasPrice(price) / 1 ether;
+            uint256 gasUnits = Math.saturatingAdd(gasUsed, overheadGas);
+            uint256 product = Math.saturatingMul(Math.saturatingMul(gasUnits, director.multiplier), _gasPrice(price));
+            fee = product == type(uint256).max ? product : product / 1 ether;
             if (fee > director.limit) fee = director.limit;
         }
         if (fee > value) fee = value;
+    }
+
+    /// @dev `value * multiplier / 1e18`, rounded down, for a multiplier below 1e18, with no product that can overflow:
+    /// the whole units of 1e18 in the value times the multiplier, plus the share of the rest. Both terms fit 256 bits,
+    /// and their sum is below the value.
+    function _share(uint256 value, uint256 multiplier) private pure returns (uint256) {
+        return value / 1 ether * multiplier + value % 1 ether * multiplier / 1 ether;
     }
 
     function _gasPrice(GasPrice price) private view returns (uint256) {
