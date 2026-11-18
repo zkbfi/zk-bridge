@@ -208,6 +208,31 @@ chmod +x "$T/hook"
 pull ZKB_PULL_HOOK="$T/hook" || true
 if [ "$(cat "$T/hook.out" 2>/dev/null)" = "$lm $lm/manifests/20261104T033000Z.json" ]; then pass "the hook gets the mirror and the newest manifest"; else fail "hook: $(cat "$T/hook.out" 2>/dev/null)"; fi
 
+# The hash checker failing without naming a file (a missing tool, an unreadable list, a format it rejects) is a failure,
+# not a verified mirror: a fake shasum and sha256sum that exit 2 in silence when asked to check.
+mkdir -p "$T/fakebin"
+for tool in shasum sha256sum; do
+  real=$(command -v "$tool" || true)
+  [ -z "$real" ] || printf '#!/bin/sh\ncase " $* " in *" -c "*) exit 2 ;; esac\nexec %s "$@"\n' "$real" >"$T/fakebin/$tool"
+done
+chmod +x "$T/fakebin"/* 2>/dev/null || true
+status=0
+pull PATH="$T/fakebin:$PATH" || status=$?
+if [ "$status" -ne 0 ] && grep -q 'hash checker exited 2 without naming a file' "$local_dir/pull.log" && ! grep -q 'verified against 20261104T033000Z.json' <(tail -2 "$local_dir/pull.log"); then pass "a hash checker that fails without naming a file fails the run"; else fail "silent checker failure (status $status): $(tail -2 "$local_dir/pull.log")"; fi
+
+# A manifest entry whose hash is not 64 hex digits is refused (a Mac's shasum -c --quiet skips such a line in silence).
+write_manifest 20261105T033000Z
+bad=$remote/manifests/20261105T033000Z.json
+sed 's/"sha256":"[0-9a-f]*"/"sha256":"notahash"/' "$bad" >"$T/bad.json"
+cp "$T/bad.json" "$bad"
+cp "$T/bad.json" "$root/var/backups/zk-bridge/proofs/trusted-manifests/20261105T033000Z.json"
+printf '%s  20261105T033000Z.json\n' "$(sha "$bad")" >>"$root/var/backups/zk-bridge/proofs/manifests.sha256"
+status=0
+pull || status=$?
+if [ "$status" -ne 0 ] && grep -q 'the manifest has a malformed entry: notahash' "$local_dir/pull.log"; then pass "a manifest entry with a malformed hash fails the run"; else fail "malformed hash (status $status): $(tail -2 "$local_dir/pull.log")"; fi
+rm -f "$bad" "$root/var/backups/zk-bridge/proofs/trusted-manifests/20261105T033000Z.json" "$lm/manifests/20261105T033000Z.json" "$local_dir/trusted-manifests/20261105T033000Z.json"
+pull || true
+
 # A manifest changed on the server after the export (by whoever can write the mirror) is refused: its hash is not in
 # the list root keeps outside the mirror.
 if [ -f "$local_dir/manifests.sha256" ]; then pass "the pull fetches the server's manifests.sha256"; else fail "no local manifests.sha256"; fi

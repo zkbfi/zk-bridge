@@ -25,7 +25,7 @@ From both chains of each pair:
 - Light clients: each head update (slot, header root, execution block, transaction, gas used, poster), committee changes.
 - Gate and registry: confirmations, seals, observed versions.
 - Escrow and supply: per native token, the mediator balance on its home chain and the bridged token supply on the other chain (from mint and burn events), and accrued and collected fees.
-- Status of each transfer or message, derived: sent, waiting for finality, covered by a stored head, delivered, failed call, release failed (final).
+- Status of each transfer or message, derived: sent, waiting for finality, covered by a stored head, delivered, release failed (final); a delivery whose call fails reverts, so the message stays not delivered.
 
 The indexer tracks only what lands on chain. It stores no proofs and accepts no off-chain records (user decision, 2026-10-25). Proof-related data comes from chain events: each light client head update with its transaction, gas used and poster.
 

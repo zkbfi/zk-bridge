@@ -214,15 +214,14 @@ When the light client stored too few heads to validate a row, the command stops 
 
 ### The delivery status
 
-A message executes once, and delivery is final. The bridge marks the message before it calls the target. The mark stays whether the call succeeds or reverts. `deliveryStatus` has three values.
+A delivery that succeeds is final. A delivery whose call to the target fails reverts, with the target's error, and leaves no mark, so the message stays not delivered and anyone can send it again. There is no failed status. `deliveryStatus` has two values.
 
 | Value | Meaning | Read from |
 |---|---|---|
-| `notDelivered` | The bridge never executed the message. `executeMessage` can still succeed. | `messageCallStatus` is false and `failedMessageDataHash` is zero. |
+| `notDelivered` | The bridge has no successful delivery of the message. `executeMessage` can still succeed, also after an earlier call that reverted. | `messageCallStatus` is false. |
 | `succeeded` | The bridge executed the message and the call to the target succeeded. | `messageCallStatus` is true. |
-| `failed` | The bridge executed the message and the call to the target failed. The call cannot repeat. | `failedMessageDataHash` is not zero. It is the keccak256 of the call data. |
 
-`alreadyDelivered` is true for `succeeded` and for `failed`. When it is true, `executeMessage` would revert with `AlreadyDelivered`. The bridge has no public view of its delivery state. These two views give it, except for a message in progress, which exists only inside the call to the target.
+`alreadyDelivered` is true for `succeeded` only. When it is true, `executeMessage` would revert with `AlreadyDelivered`. `failedMessageDataHash` and the other two `failedMessage...` views remain for the OmniBridge names and always return zero. The bridge has no public view of its delivery state. `messageCallStatus` gives it, except for a message in progress, which exists only inside the call to the target.
 
 ## The `verify` command
 

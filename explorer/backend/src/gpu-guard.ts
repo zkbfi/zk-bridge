@@ -10,12 +10,18 @@
  * tier is held at 0 until its live `max` is seen above 0 again (the owner ran `deploy/runpod/apply.mjs --apply`).
  * `deploy/runpod/endpoints.json` stays the owner of the worker counts; this is an emergency override.
  *
+ * The state of each tier (`zeroed` with the workers to put back and when, `held`, the trips of the last 24 hours and the
+ * last trip) is kept in the backend database (`gpu_guard_state`) when a `storage` is given, written after every trip,
+ * restore, release and hold and read when the guard is created. A restart in a cool-down continues it, a hold stays,
+ * and the trips keep counting. A failed write is logged and does not stop the guard.
+ *
  * Every call goes to REST v2. It never throws and never blocks start-up; a failed read or write of one tier is logged
  * and retried at the next check, and does not stop the other tiers. A tier is never marked tripped unless the PATCH
  * worked. The key travels in the Authorization header only, and no log line holds it.
  */
 import { RUNPOD_REST_URL, problemText, type BillingEndpoint } from "./billing.ts";
 import type { Logger } from "./logger.ts";
+import type { Storage } from "./storage.ts";
 
 /** The longest wait for one RunPod answer, in milliseconds. */
 export const GUARD_TIMEOUT_MILLISECONDS = 10_000;
@@ -74,6 +80,10 @@ type Tier = {
 /** The worker states that are billed and busy. */
 const BUSY = new Set(["running", "initializing", "unhealthy"]);
 
+/** What is kept of a tier between restarts. `judged` holds the start times of the hours already judged that a spend check
+ * can still read, so a restart does not trip a tier again on an hour it has already acted on. */
+type SavedTier = Pick<Tier, "zeroed" | "held" | "trips" | "last"> & { judged?: string[] };
+
 const DAY_MILLISECONDS = 86_400_000;
 const HOUR_MILLISECONDS = 3_600_000;
 
@@ -92,6 +102,8 @@ export function createGpuGuard(input: {
   /** The base address of RunPod's REST API v2; {@link RUNPOD_REST_URL} when left out. */
   restUrl?: string;
   timeoutMilliseconds?: number;
+  /** Where the state of each tier is kept across restarts; kept in memory only when left out. */
+  storage?: Storage;
 }): GpuGuard {
   const { settings, logger } = input;
   const timeout = input.timeoutMilliseconds ?? GUARD_TIMEOUT_MILLISECONDS;
@@ -107,6 +119,41 @@ export function createGpuGuard(input: {
     trips: [],
     last: null,
   }));
+
+  /** Puts back the state saved for each tier. A row that cannot be read is logged and the tier starts clean. */
+  function load(): void {
+    if (input.storage === undefined) return;
+    for (const tier of tiers) {
+      const row = input.storage.database.prepare("SELECT state FROM gpu_guard_state WHERE endpoint_id = ?").get(tier.endpoint.id) as { state: string } | undefined;
+      if (row === undefined) continue;
+      try {
+        const saved = JSON.parse(row.state) as SavedTier;
+        tier.zeroed = saved.zeroed;
+        tier.held = saved.held;
+        tier.trips = saved.trips;
+        tier.last = saved.last;
+        tier.judged = new Set(saved.judged ?? []);
+        logger.info("gpu_guard_state_loaded", { tier: tier.name, endpointId: tier.endpoint.id.slice(0, 6), state: tier.held ? "held" : tier.zeroed === null ? "ok" : "tripped", tripsLast24h: tier.trips.length });
+      } catch (error) {
+        logger.warn("gpu_guard_state_unreadable", { tier: tier.name, endpointId: tier.endpoint.id.slice(0, 6), reason: reasonOf(error) });
+      }
+    }
+  }
+
+  /** Writes the state of the tier. A failure is logged; the guard goes on with the state in memory. */
+  function save(tier: Tier): void {
+    if (input.storage === undefined) return;
+    // A spend check reads the last 3 hours; older judged hours can never come back, so they are not kept.
+    const readable = input.now() - 4 * HOUR_MILLISECONDS;
+    const judged = [...tier.judged].filter((start) => Date.parse(start) >= readable);
+    const saved: SavedTier = { zeroed: tier.zeroed, held: tier.held, trips: tier.trips, last: tier.last, judged };
+    try {
+      input.storage.database.prepare("INSERT OR REPLACE INTO gpu_guard_state (endpoint_id, state) VALUES (?, ?)").run(tier.endpoint.id, JSON.stringify(saved));
+    } catch (error) {
+      logger.warn("gpu_guard_state_unsaved", { tier: tier.name, endpointId: tier.endpoint.id.slice(0, 6), reason: reasonOf(error) });
+    }
+  }
+  load();
 
   /** One request to RunPod. @throws Error with the reason (and RunPod's problem text) when it does not answer 2xx. */
   async function call(tier: Tier, path: string, init: { method?: "PATCH"; body?: unknown } = {}): Promise<unknown> {
@@ -152,6 +199,7 @@ export function createGpuGuard(input: {
       tier.held = true;
       logger.error("gpu_guard_held", { tier: tier.name, endpointId: tier.endpoint.id.slice(0, 6), tripsLast24h: tier.trips.length, detail: "not restored; run deploy/runpod/apply.mjs --apply to set the workers again" });
     }
+    save(tier);
   }
 
   /** The work on a tier the guard stopped: release a hold the owner lifted, or put the workers back after the cool-down. */
@@ -163,12 +211,14 @@ export function createGpuGuard(input: {
       const released = tier.held;
       tier.held = false;
       tier.zeroed = null;
+      save(tier);
       logger.info(released ? "gpu_guard_released" : "gpu_guard_overridden", { tier: tier.name, endpointId, max: live.max });
       return;
     }
     if (tier.held) return;
     await writeWorkers(tier, zeroed.workers);
     tier.zeroed = null;
+    save(tier);
     logger.info("gpu_guard_restored", { tier: tier.name, endpointId, workers: zeroed.workers });
   }
 
@@ -203,20 +253,25 @@ export function createGpuGuard(input: {
     if (stuck !== null) await trip(tier, "stuck-worker", stuck);
   }
 
-  /** The completed hours of the last 3 that were not judged, with the dearest first. @throws Error when the bill cannot be read. */
+  /** The completed hours of the last 3 that were not judged and are over the limit, with the dearest first, from the records of this tier's endpoint (a record without its `serverlessId` is skipped, like `parseBillingRows`). @throws Error when the bill cannot be read. */
   async function dearHours(tier: Tier): Promise<Array<{ start: string; amountUsd: number }>> {
     const at = input.now();
     const query = new URLSearchParams({ serverlessId: tier.endpoint.id, bucketSize: "hour", startTime: new Date(at - 3 * HOUR_MILLISECONDS).toISOString(), endTime: new Date(at).toISOString() });
     const body = (await call(tier, `/billing/serverless?${query.toString()}`)) as { records?: unknown } | null;
     if (!Array.isArray(body?.records)) throw new Error("the billing answer has no list of records");
+    // The tier's own records only, and the records of one hour added together: the bill of an hour is their sum.
+    const perHour = new Map<string, number>();
+    for (const record of body.records as Array<{ startTime?: unknown; serverlessId?: unknown; totalAmount?: unknown }>) {
+      const { startTime, serverlessId, totalAmount } = record ?? {};
+      if (serverlessId !== tier.endpoint.id || typeof startTime !== "string" || typeof totalAmount !== "number" || !Number.isFinite(totalAmount)) continue;
+      perHour.set(startTime, (perHour.get(startTime) ?? 0) + totalAmount);
+    }
     const over: Array<{ start: string; amountUsd: number }> = [];
-    for (const record of body.records as Array<{ startTime?: unknown; totalAmount?: unknown }>) {
-      const { startTime, totalAmount } = record ?? {};
-      if (typeof startTime !== "string" || typeof totalAmount !== "number" || !Number.isFinite(totalAmount)) continue;
+    for (const [startTime, amountUsd] of perHour) {
       const started = Date.parse(startTime);
       // An hour that is not over is still growing: it is judged when it is.
       if (Number.isNaN(started) || started + HOUR_MILLISECONDS > at || tier.judged.has(startTime)) continue;
-      if (totalAmount > settings.maxUsdPerHour) over.push({ start: startTime, amountUsd: totalAmount });
+      if (amountUsd > settings.maxUsdPerHour) over.push({ start: startTime, amountUsd });
       else tier.judged.add(startTime);
     }
     return over.sort((a, b) => b.amountUsd - a.amountUsd);
@@ -225,10 +280,11 @@ export function createGpuGuard(input: {
   async function spendOfTier(tier: Tier): Promise<void> {
     const over = await dearHours(tier);
     const [worst] = over;
-    if (worst === undefined) return;
     // A tier that is already stopped is not stopped again; the hour is judged.
-    if (tier.zeroed === null) await trip(tier, "spend", `hour ${worst.start} billed $${worst.amountUsd.toFixed(2)}`);
+    if (worst !== undefined && tier.zeroed === null) await trip(tier, "spend", `hour ${worst.start} billed $${worst.amountUsd.toFixed(2)}`);
     for (const hour of over) tier.judged.add(hour.start);
+    // The hours judged in this check, kept across a restart.
+    save(tier);
   }
 
   let running = Promise.resolve();
