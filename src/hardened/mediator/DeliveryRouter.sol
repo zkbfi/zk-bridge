@@ -94,9 +94,13 @@ import {ExactGasCall} from "./ExactGasCall.sol";
 /// that the router cannot see: the mediator pays the router with no callback when a sender names the router as the
 /// receiver with `relayTokens`, or when a callback fails. Anyone may call `sweep` to hand the whole balance of a token to
 /// `failedDeliveryAddress`.
-/// A recipient payout hook can make the bridge deliver another message while a delivery runs, so the mediator calls
-/// `onTokenBridged` again. The router detects that with the state of its reentrancy guard and does not revert. It hands
-/// the whole value of that nested callback off with the reason `Reentered`, after the tip when the terms decode and a
+/// A callback can arrive while the reentrancy guard of the router is held. With `MessageBridge` that happens in one way
+/// only: the bridge refuses to execute a message while another runs (`MessageInProgress`), so no callback arrives
+/// inside a delivery, but `sweep` holds the guard too, and a swept token whose transfer runs code can execute a pending
+/// message on the bridge during the sweep. A message bridge that runs one message inside another (the mediator names
+/// its bridge at deployment, and nothing in the router requires `MessageBridge`) also reaches it from a payout hook or
+/// the follow-up call during a delivery. The router detects it with the state of its guard and does not revert. It
+/// hands the whole value of that callback off with the reason `Reentered`, after the tip when the terms decode and a
 /// router delivery runs, as the token and with no unwrap. `sweep` keeps the guard and refuses a reentrant call.
 ///
 /// The call after a delivery. The data of `onTokenBridged` is the 160 byte director. Optional bytes may follow it: a 20
@@ -105,15 +109,15 @@ import {ExactGasCall} from "./ExactGasCall.sol";
 /// native coin, or the wrapped token that replaced a refused coin), it makes one call to the target from itself, with the
 /// call data and no native value. The target may differ from the recipient. The call gets exactly `callGas` of the
 /// director (`ExactGasCall`), at most `MAX_CALL_GAS`: a larger `callGas` is handed off before any payout (above).
-/// When the gas left cannot give it `callGas` under the 63/64 rule plus `CALL_GAS_RESERVE`, which the router keeps to
-/// finish, the callback reverts: the mediator gave the callback the gas that the sender
-/// stated, so this means the sender's `callbackGas` is too small for its own `callGas`, and the mediator records
-/// `CallbackFailed` with the tokens left in the router (anyone may `sweep` them). A call that fails with its `callGas`
-/// never reverts the delivery and moves no tokens: the router emits `CallFailed`, and the recipient keeps the tokens.
-/// The router skips the call when the tip left nothing to pay the recipient, and when a payment failed and the amount
-/// was handed off. The router reads no data that the target returns. The call comes from the router, so it can reach
-/// only what the router holds at that moment. After the payments that is stray tokens, which anyone may already sweep.
-/// The router holds no allowance for the target to use.
+/// When the gas left cannot give it `callGas` under the 63/64 rule plus the gas of the call itself
+/// (`ExactGasCall.CALL_OVERHEAD`) and `CALL_GAS_RESERVE`, which the router keeps to finish, the callback reverts: the
+/// mediator gave the callback the gas that the sender stated, so this means the sender's `callbackGas` is too small
+/// for its own `callGas`, and the mediator records `CallbackFailed` with the tokens left in the router (anyone may
+/// `sweep` them). A call that fails with its `callGas` never reverts the delivery and moves no tokens: the router
+/// emits `CallFailed`, and the recipient keeps the tokens. The router skips the call when the tip left nothing to pay
+/// the recipient, and when a payment failed and the amount was handed off. The router reads no data that the target
+/// returns. The call comes from the router, so it can reach only what the router holds at that moment. After the
+/// payments that is stray tokens, which anyone may already sweep. The router holds no allowance for the target to use.
 ///
 /// The gas based tip counts the call. The router takes the tip before the payments and the call, so a measure of the gas
 /// that ran so far cannot cover the call. When a call is requested, the router adds `callGas`, the gas that the sender
@@ -189,14 +193,16 @@ contract DeliveryRouter is ReentrancyGuard {
     uint256 public constant NATIVE_SEND_GAS = 50_000;
 
     /// @notice The gas that the router keeps for itself after the call that follows a delivery: the event of a failed
-    /// call and the exit of the callback. The call needs this much gas left on top of `callGas` and its 63/64 share.
+    /// call and the exit of the callback. The call needs this much gas left on top of `callGas`, its 63/64 share and
+    /// the gas of the call itself (`ExactGasCall.CALL_OVERHEAD`, 6,000).
     uint256 public constant CALL_GAS_RESERVE = 10_000;
 
     /// @notice The largest `callGas` that the terms of a call may name. A larger one is terms that cannot be honoured:
     /// the router hands off the whole value with the reason `InvalidTerms`. The figure is the one of the frontends
-    /// (`MAX_CALL_GAS` of the explorer core). With the router's own work (300,000), its 63/64 share and
-    /// `CALL_GAS_RESERVE`, it makes `TokenMediator.MAX_CALLBACK_GAS` (10,468,731), the largest callback gas that a
-    /// relay may state, so a larger call could never run inside a callback.
+    /// (`MAX_CALL_GAS` of the explorer core). With the router's own work (300,000, which also covers the 6,000 of
+    /// `ExactGasCall.CALL_OVERHEAD`), its 63/64 share and `CALL_GAS_RESERVE`, it makes
+    /// `TokenMediator.MAX_CALLBACK_GAS` (10,468,731), the largest callback gas that a relay may state, so a larger
+    /// call could never run inside a callback.
     uint256 public constant MAX_CALL_GAS = 10_000_000;
 
     /// @notice The slot that holds the starting gas (low 96 bits) while a message runs through `executeMessage`. It
@@ -328,8 +334,9 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @param token The token that the mediator released to the router.
     /// @param value The amount that the mediator reports.
     /// @param data An encoded `FeeDirector`, or the 20 byte address of a native coin receiver.
-    /// @dev A call that arrives while another callback runs (a recipient payout hook made the bridge deliver another
-    /// message) does not revert: the router hands the value off with the reason `Reentered`.
+    /// @dev A call that arrives while the guard is held does not revert: the router hands the value off with the
+    /// reason `Reentered`. With `MessageBridge` that is a message executed inside a `sweep` (by the code of the swept
+    /// token); with a bridge that nests messages it is also a message executed inside another callback.
     function onTokenBridged(address token, uint256 value, bytes memory data) external {
         if (msg.sender != address(bridge)) revert NotMediator(msg.sender);
         if (_reentrancyGuardEntered()) {
@@ -391,8 +398,9 @@ contract DeliveryRouter is ReentrancyGuard {
         bridge.relayTokensAndCall(address(wNative), receiver, msg.value, data, callbackGas);
     }
 
-    /// @dev The delivery of one callback. The guard is held while it runs, so a payout hook or the call after the
-    /// delivery that makes the mediator call back takes the hand-off path of `onTokenBridged`.
+    /// @dev The delivery of one callback. The guard is held while it runs, so on a bridge that nests messages a payout
+    /// hook or the call after the delivery that makes the mediator call back takes the hand-off path of
+    /// `onTokenBridged`. `MessageBridge` refuses such a nested message.
     function _deliver(address token, uint256 value, bytes memory data) private nonReentrant {
         if (data.length == 20) {
             _payLegacy(token, address(bytes20(data)), value);
@@ -439,8 +447,9 @@ contract DeliveryRouter is ReentrancyGuard {
         emit Delivered(token, recipient, fee == 0 ? address(0) : rewardAddress, value, fee, paidOut, paidAs, target);
     }
 
-    /// @dev The hand-off of a callback that arrives while another callback runs. The router pays nobody then: it takes
-    /// the tip when the terms decode and a router delivery runs, and hands the rest off, as the token and with no unwrap.
+    /// @dev The hand-off of a callback that arrives while the guard is held (inside a `sweep`, or inside another
+    /// callback on a bridge that nests messages). The router pays nobody then: it takes the tip when the terms decode
+    /// and a router delivery runs, and hands the rest off, as the token and with no unwrap.
     function _handOffReentered(address token, uint256 value, bytes memory data) private {
         if (data.length == 20) {
             _handOff(token, address(bytes20(data)), value, Reason.Reentered);

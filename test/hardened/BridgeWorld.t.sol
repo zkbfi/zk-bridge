@@ -13,6 +13,7 @@ import {ITokenMediator} from "../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 import {MockWrappedNative} from "./mediator/utils/MediatorSupport.sol";
 import {CallBurner} from "./mediator/utils/CallTargets.sol";
+import {MedReentryToken} from "./mediator/utils/MedMocks.sol";
 import {WorldSupport} from "./utils/WorldSupport.sol";
 
 /// @notice An application on chain A. It sends one message through the bridge, so the sender that the bridge records is
@@ -325,6 +326,52 @@ contract BridgeWorldTest is WorldSupport {
         _gasBasedFee(router, copy);
         _directDeliveryNoFee(router, copy);
         _defaultTipOnBothPaths(router, copy);
+    }
+
+    event DeliveryFailed(
+        address indexed token, address indexed recipient, uint256 amount, DeliveryRouter.Reason reason
+    );
+
+    /// Claim: the real bridge never runs one message inside another, but the router can still see a callback while its
+    /// reentrancy guard is held: `sweep` holds it, and a token whose transfer runs code can execute a pending message
+    /// on the bridge during the sweep. Shows: a message to the router waits; anyone sends the router a token whose
+    /// payment to the failed delivery address executes that message on the real bridge of chain B, and calls `sweep`
+    /// of that token. The message executes, the mediator pays the router and calls `onTokenBridged`, which does not
+    /// revert: the whole value goes to the failed delivery address with `DeliveryFailed(Reentered)`, with no tip (no
+    /// router delivery runs), and the recipient gets nothing. Matters: this is how the `Reentered` path is reached with
+    /// this bridge, so the path is not dead code; it is the outcome of a direct execution started inside a sweep.
+    function test_aMessageExecutedDuringASweepIsHandedOffAsReentered() public {
+        address failedDelivery = makeAddr("failed delivery address of the sweep");
+        DeliveryRouter router = new DeliveryRouter(
+            ITokenMediator(address(mediatorB)),
+            IWETH(address(new MockWrappedNative())),
+            makeAddr("reward address of the sweep"),
+            failedDelivery
+        );
+        (Vm.Log[] memory first,) = _relayFromA(alice, receiverOnB, 100 ether);
+        _deliverToB(first);
+        address copy = mediatorB.bridgedTokenAddress(address(nativeToken));
+        address recipient = makeAddr("recipient of the message run during a sweep");
+        uint256 value = 50 ether;
+        Transit memory transit = _proveForB(
+            _relayAndCallFromA(alice, address(router), value, _directorData(recipient, router.FIXED_FEE(), 1 ether, 0))
+        );
+
+        vm.chainId(CHAIN_B);
+        MedReentryToken hooked = new MedReentryToken();
+        hooked.mint(address(router), 1);
+        hooked.arm(failedDelivery, address(bridgeB), abi.encodeCall(MessageBridge.executeMessage, (transit.proof)));
+        vm.expectEmit(true, true, false, true, address(router));
+        emit DeliveryFailed(copy, recipient, value, DeliveryRouter.Reason.Reentered);
+        vm.prank(makeAddr("stranger"));
+        router.sweep(address(hooked));
+
+        assertEq(hooked.hooksRun(), 1, "the hook ran");
+        assertTrue(hooked.hookOk(), "the bridge executed the message inside the sweep");
+        assertTrue(bridgeB.messageCallStatus(transit.messageId), "the message is delivered");
+        assertEq(BridgedToken(copy).balanceOf(failedDelivery), value, "the whole value is handed off");
+        assertEq(BridgedToken(copy).balanceOf(recipient), 0, "the recipient gets nothing");
+        assertEq(BridgedToken(copy).balanceOf(address(router)), 0, "the router keeps nothing");
     }
 
     /// Claim: the call path through the router pays the default tip, and a direct delivery pays none. The sender

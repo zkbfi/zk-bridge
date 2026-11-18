@@ -199,19 +199,26 @@ The PulseChain AMB carries no value, and the PLS path wraps and unwraps in route
 
 ### 3.6 Gas limits for deliveries that unwrap (handled; one check to add)
 
+**Superseded on 2026-11-01** (note of 2026-11-18). The message carries no gas limit any more, and `maxGasPerTx`,
+`RELEASE_GAS_LIMIT`, `CALLBACK_GAS_LIMIT` and the mediator's gas defaults were removed. The bridge gives the target all
+the gas; a failed call reverts the delivery and the message stays `NotDelivered`. The mediator's one gas number is the
+callback gas that the sender of a relay with a call states, from 1 to `MAX_CALLBACK_GAS` (10,468,731), given exactly
+through `ExactGasCall`. See `docs/hardened-build-contract.md`, "Gas reverts up, and three layers" and "Bounds on the
+gas words of a sender", and `docs/audit/invariants.md` C6 and D4a. The paragraph below is the record of the review.
+
 PulseChain uses 2,000,000 for `maxGasPerTx` and for `requestGasLimit` on both mediators. Our mediator asks for 250,000 for a release, 1,000,000 with a callback, 2,000,000 for a deploy and 2,750,000 for a deploy with a callback (`TokenMediator.sol:141-145`, `:782-787`). The constructor refuses a bridge whose `maxGasPerTx` is smaller (`TokenMediator.sol:271-273`), and our bridge allows 10,000,000 (`MessageBridge.sol:94`). The 750,000 callback budget is enough for an unwrap and a capped send, but only once 3.1 caps the send. Add a test that runs the full router path (release, callback, withdraw, send, wrap fallback) at exactly `RELEASE_GAS_LIMIT + CALLBACK_GAS_LIMIT`, and the same for the first-use deploy path at 2,750,000.
 
 ### 3.7 Executor gas (handled)
 
-OmniBridge validators choose the execution gas. Our bridge refuses execution when the gas left cannot cover the message gas under the 63/64 rule plus `EXECUTION_OVERHEAD_GAS` (`MessageBridge.sol:376-379`). So an executor cannot starve a router delivery into a final failure. No change needed.
+OmniBridge validators choose the execution gas. Our bridge calls the target with all the gas it has, and a call that fails, for lack of gas or for any other reason, reverts the delivery (`TargetCallFailed` or the target's own error): the message stays `NotDelivered` and anyone can run it again with more gas (since 2026-11-01; `EXECUTION_OVERHEAD_GAS` and the bridge's `InsufficientGas` were removed then). The mediator gives a callback exactly the callback gas that the sender stated, or reverts (`ExactGasCall`). So an executor cannot starve a router delivery into a final failure. No change needed.
 
 ### 3.8 Message size (not a PulseChain lesson)
 
-The PulseChain AMB limits size by its validators and its gas. I found nothing about size in the PLS change. Our bridge has no explicit size cap, and the gas range bounds the delivery cost. No action from this review.
+The PulseChain AMB limits size by its validators and its gas. I found nothing about size in the PLS change. Our bridge has no explicit size cap. Since 2026-11-01 it has no gas range either: the gas of the delivery transaction bounds the delivery cost, and a message too costly for one transaction stays undelivered. No action from this review.
 
 ### 3.9 Receivers that refuse tokens (handled)
 
-For tokens, our mediator never reverts on a refusing recipient. It tries the recipient once. When that fails, it emits `ReleaseFailed` and keeps the tokens, and the release is final (decided 2026-10-27; the line numbers of the older text no longer apply). That is stronger than both PulseChain mediators, which revert. The gap is only in the coin send of the routers (3.1).
+For tokens, our mediator never reverts on a recipient that refuses with gas to spare (a transfer that failed after it used up its gas reverts the delivery with `ReleaseOutOfGas` since 2026-11-01, and the message waits). It tries the recipient once. When that fails, it emits `ReleaseFailed` and keeps the tokens, and the release is final (decided 2026-10-27; the line numbers of the older text no longer apply). That is stronger than both PulseChain mediators, which revert. The gap is only in the coin send of the routers (3.1).
 
 ## 4. Every bridge deployment involving PulseChain that gib.show knows
 

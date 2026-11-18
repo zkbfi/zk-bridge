@@ -55,10 +55,10 @@ The bridge moves arbitrary messages, and tokens through them, between Ethereum a
 A token relay from PulseChain to Ethereum, step by step:
 
 1. The sender calls `TokenMediator.relayTokens` on PulseChain. The mediator pulls the tokens, raises its record `mediatorBalance(token)` by the amount received, and calls `MessageBridge.requireToPassMessage`.
-2. The bridge checks that sends are open, the cutoff, the gas range and the selector, then calls `BeaconForkGate.admit("")`. It emits `UserRequestForAffirmation`.
+2. The bridge checks that sends are open, the cutoff and the selector, then calls `BeaconForkGate.admit("")`. It reads no gas number (the gas field of the message is always zero). It emits `UserRequestForAffirmation`.
 3. Someone runs `zk-bridge-prover prove` and sends `BeaconLightClient.update` on Ethereum until a stored finalized PulseChain header lies after the send. Each update carries a Groth16 proof of a fold of 1 to 64 light-client updates.
 4. Someone runs `zk-bridge-prover evidence`, adds any layout rows it needs (`addBlockRootsLayout`, `addBlockHashLayout`, `addHistoricalSummariesLayout`, each checked against stored data), and calls `MessageBridge.executeMessage` on Ethereum, directly or through `DeliveryRouter`.
-5. The bridge marks the message delivered and calls the mediator handler with the gas the sender chose. The mediator mints the bridged copy (deploying it on first use) or unlocks the native token. A refused release emits `ReleaseFailed` and is final.
+5. The bridge marks the message in progress and calls the mediator handler with all the gas it has. When the call fails (a revert, or too little gas) the delivery reverts and the message waits for a run with more gas; there is no failed status. The mediator mints the bridged copy (deploying it on first use) or unlocks the native token. A release refused with gas to spare emits `ReleaseFailed` and is final; one that ran out of gas reverts the delivery (`ReleaseOutOfGas`). A relay with a call gives `onTokenBridged` exactly the callback gas that the sender stated, through `ExactGasCall`.
 
 ## 2. State of the repository for the audit
 
@@ -119,7 +119,7 @@ Review these first and in this order. A defect here can forge a head, forge or r
 
 | File | Lines | What it does |
 |---|---|---|
-| `src/hardened/mediator/TokenMediator.sol` | 440 | Lock, unlock, mint, burn. The record `mediatorBalance`. Handlers callable only by the bridge with the remote mediator as sender. Gas reserve so a handler never reverts. |
+| `src/hardened/mediator/TokenMediator.sol` | 440 | Lock, unlock, mint, burn. The record `mediatorBalance`. Handlers callable only by the bridge with the remote mediator as sender. Gas reserve that tells a refused transfer (`ReleaseFailed`, final) from a lack of gas (`ReleaseOutOfGas`, the delivery reverts and waits). |
 | `src/hardened/mediator/BridgedToken.sol` | 78 | The bridged copy. Mint and burn only by the mediator. Its own EIP-2612 `permit` and ERC-677 `transferAndCall`. |
 | `src/hardened/mediator/TokenFactory.sol` | 41 | `CREATE2` deployment of copies at an address computed from the home chain and the native token. |
 | `src/hardened/mediator/TokenReader.sol` | 42 | Reads name, symbol and decimals of any token. |

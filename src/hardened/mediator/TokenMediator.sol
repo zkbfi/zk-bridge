@@ -119,7 +119,8 @@ contract TokenMediator is ITokenMediator, IMediatorHandlers, ReentrancyGuard {
     uint256 public constant TRANSFER_GAS_RESERVE = 60_000;
 
     /// @notice The gas that the mediator keeps for itself after the callback: the event of a failed callback and the
-    /// return to the bridge. A delivery must have the gas of the callback, its 63/64 share and this reserve.
+    /// return to the bridge. A delivery must have the gas of the callback, its 63/64 share, the gas of the call itself
+    /// (`ExactGasCall.CALL_OVERHEAD`, 6,000) and this reserve.
     uint256 public constant CALLBACK_GAS_RESERVE = 10_000;
 
     /// @notice The largest callback gas that a relay with a call may state: 10,468,731. A send above it reverts with
@@ -129,15 +130,16 @@ contract TokenMediator is ITokenMediator, IMediatorHandlers, ReentrancyGuard {
     /// a router's own work, a follow-up call of 10,000,000, its 63/64 share (158,731, rounded up) and the router's
     /// reserve of 10,000. It fits one transaction under the cap of EIP-7825 (16,777,216 gas) with a whole delivery
     /// around it. Measured (`BridgeWorld.t.sol`, `test_theLargestCallbackIsDeliveredUnderTheTransactionGasCap`): with a
-    /// call that burns its 10,000,000 gas, the delivery through the router and the real bridge needs 11,422,556 gas of
+    /// call that burns its 10,000,000 gas, the delivery through the router and the real bridge needs 11,428,828 gas of
     /// execution; with 21,000 for the transaction, 50,144 for the calldata of the proof and 100,000 of room for the
-    /// historical proof path, 11,593,700 gas, which leaves 5,183,516. The delivery adds the 63/64 share of each call
-    /// frame (router, bridge, mediator), `CALLBACK_GAS_RESERVE`, the proof check (about 323,000 to 353,000 gas) and the
-    /// release. The first message of a token also deploys its copy. On a chain that charges the standard 200 gas per
-    /// byte of code that takes about 1,000,000 gas and fits; on Sepolia, which charges about 1,600 gas per byte, it
-    /// takes about 7,000,000, and a first message with a callback gas above about 8,500,000 does not fit one
-    /// transaction there. That message waits, and is delivered once the copy exists: any first message of the same
-    /// token (a plain relay does) deploys it, and the deploy step of a later message then only reads the copy.
+    /// historical proof path, 11,599,972 gas, which leaves 5,177,244. The delivery adds the 63/64 share of each call
+    /// frame (router, bridge, mediator), `ExactGasCall.CALL_OVERHEAD` and `CALLBACK_GAS_RESERVE`, the proof check
+    /// (about 323,000 to 353,000 gas) and the release. The first message of a token also deploys its copy. On a chain
+    /// that charges the standard 200 gas per byte of code that takes about 1,000,000 gas and fits; on Sepolia, which
+    /// charges about 1,600 gas per byte, it takes about 7,000,000, and a first message with a callback gas above about
+    /// 8,500,000 does not fit one transaction there. That message waits, and is delivered once the copy exists: any
+    /// first message of the same token (a plain relay does) deploys it, and the deploy step of a later message then
+    /// only reads the copy.
     uint256 public constant MAX_CALLBACK_GAS = CALLBACK_GAS_MAXIMUM;
 
     /// @notice The text between the name of a native token and the name of its home chain, in the name of a bridged

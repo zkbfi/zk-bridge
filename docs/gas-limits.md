@@ -6,6 +6,21 @@ relay with a call, and the router's is the `callGas` of its terms. See `docs/har
 up, and three layers", and `docs/superpowers/specs/2026-11-01-gas-revert-up.md`. The text below is the record of the
 earlier rule.
 
+What the earlier rule named and what replaced it (note of 2026-11-18):
+
+- The bridge: `MIN_GAS_PER_CALL`, `MAX_GAS_PER_TX`, `EXECUTION_OVERHEAD_GAS`, `GasOutOfRange` and its `InsufficientGas`
+  are removed. A send ignores its gas argument (the gas field of the message is always zero), and `maxGasPerTx()`
+  returns `2^32 - 1`. `executeMessage` calls the target with all the gas it has; a failed call reverts with the error
+  of the target (or `TargetCallFailed`) and the message stays `NotDelivered`. There is no failed status.
+- The mediator: `_chooseGasLimit`, the defaults (`RELEASE_GAS_LIMIT`, `CALLBACK_GAS_LIMIT`, the deploy rule),
+  `GasLimitBelowMinimum` and `GasLimitAboveBridgeMaximum` are removed. A relay with a call states its callback gas,
+  from 1 (`ZeroCallbackGas` below) to `MAX_CALLBACK_GAS` (`CallbackGasTooHigh` above). The callback gets exactly that
+  gas through `ExactGasCall`, which needs the gas, its 63/64 share, `CALL_OVERHEAD` (6,000) and the mediator's
+  `CALLBACK_GAS_RESERVE` (10,000), else the delivery reverts with `InsufficientGas`.
+- The router: its follow-up call gets exactly `callGas` of the terms, by the same rule with `CALL_GAS_RESERVE`.
+- The shared `requiredDeliveryGas` of test 5 mirrored the removed bridge guard. Audit-facing text of the current rule:
+  `docs/audit/invariants.md` C6 and D4a.
+
 **Bounds since 2026-11-18.** The mediator refuses a callback gas above `TokenMediator.MAX_CALLBACK_GAS` (10,468,731)
 at the source with `CallbackGasTooHigh`, so a message that no transaction can deliver is never sent (rule 2 below holds
 again for that one number). The router hands off, with `DeliveryFailed` and the reason `InvalidTerms`, terms whose
@@ -25,6 +40,9 @@ holds today and where it does not. Later tasks fix the gaps and add the tests be
 4. The user call of the router is bounded by the limit of the message.
 
 ## The layers today
+
+Record of 2026-10-28. Every bridge and mediator row of this table describes code removed on 2026-11-01 (see the note
+at the top).
 
 I read each file and ran the test named in the "Evidence" column on 2026-10-28.
 
@@ -120,6 +138,8 @@ Task 11 adds the helper to `explorer/shared/src` and exports it from the index.
 | 13 | Terminal form and review text use the message limit | 5 (the shared helper) |
 
 ## Result of Task 11 (2026-10-28)
+
+Record. Superseded on 2026-11-01: the errors and constants named here no longer exist (see the note at the top).
 
 The mediator now refuses a token request above zero and below the default of its kind with
 `GasLimitBelowMinimum(gasLimit, minimum)`. Zero gives the default. The router needed no change: the guard test

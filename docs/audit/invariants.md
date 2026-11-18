@@ -160,11 +160,11 @@ The anchor is a header the light client stored. Ancestry goes through `block_roo
 
 ### C6. An executor cannot burn a message by giving too little gas
 
-The bridge refuses to execute unless it can forward the full message gas after the 63/64 rule plus its bookkeeping. The message stays undelivered when refused. A target that runs out of its own gas is a final failure.
+Since 2026-11-01 a message carries no gas limit: the gas argument of a send is ignored, and the 4 byte gas field of the encoding is always zero. The bridge calls the target with all the gas it has. When the call fails, for any reason (a revert, or too little gas), `executeMessage` reverts with the error of the target, or `TargetCallFailed` when it returned none, and the message stays `NotDelivered`, so anyone can run it again with more gas. There is no failed status and no failure record (`DeliveryStatus` is `NotDelivered`, `InProgress`, `Succeeded`; view `deliveryStatus`). A gas number that the sender states is checked one layer up: the callback gas of the mediator (D4a) and the `callGas` of the router, both through `ExactGasCall`.
 
 | Enforced | Tests |
 |---|---|
-| `MessageBridge.sol` line 382 (`InsufficientGas`) | `MessageBridgeDelivery.t.sol` `test_gasGuard_starvedExecutionIsRefusedAndTheMessageSurvives`, `test_gasGuard_leastGasGivesTheTargetAllItsGasAndFinishesTheBookkeeping`, `test_final_targetThatBurnsItsGasIsAFinalFailure`, `test_final_revertingTargetIsDeliveredAsAFailure` |
+| `MessageBridge.sol` `executeMessage` (line 273), `_callTarget` (line 332), `TargetCallFailed` | `MessageBridgeDelivery.t.sol` `test_gas_starvedExecutionRevertsAndTheMessageSurvives`, `test_gas_theTargetGetsAllTheGasNotTheGasField`, `test_revertUp_revertingTargetRevertsTheDeliveryAndTheMessageWaits`, `test_revertUp_targetThatBurnsItsGasRevertsWithTargetCallFailed`; `MessageBridgeSend.t.sol` `test_send_gasArgumentIsIgnoredAndTheGasFieldIsZero` |
 
 ### C7. The delivery context is set only during the call to the target
 
@@ -174,7 +174,7 @@ The bridge refuses to execute unless it can forward the full message gas after t
 
 ### C8. Sends are refused until the bridge is opened, and the lock opens once and never closes
 
-`openDeposits` needs a proof that the remote light client stored an update in a block of the other chain that this chain's light client stored. A send checks, in this order: the lock, the cutoff, the gas range, the forbidden selectors, the gate.
+`openDeposits` needs a proof that the remote light client stored an update in a block of the other chain that this chain's light client stored. A send checks, in this order: the lock, the cutoff, the forbidden selectors, the gate. The gas argument is not checked (C6).
 
 | Enforced | Tests |
 |---|---|
@@ -202,21 +202,21 @@ For each native token: balance = record + failed releases + plain transfers. For
 |---|---|
 | `TokenMediator.sol` lines 598 to 603 (`NotBridge`, sender, `WrongSourceChain`); `BridgedToken.sol` `mint`, `burn` | `mediator/TokenMediator.t.sol` `test_everyHandlerRefusesACallerThatIsNotTheBridge`, `test_theRemoteMediatorItselfCannotCallAHandlerDirectly`, `test_everyHandlerRefusesAMessageFromAnotherSender`, `test_everyHandlerRefusesAMessageFromAnotherChain`; `mediator/TokenMediatorInvariant.t.sol` `invariant_forgedMessagesChangeNothing`; `MessageBridgeGaps.t.sol` `test_secondBridge_mediatorRefusesAHandlerCallFromTheOtherBridge`; `mediator/BridgedToken.t.sol` `test_onlyTheMediatorCanMint`, `test_onlyTheMediatorCanBurnAndItBurnsItsOwnBalance`; `invariant/TokenFactoryProperties.t.sol` `testFuzz_onlyTheMediatorMintsAndBurnsAndTheSupplyFollows`, `testFuzz_onlyTheMediatorDeploys` |
 
-### D4. A handler never reverts, so a delivered message never loses its tokens to a revert
+### D4. A release that lacked gas reverts and waits; a release refused with gas to spare is final
 
-A token transfer gets the gas left minus `TRANSFER_GAS_RESERVE` (60,000) and at most 32 bytes of return data. A failed transfer is a final `ReleaseFailed`.
-
-| Enforced | Tests |
-|---|---|
-| `TokenMediator.sol` (`TRANSFER_GAS_RESERVE` at line 149, release path) | `mediator/TokenMediatorInvariant.t.sol` `invariant_noDeliveryFails`; `mediator/TokenMediatorHostileGas.t.sol` `test_aTokenThatBurnsAllItsGasEndsWithAFailedRelease`, `test_aTokenThatRevertsOnEveryTransferEndsWithAFailedRelease`, `test_aBlockedRecipientEndsWithAFailedRelease`, `test_theSameTokenIsPaidWhenTheSenderAsksForMoreGas`; `mediator/TokenMediatorDeployGas.t.sol` `test_gasOfEveryLengthDeploysWithinTheRule`; `DeployBridge.t.sol` `test_deployedBridgeLetsThroughTheGasThatTheMediatorNeeds` |
-
-### D4a. A message never carries a gas limit below the default of its kind or above the bridge maximum
-
-A token relay with a gas limit of zero sends the default of its kind (release 250,000; plus the callback 750,000 with a call; a deploy follows the length of the name and the symbol). A request above zero and below the default reverts with `GasLimitBelowMinimum`. A request above `maxGasPerTx()` reverts with `GasLimitAboveBridgeMaximum`. A plain message sent straight through the bridge has no default and needs a limit of at least 100 (`MIN_GAS_PER_CALL`); a lower one reverts with `GasOutOfRange`. The user call of the router runs inside the call of the mediator, so it never gets more than the message limit.
+A token transfer gets the gas left minus `TRANSFER_GAS_RESERVE` (60,000) and at most 32 bytes of return data. The mint and the flow limiter get all the gas. A call that fails after it used up its gas reverts the delivery with `ReleaseOutOfGas`, so the message stays `NotDelivered` (C6) and runs again with more gas. A call that fails with gas to spare is a refusal: `ReleaseFailed`, final, nothing paid and nothing payable later.
 
 | Enforced | Tests |
 |---|---|
-| `TokenMediator.sol` `_chooseGasLimit` | `mediator/TokenMediatorGasLimit.t.sol` `test_aRequestBelowTheDefaultIsRefused`, `test_aRequestOfZeroGivesTheDefault`, `test_aRequestAtTheDefaultIsAccepted`, `test_aDeployRequestBelowTheNameRuleIsRefused`, `test_aRequestAboveTheBridgeMaximumIsRefused`; `mediator/TokenMediatorFuzz.t.sol` `testFuzz_everySentLimitIsAtLeastTheKindMinimumAndAtMostTheMaximum`; `mediator/DeliveryRouterCall.t.sol` `test_theUserCallNeverGetsMoreThanTheMessageGasLimit` |
+| `TokenMediator.sol` (`TRANSFER_GAS_RESERVE` at line 119, `ReleaseOutOfGas`, release path) | `mediator/TokenMediatorInvariant.t.sol` `invariant_noDeliveryFails`; `mediator/TokenMediatorHostileGas.t.sol` `test_aTokenThatBurnsAllItsGasKeepsItsReleaseWaiting`, `test_aHeavyTokenIsPaidWhenTheExecutorBringsTheGas`, `test_aTokenThatRevertsOnEveryTransferEndsWithAFailedRelease`, `test_aBlockedRecipientEndsWithAFailedRelease`; `mediator/TokenMediatorStarvation.t.sol` `test_aStarvedTransferAlwaysRevertsTheDelivery`, `test_aStarvedMintAlwaysRevertsTheDelivery`, `test_aStarvedLimiterAlwaysRevertsTheDelivery`; `mediator/TokenMediatorDeployGas.t.sol` `test_aNineThousandByteNameRelaysAndDeploys`, `test_aFiveThousandByteNameDeploysThroughTheRealBridge` |
+
+### D4a. A callback gets exactly the callback gas that its sender stated, or the delivery reverts; every stated callback gas is deliverable
+
+The mediator's one gas number is the callback gas of a relay with a call (`relayTokensAndCall`, or the 32 bytes after the receiver in the ERC-677 data of `transferAndCall`). A plain relay has none. A callback gas of zero reverts with `ZeroCallbackGas`; one above `MAX_CALLBACK_GAS` (10,468,731) reverts with `CallbackGasTooHigh` at the source (since 2026-11-18), so no message asks for more gas than one transaction under the cap of EIP-7825 can give. At delivery the mediator calls `onTokenBridged` through `ExactGasCall`: before the call it needs the callback gas, its 63/64 share, `ExactGasCall.CALL_OVERHEAD` (6,000, the gas that the call spends of its own) and `CALLBACK_GAS_RESERVE` (10,000), else it reverts with `InsufficientGas` and the message waits (C6). A callback that fails after it received its whole gas is recorded (`CallbackFailed`), and the tokens stay with the receiver. The router's follow-up call follows the same rule with its `callGas` (at most `MAX_CALL_GAS`, 10,000,000; a larger one is handed off with `InvalidTerms`) and `CALL_GAS_RESERVE`, inside the callback gas.
+
+| Enforced | Tests |
+|---|---|
+| `MediatorPayloads.sol` `send` (`ZeroCallbackGas`, `CallbackGasTooHigh`); `TokenMediator.sol` callback (`CALLBACK_GAS_RESERVE`, `MAX_CALLBACK_GAS`); `ExactGasCall.sol` (`CALL_OVERHEAD`, `InsufficientGas`, `CallOutOfGas`); `DeliveryRouter.sol` (`MAX_CALL_GAS`, `CALL_GAS_RESERVE`) | `mediator/TokenMediator.t.sol` `test_relayTokensAndCallRefusesZeroCallbackGas`, `test_relayTokensAndCallRefusesACallbackGasAboveTheMaximum`, `test_onTokenTransferRefusesACallbackGasAboveTheMaximum`; `mediator/TokenMediatorStarvation.t.sol` `test_aCallbackGetsItsGasOrTheDeliveryReverts`, `test_aBurnerWithItsFullGasIsRecordedAndOneUnitLessReverts`; `mediator/ExactGasCall.t.sol` (all); `mediator/DeliveryRouterTerms.t.sol` `test_theLargestCallFitsTheLargestCallback`, `test_aCallGasAboveTheMaximumIsHandedOffWithNoTip`; `BridgeWorld.t.sol` `test_theLargestCallbackIsDeliveredUnderTheTransactionGasCap` |
 
 ### D5. A copy lives at the address the factory rule predicts, one copy per (home chain, native token)
 

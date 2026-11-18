@@ -986,7 +986,7 @@ Design choices of the router, because this bridge has no admin:
   - *The payout to a valid recipient fails* (a token that refuses it, a native send that fails in both coin and wrapped form). The tip goes to the reward address as usual. The router pushes the undelivered amount to the failed delivery address, as the wrapped token for a native payout.
   - *Terms that decode but name the zero address or the router itself* (data of at least 128 bytes). The router takes the tip by the terms of the director, with its limit exactly as for a normal delivery, and pushes the rest to the failed delivery address. Nothing is sent to the zero address. A direct delivery takes no tip, so the whole value is pushed.
   - *Data that cannot be decoded as a director* (neither 20 bytes nor at least 128 bytes, or a first word with bits above 160, which `abi.decode` would refuse), and a 20 byte legacy receiver that is the zero address or the router. No tip can be computed. The router pushes the whole value.
-  - *A reentrant callback* (a recipient payout hook makes the bridge deliver another message to the router while a delivery runs, so the mediator calls `onTokenBridged` again). The router detects it with the state of its reentrancy guard and does not revert. It takes the tip by the terms when they decode and a router delivery runs, as the token and with no unwrap, and pushes the rest (the whole value for a legacy receiver, for data of no known shape, or for a direct delivery) to the failed delivery address, with `DeliveryFailed(Reentered)`. `sweep` keeps the guard and refuses a reentrant call.
+  - *A reentrant callback* (a callback that arrives while the router's reentrancy guard is held; see "Code review, 2026-11-18, second round" for the two ways: a message executed inside a `sweep`, with any bridge, and a payout hook that delivers another message, only on a bridge that nests messages). The router detects it with the state of its reentrancy guard and does not revert. It takes the tip by the terms when they decode and a router delivery runs, as the token and with no unwrap, and pushes the rest (the whole value for a legacy receiver, for data of no known shape, or for a direct delivery) to the failed delivery address, with `DeliveryFailed(Reentered)`. `sweep` keeps the guard and refuses a reentrant call.
   - *The 20 byte legacy form with a token that is not the wrapped native token.* There is nothing to unwrap. The router pays the token to the receiver, with no fee, and pushes the value to the failed delivery address if the token refuses the receiver.
   If the push to the failed delivery address fails too (a token that also blocks it), the tokens stay in the router for good, and the router emits `HandOffRefused(token, amount)` after `DeliveryFailed` (user decision 2026-10-27: no claim records in the router). The router has no `claimable`, no `totalClaimable`, no `claim`, no `claimNative` and no `Claimed` event. A later `sweep(token)` tries the push again, so the tokens move once the token stops refusing the address. A delivery uses the balance of the router, up to the value that the mediator reports, so a token that takes a cut on transfer cannot make the router pay more than it holds. Invariants: the router holds no coin at rest, and for each delivery the recipient, the tip, the hand-off and the protocol fee add up to the released value. Gas: a delivery through the router costs the same as before within 130 gas (fixed fee 131,989 to 131,981, share fee 132,197 to 132,189, gas based fee 198,258 to 198,380; the fixed and share paths gain no storage read). The open entry (no origin check, no reward argument) saves about 500 gas more: fixed fee 131,492, multiplier of total fee 131,700, gas based fee 197,868 (`DeliveryRouterGas.t.sol`, call gas). Limits: a token that a stranger sends to the router by plain transfer, or that another router pays to it as a recipient, has no record. The router cannot detect it at the time, but `sweep(token)` hands it to the failed delivery address later.
 
@@ -1017,7 +1017,7 @@ Scaling and modes: percent is 1e18 scaled (`1 ether` is 100 percent). Fixed: `fe
 | `EXCLUDE_PRIORITY` where `block.basefee` is 0 | Gives a zero gas fee (BSC reports a base fee of 0) | The same in the contract. The shared module refuses `EXCLUDE_PRIORITY` for a chain that is configured with `baseFee: none` | The sender would pay for a flag that gives the runner nothing. |
 | Native payout | `call{value}` with all gas, revert `NotPayable` on failure | `call` with 50,000 gas, wrapped token as fallback, then hand-off | The callback must never revert, and a receiver must not burn the gas. |
 | Token payout | `safeTransfer`, reverts on failure | `trySafeTransfer`, hand-off to `failedDeliveryAddress`, and `HandOffRefused` with the tokens kept if that fails | A revert in the callback strands the tokens in the router. |
-| Reentrant callback | `nonReentrant`, reverts | No revert: the router detects the guard state and hands the whole value of the nested callback off, after the tip when the terms decode, `DeliveryFailed(Reentered)` | A recipient payout hook can make the bridge deliver another message while a delivery runs. A revert would leave those tokens in the router. `sweep` stays guarded. |
+| Reentrant callback | `nonReentrant`, reverts | No revert: the router detects the guard state and hands the whole value of the nested callback off, after the tip when the terms decode, `DeliveryFailed(Reentered)` | A message executed inside a `sweep` (any bridge), or a payout hook that delivers another message (a bridge that nests messages; `MessageBridge` refuses with `MessageInProgress`). A revert would leave those tokens in the router. `sweep` stays guarded. |
 | Order of payment | Recipient, then the fee | The tip, then the recipient | The tip rule of the failed delivery paths needs the tip first. |
 | 20 byte legacy data | `require(_token == wNative)`, revert on another token | Pays the token to the receiver for any token that is not `wNative` | No revert, nothing stranded. |
 | Data of another length, or a dirty address word | `abi.decode` reverts | Hand-off of the whole value, `DeliveryFailed(InvalidTerms)` | Same reason. |
@@ -1383,8 +1383,9 @@ The rule: clamp at the source, so every message stays deliverable. Too little ga
   figure is the frontends' `MAX_CALLBACK_GAS`: a router's own work (300,000), a follow-up call of 10,000,000, its 63/64
   share (158,731) and the router's reserve (10,000). `BridgeWorld.t.sol`
   (`test_theLargestCallbackIsDeliveredUnderTheTransactionGasCap`) measures a delivery with that callback gas and a call
-  that burns 10,000,000 gas through the real bridge: 11,422,556 gas of execution, 11,593,700 with the transaction, the
-  calldata of the proof and 100,000 of room for the historical path, which leaves 5,183,516 under the cap. The first
+  that burns 10,000,000 gas through the real bridge: 11,428,828 gas of execution, 11,599,972 with the transaction, the
+  calldata of the proof and 100,000 of room for the historical path, which leaves 5,177,244 under the cap (figures
+  since `ExactGasCall.CALL_OVERHEAD`, second round below; before it: 11,422,556, 11,593,700 and 5,183,516). The first
   message of a token also deploys its copy, about 7,000,000 gas on Sepolia (1,600 gas per byte of code); with a callback
   gas above about 8,500,000 that message does not fit one Sepolia transaction, and waits until any first message of the
   same token (a plain relay does) has deployed the copy.
@@ -1406,6 +1407,53 @@ Sizes after the change (`forge build --sizes`, runtime bytes): `DeliveryRouter` 
 6,160 (was 6,102), `TokenMediator` 8,557 (was 8,536), `MessageBridge` 9,370 (unchanged). All stay under the budget of
 `CreationGasCap.t.sol`. Tests: `mediator/TokenMediator.t.sol`, `mediator/TokenMediatorFuzz.t.sol`,
 `mediator/DeliveryRouterTerms.t.sol` (new), `BridgeWorld.t.sol`, `MessageBridgeSend.t.sol`, `RedeployLayers.t.sol`.
+
+### Code review, 2026-11-18, second round
+
+The owner's words, verbatim: "fix 2-8."
+
+- **`ExactGasCall` holds for any reserve (finding 2).** Check (b) after a failed call (`gasleft() < gasAmount / 63`
+  means the callee was short) assumed that the caller's `reserve` paid for the gas that the call spends of its own
+  between check (a) and the moment it forwards: the address access (2,600 cold), a second 2,600 when the target
+  delegates its code (EIP-7702), and the opcodes; and for the few opcodes of check (b) itself. With a smaller reserve a
+  callee that received all of its gas and failed could be reported as `CallOutOfGas`, a revert that no amount of gas
+  fixes once the band is hit. Measured with no reserve (`ExactGasCall.t.sol`): a band of 93 gas, 2,752 to 2,844 gas past
+  check (a) with a cold target, and 5,352 to 5,444 with a cold delegating target. The shipped callers passed 10,000
+  (`TokenMediator.CALLBACK_GAS_RESERVE`, `DeliveryRouter.CALL_GAS_RESERVE`), which covered it, but the library stated
+  no minimum. Fix: check (a) requires `gasAmount + gasAmount / 63 + CALL_OVERHEAD + reserve`, with `CALL_OVERHEAD`
+  6,000. If `L` is the gas left when the call forwards, check (a) gives `L >= gasAmount + gasAmount / 63 + reserve + t`
+  (`t` the gas of check (b) before it reads the gas left), so `L - L / 64 >= gasAmount` (the callee gets all of it) and
+  a callee that uses all of it leaves at least `gasAmount / 63 + reserve`. Check (b) stays as the guard for an EVM that
+  charges a call more than `CALL_OVERHEAD` before it forwards. The `reserve` is again only the gas that the caller needs
+  after the call. Cost: every callback and every follow-up call needs 6,000 gas more; the router's 300,000 of own work
+  in `MAX_CALLBACK_GAS` covers it (its costliest path is about 100,000), so `MAX_CALLBACK_GAS`, `MAX_CALL_GAS` and the
+  frontends' formula (`ROUTER_CALLBACK_GAS_BASE + callGas + ceil(callGas / 63) + CALL_GAS_RESERVE`) do not change. The
+  at-cap delivery of `BridgeWorld.t.sol` now needs 11,428,828 gas of execution (was 11,422,556) and leaves 5,177,244
+  under the cap. Tests: `mediator/ExactGasCall.t.sol` `test_aCalleeWithItsWholeGasThatFailsIsARecordedFailureWithNoReserve`
+  (scans 4,000 gas past check (a), red without `CALL_OVERHEAD`), `test_aDelegatingCalleeWithItsWholeGasThatFailsIsARecordedFailure`
+  (the same on the Prague rules), `test_theLeastGasPastTheCheckGivesABurnerItsWholeGas`. Test targets are now created
+  in `setUp`, so `vm.cool` makes them cold; before, `test_aBurnerALittleShortOfItsGasRevertsWithCallOutOfGas` ran on a
+  warm target and that test is replaced (no gas past check (a) leaves a callee short now).
+- **The `Reentered` path of the router stays (finding 3).** The finding: `MessageBridge.executeMessage` refuses a
+  message while another runs (`MessageInProgress`), so a payout hook cannot nest a delivery and the path looked dead.
+  It is not: `sweep` holds the same guard, and a token whose transfer runs code can execute a pending message on the
+  real bridge during a sweep. The mediator then calls `onTokenBridged` with the guard held, and the router hands the
+  whole value off with `Reentered` (no tip: no router delivery runs). `BridgeWorld.t.sol`
+  `test_aMessageExecutedDuringASweepIsHandedOffAsReentered` shows it through the real bridge. The router also takes any
+  mediator in its constructor, and the mediator any bridge, so a bridge that nests messages reaches the path from a
+  payout hook (`mediator/DeliveryRouterReentry.t.sol`, with the nesting `MockAMB`). Decision: keep the path, and say in
+  the NatSpec which bridge reaches it how. `Reason.Reentered` stays; no explorer code names it (grep of `explorer/`,
+  2026-11-18). Open, for the owner: anyone can make any pending message to the router run inside a `sweep`, so its
+  value goes to `failedDeliveryAddress` instead of its recipient (no theft; the recipient must recover it from the
+  operator). A `sweep` that refuses to run during a delivery but does not hold the guard would let such a message
+  deliver as a direct execution. Not changed (`docs/audit/known-issues.md` 1.20 (d)).
+- **Docs of the removed gas model (finding 8).** `docs/audit/invariants.md` C6, C8, D4 and D4a now state the current
+  rule (all gas to the target, revert up, the callback gas of the sender, `MAX_CALLBACK_GAS`) and cite tests that
+  exist; `docs/audit/README.md` steps 2 and 5; dated notes in `docs/gas-limits.md` and `docs/pulsechain-amb-review.md`
+  3.6 to 3.9; `prover/README.md` names `deliveryStatus(bytes32)`.
+
+Sizes after the change (`forge build --sizes`, runtime bytes): `DeliveryRouter` 8,980 (was 8,967), `TokenMediator`
+8,570 (was 8,557), `MediatorPayloads` 6,160 and `MessageBridge` 9,370 (unchanged).
 
 ## Fork gate by shape (2026-10-27) (built)
 
