@@ -9,8 +9,11 @@ import {ITokenMediator} from "../../../src/hardened/mediator/ITokenMediator.sol"
 import {MediatorFixture, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 import {MedReentryToken, MedDenyListWrappedNative} from "./utils/MedMocks.sol";
 
-/// @notice A payout hook of a recipient can call the bridge and deliver another message while a delivery runs. The
-/// mediator then calls `onTokenBridged` on the router again. The router never reverts in the callback, because the
+/// @notice On a message bridge that runs one message inside another, a payout hook of a recipient can deliver another
+/// message while a delivery runs. The mock bridge of these tests (`MockAMB`) does that; `MessageBridge` refuses with
+/// `MessageInProgress`, and reaches the same path only through a `sweep` (`BridgeWorld.t.sol`,
+/// `test_aMessageExecutedDuringASweepIsHandedOffAsReentered`). The mediator then calls `onTokenBridged` on the router
+/// again. The router never reverts in the callback, because the
 /// mediator keeps no hold on a failed call and the tokens would stay in the router with no record. It hands the value of
 /// the nested callback off to the failed delivery address, after the tip when the terms decode.
 contract DeliveryRouterReentryTest is MediatorFixture {

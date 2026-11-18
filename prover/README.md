@@ -221,7 +221,7 @@ A delivery that succeeds is final. A delivery whose call to the target fails rev
 | `notDelivered` | The bridge has no successful delivery of the message. `executeMessage` can still succeed, also after an earlier call that reverted. | `messageCallStatus` is false. |
 | `succeeded` | The bridge executed the message and the call to the target succeeded. | `messageCallStatus` is true. |
 
-`alreadyDelivered` is true for `succeeded` only. When it is true, `executeMessage` would revert with `AlreadyDelivered`. `failedMessageDataHash` and the other two `failedMessage...` views remain for the OmniBridge names and always return zero. The bridge has no public view of its delivery state. `messageCallStatus` gives it, except for a message in progress, which exists only inside the call to the target.
+`alreadyDelivered` is true for `succeeded` only. When it is true, `executeMessage` would revert with `AlreadyDelivered`. `failedMessageDataHash` and the other two `failedMessage...` views remain for the OmniBridge names and always return zero. The bridge also has a public view of its delivery state, `deliveryStatus(bytes32)`, with three values: `NotDelivered`, `InProgress` and `Succeeded`. `InProgress` exists only inside the call to the target, so outside a delivery it gives the same answer as `messageCallStatus`.
 
 ## The `verify` command
 

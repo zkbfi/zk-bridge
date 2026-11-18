@@ -304,9 +304,10 @@ contract MessageBridgeGapsTest is MessageScenes, DynamicProofs {
 
     /// Claim: a send checks in this order: the lock, the cutoff, the selector, the gate. Shows: with every
     /// check failing at once, the errors come one by one as each earlier check is satisfied: closed lock, then cutoff
-    /// reached, then gas out of range, then a forbidden selector, then the refusal of the gate. The gate is never
-    /// called before it. Matters: the order is part of the contract. The retired vault ran the gate FIRST. The message
-    /// bridge runs it LAST, on purpose: the gate may spend gas and write state, so every cheap check goes before it.
+    /// reached, then a forbidden selector, then the refusal of the gate. The bridge reads no gas number. The gate is
+    /// never called before it. Matters: the order is part of the contract. The retired vault ran the gate FIRST. The
+    /// message bridge runs it LAST, on purpose: the gate may spend gas and write state, so every cheap check goes
+    /// before it.
     function test_sendOrder_lockCutoffGasSelectorThenGate() public {
         MessageGate gate = new MessageGate();
         gate.setRefusing(true);
