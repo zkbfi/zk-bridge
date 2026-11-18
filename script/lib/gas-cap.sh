@@ -26,9 +26,13 @@ check_gas_cap() {
     printf 'FAIL gas  chain=%-8s no maxTransactionGas in %s\n' "$chain_id" "$GAS_DEFAULTS_FILE"
     return 1
   fi
-  limit_hex=$(curl -s --max-time 30 -X POST -H 'Content-Type: application/json' \
-    --data '{"jsonrpc":"2.0","id":1,"method":"eth_getBlockByNumber","params":["latest",false]}' "$rpc_url" 2>/dev/null \
-    | jq -r '.result.gasLimit // empty' 2>/dev/null)
+  # The URL can hold an RPC key, so it goes to curl on standard input (a config file), never on its argv, where any
+  # local user could read it in the process list. preflight.sh's request() does the same.
+  limit_hex=$({
+    printf 'url = "%s"\n' "$rpc_url"
+    printf 'request = "POST"\nsilent\nmax-time = 30\nheader = "Content-Type: application/json"\n'
+    printf 'data = "%s"\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getBlockByNumber\",\"params\":[\"latest\",false]}'
+  } | curl --config - 2>/dev/null | jq -r '.result.gasLimit // empty' 2>/dev/null)
   if ! [[ "$limit_hex" =~ ^0x[0-9a-fA-F]+$ ]]; then
     printf 'FAIL gas  chain=%-8s the latest block has no readable gas limit\n' "$chain_id"
     return 1

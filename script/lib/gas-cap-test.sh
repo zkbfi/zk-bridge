@@ -48,5 +48,13 @@ expect "table cap below the worst case fails" 1 "maxTransactionGas 10000000 is b
 printf '{"chains":{"369":{"maxTransactionGas":16777216}}}' >"$GAS_DEFAULTS_FILE"
 expect "a table without the worst case fails" 1 "no worstCaseDeliveryGas" 369 0x2aea540
 
+# The RPC URL can hold a key: it must reach curl on standard input, never on its argv (the process list).
+lib="$(dirname "${BASH_SOURCE[0]}")/gas-cap.sh"
+if grep -q 'curl --config -' "$lib" && ! grep -E 'curl[^|]*"\$rpc_url"' "$lib" >/dev/null; then
+  echo "PASS  the RPC URL never goes on curl's argv"
+else
+  echo "FAIL  the RPC URL never goes on curl's argv"; FAILURES=$((FAILURES + 1))
+fi
+
 [ "$FAILURES" -eq 0 ] && { echo "all passed"; exit 0; }
 echo "$FAILURES failed"; exit 1
