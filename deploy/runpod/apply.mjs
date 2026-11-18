@@ -8,6 +8,11 @@
 //   ... --apply --delete-retired                                        also deletes the endpoints listed under "retired"
 //   ... --apply --delete-unused-templates                               also deletes the templates that no tier needs (listed in every run)
 //   ... --config <file>|-                                               another file, or the JSON on standard input
+//   ... --pair <name>                                                   only the endpoints of one pair (sepolia-pls943, eth-pls); the rest are left alone
+//
+// Every endpoint names its "pair". One endpoint id or name under two pairs is refused: the spend guard reads RunPod's bill per endpoint,
+// so two pairs on one endpoint would see each other's spend. An endpoint with "pending": true does not exist at RunPod yet (the
+// mainnet tiers of eth-pls); it is skipped, and created, only by a run with --pair <its pair>.
 //
 // The key comes from the environment only. It is never printed, and no request is printed. An endpoint that exists at
 // RunPod but is neither in the file nor retired is listed and never touched. REST v2 answers 422 for a field it does not know, so the
@@ -66,10 +71,14 @@ export function parseConfig(text) {
   if (!isTextList(keepTemplates)) fail('"keepTemplates" must be a list of template ids that --delete-unused-templates leaves alone');
   const names = new Set();
   const ids = new Set();
+  const pairOfName = new Map();
+  const pairOfId = new Map();
   for (const endpoint of endpoints) {
     if (!isObject(endpoint)) fail("has an endpoint that is not an object");
     for (const key of ["label", "name"]) if (!isText(endpoint[key])) fail(`endpoint needs a text "${key}"`);
     const where = `endpoint ${endpoint.label}`;
+    if (!isText(endpoint.pair)) fail(`${where} needs a text "pair", the pair it serves (such as sepolia-pls943 or eth-pls)`);
+    if (endpoint.pending !== undefined && typeof endpoint.pending !== "boolean") fail(`${where} needs "pending" to be true or false`);
     if (!ENDPOINT_TYPES.includes(endpoint.type)) fail(`${where} needs a "type" of ${ENDPOINT_TYPES.join(" or ")}`);
     const { gpu, workers, scaling } = endpoint;
     if (!isObject(gpu) || !isTextList(gpu.pools) || gpu.pools.length === 0) fail(`${where} needs "gpu" with a non-empty "pools" list`);
@@ -86,11 +95,13 @@ export function parseConfig(text) {
       if (typeof scaling.queueDelay !== "number" || scaling.queueDelay < 0.5) fail(`${where} needs scaling "queueDelay" of at least 0.5`);
     } else fail(`${where} needs scaling "type" REQUEST_COUNT or QUEUE_DELAY`);
     if (endpoint.type === "LOAD_BALANCER" && scaling.type !== "REQUEST_COUNT") fail(`${where} is a LOAD_BALANCER, which scales by REQUEST_COUNT`);
-    if (names.has(endpoint.name)) fail(`names the endpoint "${endpoint.name}" twice`);
+    if (names.has(endpoint.name)) fail(`names the endpoint "${endpoint.name}" twice${pairOfName.get(endpoint.name) === endpoint.pair ? "" : `, under pairs ${pairOfName.get(endpoint.name)} and ${endpoint.pair}: each pair needs its own endpoints`}`);
     names.add(endpoint.name);
+    pairOfName.set(endpoint.name, endpoint.pair);
     if (endpoint.id !== undefined) {
-      if (!isText(endpoint.id) || ids.has(endpoint.id)) fail(`endpoint ${endpoint.label} has an "id" that is not text or is used twice`);
+      if (!isText(endpoint.id) || ids.has(endpoint.id)) fail(`endpoint ${endpoint.label} has an "id" that is not text or is used twice${isText(endpoint.id) && pairOfId.get(endpoint.id) !== endpoint.pair ? `, under pairs ${pairOfId.get(endpoint.id)} and ${endpoint.pair}: each pair needs its own endpoints` : ""}`);
       ids.add(endpoint.id);
+      pairOfId.set(endpoint.id, endpoint.pair);
     }
   }
   for (const id of retired) if (ids.has(id)) fail(`lists ${id} both as an endpoint and as retired`);
@@ -275,20 +286,27 @@ export function unusedTemplates(templates, config) {
 }
 
 /** Everything the run would do. Pure. `live` is what {@link readLive} returns. */
-export function planChanges(config, live) {
+export function planChanges(config, live, { pair = null } = {}) {
   const taken = new Set();
-  const tiers = config.endpoints.map((tier) => {
+  // Without --pair, an endpoint that does not exist yet ("pending") is skipped; with --pair, the pair's endpoints are the plan and the others are left alone.
+  const selected = (tier) => (pair === null ? tier.pending !== true : tier.pair === pair);
+  if (pair !== null && !config.endpoints.some((tier) => tier.pair === pair)) throw new ApplyError(`the configuration has no endpoint of pair ${pair}`);
+  for (const tier of config.endpoints) {
     const current = findLive(live.endpoints, tier);
     if (current !== null) taken.add(current.id);
+  }
+  const tiers = config.endpoints.filter(selected).map((tier) => {
+    const current = findLive(live.endpoints, tier);
     return { tier, live: current, ...diffEndpoint(config.container, tier, current) };
   });
+  const skipped = config.endpoints.filter((tier) => !selected(tier) && tier.pending === true);
   const retired = config.retired.map((id) => {
     const current = live.endpoints.find((endpoint) => endpoint.id === id) ?? null;
     if (current !== null) taken.add(current.id);
     return { id, live: current };
   });
   const unmanaged = live.endpoints.filter((endpoint) => !taken.has(endpoint.id)).map((endpoint) => ({ id: endpoint.id, name: endpoint.name }));
-  return { endpoints: tiers, retired, unmanaged, templates: unusedTemplates(live.templates, config) };
+  return { endpoints: tiers, skipped, retired, unmanaged, templates: unusedTemplates(live.templates, config) };
 }
 
 /** The report of a plan as lines of text. */
@@ -296,10 +314,11 @@ export function describePlan(plan) {
   const lines = [];
   const list = (changes) => changes.map(({ field, from, to }) => `    ${field}: ${from === undefined ? "(none)" : show(from)} -> ${show(to)}`);
   for (const { tier, exists, changes, warnings } of plan.endpoints) {
-    lines.push(`endpoint ${tier.label} (${tier.name}${tier.id === undefined ? "" : `, ${tier.id}`}): ${!exists ? "does not exist, will be created" : changes.length === 0 ? "no change" : "changes"}`);
+    lines.push(`endpoint ${tier.label} (${tier.pair}, ${tier.name}${tier.id === undefined ? "" : `, ${tier.id}`}): ${!exists ? "does not exist, will be created" : changes.length === 0 ? "no change" : "changes"}`);
     lines.push(...list(changes));
     for (const warning of warnings) lines.push(`    warning: ${warning}`);
   }
+  for (const tier of plan.skipped) lines.push(`endpoint ${tier.label} (${tier.pair}, ${tier.name}): not created yet, skipped; run with --pair ${tier.pair} at that pair's deploy`);
   for (const { id, live } of plan.retired) {
     lines.push(live === null ? `retired ${id}: already gone` : `retired ${id} (${live.name}): still exists; deleted only with --apply --delete-retired`);
   }
@@ -353,7 +372,7 @@ export async function applyPlan(plan, client, { deleteRetired = false, deleteUnu
 
 /** Reads the command line. */
 export function parseArguments(argv) {
-  const options = { apply: false, deleteRetired: false, deleteUnusedTemplates: false, config: null };
+  const options = { apply: false, deleteRetired: false, deleteUnusedTemplates: false, config: null, pair: null };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--apply") options.apply = true;
@@ -363,6 +382,10 @@ export function parseArguments(argv) {
       options.config = argv[index + 1];
       index += 1;
       if (options.config === undefined) throw new ApplyError("--config needs a path, or - for standard input");
+    } else if (argument === "--pair") {
+      options.pair = argv[index + 1];
+      index += 1;
+      if (options.pair === undefined || options.pair.startsWith("--")) throw new ApplyError("--pair needs the name of a pair, such as eth-pls");
     } else throw new ApplyError(`unknown argument ${argument}`);
   }
   if ((options.deleteRetired || options.deleteUnusedTemplates) && !options.apply) throw new ApplyError("--delete-retired and --delete-unused-templates work only with --apply");
@@ -382,7 +405,7 @@ export async function run({ argv, env, readFile = (path) => readFileSync(path, "
     if (apiKey === undefined || apiKey === "") throw new ApplyError("set RUNPOD_API_KEY in the environment");
     const config = parseConfig(options.config === "-" ? readStdin() : readFile(options.config ?? DEFAULT_CONFIG));
     const rest = client ?? makeRestClient(apiKey, fetchFunction);
-    const plan = planChanges(config, await readLive(rest));
+    const plan = planChanges(config, await readLive(rest), { pair: options.pair });
     for (const line of describePlan(plan)) out(line);
     if (!options.apply) {
       out("dry run: nothing changed. Add --apply to make these changes.");

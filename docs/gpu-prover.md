@@ -373,6 +373,14 @@ The file has four parts:
   (`OFF`, `FLASHBOOT` or `PRIORITY_FLASHBOOT`), `timeoutMs` and `scaling` (`{ "type": "REQUEST_COUNT", "requestCount": 1 }`).
   `id` is the RunPod endpoint id. Leave it out for a tier that does not exist yet: the script creates it (matching by
   `name` on later runs) and prints the new id, which you then put in the file and in `backend.json`.
+  `pair` names the pair that the endpoint serves (`sepolia-pls943`, the three live tiers; `eth-pls`, the mainnet tiers).
+  The spend guard reads RunPod's bill per endpoint, so each pair has its own endpoints: the script refuses a file in which
+  one endpoint `id` or `name` appears under two pairs, and `--pair <name>` applies one pair and leaves the other alone.
+  The three `eth-pls` entries (names with an `eth-pls` suffix, same images and GPU pools, `workers.min` 0) carry
+  `"pending": true`: they do not exist at RunPod yet. A run without `--pair` skips them and says so; they are created only by
+  `node deploy/runpod/apply.mjs --apply --pair eth-pls`, the RunPod step of the mainnet deploy. Put the printed ids in the file
+  and in the mainnet `backend.json`, and remove `pending`. The backend does not read this file at run time (a release does not
+  carry it), so the check that no endpoint serves two pairs is the script's and its tests.
 - `retired`: ids of endpoints that should be gone. The script deletes them only with `--apply --delete-retired`.
 - `keepTemplates` (optional): ids of RunPod templates that `--delete-unused-templates` must leave alone.
 

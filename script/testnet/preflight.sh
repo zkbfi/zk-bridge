@@ -19,9 +19,14 @@
 # The key comes only from the environment variable VALVE_KEY. The script never prints it:
 #   - the key reaches curl through a configuration file on standard input, so it is not in any process list;
 #   - all output passes through a sed script that replaces the key, and any text that has the shape of a key.
+# It also checks, for each chain, that the latest block gas limit and the chain's `maxTransactionGas` in
+# deploy/gas-defaults.json both cover the worst-case delivery (script/lib/gas-cap.sh). A chain below it is a FAIL.
 # It sends no transaction and it reads only. It downloads at most a few bytes of each large state.
 
 set -uo pipefail
+
+# shellcheck source=../lib/gas-cap.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/gas-cap.sh"
 
 readonly BASE_URL="https://one.valve.city"
 readonly ENDPOINTS="${ENDPOINTS:-valve}"
@@ -136,9 +141,22 @@ check_rpc() {
   report "rpc eth_chainId" "$status" OK "$((answer))"
 }
 
+# The gas cap of the current chain: block gas limit and table cap against the worst-case delivery.
+check_gas() {
+  local endpoint line
+  endpoint=$(rpc_base)
+  if [ -z "$endpoint" ]; then
+    report "gas cap" "n/a" INFO "no execution endpoint known; set SEPOLIA_RPC_URL"
+    return
+  fi
+  line=$(check_gas_cap "$CHAIN_ID" "$endpoint") || fail_count=$((fail_count + 1))
+  printf '%s\n' "$line"
+}
+
 check_chain() {
   local head_slot head_root state_root period finalized_root
   check_rpc
+  check_gas
 
   check_beacon "genesis" "/eth/v1/beacon/genesis" "application/json" '.data.genesis_time'
   check_beacon "config/spec" "/eth/v1/config/spec" "application/json" '.data.SECONDS_PER_SLOT'

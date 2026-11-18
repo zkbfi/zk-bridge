@@ -93,6 +93,8 @@ guard goes on with the state in memory.
   "stuckMinutes": 15,
   "spendCheckSeconds": 3600,
   "maxUsdPerHour": 0.5,
+  "proofCostUsd": 0.1,
+  "headroom": 2,
   "cooldownMinutes": 10,
   "maxTripsPerDay": 3,
   "backoffSeconds": 900
@@ -100,6 +102,18 @@ guard goes on with the state in memory.
 ```
 
 `checkSeconds` 300 keeps v2 calls near 3 × 288 = 864 a day for the workers list. `backoffSeconds` 900 is the wait after a 429 when RunPod sends no `Retry-After`. The defaults are the owner's $0.50/h.
+
+**Update 2026-11-18 (two pairs, `2026-11-18-two-pairs-gas-and-proving-design.md`).** `maxUsdPerHour` is no longer a flat
+default. Left out, it is derived from the pair's `minIntervalSeconds` (the pair's `watch.pairs.<pair>` value, else the
+`watch` value; an interval of 0 counts as 60 seconds; no interval anywhere derives nothing and keeps the floors): `max(0.5, 2 x ceil(3600 / interval) x proofCostUsd x headroom)`,
+with `proofCostUsd` (default 0.10; measured about 0.06 on 2026-11-18 including the cold start) and `headroom` (default 2).
+The 2 is the two directions, which can land on the same tier in the tier race. An hourly pair derives 0.5, the figure
+above; a 600 s pair derives 2.40. A value in the file wins. The same interval sets the default of
+`limits.gpuBudgetUsdPerDirectionPerDay`: `max(5, 24 x ceil(3600 / interval) x proofCostUsd x headroom)`, so 5 hourly and
+28.80 at 600 s. When a value in the file is below the derived one, the backend logs `gpu_limits_below_interval` once at
+start-up with both figures and runs with the value it was given. At start-up it also logs `gpu_limits`, the limits in
+force with each marked derived or set. Each pair has its own RunPod endpoints (`pair` in `deploy/runpod/endpoints.json`),
+because the guard reads spend per endpoint and two pairs on one endpoint would see each other's bill.
 
 ### Visibility
 

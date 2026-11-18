@@ -3,6 +3,7 @@ import { PAIR_DEFINITIONS, PROOF_DIRECTIONS, beaconVariableName, headerRpcVariab
 import { SINGLE_ENDPOINT_LABEL, endpointKeyVariables, remoteEndpointListSchema, type ProverSecret, type RemoteEndpoint } from "@zk-bridge/shared/prover";
 import { DEFAULT_RATE_LIMITS } from "./requests/rate-limit.ts";
 import { DEFAULT_WARMUP } from "./watch/warmup.ts";
+import { deriveGpuLimits, type GpuLimits } from "./gpu-limits.ts";
 import { signerSchema } from "../../bots/src/config/bot-config.ts";
 import { rpcProxySchema } from "./rpc-proxy/settings.ts";
 
@@ -108,12 +109,16 @@ export const backendConfigSchema = z
         secondsBeforeRetryAfterFailure: positiveInteger.default(DEFAULT_RATE_LIMITS.secondsBeforeRetryAfterFailure),
         /** Absent: the epochs per day of the direction's source chain (225 or 270). */
         jobsPerDirectionPerDay: positiveInteger.optional(),
-        gpuBudgetUsdPerDirectionPerDay: z.number().min(0).max(100_000).default(DEFAULT_RATE_LIMITS.gpuBudgetUsdPerDirectionPerDay),
+        /**
+         * The GPU budget of one direction in 24 hours, in USD. Absent: derived from the pair's `minIntervalSeconds`,
+         * `max(5, 24 x proofsPerHour x gpuGuard.proofCostUsd x gpuGuard.headroom)` (`gpu-limits.ts`); the parsed value is the result.
+         */
+        gpuBudgetUsdPerDirectionPerDay: z.number().min(0).max(100_000).optional(),
         keepAliveSeconds: positiveInteger.default(DEFAULT_RATE_LIMITS.keepAliveSeconds),
         pendingProofStaleSeconds: positiveInteger.default(DEFAULT_RATE_LIMITS.pendingProofStaleSeconds),
       })
       .strict()
-      .default(DEFAULT_RATE_LIMITS),
+      .prefault({}),
     /**
      * The execution endpoint of each chain of the pair, by chain identifier. An endpoint can carry a key, so keep the
      * file private (mode 0600); the logger removes these values from every line.
@@ -231,7 +236,15 @@ export const backendConfigSchema = z
         checkSeconds: positiveInteger.default(300),
         stuckMinutes: positiveInteger.default(15),
         spendCheckSeconds: positiveInteger.default(3600),
-        maxUsdPerHour: z.number().positive().default(0.5),
+        /**
+         * The most that one tier may bill in a completed hour, in USD. Absent: derived from the pair's `minIntervalSeconds`,
+         * `max(0.5, 2 x proofsPerHour x proofCostUsd x headroom)` (`gpu-limits.ts`); the parsed value is the result.
+         */
+        maxUsdPerHour: z.number().positive().optional(),
+        /** What one proof costs, for the derived limits: about 0.06 measured on 2026-11-18, including the cold start. */
+        proofCostUsd: z.number().positive().default(0.1),
+        /** The multiplier of the derived limits that covers keep-alives, urgent proofs and a retry. */
+        headroom: z.number().positive().default(2),
         cooldownMinutes: positiveInteger.default(10),
         maxTripsPerDay: positiveInteger.default(3),
         /** How long a tier is left alone after RunPod answers it 429 (its request limit), when RunPod sends no `Retry-After`. */
@@ -338,10 +351,47 @@ export const backendConfigSchema = z
   .refine((config) => config.limits.requestRetentionHours * 3600 >= config.prover.timeoutSeconds, {
     message: "limits.requestRetentionHours must not be shorter than prover.timeoutSeconds, or a waiting caller loses its request",
     path: ["limits", "requestRetentionHours"],
+  })
+  // The GPU limits that the file leaves out follow the pair's interval. {@link gpuLimitsOf} gives the figures and where each came from.
+  .transform((config) => {
+    const gpuLimits = deriveGpuLimits({
+      watch: config.watch,
+      pair: config.pair,
+      proofCostUsd: config.gpuGuard.proofCostUsd,
+      headroom: config.gpuGuard.headroom,
+      explicit: { maxUsdPerHour: config.gpuGuard.maxUsdPerHour, gpuBudgetUsdPerDirectionPerDay: config.limits.gpuBudgetUsdPerDirectionPerDay },
+    });
+    const resolved = {
+      ...config,
+      gpuGuard: { ...config.gpuGuard, maxUsdPerHour: gpuLimits.maxUsdPerHour.value },
+      limits: { ...config.limits, gpuBudgetUsdPerDirectionPerDay: gpuLimits.gpuBudgetUsdPerDirectionPerDay.value },
+    };
+    limitsOfConfig.set(resolved, gpuLimits);
+    return resolved;
   });
+
+/** The GPU limits of each parsed configuration, kept beside it (not in it: a config that is written out and read again must load). */
+const limitsOfConfig = new WeakMap<object, GpuLimits>();
 
 /** The parsed backend configuration. */
 export type BackendConfig = z.infer<typeof backendConfigSchema>;
+
+/**
+ * The GPU limits in force for a parsed configuration, each derived or set (`gpu-limits.ts`). A copy of the configuration
+ * that was not parsed (a spread object) counts both values as set.
+ */
+export function gpuLimitsOf(config: BackendConfig): GpuLimits {
+  return (
+    limitsOfConfig.get(config) ??
+    deriveGpuLimits({
+      watch: config.watch,
+      pair: config.pair,
+      proofCostUsd: config.gpuGuard.proofCostUsd,
+      headroom: config.gpuGuard.headroom,
+      explicit: { maxUsdPerHour: config.gpuGuard.maxUsdPerHour, gpuBudgetUsdPerDirectionPerDay: config.limits.gpuBudgetUsdPerDirectionPerDay },
+    })
+  );
+}
 
 /** The configuration file is not valid. */
 export class BackendConfigError extends Error {

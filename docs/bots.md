@@ -63,6 +63,8 @@ If anyone calls `MessageBridge.executeMessage` directly, the mediator still deli
 
 The runner holds a wallet on the destination chain (the same signer options as the dashboard: keystore, key, mnemonic, hardware). It never sends without a successful simulation.
 
+**One runner wallet per destination chain, never shared across pairs.** With two pairs there are four wallets: Sepolia (11155111) and PulseChain testnet v4 (943) for `sepolia-pls943`, and Ethereum (1) and PulseChain (369) for `eth-pls`. PulseChain testnet and PulseChain mainnet are different chains and so get different wallets, even though both are "PulseChain". A wallet is never used by two pairs, so a nonce that is stuck or a balance that runs out on one pair never blocks the other. Each runner takes its own signer in its own bot configuration. On mainnet the Ethereum wallet pays the large gas cost; the tip on the message covers it (docs/superpowers/specs/2026-11-18-two-pairs-gas-and-proving-design.md, decision 5).
+
 ## Shared rules
 
 - Every RPC and beacon endpoint and key comes from configuration or the environment; nothing secret is committed or logged (redact `vk_` keys in all output).

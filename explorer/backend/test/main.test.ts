@@ -185,6 +185,31 @@ describe("endpoints in the configuration", () => {
   });
 });
 
+describe("GPU limits at start-up", () => {
+  const start = async (overrides: Record<string, unknown>) => {
+    const directory = workspace();
+    const lines: string[] = [];
+    const config = makeConfig({ databasePath: join(directory, "backend.sqlite"), listen: { host: "127.0.0.1", port: 0 }, indexerUrl: INDEXER_URL, watch: { enabled: false, pairs: { "eth-pls": { minIntervalSeconds: 600 } } }, ...overrides });
+    const running = await startBackend({ config, pair: PAIR, enabled: ["requests"], environment: ENVIRONMENT, write: (line) => lines.push(line) });
+    await running.stop();
+    return lines.join("\n");
+  };
+
+  it("logs the derived limits once, and no warning", async () => {
+    const log = await start({});
+    expect(log.match(/"gpu_limits"/g)).toHaveLength(1);
+    expect(log).toContain('"maxUsdPerHour":2.4,"maxUsdPerHourSource":"derived"');
+    expect(log).toContain('"gpuBudgetUsdPerDirectionPerDay":28.8,"gpuBudgetSource":"derived"');
+    expect(log).not.toContain("gpu_limits_below_interval");
+  });
+
+  it("runs with an explicit value below the derived one and warns about it once", async () => {
+    const log = await start({ gpuGuard: { maxUsdPerHour: 0.5 }, limits: { gpuBudgetUsdPerDirectionPerDay: 5 } });
+    expect(log.match(/gpu_limits_below_interval/g)).toHaveLength(2);
+    expect(log).toContain('"maxUsdPerHour":0.5,"maxUsdPerHourSource":"set"');
+  });
+});
+
 describe("secrets in the log", () => {
   const configFor = (directory: string, indexerUrl = INDEXER_URL) =>
     makeConfig({

@@ -26,6 +26,8 @@ import {
 
 const fileText = readFileSync(new URL("./endpoints.json", import.meta.url), "utf8");
 const config = () => parseConfig(fileText);
+/** The endpoints of the live testnet pair: the three tiers that exist at RunPod. */
+const testnetTiers = () => config().endpoints.filter((tier) => tier.pair === "sepolia-pls943");
 const edit = (change) => {
   const copy = JSON.parse(fileText);
   change(copy);
@@ -91,7 +93,8 @@ function fakeClient({ endpoints = LIVE, templates = TEMPLATES, fail = {} } = {})
 }
 
 test("the file in the repository is valid and holds the three tiers in order, one retired endpoint and no secret", () => {
-  const { container, endpoints, retired } = config();
+  const { container, retired } = config();
+  const endpoints = testnetTiers();
   assert.deepEqual(endpoints.map((tier) => tier.label), ["gpu-24gb", "gpu-32gb", "gpu-48gb"]);
   assert.deepEqual(endpoints.map((tier) => tier.id), ["43nsvfb8svkosr", "muecz9pudncily", "nuax43o5zxyv9a"]);
   assert.deepEqual(endpoints.map((tier) => tier.gpu.pools), [["ADA_24", "AMPERE_24"], ["ADA_32_PRO"], ["ADA_48_PRO"]]);
@@ -107,14 +110,14 @@ test("the file in the repository is valid and holds the three tiers in order, on
 });
 
 test("every tier asks for CUDA 12.8, which the image needs (docker/Dockerfile: nvidia/cuda 12.8.2 runtime, driver 570 or newer)", () => {
-  assert.deepEqual(config().endpoints.map((tier) => tier.gpu.minCudaVersion), ["12.8", "12.8", "12.8"]);
+  assert.deepEqual(config().endpoints.map((tier) => tier.gpu.minCudaVersion), Array(6).fill("12.8"));
   const dockerfile = readFileSync(new URL("../../docker/Dockerfile", import.meta.url), "utf8");
   assert.match(dockerfile, /nvidia\/cuda:12\.8\.\d+-runtime/);
 });
 
 test("the three tiers declare the live values of 2026-11-16: workers 0 to 1 (0 to 0 for gpu-48gb since 2026-11-18), idle timeout 5, FLASHBOOT, 600000 ms, REQUEST_COUNT 1, LOAD_BALANCER", () => {
   for (const tier of config().endpoints) {
-    assert.deepEqual(tier.workers, { min: 0, max: tier.label === "gpu-48gb" ? 0 : 1 });
+    assert.deepEqual(tier.workers, { min: 0, max: tier.label.startsWith("gpu-48gb") ? 0 : 1 });
     assert.equal(tier.idleTimeout, 5);
     assert.equal(tier.flashboot, "FLASHBOOT");
     assert.equal(tier.timeoutMs, 600000);
@@ -321,10 +324,10 @@ test("unusedTemplates lists private serverless templates, skips public and pod o
 test("describePlan prints a line per tier with old and new values, the retired, unknown and unused templates, and never an environment value", () => {
   const live = [liveEndpoint({ env: { PORT: "hunter2" }, workers: { min: 0, max: 1, idleTimeout: 60 } }), LIVE[1], liveEndpoint({ id: "stray0000", name: "other" })];
   const text = describePlan(planChanges(config(), { endpoints: [...live, LIVE[2]], templates: TEMPLATES })).join("\n");
-  assert.match(text, /endpoint gpu-24gb \(zk-bridge-prover-gpu, 43nsvfb8svkosr\): changes/);
+  assert.match(text, /endpoint gpu-24gb \(sepolia-pls943, zk-bridge-prover-gpu, 43nsvfb8svkosr\): changes/);
   assert.match(text, /workers\.idleTimeout: 60 -> 5/);
   assert.match(text, /env\.PORT: \(set\) -> \(set\)/);
-  assert.match(text, /endpoint gpu-32gb \(zk-bridge-prover-gpu-32gb, muecz9pudncily\): no change/);
+  assert.match(text, /endpoint gpu-32gb \(sepolia-pls943, zk-bridge-prover-gpu-32gb, muecz9pudncily\): no change/);
   assert.match(text, /gpu\.minCudaVersion: "12\.0" -> "12\.8"/);
   assert.match(text, /retired zmp5owbxu73fc2: already gone/);
   assert.match(text, /not in the file, left alone: stray0000 \(other\)/);
@@ -332,7 +335,7 @@ test("describePlan prints a line per tier with old and new values, the retired, 
   assert.match(text, /hsj330cqpf \(zk-bridge-prover-gpu-template\)/);
   assert.doesNotMatch(text, /hunter2|public|a-pod/);
   const created = describePlan(planChanges(config(), { endpoints: [], templates: [] })).join("\n");
-  assert.match(created, /endpoint gpu-24gb \(zk-bridge-prover-gpu, 43nsvfb8svkosr\): does not exist, will be created/);
+  assert.match(created, /endpoint gpu-24gb \(sepolia-pls943, zk-bridge-prover-gpu, 43nsvfb8svkosr\): does not exist, will be created/);
   const present = describePlan(planChanges(config(), { endpoints: [...LIVE, liveEndpoint({ id: "zmp5owbxu73fc2", name: "old" })], templates: [] })).join("\n");
   assert.match(present, /retired zmp5owbxu73fc2 \(old\): still exists; deleted only with --apply --delete-retired/);
   const odd = describePlan(planChanges(config(), { endpoints: [liveEndpoint({ type: "QUEUE" }), LIVE[1], LIVE[2]], templates: [] })).join("\n");
@@ -423,11 +426,14 @@ test("unused templates are listed in every run and deleted only with --apply --d
 });
 
 test("the command line: the delete flags need --apply, unknown arguments and a missing config path are refused", () => {
-  assert.deepEqual(parseArguments([]), { apply: false, deleteRetired: false, deleteUnusedTemplates: false, config: null });
-  assert.deepEqual(parseArguments(["--apply", "--delete-retired", "--delete-unused-templates", "--config", "-"]), { apply: true, deleteRetired: true, deleteUnusedTemplates: true, config: "-" });
+  assert.deepEqual(parseArguments([]), { apply: false, deleteRetired: false, deleteUnusedTemplates: false, config: null, pair: null });
+  assert.deepEqual(parseArguments(["--apply", "--delete-retired", "--delete-unused-templates", "--config", "-"]), { apply: true, deleteRetired: true, deleteUnusedTemplates: true, config: "-", pair: null });
   assert.throws(() => parseArguments(["--delete-retired"]), /only with --apply/);
   assert.throws(() => parseArguments(["--delete-unused-templates"]), /only with --apply/);
   assert.throws(() => parseArguments(["--config"]), /--config needs a path/);
+  assert.equal(parseArguments(["--pair", "eth-pls"]).pair, "eth-pls");
+  assert.throws(() => parseArguments(["--pair"]), /--pair needs the name of a pair/);
+  assert.throws(() => parseArguments(["--pair", "--apply"]), /--pair needs the name of a pair/);
   assert.throws(() => parseArguments(["--force"]), /unknown argument --force/);
 });
 
@@ -524,4 +530,65 @@ test("applyPlan with no flags and an empty plan writes nothing", async () => {
   const { client, writes } = fakeClient();
   assert.deepEqual(await applyPlan({ endpoints: [], retired: [], unmanaged: [], templates: [] }, client), []);
   assert.deepEqual(writes(), []);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Pairs (docs/superpowers/specs/2026-11-18-two-pairs-gas-and-proving-design.md, decision 4)
+
+test("every endpoint names its pair: the live tiers are sepolia-pls943, the mainnet tiers are eth-pls, pending, with the same pools and workers min 0", () => {
+  const tiers = config().endpoints;
+  assert.deepEqual(testnetTiers().map((tier) => tier.pending), [undefined, undefined, undefined]);
+  const mainnet = tiers.filter((tier) => tier.pair === "eth-pls");
+  assert.deepEqual(mainnet.map((tier) => tier.name), ["zk-bridge-prover-gpu-eth-pls", "zk-bridge-prover-gpu-32gb-eth-pls", "zk-bridge-prover-gpu-48gb-eth-pls"]);
+  assert.ok(mainnet.every((tier) => tier.pending === true && tier.id === undefined && tier.workers.min === 0));
+  assert.deepEqual(mainnet.map((tier) => tier.gpu), testnetTiers().map((tier) => tier.gpu));
+});
+
+test("no endpoint id or name appears under two pairs in the file in the repository", () => {
+  const tiers = config().endpoints;
+  for (const key of ["id", "name"]) {
+    const values = tiers.map((tier) => tier[key]).filter((value) => value !== undefined);
+    assert.equal(new Set(values).size, values.length, key);
+  }
+});
+
+test("parseConfig refuses an endpoint without a pair, a bad pending, and one id or name under two pairs", () => {
+  assert.throws(() => parseConfig(edit((c) => delete c.endpoints[0].pair)), /needs a text "pair"/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[0].pending = "yes"))), /"pending" to be true or false/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[3].name = c.endpoints[0].name))), /twice, under pairs sepolia-pls943 and eth-pls/);
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[3].id = c.endpoints[0].id))), /"id" that is not text or is used twice, under pairs sepolia-pls943 and eth-pls/);
+  // Inside one pair the older message stays.
+  assert.throws(() => parseConfig(edit((c) => (c.endpoints[1].name = c.endpoints[0].name))), /names the endpoint "zk-bridge-prover-gpu" twice$/);
+});
+
+test("without --pair the pending mainnet tiers are skipped and said so; the live account plan is the same as before", async () => {
+  const plan = planChanges(config(), { endpoints: LIVE, templates: [] });
+  assert.deepEqual(plan.endpoints.map(({ tier }) => tier.label), ["gpu-24gb", "gpu-32gb", "gpu-48gb"]);
+  assert.deepEqual(plan.skipped.map((tier) => tier.label), ["gpu-24gb-eth-pls", "gpu-32gb-eth-pls", "gpu-48gb-eth-pls"]);
+  assert.match(describePlan(plan).join("\n"), /gpu-24gb-eth-pls \(eth-pls, zk-bridge-prover-gpu-eth-pls\): not created yet, skipped; run with --pair eth-pls/);
+  const { client, writes } = fakeClient();
+  assert.equal(await run({ argv: ["--apply"], env: { RUNPOD_API_KEY: "k" }, client, out() {} }), 0);
+  assert.equal(writes().some((call) => call.method === "POST"), false, "no create without --pair eth-pls");
+});
+
+test("--pair eth-pls plans only that pair, creates its pending tiers, and leaves the testnet endpoints alone (not even listed as unmanaged)", async () => {
+  const plan = planChanges(config(), { endpoints: LIVE, templates: [] }, { pair: "eth-pls" });
+  assert.deepEqual(plan.endpoints.map(({ tier }) => tier.label), ["gpu-24gb-eth-pls", "gpu-32gb-eth-pls", "gpu-48gb-eth-pls"]);
+  assert.ok(plan.endpoints.every((entry) => !entry.exists));
+  assert.deepEqual(plan.skipped, []);
+  assert.deepEqual(plan.unmanaged, []);
+  const { client, writes } = fakeClient();
+  assert.equal(await run({ argv: ["--apply", "--pair", "eth-pls"], env: { RUNPOD_API_KEY: "k" }, client, out() {} }), 0);
+  assert.deepEqual(writes().map((call) => call.method), ["POST", "POST", "POST"]);
+  assert.deepEqual(writes().map((call) => call.body.name), ["zk-bridge-prover-gpu-eth-pls", "zk-bridge-prover-gpu-32gb-eth-pls", "zk-bridge-prover-gpu-48gb-eth-pls"]);
+});
+
+test("--pair sepolia-pls943 applies the live tiers only, and a pair that has no endpoint is refused", async () => {
+  const plan = planChanges(config(), { endpoints: LIVE, templates: [] }, { pair: "sepolia-pls943" });
+  assert.deepEqual(plan.endpoints.map(({ tier }) => tier.label), ["gpu-24gb", "gpu-32gb", "gpu-48gb"]);
+  assert.throws(() => planChanges(config(), { endpoints: LIVE, templates: [] }, { pair: "nope" }), /no endpoint of pair nope/);
+  const errors = [];
+  const { client } = fakeClient();
+  assert.equal(await run({ argv: ["--pair", "nope"], env: { RUNPOD_API_KEY: "k" }, client, out() {}, err: (line) => errors.push(line) }), 1);
+  assert.match(errors[0], /no endpoint of pair nope/);
 });
