@@ -122,17 +122,32 @@ contract DeliveryRouterTest is MediatorFixture {
     /// with a plain token; the base of 300,000 leaves room for tokens whose transfers cost more. Matters: a frontend that follows the core package never strands tokens in the
     /// router.
     function test_theCoreCallbackGasBaseCoversTheCostliestPathOfTheRouter() public {
+        _costliestPathWithCallGas(200_000, 250_000);
+    }
+
+    /// Claim: the same recommendation covers the costliest path at the largest call gas, `MAX_CALL_GAS`, through the
+    /// hop to `routerCaller`. Shows: with a call gas of 10,000,000, the recommended callback gas is
+    /// `TokenMediator.MAX_CALLBACK_GAS` (10,468,731), the path delivers with it, and the least callback gas that runs
+    /// it is logged with the room that is left. Matters: since 2026-11-18 (third round) the call goes out through
+    /// `routerCaller`, a second call frame, so a second 63/64 share (about `callGas / 63`, 158,731 here) comes out of
+    /// the 300,000 of router work in the formula; it is largest at the largest call gas.
+    function test_theCoreCallbackGasCoversTheCostliestPathAtTheLargestCallGas() public {
+        uint256 recommended = _costliestPathWithCallGas(router.MAX_CALL_GAS(), 250_000);
+        assertEq(recommended, mediatorA.MAX_CALLBACK_GAS(), "the recommendation at the largest call gas");
+    }
+
+    /// @dev The costliest path of the router with a call of `callGas` (see the claim above), and the bisection of the
+    /// least callback gas that runs it. Returns the recommended callback gas.
+    function _costliestPathWithCallGas(uint256 callGas, uint256 maximumRoom) internal returns (uint256 recommended) {
         vm.txGasPrice(10 gwei);
         address refusingReward = address(new CoinRefuser());
         _useReward(refusingReward);
         address refusingRecipient = address(new CoinRefuser());
         CallRecorder target = new CallRecorder();
-        uint256 callGas = 200_000;
         DeliveryRouter.FeeDirector memory director =
             DeliveryRouter.FeeDirector(refusingRecipient, router.UNWRAP(), 1 ether, 1 ether, callGas);
         bytes memory data = bytes.concat(abi.encode(director), abi.encodePacked(address(target)), hex"c0ffee");
-        uint256 recommended =
-            CORE_ROUTER_CALLBACK_GAS_BASE + callGas + (callGas + 62) / 63 + router.CALL_GAS_RESERVE();
+        recommended = CORE_ROUTER_CALLBACK_GAS_BASE + callGas + (callGas + 62) / 63 + router.CALL_GAS_RESERVE();
 
         uint256 snapshot = vm.snapshotState();
         uint256 index = _sendWrappedBackWithGas(5 ether, data, recommended);
@@ -157,10 +172,12 @@ contract DeliveryRouterTest is MediatorFixture {
             if (failed) low = middle + 1;
             else high = middle;
         }
+        emit log_named_uint("call gas", callGas);
         emit log_named_uint("least callback gas of the costliest path", low);
         emit log_named_uint("recommended callback gas", recommended);
+        emit log_named_uint("room", recommended - low);
         assertLe(low, recommended, "the recommendation covers the costliest path");
-        assertLt(recommended - low, 250_000, "and asks for less than 250,000 gas more than it needs");
+        assertLt(recommended - low, maximumRoom, "and asks for less than the room allowed more than it needs");
     }
 
     function _countOf(Vm.Log[] memory logs, bytes32 topic) internal pure returns (uint256 count) {

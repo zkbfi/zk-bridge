@@ -3,7 +3,8 @@ pragma solidity ^0.8.24;
 
 /// @title ExactGasCall
 /// @notice A call that gets exactly the gas that a sender stated, or none at all. The rule is the same wherever a
-/// sender states a gas number for a call (the callback of the mediator, the follow-up call of a router): not enough gas
+/// sender states a gas number for a call (the callback of the mediator, the follow-up call of a router, which
+/// `RouterCaller` makes with this rule written out in assembly): not enough gas
 /// reverts the whole delivery, so it can run again with more gas; a callee that fails with the gas it was promised is
 /// a recorded failure, and the delivery completes.
 /// @dev Two checks, one on each side of the call.

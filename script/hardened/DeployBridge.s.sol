@@ -52,7 +52,10 @@ import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 /// token gets no delivery router, and the configuration that asks for one is refused. The delivery router also needs `deliveryRouter.rewardAddress` (the one address that
 /// receives the tips) and `deliveryRouter.failedDeliveryAddress` (the address that receives what the router cannot
 /// deliver; it may equal the reward address). Anyone may call the router, so it has no runner. The deployment reads
-/// both addresses back from the router and refuses a mismatch.
+/// both addresses back from the router and refuses a mismatch. The router creates its `RouterCaller` (the account that
+/// makes the call after a delivery) in its own constructor, in the same transaction, so it takes no nonce of the
+/// deployer; the read-back requires the caller at the router's first creation address, naming the router, with the
+/// compiled code (`requireRouterCaller`).
 contract DeployBridge is LinkedCode {
     /// @notice Whether a router is deployed.
     enum RouterChoice {
@@ -438,6 +441,7 @@ contract DeployBridge is LinkedCode {
         requireBuiltCode("TokenFactory", deployed.factory, _librariesOf(deployed));
         if (deployed.deliveryRouter != address(0)) {
             requireBuiltCode("DeliveryRouter", deployed.deliveryRouter, _librariesOf(deployed));
+            requireRouterCaller(deployed.deliveryRouter);
         }
     }
 

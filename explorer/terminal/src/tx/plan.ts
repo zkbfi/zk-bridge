@@ -30,7 +30,7 @@ export interface DeliveryFeeReview {
   readonly routerChainName: string
   /** The fee terms that the call data holds. */
   readonly director: FeeDirector
-  /** The call that the router makes after the delivery, from the router with no native value. Absent when the relay asks for none. */
+  /** The call that the router makes after the delivery, through its `routerCaller` (not from the router itself) with no native value. Absent when the relay asks for none. */
   readonly call?: DeliveryCall
   /** The token that the fee is paid in, on the destination chain. */
   readonly token: { readonly symbol: string; readonly decimals: number }

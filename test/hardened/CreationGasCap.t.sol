@@ -21,6 +21,8 @@ contract CreationGasCapTest is Test {
     uint256 internal constant GAS_PER_CONSTRUCTOR_BYTE = 64;
     /// @notice The share of the cap that one creation may use: the room is 10%.
     uint256 internal constant BUDGET_PERCENT = 90;
+    /// @notice The base cost of a CREATE inside a creation (the router creates its `RouterCaller`).
+    uint256 internal constant NESTED_CREATE_GAS = 32_000;
 
     /// Claim: each of the eight creations of `RedeployLayers` (layers mode), the gate that the `layers-and-gate` mode
     /// creates first (`BeaconForkGate`; its constructor also creates the opcode probe, about 60 bytes, inside the room),
@@ -45,6 +47,7 @@ contract CreationGasCapTest is Test {
         for (uint256 i = 0; i < names.length; i++) {
             (uint256 runtime, uint256 creation) = _sizes(names[i]);
             uint256 estimate = runtime * SEPOLIA_GAS_PER_RUNTIME_BYTE + (creation - runtime) * GAS_PER_CONSTRUCTOR_BYTE;
+            if (keccak256(bytes(names[i])) == keccak256("DeliveryRouter")) estimate += _nestedRouterCaller();
             console2.log(names[i], runtime, estimate);
             assertLe(estimate, budget, names[i]);
         }
@@ -57,6 +60,27 @@ contract CreationGasCapTest is Test {
         uint256 budget = TRANSACTION_GAS_CAP * BUDGET_PERCENT / 100;
         assertEq(budget / SEPOLIA_GAS_PER_RUNTIME_BYTE, 9437);
         assertGt(22_465 * SEPOLIA_GAS_PER_RUNTIME_BYTE, TRANSACTION_GAS_CAP);
+    }
+
+    /// Claim: the creation of the router, with the `RouterCaller` that its constructor creates, fits the budget.
+    /// Shows: the router's estimate plus the caller's runtime code at Sepolia's price and the base of a CREATE, printed,
+    /// is under the budget. Matters: the router creates its caller in the same transaction (code review, 2026-11-18,
+    /// third round), so the caller's code is paid inside the router's creation; the creation code of the caller already
+    /// counts in the router's constructor bytes.
+    function test_theRouterWithItsCallerFitsTheGasCapWithRoom() public view {
+        (uint256 runtime, uint256 creation) = _sizes("DeliveryRouter");
+        uint256 estimate = runtime * SEPOLIA_GAS_PER_RUNTIME_BYTE + (creation - runtime) * GAS_PER_CONSTRUCTOR_BYTE
+            + _nestedRouterCaller();
+        uint256 budget = TRANSACTION_GAS_CAP * BUDGET_PERCENT / 100;
+        console2.log("DeliveryRouter with its RouterCaller", estimate, budget - estimate);
+        assertLe(estimate, budget);
+    }
+
+    /// @dev What the router's constructor adds when it creates its `RouterCaller`: the caller's runtime code at
+    /// Sepolia's price and the base of a CREATE.
+    function _nestedRouterCaller() private view returns (uint256) {
+        (uint256 callerRuntime,) = _sizes("RouterCaller");
+        return callerRuntime * SEPOLIA_GAS_PER_RUNTIME_BYTE + NESTED_CREATE_GAS;
     }
 
     /// @dev The runtime and the creation code sizes from the build output. A library placeholder is 40 hex digits, the

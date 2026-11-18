@@ -69,7 +69,7 @@ A link to the Bridge screen can carry the direction, the token and the amount; t
 
 The delivery menu (tap the fee) has an **Advanced** part.
 
-- **Call after delivery.** A contract on the destination chain that the delivery router calls once it has paid the recipient, and the call data to send it. The call comes from the router. It sends no coin. It runs only after the payment succeeded, and a call that fails does not undo the delivery: the recipient keeps the tokens.
+- **Call after delivery.** A contract on the destination chain that the delivery router calls once it has paid the recipient, and the call data to send it. The call comes from a small contract of the router that holds nothing, not from the router itself, so the target sees that contract as the caller. It sends no coin. It runs only after the payment succeeded, and a call that fails does not undo the delivery: the recipient keeps the tokens.
 - **Call gas.** The exact gas the call gets, as a whole number. It has no default: enter it when you name a call. The callback gas that the transfer carries is worked out from it (the call gas plus the router's own work) and shown beside it, read only. A plain transfer has no gas number at all.
 
 A call costs gas, so a gas-based fee rises with it. The control names the call, its gas and the router, for example "A bot delivers it on PulseChain · fee 0.39%, then calls 0x12…ab with 200,000 gas".

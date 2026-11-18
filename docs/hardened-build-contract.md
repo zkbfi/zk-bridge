@@ -1038,14 +1038,14 @@ These are user decisions of 2026-10-27, for `DeliveryRouter`.
 
 1. **No claim records in the router.** `claimable`, `totalClaimable`, `claim`, `Claimed` and `NothingToClaim` are deleted. When `failedDeliveryAddress` cannot take a hand-off, the tokens stay in the router for good and the router emits `HandOffRefused(token, amount)`. `sweep(token)` stays and anyone may call it. With no records, it sends the whole router balance of the token to `failedDeliveryAddress`. If that push fails, it emits `HandOffRefused` and leaves the tokens where they are. The reentrancy guards stay.
 2. **A user defined call after a successful delivery.** The flow: the mediator pays the router and calls `onTokenBridged` with the gas limit that the sender set. The router takes the tip and pays the recipient (unwrapping first when asked). Only when that payment succeeded, the router makes one call to a user defined target with user defined call data. The target may differ from the recipient.
-   - The router makes the call itself. There is no executor contract.
+   - The router makes the call itself. There is no executor contract. (Superseded 2026-11-18, third round: the call goes out from `RouterCaller`, a contract that the router creates and that holds nothing; see "Code review, 2026-11-18, third round".)
    - A failed call does not revert the delivery and moves no tokens. The router emits `CallFailed(target, recipient, gasGiven)`. A call that has no spare gas also emits it, with `gasGiven` of zero.
    - The router skips the call when the payment failed and the amount was handed off, when the tip left nothing to pay, when the data has fewer than 20 bytes after the director, and for the 20 byte legacy form. A direct delivery (no router starting gas) pays no tip and still makes the call.
    - The call carries no native value. The router reads no answer, so a target cannot spend the reserve on a large answer.
    - Gas: the call gets the gas that is left, less `CALL_GAS_RESERVE` of 10,000. The router keeps the reserve to emit `CallFailed` and to leave the callback. Measured with a target that burns all its gas (`DeliveryRouterGas.t.sol`): the router needs between 3,361 and 3,586 gas after the call returns (two measures, one inside a test harness and one from outside), so the reserve is about 2.8 times the need. The first version read `gasleft()` twice in the reserve check, and a supply within 21 gas of the threshold made the subtraction underflow and revert the callback. A test caught it, and the router reads `gasleft()` once now. The measure is valid while a 64th of the gas at the call is below the reserve (the call is capped at 63/64 of the gas that is left, and the 64th that the router keeps is larger above 640,000 gas).
    - The gas tip counts the call. The router takes the tip before it pays the recipient and before the call, so the measure `startingGas - gasleft()` at the tip cannot cover the call by itself. This was checked, and it did not. When data asks for a call, the router now adds the gas that the call may use to the measure: the gas left at the measure, less the payout overhead and `CALL_GAS_RESERVE`. With a call, the gas based tip therefore reaches up to what the deliverer made available, whether the target burns the gas or not, and `limit` stays the only bound, as it was. A tip counts the allowance even when the payment later fails and the call does not run. The overhead constants were checked against the gas that runs after the measure (the tip transfer, the recipient payment and the exit of the guard). `TOKEN_GAS_OVERHEAD` of 100,000 holds: 53,740 gas runs after the measure with two new accounts. `NATIVE_GAS_OVERHEAD` of 50,000 did not hold: 71,598 gas runs after the measure when the recipient and the reward address are both empty accounts (44,097 with one new account, 16,597 with none), because a coin sent to an empty account costs more. `NATIVE_GAS_OVERHEAD` is now 100,000, equal to the token constant (figures in `DeliveryRouterGas.t.sol`).
    - Encoding of the data of `relayTokensAndCall` to a router: the 128 byte `FeeDirector` first. Optional bytes follow: the 20 byte target, then the call data, which fills the rest. A director with no extra bytes means delivery only. A tail of 1 to 19 bytes means delivery only for the router, and the shared guard refuses to build it. The 20 byte legacy form stays and carries no call. `explorer/shared/src/delivery-terms.ts` is the one TypeScript module that encodes and decodes this, with vectors that the compiled router printed. The terminal and the web page have an optional target field and an optional call data field, empty by default.
-   - What the call can reach. The call comes from the router, so the target can reach only what the router holds when it runs: after the tip and the payment that is stray tokens, which anyone may already sweep. A sender can also name a token as the target with `transfer` call data, and the router then moves its stray balance of that token. The router holds no allowance for a target to use. Delivered value is never reachable, because the router pays it out before the call.
+   - What the call can reach. The call comes from the router, so the target can reach only what the router holds when it runs: after the tip and the payment that is stray tokens, which anyone may already sweep. A sender can also name a token as the target with `transfer` call data, and the router then moves its stray balance of that token. The router holds no allowance for a target to use. Delivered value is never reachable, because the router pays it out before the call. (Changed 2026-11-18, third round: stray tokens belong to `failedDeliveryAddress`, so the call now comes from `RouterCaller` and reaches nothing.)
 3. **No standing approval.** The constructor no longer approves the mediator for the maximum wrapped native amount. Each wrap and send approves exactly the amount that it wraps. The mediator takes all of it in the same call, and a test checks that the allowance ends at zero for every entry point.
 
 #### Decisions (2026-10-24, later)
@@ -1454,6 +1454,65 @@ The owner's words, verbatim: "fix 2-8."
 
 Sizes after the change (`forge build --sizes`, runtime bytes): `DeliveryRouter` 8,980 (was 8,967), `TokenMediator`
 8,570 (was 8,557), `MediatorPayloads` 6,160 and `MessageBridge` 9,370 (unchanged).
+
+### Code review, 2026-11-18, third round
+
+The owner's words, verbatim: "fix 1-7, refuse delivery for 8, separate caller for router. is there any reason to think
+that 8 would not have succeeded?" Then, on finding 8 (a message to an address with no code), a change of plan, verbatim:
+"well, the mistake is on the sender, not on us. if we did everything we were supposed to do and now there are new
+tokens at that new address then we are done" and "right, we do not need to deliver to a router. we can just deliver
+direct to an address and be done with it. the router is for sustaining the protocol and doing basic things like
+unwrapping". The sweep and `Reentered` behaviour stays as it is (`docs/audit/known-issues.md` 1.20 (d), accepted).
+
+- **A separate caller for the router's follow-up call.** The finding: `DeliveryRouter._callTarget` called a target and
+  call data that the sender chose, from the router. A delivery could carry `token.transfer(attacker, balance)` and take
+  what the router held: tokens of a plain relay to the router, of a failed callback (the mediator pays the router before
+  the callback, and the revert of the callback undoes only the router's work) or of a `HandOffRefused`, all of which
+  `sweep` sends to `failedDeliveryAddress`. The fix: the call goes out from `RouterCaller`
+  (`src/hardened/mediator/RouterCaller.sol`), a contract that the router creates in its constructor (immutable
+  `routerCaller`) and that only that router may use (`NotRouter`). It has no owner, holds nothing, gives no approval
+  and takes no coin. Anything sent to it is not protected (any follow-up call can move it) and is not where funds go.
+  **Behaviour change:** the target sees `msg.sender == routerCaller`, not the router.
+- **The gas through the hop.** The router passes `callGas`, the target and the call data in place (the last word of the
+  director and the bytes after it, a packed form with no selector) and forwards all its gas but `CALLER_GAS_RESERVE`
+  (`CALL_GAS_RESERVE` + `ExactGasCall.CALL_OVERHEAD`, 16,000). `RouterCaller` applies the rule of `ExactGasCall`, written
+  out in assembly to keep its code small: it requires `callGas + callGas / 63 + CALL_OVERHEAD + RETURN_RESERVE` (1,000,
+  the gas to answer) or reverts `InsufficientGas`; a failed call that leaves less than `callGas / 63` reverts
+  `CallOutOfGas`; else it answers whether the target succeeded. The router passes a revert of `RouterCaller` up, so too
+  little gas still reverts the callback (the mediator records `CallbackFailed`, as before), and a target that fails with
+  its gas is still a `CallFailed` with the delivery complete. The hop is a second call frame, so a second 63/64 share
+  comes out of the callback gas: measured on the costliest path of the router (gas based tip with an unwrap, both coin
+  sends refused, `DeliveryRouter.t.sol`), the least callback gas is 335,703 with a call of 200,000 (was 328,802) and
+  10,437,108 with a call of `MAX_CALL_GAS` (was 10,284,358): 152,750 more at the largest call. It fits the router's own
+  work allowance of 300,000, so `MAX_CALLBACK_GAS` (10,468,731), `MAX_CALL_GAS`, `CALL_GAS_RESERVE` and the frontends'
+  formula (`ROUTER_CALLBACK_GAS_BASE + callGas + ceil(callGas / 63) + CALL_GAS_RESERVE`) do not change, but the room that
+  the formula leaves for tokens whose transfers cost more is now 31,623 gas at `MAX_CALL_GAS` (was 184,373) and 177,472
+  at 200,000 (was 184,373). Open, for the owner: a lower `MAX_CALL_GAS` (about 9,850,000) would bring the room at the
+  largest call back to about 184,000, and needs the same figure in `@zkb/core`. The delivery at the cap in
+  `BridgeWorld.t.sol` does not change (11,428,828 gas of execution, 11,599,972 with the transaction, 5,177,244 under
+  16,777,216): the mediator gives the callback exactly the callback gas, so the hop changes only how the router spends it.
+- **How the caller is created.** By the router's constructor, so a deployment stays one transaction for the router and
+  takes no nonce of the deployer: the nonce plans of `DeployBridge.s.sol` and `RedeployLayers.s.sol` (all modes,
+  `router` included) do not change. The read-backs require the caller at the router's first creation address, naming
+  the router, with the compiled code (`LinkedCode.requireRouterCaller`). Deployed first and passed in, the caller would
+  need the router's predicted address and one more creation in every nonce plan. The cost is the gas cap of one
+  creation: `CreationGasCap.t.sol` now adds the caller's runtime code at Sepolia's price and the base of a CREATE to the
+  router's estimate (`test_theRouterWithItsCallerFitsTheGasCapWithRoom`): 15,073,024 gas against the budget of
+  15,099,494 (90% of 16,777,216), 26,470 to spare. That is why the caller is written in assembly (333 bytes; the same
+  rule through the `ExactGasCall` library was 614) and why `CALLER_GAS_RESERVE` is private (a public getter cost 48
+  bytes of the router).
+- **A message to an address with no code (finding 8) is not changed.** A call to an address with no code succeeds in the
+  EVM, so the message is `Succeeded` with nothing run, as on the bridge that this one mimics, and it never runs again.
+  The target is the sender's choice. Documented in the NatSpec of `MessageBridge.executeMessage` and `_callTarget`,
+  pinned by `MessageBridgeDelivery.t.sol` `test_revertUp_aTargetWithNoCodeCompletesAsAnEmptyCall`, and accepted in
+  `docs/audit/known-issues.md` 1.24.
+
+Sizes after the change (`forge build --sizes`, runtime bytes): `DeliveryRouter` 9,028 (was 8,980), `RouterCaller` 333
+(new), `TokenMediator` 8,570 and `MessageBridge` 9,370 (unchanged). Tests: `mediator/RouterCaller.t.sol` (new: the
+caller refuses anyone but its router and takes no coin, a target equal to the caller fails, the exact gas at the
+boundary through the hop), `mediator/DeliveryRouterCall.t.sol` `test_aCallToTheTokenCannotMoveTheStrayBalanceOfTheRouter`
+(the exploit, red before the fix: the transfer moved the stray balance), `mediator/DeliveryRouter.t.sol`
+`test_theCoreCallbackGasCoversTheCostliestPathAtTheLargestCallGas`, `CreationGasCap.t.sol`.
 
 ## Fork gate by shape (2026-10-27) (built)
 
