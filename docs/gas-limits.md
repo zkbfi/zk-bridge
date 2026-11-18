@@ -158,3 +158,13 @@ Each mutation was applied to `src/hardened/mediator/TokenMediator.sol`, the test
 | M-G2 | `requested < minimum` becomes `requested <= minimum` | Red: `test_aRequestAtTheDefaultIsAccepted`, `test_aDeployRequestBelowTheNameRuleIsRefused`, `test_theGasLimitOverloadsSendTheOmnibridgePayload`, the fuzz test |
 | M-G3 | Drop the zero case (`gasLimit = requested`) | Red: `test_aRequestOfZeroGivesTheDefault`, `test_theExistingEntryPointsKeepTheDefaultLimits`, the fuzz test and more |
 | M-G4 | Skip the deploy rule in the minimum (`if (needed > gasLimit) gasLimit = needed;` removed) | Red: `test_aDeployRequestBelowTheNameRuleIsRefused` |
+
+## Per-chain transaction cap and the deploy preflight (2026-11-18)
+
+Every delivery is its own transaction on one destination chain, so the number of pairs changes no on-chain figure
+(`docs/superpowers/specs/2026-11-18-two-pairs-gas-and-proving-design.md`). A chain must fit one worst-case delivery under its
+per-transaction gas cap (EIP-7825, 16,777,216 where it applies). `deploy/gas-defaults.json` holds the worst case
+(`worstCaseDeliveryGas`, 11,428,828: the at-cap delivery that `test/hardened/BridgeWorld.t.sol` measures) and a
+`maxTransactionGas` for each chain (1, 11155111, 369 and 943, all 16,777,216, which is safe on any chain). The preflight
+(`script/testnet/preflight.sh`, through `script/lib/gas-cap.sh`; a mainnet preflight sources the same file) fails a chain
+whose latest block gas limit or table cap is below the worst case. `script/lib/gas-cap-test.sh` tests it against a fake RPC.

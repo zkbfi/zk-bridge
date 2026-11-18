@@ -45,7 +45,7 @@ export type BatchRule = {
 type BatchLevel = { readonly minIntervalSeconds?: number | undefined; readonly maxWaitSeconds?: number | undefined; readonly lookaheadSeconds?: number | undefined; readonly profitMargin?: number | undefined; readonly unpricedAtMaximumPays?: boolean | undefined };
 
 /** The minimum interval a level names: `minIntervalSeconds`, else its deprecated alias `maxWaitSeconds`. */
-const intervalOf = (level: BatchLevel | undefined) => level?.minIntervalSeconds ?? level?.maxWaitSeconds;
+export const intervalOf = (level: BatchLevel | undefined) => level?.minIntervalSeconds ?? level?.maxWaitSeconds;
 
 /**
  * The rule of one direction: the direction's own fields beat its pair's, the pair's beat the global ones of `watch`.

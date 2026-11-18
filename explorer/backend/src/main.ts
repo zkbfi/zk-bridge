@@ -7,7 +7,8 @@ import type { Pair } from "@zk-bridge/shared";
 import { endpointKeyVariables, executeCommand, type CommandExecutor } from "@zk-bridge/shared/prover";
 import { grindPreflight, type PreflightResult } from "@zk-bridge/shared/msgboard";
 import { createApp } from "./app.ts";
-import { BackendConfigError, MODULE_NAMES, endpointSecrets, loadBackendPair, parseBackendConfig, readSecrets, remoteEndpoints, warmupTarget, type BackendConfig, type ModuleName } from "./config.ts";
+import { logGpuLimits } from "./gpu-limits.ts";
+import { BackendConfigError, gpuLimitsOf, MODULE_NAMES, endpointSecrets, loadBackendPair, parseBackendConfig, readSecrets, remoteEndpoints, warmupTarget, type BackendConfig, type ModuleName } from "./config.ts";
 import { createLogger, type Logger } from "./logger.ts";
 import type { BackendModuleContext, ModuleTable } from "./module.ts";
 import * as archive from "./archive/module.ts";
@@ -124,6 +125,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
     logger,
   });
   const pingProver = createProverPing({ ...warmupTarget(config, secrets), timeoutMilliseconds: config.watch.warmup.pingTimeoutSeconds * 1000 });
+  logGpuLimits(logger, gpuLimitsOf(config));
   const runpodEndpoints = billingEndpoints(config, secrets);
   const billing = runpodEndpoints.length === 0 ? undefined : createBillingReader({ endpoints: runpodEndpoints, now, logger, ttlMilliseconds: config.billing.refreshSeconds * 1000, retryMilliseconds: config.billing.retrySeconds * 1000 });
   const idleHistory = createIdleHistory(storage);

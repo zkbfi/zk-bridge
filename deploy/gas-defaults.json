@@ -1,3 +1,11 @@
 {
-  "backendStartDeliveryGas": 500000
+  "backendStartDeliveryGas": 500000,
+  "worstCaseDeliveryGas": 11428828,
+  "worstCaseDeliveryGasMeasuredBy": "test/hardened/BridgeWorld.t.sol: the at-cap delivery (a callback that burns MAX_CALL_GAS = 10,000,000 through the real bridge), gas of execution without the transaction",
+  "chains": {
+    "1": { "maxTransactionGas": 16777216 },
+    "11155111": { "maxTransactionGas": 16777216 },
+    "369": { "maxTransactionGas": 16777216 },
+    "943": { "maxTransactionGas": 16777216 }
+  }
 }

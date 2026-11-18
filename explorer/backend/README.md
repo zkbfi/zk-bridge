@@ -257,7 +257,7 @@ The job limits (owner, 2026-11-07: "yes to the job limit changes"):
 - `jobsPerDirectionPerDay`: a backstop of jobs that may pay for a proof, per direction, in any 24 hours. Default: the
   epochs per day of the direction's source chain (225 or 270). A job that found the chain up to date paid nothing and
   does not count.
-- `gpuBudgetUsdPerDirectionPerDay` (default 5): before a job starts, the spend of the direction's jobs proved in the
+- `gpuBudgetUsdPerDirectionPerDay` (default: derived from the pair's interval, `max(5, 24 x ceil(3600 / minIntervalSeconds) x gpuGuard.proofCostUsd x gpuGuard.headroom)`: 5 at 3600 s, 28.80 at 600 s; a value in the file wins and one below the derived figure logs `gpu_limits_below_interval` at start-up): before a job starts, the spend of the direction's jobs proved in the
   last 24 hours must be under it. The spend is each job's worker seconds (`worker_total_ms`, else `remote_ms`, else
   its start to its proof, plus the wait for a cold worker) at the configured GPU price `watch.warmup.gpuUsdPerHour`
   (RunPod's billing gives dollars and no billed time, so no rate can be measured from it). A spent budget
@@ -449,7 +449,10 @@ Settings, all optional (`watch` in the configuration file):
 | `gpuGuard.checkSeconds` | 300 | How often the guard reads the workers of each tier (`GET /v2/serverless/{id}/workers`, one request per tier). |
 | `gpuGuard.stuckMinutes` | 15 | A worker that is `RUNNING`, `INITIALIZING` or `UNHEALTHY` at every check for longer than this trips its tier. A proof takes 1 to 3 minutes. |
 | `gpuGuard.spendCheckSeconds` | 3600 | How often the guard reads the bill of the last 3 hours of each tier (`GET /v2/billing/serverless?serverlessId=...&bucketSize=hour`). |
-| `gpuGuard.maxUsdPerHour` | 0.5 | A completed hour billed above this trips its tier. Each hour is judged once. |
+| `gpuGuard.maxUsdPerHour` | derived | A completed hour billed above this trips its tier. Each hour is judged once. Left out, it is `max(0.5, 2 x ceil(3600 / minIntervalSeconds) x proofCostUsd x headroom)` of the pair in `pair` (its `watch.pairs.<pair>` interval, else the `watch` one; 0 counts as 60 s; no interval anywhere derives nothing and keeps 0.5): 0.5 at 3600 s, 2.40 at 600 s. The 2 is the two directions on one tier. A value in the file wins; if it is below the derived figure the backend logs `gpu_limits_below_interval` once at start-up and runs with it. The limits in force, each derived or set, are logged as `gpu_limits`. |
+| `gpuGuard.proofCostUsd` | 0.10 | What one proof costs, for the derived limits (about 0.06 measured on 2026-11-18, cold start included). |
+| `gpuGuard.headroom` | 2 | The multiplier of the derived limits for keep-alives, urgent proofs and a retry. |
+| `limits.gpuBudgetUsdPerDirectionPerDay` | derived | The 24 hour GPU budget of one direction in USD. Left out: `max(5, 24 x ceil(3600 / minIntervalSeconds) x proofCostUsd x headroom)`, so 5 at 3600 s and 28.80 at 600 s. A value in the file wins. |
 | `gpuGuard.cooldownMinutes` | 10 | How long a tripped tier stays at 0 workers before its workers are put back (only if it still reads `max: 0`). |
 | `gpuGuard.maxTripsPerDay` | 3 | The trip that makes this many in 24 hours is held: the tier stays at 0 until `deploy/runpod/apply.mjs --apply` sets its workers again. A held tier is read for its release only every `spendCheckSeconds`. |
 | `gpuGuard.backoffSeconds` | 900 | How long the guard leaves a tier alone after RunPod answers it 429 (its daily request limit), when the answer has no `Retry-After` (which is used instead, at most 3600 s). One `gpu_guard_rate_limited` warning per back-off. |
