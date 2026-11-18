@@ -53,6 +53,7 @@ import {
   latestDoneStepJob,
   latestStepJob,
   recentStepRequestsOfCaller,
+  UP_TO_DATE_REASON,
   type StepJobKind,
   type StepRow,
 } from "./store.ts";
@@ -210,10 +211,10 @@ export function createStepService(input: StepServiceInput): StepService {
   };
 
   /** Starts a row, or joins the one a concurrent request started (the unique index). */
-  const startRow = (kind: StepJobKind, subject: string, startSlot: number | null): { readonly id: string; readonly joined: boolean } => {
+  const startRow = (kind: StepJobKind, subject: string, startSlot: number | null, direction?: ProofDirection): { readonly id: string; readonly joined: boolean } => {
     const id = `step:${randomUUID()}`;
     try {
-      insertStepJob(storage, { id, kind, subject, at: now(), startSlot });
+      insertStepJob(storage, { id, kind, subject, at: now(), startSlot, ...(direction === undefined ? {} : { direction }) });
       logger.info("step_job_started", { jobId: id, kind, subject });
       return { id, joined: false };
     } catch {
@@ -225,8 +226,8 @@ export function createStepService(input: StepServiceInput): StepService {
    * Starts a job of a step and runs `work` in the background, or joins the job that a concurrent request started between
    * this request's checks and its insert.
    */
-  const startOrJoin = (request: StepSubmit, kind: StepJobKind, subject: string, startSlot: number | null, work: (id: string) => Promise<void>): StepRequestAnswer => {
-    const started = startRow(kind, subject, startSlot);
+  const startOrJoin = (request: StepSubmit, kind: StepJobKind, subject: string, startSlot: number | null, work: (id: string) => Promise<void>, direction?: ProofDirection): StepRequestAnswer => {
+    const started = startRow(kind, subject, startSlot, direction);
     if (started.joined) return accepted(request, started.id, { joined: true });
     track(started.id, work(started.id));
     return accepted(request, started.id);
@@ -276,7 +277,7 @@ export function createStepService(input: StepServiceInput): StepService {
       const started = { id };
       try {
         const outcome = await prover.proveFromHead({ direction, head: state.head, programKey: state.programKey });
-        if (outcome.kind === "up-to-date") return finish(started.id, "registry-light-client-update", { error: "the light client already holds the newest final header" });
+        if (outcome.kind === "up-to-date") return finish(started.id, "registry-light-client-update", { error: UP_TO_DATE_REASON });
         recordProveTiming(storage, { jobId: `registry-${started.id.slice(5)}`, direction, startedAt: at, provedAt: now(), timing: outcome.timing ?? null });
         const proven = outcome.proofPackage;
         const result = {
@@ -295,7 +296,7 @@ export function createStepService(input: StepServiceInput): StepService {
         logger.warn("step_prove_failed", { jobId: started.id, kind: request.kind, error });
         finish(started.id, "registry-light-client-update", { error: describeFailure(error) });
       }
-    });
+    }, direction);
   }
 
   async function forkObservation(request: StepSubmit): Promise<StepSubmitResult> {

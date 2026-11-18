@@ -1,4 +1,5 @@
 import { decodeFunctionData, parseAbi, toEventSelector, toFunctionSelector, type Hex } from "viem";
+import { ADDRESS, isObject } from "./values.ts";
 
 /**
  * The rules of rpc.zkb.fi for one JSON-RPC request (docs/rpc-proxy.md). A request passes when its method is served and
@@ -10,7 +11,8 @@ import { decodeFunctionData, parseAbi, toEventSelector, toFunctionSelector, type
  * - `eth_call` and `eth_estimateGas` go to a zkb.fi contract (any function), to Multicall3 (each inner call is checked by
  *   the same rule), or to any other address with a token read of the exact ABI length (`anyAddressFunctions`) or an
  *   `approve` of the exact length whose spender is a zkb.fi contract; gas at most `maxCallGas` (the cap is forwarded as the gas of a call that names none); no state or block override;
- * - every other served method passes as it is.
+ * - the other served methods the dapp uses pass only with the parameters of their own shape ({@link FIXED_SHAPES}); a
+ *   served method that has no such shape is refused, so a configured method never forwards parameters nobody checked.
  *
  * A request that passes is REBUILT from what was checked ({@link checkRequest}): a fresh `{ jsonrpc, id, method, params }`
  * whose call object or log filter holds only the known keys, so the node never reads a field the filter did not see (a
@@ -77,9 +79,12 @@ const APPROVE_SELECTOR = toFunctionSelector("approve(address,uint256)");
 /** `approve(address,uint256)`: the selector and two words. */
 const APPROVE_BYTES = 68;
 
-const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const HEX = /^0x(?:[0-9a-fA-F]{2})*$/;
 const QUANTITY = /^0x[0-9a-fA-F]{1,64}$/;
+const WORD = /^0x[0-9a-fA-F]{64}$/;
+/** A storage slot: a quantity (`0x0`) or a full 32-byte word. */
+const SLOT = /^0x(?:[0-9a-fA-F]{1,64})$/;
+const BLOCK_TAGS = new Set(["latest", "earliest", "pending", "safe", "finalized"]);
 
 /**
  * The selectors of function signatures such as `balanceOf(address)`, each with its exact calldata length: four bytes
@@ -94,8 +99,6 @@ export function selectorsOf(signatures: readonly string[]): ReadonlyMap<string, 
     }),
   );
 }
-
-const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 const short = (address: string): string => `${address.slice(0, 6)}…${address.slice(-4)}`;
 
@@ -132,17 +135,65 @@ export function checkRequest(request: JsonRpcRequest, rules: ChainRules): Checke
       return typeof outcome === "string" ? refused(outcome) : pass([outcome, ...params.slice(1)]);
     }
     case "eth_getProof":
-    case "eth_getStorageAt":
-      return isContract(params[0], rules) ? pass(params) : refused(`${request.method} reads only zkb.fi contracts of chain ${rules.chainId}`);
+    case "eth_getStorageAt": {
+      if (!isContract(params[0], rules)) return refused(`${request.method} reads only zkb.fi contracts of chain ${rules.chainId}`);
+      const rebuilt = request.method === "eth_getProof" ? proofParams(params) : storageParams(params);
+      return rebuilt === null ? refused(`${request.method} takes ${request.method === "eth_getProof" ? "[address, storage keys, block]" : "[address, slot, block]"}, each checked`) : pass(rebuilt);
+    }
     case "eth_call":
     case "eth_estimateGas": {
       const outcome = checkCall(request.method, params, rules);
       return typeof outcome === "string" ? refused(outcome) : pass([outcome, ...params.slice(1)]);
     }
-    default:
-      return pass(params);
+    default: {
+      const shape = FIXED_SHAPES[request.method];
+      if (shape === undefined) return refused(`${request.method} has no parameter rule here, so it is not forwarded`);
+      const rebuilt = shape(params);
+      return rebuilt === null ? refused(`${request.method} has parameters of the wrong shape`) : pass(rebuilt);
+    }
   }
 }
+
+/** A block tag (`latest`, ...) or a block number as a quantity. */
+const isBlock = (value: unknown): value is string => typeof value === "string" && (BLOCK_TAGS.has(value) || QUANTITY.test(value));
+
+/** `[address, storage keys, block]` with every field checked, or null. The address is checked by the caller. */
+function proofParams(params: readonly unknown[]): unknown[] | null {
+  const [address, keys, block] = params;
+  if (params.length !== 3 || !Array.isArray(keys) || !keys.every((key) => typeof key === "string" && WORD.test(key)) || !isBlock(block)) return null;
+  return [address, [...keys], block];
+}
+
+/** `[address, slot, block]` with every field checked, or null. The address is checked by the caller. */
+function storageParams(params: readonly unknown[]): unknown[] | null {
+  const [address, slot, block] = params;
+  if (params.length !== 3 || typeof slot !== "string" || !SLOT.test(slot) || !isBlock(block)) return null;
+  return [address, slot, block];
+}
+
+/** A rebuilder of the parameters of one method: the fresh array, or null when the given ones are not of that shape. */
+type Shape = (params: readonly unknown[]) => unknown[] | null;
+
+const noParams: Shape = (params) => (params.length === 0 ? [] : null);
+const addressAndBlock: Shape = ([address, block, ...rest]) => (rest.length === 0 && typeof address === "string" && ADDRESS.test(address) && isBlock(block) ? [address, block] : null);
+const oneHash: Shape = ([hash, ...rest]) => (rest.length === 0 && typeof hash === "string" && WORD.test(hash) ? [hash] : null);
+
+/**
+ * The parameters of the served methods that need no check of an address set, each rebuilt from checked fields. A method
+ * that the configuration serves but that is not here is refused ({@link checkRequest}).
+ */
+const FIXED_SHAPES: Readonly<Record<string, Shape>> = {
+  eth_chainId: noParams,
+  eth_blockNumber: noParams,
+  eth_gasPrice: noParams,
+  eth_maxPriorityFeePerGas: noParams,
+  eth_getBalance: addressAndBlock,
+  eth_getCode: addressAndBlock,
+  eth_getTransactionCount: addressAndBlock,
+  eth_getTransactionByHash: oneHash,
+  eth_getTransactionReceipt: oneHash,
+  eth_getBlockByNumber: ([block, full, ...rest]) => (rest.length === 0 && isBlock(block) && typeof full === "boolean" ? [block, full] : null),
+};
 
 /**
  * Checks one request.

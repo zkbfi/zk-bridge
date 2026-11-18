@@ -145,11 +145,22 @@ sync_once() {
     esac
   done
   # Last, so that it lists every manifest just fetched.
-  # shellcheck disable=SC2086
   mkdir -p "$LOCAL_DIR/trusted-manifests"
+  # The server's trusted copies are optional: an export that predates them leaves no directory, and verify() then falls back
+  # to manifests.sha256 alone. Only "the directory is not there" is let through; any other failure is fatal like the rest.
+  local err status=0
+  err=$(mktemp "$LOCAL_DIR/.rsync-err-XXXXXX")
+  TMP_FILES+=("$err")
   # shellcheck disable=SC2086
-  $RSYNC -rt --ignore-existing --delete ${lock[@]+"${lock[@]}"} -e "$SSH $SSH_OPTS" "$HOST:$REMOTE_TRUSTED_MANIFESTS/" "$LOCAL_DIR/trusted-manifests/" \
-    || { log "rsync of trusted-manifests from $HOST failed"; return 1; }
+  $RSYNC -rt --ignore-existing --delete ${lock[@]+"${lock[@]}"} -e "$SSH $SSH_OPTS" "$HOST:$REMOTE_TRUSTED_MANIFESTS/" "$LOCAL_DIR/trusted-manifests/" 2>"$err" || status=$?
+  cat "$err" >&2
+  if [ "$status" -eq 23 ] && grep -q 'No such file or directory' "$err"; then
+    log "the server has no trusted-manifests directory; trusted copies are skipped"
+    rm -f "$LOCAL_DIR"/trusted-manifests/*
+  elif [ "$status" -ne 0 ]; then
+    log "rsync of trusted-manifests from $HOST failed"
+    return 1
+  fi
   # shellcheck disable=SC2086
   $RSYNC -t ${lock[@]+"${lock[@]}"} -e "$SSH $SSH_OPTS" "$HOST:$REMOTE_TRUST" "$LOCAL_DIR/manifests.sha256" || { log "rsync of manifests.sha256 from $HOST failed"; return 1; }
 }
@@ -260,7 +271,7 @@ main() {
   fi
   echo $$ >"$run_lock/pid"
   TMP_FILES+=("$run_lock")
-  rm -f "$LOCAL_DIR"/.check-* "$LOCAL_DIR"/.listed-*
+  rm -f "$LOCAL_DIR"/.check-* "$LOCAL_DIR"/.listed-* "$LOCAL_DIR"/.checker-* "$LOCAL_DIR"/.rsync-err-*
 
   log "pulling the mirror from $HOST"
   sync_once || die "the pull from $HOST failed"

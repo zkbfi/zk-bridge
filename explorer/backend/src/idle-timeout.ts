@@ -8,7 +8,8 @@
  * logged and the last value stays; a RunPod error answer (RFC 9457) is logged with its title and detail. The key travels in
  * the Authorization header only, and no log line holds it.
  */
-import { RUNPOD_REST_URL, problemText, type BillingEndpoint } from "./billing.ts";
+import type { BillingEndpoint } from "./billing.ts";
+import { RUNPOD_REST_URL, reasonOf, runPodRequest } from "./runpod-rest.ts";
 import type { Logger } from "./logger.ts";
 
 /** The longest wait for one RunPod answer, in milliseconds. */
@@ -21,12 +22,6 @@ export interface IdleTimeoutReader {
   start(intervalMilliseconds: number): { stop(): Promise<void> };
   /** What RunPod reports for the first endpoint (the one that gets the warm-up pings), after the last read; null while unknown. */
   endpointIdleTimeoutSeconds(): number | null;
-}
-
-/** The text of a failure: our own message, or the name of a network error. It never holds the key. */
-function reasonOf(error: unknown): string {
-  const { name, message } = error as Error;
-  return name === "Error" ? message : name;
 }
 
 export function createIdleTimeoutReader(input: {
@@ -47,15 +42,7 @@ export function createIdleTimeoutReader(input: {
 
   /** `workers.idleTimeout` of one endpoint, in seconds. @throws Error with the reason when it cannot be read. */
   async function readOne(endpoint: BillingEndpoint): Promise<number> {
-    const answer = await doFetch()(`${base}/serverless/${encodeURIComponent(endpoint.id)}`, {
-      headers: { authorization: `Bearer ${endpoint.apiKey}`, accept: "application/json" },
-      signal: AbortSignal.timeout(timeout),
-    });
-    const body: unknown = await answer.json().catch(() => null);
-    if (!answer.ok) {
-      const problem = problemText(body);
-      throw new Error(`RunPod answered ${answer.status}${problem === null ? "" : `: ${problem}`}`);
-    }
+    const body = await runPodRequest(doFetch(), `${base}/serverless/${encodeURIComponent(endpoint.id)}`, { apiKey: endpoint.apiKey, timeoutMilliseconds: timeout });
     const seconds = (body as { workers?: { idleTimeout?: unknown } | null } | null)?.workers?.idleTimeout;
     if (typeof seconds !== "number" || !Number.isFinite(seconds)) throw new Error("the endpoint has no idleTimeout");
     return seconds;

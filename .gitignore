@@ -8,3 +8,6 @@ script/hardened/e2e.config.json
 e2e/state/
 .superpowers/
 __pycache__/
+
+# Ansible collections that ansible-galaxy installs (deploy/ansible/requirements.yml); never committed
+deploy/ansible/.ansible/

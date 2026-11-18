@@ -1,5 +1,6 @@
 import type { ProofDirection } from "@zk-bridge/shared";
 import type { Storage } from "../storage.ts";
+import { UP_TO_DATE_REASON } from "../steps/store.ts";
 
 /** The life of a job. `queued` and `proving` are the active states: at most one job per direction is active. */
 export type JobStatus = "queued" | "proving" | "published" | "on-chain" | "failed";
@@ -128,8 +129,11 @@ export function lastJobTargetSlot(storage: Storage, direction: ProofDirection): 
  * The worker seconds of each job of the direction whose proof came back (or that failed) after `since`: the request on the worker
  * (`worker_total_ms`, else `remote_ms`, else from the job's start to its proof) and, for a job that met a cold worker,
  * its wait for the worker. A job that failed without a timing row (the prover errored, or ran past its limit) is
- * charged from its creation to its failure: the jobs table keeps no later start, so the queue wait is counted too, which
- * errs on the side of the budget. They price the GPU budget.
+ * charged from its creation to its failure: the jobs table keeps no later start (a status change overwrites
+ * `updated_at`, and no other column records when the job went to the prover), so the queue wait is counted too, which
+ * errs on the side of the budget. A fork registry's light client update that failed (a `step_jobs` row with its
+ * direction, run by the step service under the same budget) is charged from its start, which is taken just before the
+ * prover is called, to its failure; one that found the chain up to date ran no GPU and is left out. They price the GPU budget.
  */
 export function recentJobSeconds(storage: Storage, direction: ProofDirection, since: number): Array<{ provedAt: number; seconds: number }> {
   type Row = { proved_at: number; started_at: number | null; worker_total_ms: number | null; remote_ms: number | null; wait_worker_ms: number | null; not_ready_count: number | null };
@@ -139,7 +143,16 @@ export function recentJobSeconds(storage: Storage, direction: ProofDirection, si
   const failed = storage.database
     .prepare("SELECT updated_at, created_at FROM jobs WHERE direction = ? AND status = 'failed' AND updated_at > ? AND id NOT IN (SELECT job_id FROM job_timings)")
     .all(direction, since) as Array<{ updated_at: number; created_at: number }>;
-  const charged = failed.map((row) => ({ provedAt: row.updated_at, seconds: Math.max(0, row.updated_at - row.created_at) / 1000 }));
+  const failedSteps = storage.database
+    .prepare(
+      `SELECT updated_at, started_at FROM step_jobs WHERE direction = ? AND status = 'failed' AND updated_at > ? AND error IS NOT ?
+         AND NOT EXISTS (SELECT 1 FROM job_timings WHERE job_id = 'registry-' || substr(step_jobs.id, 6))`,
+    )
+    .all(direction, since, UP_TO_DATE_REASON) as Array<{ updated_at: number; started_at: number }>;
+  const charged = [
+    ...failed.map((row) => ({ provedAt: row.updated_at, seconds: Math.max(0, row.updated_at - row.created_at) / 1000 })),
+    ...failedSteps.map((row) => ({ provedAt: row.updated_at, seconds: Math.max(0, row.updated_at - row.started_at) / 1000 })),
+  ];
   return [...rows.map((row) => {
     const request = row.worker_total_ms ?? row.remote_ms ?? row.proved_at - (row.started_at ?? row.proved_at);
     const startUp = (row.not_ready_count ?? 0) > 0 ? (row.wait_worker_ms ?? 0) : 0;

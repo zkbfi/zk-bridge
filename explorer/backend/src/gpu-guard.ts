@@ -15,11 +15,16 @@
  * restore, release and hold and read when the guard is created. A restart in a cool-down continues it, a hold stays,
  * and the trips keep counting. A failed write is logged and does not stop the guard.
  *
- * Every call goes to REST v2. It never throws and never blocks start-up; a failed read or write of one tier is logged
+ * RunPod limits requests per day. A held tier is read for its release only every `spendCheckSeconds`. A 429 answer puts the
+ * tier in back-off: no call (worker check, spend check, release) for its `Retry-After` (at most an hour) or else
+ * `backoffSeconds`, with one `gpu_guard_rate_limited` warning per back-off. The back-off is kept in memory only.
+ *
+ * Every call goes to REST v2 (`runpod-rest.ts`). It never throws and never blocks start-up; a failed read or write of one tier is logged
  * and retried at the next check, and does not stop the other tiers. A tier is never marked tripped unless the PATCH
  * worked. The key travels in the Authorization header only, and no log line holds it.
  */
-import { RUNPOD_REST_URL, problemText, type BillingEndpoint } from "./billing.ts";
+import type { BillingEndpoint } from "./billing.ts";
+import { RUNPOD_REST_URL, RunPodRequestError, reasonOf, runPodRequest } from "./runpod-rest.ts";
 import type { Logger } from "./logger.ts";
 import type { Storage } from "./storage.ts";
 
@@ -35,6 +40,8 @@ export type GpuGuardSettings = {
   readonly maxUsdPerHour: number;
   readonly cooldownMinutes: number;
   readonly maxTripsPerDay: number;
+  /** How long a tier is left alone after RunPod answered it 429 (request limit), when RunPod names no `Retry-After`. */
+  readonly backoffSeconds: number;
 };
 
 /** The state of one tier, for the private billing figures. */
@@ -73,6 +80,10 @@ type Tier = {
   /** Set when the guard changed the endpoint: what to put back, and when. */
   zeroed: { workers: Workers; restoreAt: number } | null;
   held: boolean;
+  /** When a held tier's endpoint was last read for a release (0: never since the start). Not kept across restarts. */
+  heldCheckedAt: number;
+  /** No call goes to RunPod for this tier before this time, after a 429. Not kept across restarts. */
+  backoffUntil: number;
   trips: number[];
   last: { at: number; signal: Signal; evidence: string } | null;
 };
@@ -87,11 +98,8 @@ type SavedTier = Pick<Tier, "zeroed" | "held" | "trips" | "last"> & { judged?: s
 const DAY_MILLISECONDS = 86_400_000;
 const HOUR_MILLISECONDS = 3_600_000;
 
-/** The text of a failure: our own message, or the name of a network error. It never holds the key. */
-function reasonOf(error: unknown): string {
-  const { name, message } = error as Error;
-  return name === "Error" ? message : name;
-}
+/** The longest back-off a `Retry-After` can set, in seconds: a tier is probed at least once an hour. */
+const MAX_BACKOFF_SECONDS = 3600;
 
 export function createGpuGuard(input: {
   endpoints: readonly BillingEndpoint[];
@@ -116,6 +124,8 @@ export function createGpuGuard(input: {
     judged: new Set(),
     zeroed: null,
     held: false,
+    heldCheckedAt: 0,
+    backoffUntil: 0,
     trips: [],
     last: null,
   }));
@@ -155,21 +165,9 @@ export function createGpuGuard(input: {
   }
   load();
 
-  /** One request to RunPod. @throws Error with the reason (and RunPod's problem text) when it does not answer 2xx. */
-  async function call(tier: Tier, path: string, init: { method?: "PATCH"; body?: unknown } = {}): Promise<unknown> {
-    const answer = await doFetch()(`${base}${path}`, {
-      method: init.method ?? "GET",
-      headers: { authorization: `Bearer ${tier.endpoint.apiKey}`, accept: "application/json", ...(init.body === undefined ? {} : { "content-type": "application/json" }) },
-      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
-      signal: AbortSignal.timeout(timeout),
-    });
-    const body: unknown = await answer.json().catch(() => null);
-    if (!answer.ok) {
-      const problem = problemText(body);
-      throw new Error(`RunPod answered ${answer.status}${problem === null ? "" : `: ${problem}`}`);
-    }
-    return body;
-  }
+  /** One request to RunPod. @throws RunPodRequestError (a 429 included) or the error of `fetch`. */
+  const call = (tier: Tier, path: string, init: { method?: "PATCH"; body?: unknown } = {}): Promise<unknown> =>
+    runPodRequest(doFetch(), `${base}${path}`, { apiKey: tier.endpoint.apiKey, timeoutMilliseconds: timeout, ...init });
 
   const endpointPath = (tier: Tier) => `/serverless/${encodeURIComponent(tier.endpoint.id)}`;
 
@@ -197,6 +195,7 @@ export function createGpuGuard(input: {
     logger.error("gpu_guard_tripped", { tier: tier.name, endpointId: tier.endpoint.id.slice(0, 6), signal, evidence, tripsLast24h: tier.trips.length });
     if (tier.trips.length >= settings.maxTripsPerDay) {
       tier.held = true;
+      tier.heldCheckedAt = at;
       logger.error("gpu_guard_held", { tier: tier.name, endpointId: tier.endpoint.id.slice(0, 6), tripsLast24h: tier.trips.length, detail: "not restored; run deploy/runpod/apply.mjs --apply to set the workers again" });
     }
     save(tier);
@@ -205,6 +204,11 @@ export function createGpuGuard(input: {
   /** The work on a tier the guard stopped: release a hold the owner lifted, or put the workers back after the cool-down. */
   async function settle(tier: Tier, zeroed: NonNullable<Tier["zeroed"]>): Promise<void> {
     if (!tier.held && input.now() < zeroed.restoreAt) return;
+    // A held tier waits for the owner, who is slow: look at it on the spend interval, not at every worker check.
+    if (tier.held) {
+      if (input.now() < tier.heldCheckedAt + settings.spendCheckSeconds * 1000) return;
+      tier.heldCheckedAt = input.now();
+    }
     const live = await readWorkers(tier);
     const endpointId = tier.endpoint.id.slice(0, 6);
     if (live.max > 0) {
@@ -239,11 +243,24 @@ export function createGpuGuard(input: {
     return stuck;
   }
 
+  /**
+   * Runs one check of a tier and logs a failure. A tier in back-off is not called at all. A 429 starts a back-off (the
+   * `Retry-After` of RunPod, at most an hour, else `backoffSeconds`) and logs one `gpu_guard_rate_limited`, not the
+   * ordinary failure line; the calls skipped during the back-off log nothing.
+   */
   async function guarded(tier: Tier, work: () => Promise<void>, event: string): Promise<void> {
+    if (input.now() < tier.backoffUntil) return;
     try {
       await work();
     } catch (error) {
-      logger.warn(event, { tier: tier.name, endpointId: tier.endpoint.id.slice(0, 6), reason: reasonOf(error) });
+      const endpointId = tier.endpoint.id.slice(0, 6);
+      if (error instanceof RunPodRequestError && error.status === 429) {
+        const backoffSeconds = Math.min(error.retryAfterSeconds ?? settings.backoffSeconds, MAX_BACKOFF_SECONDS);
+        tier.backoffUntil = input.now() + backoffSeconds * 1000;
+        logger.warn("gpu_guard_rate_limited", { tier: tier.name, endpointId, backoffSeconds, detail: "RunPod's request limit is reached; no call for this tier until the back-off ends" });
+        return;
+      }
+      logger.warn(event, { tier: tier.name, endpointId, reason: reasonOf(error) });
     }
   }
 

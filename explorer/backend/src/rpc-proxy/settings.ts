@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ADDRESS } from "./values.ts";
 
 /**
  * The settings of the `rpc-proxy` module: the filter in front of eRPC that serves `https://rpc.zkb.fi/<chainId>`
@@ -78,7 +79,7 @@ export const PULSECHAIN_PRICE_CONTRACTS: readonly string[] = [
   "0x4fD0aaa7506f3d9cB8274bdB946Ec42A1b8751Ef",
 ];
 
-const address = z.string().regex(/^0x[0-9a-fA-F]{40}$/, "must be an address (0x and 40 hex digits)");
+const address = z.string().regex(ADDRESS, "must be an address (0x and 40 hex digits)");
 const STATIC_TYPE = "(?:address|bool|u?int(?:8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)?|bytes(?:[1-9]|[12][0-9]|3[0-2]))";
 /** A function with static arguments only, so its calldata has one exact length (the filter checks it). */
 const functionSignature = z.string().regex(new RegExp(`^[A-Za-z_][A-Za-z0-9_]*\\((?:${STATIC_TYPE}(?:,${STATIC_TYPE})*)?\\)$`), "must be a function signature with static arguments, such as balanceOf(address)");
