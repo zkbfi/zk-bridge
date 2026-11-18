@@ -646,6 +646,51 @@ contract TokenMediatorTest is MediatorFixture {
         assertEq(ambA.sentCount(), 0);
     }
 
+    /// Claim: `relayTokensAndCall` refuses a callback gas above `MAX_CALLBACK_GAS`, and takes the maximum itself.
+    /// Shows: one above the maximum reverts with `CallbackGasTooHigh` and the two numbers, sends no message and leaves
+    /// the tokens with the sender; the maximum sends a message that carries it. Matters: a callback gas that no
+    /// transaction can give (EIP-7825 caps one at 16,777,216) would leave a message that no one can ever deliver, after
+    /// the tokens were locked or burned.
+    function test_relayTokensAndCallRefusesACallbackGasAboveTheMaximum() public {
+        uint256 maximum = mediatorA.MAX_CALLBACK_GAS();
+        assertEq(maximum, 10_468_731, "the figure of the frontends (MAX_CALLBACK_GAS of @zkb/core)");
+        uint256 held = tokenA.balanceOf(alice);
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.CallbackGasTooHigh.selector, maximum + 1, maximum));
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, "x", maximum + 1);
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(TokenMediator.CallbackGasTooHigh.selector, type(uint256).max, maximum)
+        );
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, "x", type(uint256).max);
+        assertEq(ambA.sentCount(), 0, "a refused relay sends nothing");
+        assertEq(tokenA.balanceOf(alice), held, "and takes nothing");
+
+        vm.prank(alice);
+        mediatorA.relayTokensAndCall(address(tokenA), bob, 1 ether, "x", maximum);
+        bytes memory data = ambA.messageAt(0).data;
+        uint256 gasWord;
+        assembly {
+            gasWord := mload(add(data, add(36, mul(7, 32))))
+        }
+        assertEq(gasWord, maximum, "the maximum is carried");
+    }
+
+    /// Claim: ERC-677 data whose gas word is above `MAX_CALLBACK_GAS` is refused, for a bridged copy too. Shows: the
+    /// revert names the gas word and the maximum, and no message is sent. Matters: `transferAndCall` reaches the same
+    /// check as `relayTokensAndCall`, so neither entry can lock or burn tokens for a message that cannot be delivered.
+    function test_onTokenTransferRefusesACallbackGasAboveTheMaximum() public {
+        _bridgeAtoB(alice, address(tokenA), bob, 100 ether);
+        BridgedToken copy = BridgedToken(_copyOf(address(tokenA)));
+        uint256 maximum = mediatorB.MAX_CALLBACK_GAS();
+        vm.prank(bob);
+        copy.transfer(address(mediatorB), 1 ether);
+        vm.prank(address(copy));
+        vm.expectRevert(abi.encodeWithSelector(TokenMediator.CallbackGasTooHigh.selector, maximum + 1, maximum));
+        mediatorB.onTokenTransfer(bob, 1 ether, abi.encodePacked(carol, maximum + 1, hex"01"));
+        assertEq(ambB.sentCount(), 0, "no message");
+    }
+
     function test_onTokenTransferWithNoReceiverSendsToTheSender() public {
         _bridgeAtoB(alice, address(tokenA), bob, 100 ether);
         BridgedToken copy = BridgedToken(_copyOf(address(tokenA)));

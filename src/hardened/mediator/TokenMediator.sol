@@ -10,7 +10,13 @@ import {ITokenMediator} from "./ITokenMediator.sol";
 import {IBurnableMintableERC677Token} from "./IBurnableMintableERC677Token.sol";
 import {IERC20Receiver} from "./IERC20Receiver.sol";
 import {TokenFactory} from "./TokenFactory.sol";
-import {MediatorPayloads, IMediatorHandlers, COPY_NAME_CONNECTOR, COPY_SYMBOL_PREFIX} from "./MediatorPayloads.sol";
+import {
+    MediatorPayloads,
+    IMediatorHandlers,
+    COPY_NAME_CONNECTOR,
+    COPY_SYMBOL_PREFIX,
+    CALLBACK_GAS_MAXIMUM
+} from "./MediatorPayloads.sol";
 import {ExactGasCall} from "./ExactGasCall.sol";
 
 /// @title TokenMediator
@@ -58,7 +64,8 @@ import {ExactGasCall} from "./ExactGasCall.sol";
 /// brings, and an executor that brings too little only loses its own transaction. The one gas number is the gas of the
 /// callback: a sender of a relay with a call states `callbackGas`, the message carries it, and the handler on the other
 /// chain calls `onTokenBridged` with exactly that gas (see `ExactGasCall`). The gas guarantee is the same for every
-/// receiver contract: the mediator knows no router.
+/// receiver contract: the mediator knows no router. A send refuses a callback gas above `MAX_CALLBACK_GAS`, the most
+/// that one transaction can give with the delivery around it, so every message that it sends can be delivered.
 ///
 /// Divergences from OmniBridge. The handlers also check `messageSourceChainId`. `deploy` takes the native token.
 /// Tokens are not registered by an owner. There are no limits, no failed message fix and no claim of stray tokens.
@@ -115,6 +122,24 @@ contract TokenMediator is ITokenMediator, IMediatorHandlers, ReentrancyGuard {
     /// return to the bridge. A delivery must have the gas of the callback, its 63/64 share and this reserve.
     uint256 public constant CALLBACK_GAS_RESERVE = 10_000;
 
+    /// @notice The largest callback gas that a relay with a call may state: 10,468,731. A send above it reverts with
+    /// `CallbackGasTooHigh`, so that every message stays deliverable: a callback gas that no transaction can give would
+    /// leave the tokens locked or burned on this chain and the message undeliverable for good.
+    /// @dev The figure is the one that the frontends use (`MAX_CALLBACK_GAS` of the explorer core): the 300,000 gas of
+    /// a router's own work, a follow-up call of 10,000,000, its 63/64 share (158,731, rounded up) and the router's
+    /// reserve of 10,000. It fits one transaction under the cap of EIP-7825 (16,777,216 gas) with a whole delivery
+    /// around it. Measured (`BridgeWorld.t.sol`, `test_theLargestCallbackIsDeliveredUnderTheTransactionGasCap`): with a
+    /// call that burns its 10,000,000 gas, the delivery through the router and the real bridge needs 11,422,556 gas of
+    /// execution; with 21,000 for the transaction, 50,144 for the calldata of the proof and 100,000 of room for the
+    /// historical proof path, 11,593,700 gas, which leaves 5,183,516. The delivery adds the 63/64 share of each call
+    /// frame (router, bridge, mediator), `CALLBACK_GAS_RESERVE`, the proof check (about 323,000 to 353,000 gas) and the
+    /// release. The first message of a token also deploys its copy. On a chain that charges the standard 200 gas per
+    /// byte of code that takes about 1,000,000 gas and fits; on Sepolia, which charges about 1,600 gas per byte, it
+    /// takes about 7,000,000, and a first message with a callback gas above about 8,500,000 does not fit one
+    /// transaction there. That message waits, and is delivered once the copy exists: any first message of the same
+    /// token (a plain relay does) deploys it, and the deploy step of a later message then only reads the copy.
+    uint256 public constant MAX_CALLBACK_GAS = CALLBACK_GAS_MAXIMUM;
+
     /// @notice The text between the name of a native token and the name of its home chain, in the name of a bridged
     /// copy. The copy of `Wrapped Ether` from Ethereum is `Wrapped Ether from Ethereum`.
     string public constant NAME_CONNECTOR = COPY_NAME_CONNECTOR;
@@ -134,6 +159,8 @@ contract TokenMediator is ITokenMediator, IMediatorHandlers, ReentrancyGuard {
     error FactoryOfAnotherMediator(address mediator);
     /// @notice A relay with a call states no gas for the callback. There is no default.
     error ZeroCallbackGas();
+    /// @notice A relay states a callback gas above `MAX_CALLBACK_GAS`, which no delivery can give.
+    error CallbackGasTooHigh(uint256 callbackGas, uint256 maximum);
     /// @notice The ERC-677 data is longer than a receiver and shorter than a receiver and the callback gas.
     error MalformedTransferData(uint256 length);
     /// @notice A token, the copy or the flow limiter failed after it used up the gas that it got during a release. The
@@ -245,9 +272,10 @@ contract TokenMediator is ITokenMediator, IMediatorHandlers, ReentrancyGuard {
     /// @notice Relays tokens to `receiver` and calls `onTokenBridged(token, value, data)` on it with exactly
     /// `callbackGas`, even when `data` is empty, as OmniBridge calls. New: the gas of the callback is the sender's, and
     /// there is no default.
-    /// @dev On the other chain, a delivery that cannot give the callback `callbackGas` (63/64 rule included) reverts and
-    /// can run again with more gas. A callback that fails with that gas emits `CallbackFailed`, and the tokens stay
-    /// with `receiver`. A `callbackGas` of zero reverts with `ZeroCallbackGas`.
+    /// @dev On the other chain, a delivery that cannot give the callback `callbackGas` (63/64 rule included) reverts
+    /// and can run again with more gas. A callback that fails with that gas emits `CallbackFailed`, and the tokens stay
+    /// with `receiver`. A `callbackGas` of zero reverts with `ZeroCallbackGas`, and one above `MAX_CALLBACK_GAS` with
+    /// `CallbackGasTooHigh`.
     /// @param callbackGas The gas that `onTokenBridged` gets on the other chain.
     function relayTokensAndCall(
         address token,

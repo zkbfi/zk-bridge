@@ -128,6 +128,8 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     /// @notice The call to the target failed and returned no error of its own (for example, it ran out of gas). The
     /// message stays `NotDelivered`.
     error TargetCallFailed(bytes32 messageId);
+    /// @notice The chain identifier of the deployment does not fit the 64 bits that the message format gives it.
+    error LocalChainIdTooLarge(uint256 chainId);
 
     /// @notice The identifier of this chain: `block.chainid` at deployment.
     uint64 public immutable localChainId;
@@ -180,7 +182,7 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
         if (remoteBridge_ == address(0)) revert ZeroValue("remoteBridge");
         if (depositGate_ == address(0)) revert ZeroValue("depositGate");
         if (bridgeTerms.remoteLightClient == address(0)) revert ZeroValue("remoteLightClient");
-        uint64 localChainId_ = uint64(block.chainid);
+        uint64 localChainId_ = _toLocalChainId(block.chainid);
         if (remoteChainId_ == localChainId_) revert RemoteChainIsLocalChain();
 
         localChainId = localChainId_;
@@ -189,6 +191,13 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
         sendCutoffTimestamp = bridgeTerms.cutoffTimestamp;
         depositGate = IDepositGate(depositGate_);
         messageIdPrefix = AmbMessageCodec.messageIdPrefix(localChainId_, address(this));
+    }
+
+    /// @dev `block.chainid` as the local chain identifier of the messages, which hold it in 64 bits. A larger
+    /// identifier is refused rather than cut, because a cut identifier names another chain.
+    function _toLocalChainId(uint256 chainId) internal pure returns (uint64) {
+        if (chainId > type(uint64).max) revert LocalChainIdTooLarge(chainId);
+        return uint64(chainId);
     }
 
     // ------------------------------------------------------------------ sending

@@ -12,6 +12,7 @@ import {DeliveryRouter} from "../../src/hardened/mediator/DeliveryRouter.sol";
 import {ITokenMediator} from "../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 import {MockWrappedNative} from "./mediator/utils/MediatorSupport.sol";
+import {CallBurner} from "./mediator/utils/CallTargets.sol";
 import {WorldSupport} from "./utils/WorldSupport.sol";
 
 /// @notice An application on chain A. It sends one message through the bridge, so the sender that the bridge records is
@@ -516,6 +517,84 @@ contract BridgeWorldTest is WorldSupport {
         emit log_named_uint("gas of the receipt", receiptGas);
         emit log_named_uint("calldata bytes", abi.encodeCall(DeliveryRouter.executeMessage, (transit.proof)).length);
         assertLt(receiptGas, EXPLORER_DEFAULT_DELIVERY_GAS, "the default of the explorer covers the first delivery");
+    }
+
+    /// @dev The per-transaction gas cap of EIP-7825.
+    uint256 internal constant TRANSACTION_GAS_CAP = 16_777_216;
+    /// @dev What the historical proof path adds to a delivery of the recent path, with room: 30,175 gas of execution
+    /// (`MessageBridgeGas.t.sol`: 353,009 against 322,834) and the calldata of a longer ancestry branch (45 siblings of
+    /// 32 bytes, 23,040 gas at 16 gas a byte).
+    uint256 internal constant HISTORICAL_PATH_ROOM = 100_000;
+
+    /// Claim: the largest callback gas that the mediator lets a sender state (`MAX_CALLBACK_GAS`), carrying the largest
+    /// call of the router (`MAX_CALL_GAS`) to a target that burns all of it, is delivered through the real bridge
+    /// within one transaction under the gas cap of EIP-7825, with room. Shows: the least gas with which
+    /// `executeMessage` of the router succeeds, plus the 21,000 of a transaction, the calldata of the proof and the
+    /// room of the historical path, is below 16,777,216; the figures are logged; a run with that least gas delivers,
+    /// pays the recipient and records the failed call. Matters: the mediator refuses a callback gas above the maximum
+    /// so that every message it sends stays deliverable; the maximum must therefore fit a whole delivery in one
+    /// transaction.
+    /// @dev The copy of the token exists before the measured message, as for every message but the first of a token.
+    /// The first message of a token also deploys its copy: about 1,000,000 gas on the local EVM and about 7,000,000 on
+    /// Sepolia (`docs/testnet-run.md`), which a maximal callback leaves no room for on Sepolia. That message waits
+    /// until the copy exists: any first message of the token deploys it, and then the deploy step costs a read.
+    function test_theLargestCallbackIsDeliveredUnderTheTransactionGasCap() public {
+        DeliveryRouter router = new DeliveryRouter(
+            ITokenMediator(address(mediatorB)),
+            IWETH(address(new MockWrappedNative())),
+            makeAddr("reward address of the largest call"),
+            makeAddr("failed delivery address of the largest call")
+        );
+        (Vm.Log[] memory first,) = _relayFromA(alice, receiverOnB, 100 ether);
+        _deliverToB(first);
+
+        address recipient = makeAddr("recipient of the largest call");
+        bytes memory data = bytes.concat(
+            abi.encode(DeliveryRouter.FeeDirector(recipient, router.FIXED_FEE(), 1 ether, 0, router.MAX_CALL_GAS())),
+            abi.encodePacked(address(new CallBurner())),
+            hex"01"
+        );
+        uint256 callbackGas = mediatorA.MAX_CALLBACK_GAS();
+        vm.chainId(CHAIN_A);
+        vm.recordLogs();
+        vm.prank(alice);
+        mediatorA.relayTokensAndCall(address(nativeToken), address(router), 100 ether, data, callbackGas);
+        Transit memory transit = _proveForB(vm.getRecordedLogs());
+        vm.chainId(CHAIN_B);
+
+        bytes memory callData = abi.encodeCall(DeliveryRouter.executeMessage, (transit.proof));
+        uint256 calldataGas;
+        for (uint256 i = 0; i < callData.length; i++) {
+            calldataGas += callData[i] == 0 ? 4 : 16;
+        }
+        uint256 least = _leastGasThatDelivers(address(router), callData);
+        uint256 transactionGas = least + 21_000 + calldataGas + HISTORICAL_PATH_ROOM;
+        emit log_named_uint("largest callback: least gas of executeMessage of the router", least);
+        emit log_named_uint("largest callback: calldata gas of the proof", calldataGas);
+        emit log_named_uint("largest callback: transaction gas with the room of the historical path", transactionGas);
+        emit log_named_uint("largest callback: room under the cap of EIP-7825", TRANSACTION_GAS_CAP - transactionGas);
+        assertLt(transactionGas, TRANSACTION_GAS_CAP, "a delivery with the largest callback fits one transaction");
+
+        (bool delivered,) = address(router).call{gas: least}(callData);
+        assertTrue(delivered, "the least gas delivers");
+        assertTrue(bridgeB.messageCallStatus(transit.messageId), "the message executed");
+        address copy = mediatorB.bridgedTokenAddress(address(nativeToken));
+        assertEq(BridgedToken(copy).balanceOf(recipient), 99 ether, "the recipient is paid after the tip");
+    }
+
+    /// @dev The least gas with which a call of `callData` to `target` succeeds. Found by bisection.
+    function _leastGasThatDelivers(address target, bytes memory callData) internal returns (uint256) {
+        uint256 low = 10_000_000;
+        uint256 high = TRANSACTION_GAS_CAP;
+        while (low < high) {
+            uint256 middle = (low + high) / 2;
+            uint256 snapshot = vm.snapshotState();
+            (bool done,) = target.call{gas: middle}(callData);
+            vm.revertToState(snapshot);
+            if (done) high = middle;
+            else low = middle + 1;
+        }
+        return low;
     }
 
     /// Claim: the start figure of the backend (`deploy/gas-defaults.json`, `backendStartDeliveryGas`) covers a plain token

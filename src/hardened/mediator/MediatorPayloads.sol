@@ -12,6 +12,10 @@ import {IAMB} from "../IAMB.sol";
 string constant COPY_NAME_CONNECTOR = " from ";
 string constant COPY_SYMBOL_PREFIX = "z";
 
+/// @dev The largest callback gas that a relay may state, one copy for this library and the public constant of
+/// `TokenMediator` (`MAX_CALLBACK_GAS`). See `TokenMediator.MAX_CALLBACK_GAS` for the figure.
+uint256 constant CALLBACK_GAS_MAXIMUM = 10_468_731;
+
 /// @title IMediatorHandlers
 /// @notice The handlers of `TokenMediator` that a message of the other mediator calls. `TokenMediator` implements this
 /// interface, so the selectors that `MediatorPayloads` encodes are checked against the mediator by the compiler.
@@ -90,6 +94,9 @@ library MediatorPayloads {
     error InvalidReceiver(address receiver);
     error ZeroAmount();
     error ZeroCallbackGas();
+    /// @notice The callback gas of a relay is above the largest that a delivery can give. The same error as
+    /// `TokenMediator.CallbackGasTooHigh`.
+    error CallbackGasTooHigh(uint256 callbackGas, uint256 maximum);
     error MediatorBalanceOverflow(address token);
     /// @notice A token has neither a name nor a symbol, so the other chain could not name its copy. The same error as
     /// `TokenMediator.NoTokenName`.
@@ -112,8 +119,9 @@ library MediatorPayloads {
     uint256 internal constant CALL_DATA_START = 52;
 
     /// @notice The sending side of `TokenMediator`, after the tokens arrived: checks the receiver, the amount and the
-    /// callback gas, asks the flow limiter, locks a native token (or burns a bridged copy), and sends the message to the
-    /// mediator on the other chain. The message asks the bridge for no gas.
+    /// callback gas (not zero for a relay with a call, never above `CALLBACK_GAS_MAXIMUM`), asks the flow limiter,
+    /// locks a native token (or burns a bridged copy), and sends the message to the mediator on the other chain. The
+    /// message asks the bridge for no gas.
     /// @dev Runs with DELEGATECALL in the storage of the mediator: the record of the native tokens and the map of the
     /// bridged copies are `storage` arguments. The mediator passes its bridge, its twin and its limiter.
     function send(
@@ -131,6 +139,9 @@ library MediatorPayloads {
         }
         if (value == 0) revert ZeroAmount();
         if (relay.withCall && relay.callbackGas == 0) revert ZeroCallbackGas();
+        if (relay.callbackGas > CALLBACK_GAS_MAXIMUM) {
+            revert CallbackGasTooHigh(relay.callbackGas, CALLBACK_GAS_MAXIMUM);
+        }
         if (address(limiter) != address(0)) limiter.checkDeposit(relay.token, from, value);
 
         address nativeToken = nativeTokenAddress[relay.token];

@@ -6,6 +6,13 @@ relay with a call, and the router's is the `callGas` of its terms. See `docs/har
 up, and three layers", and `docs/superpowers/specs/2026-11-01-gas-revert-up.md`. The text below is the record of the
 earlier rule.
 
+**Bounds since 2026-11-18.** The mediator refuses a callback gas above `TokenMediator.MAX_CALLBACK_GAS` (10,468,731)
+at the source with `CallbackGasTooHigh`, so a message that no transaction can deliver is never sent (rule 2 below holds
+again for that one number). The router hands off, with `DeliveryFailed` and the reason `InvalidTerms`, terms whose
+`callGas` is above `DeliveryRouter.MAX_CALL_GAS` (10,000,000). Both figures are those of the frontends
+(`MAX_CALLBACK_GAS` and `MAX_CALL_GAS` of the explorer core). See `docs/hardened-build-contract.md`, "Bounds on the gas
+words of a sender".
+
 This page records how the gas limit of one message travels from the sender to the user call. It lists where the rule
 holds today and where it does not. Later tasks fix the gaps and add the tests below as their first step.
 

@@ -1246,9 +1246,10 @@ gas. A callee that says no, with the gas it was promised, is recorded and the de
   records. `maxGasPerTx()` returns `2^32 - 1`. An executor that brings too little gas loses only its own transaction, so
   the bridge needs no guard.
 - **Layer 2.** The mediator has no gas rules and no defaults. Its one gas number is the callback gas `N`: a sender of
-  `relayTokensAndCall(token, receiver, value, data, callbackGas)` states it (zero reverts `ZeroCallbackGas`), the
-  message carries it as the last argument of the `...AndCall` handler, and the handler calls `onTokenBridged` with
-  exactly `N` through `ExactGasCall`, for any receiver. ERC-677 data carries it after the receiver (20 bytes receiver,
+  `relayTokensAndCall(token, receiver, value, data, callbackGas)` states it (zero reverts `ZeroCallbackGas`; since
+  2026-11-18 a figure above `MAX_CALLBACK_GAS`, 10,468,731, reverts `CallbackGasTooHigh`, see "Bounds on the gas words
+  of a sender"), the message carries it as the last argument of the `...AndCall` handler, and the handler calls
+  `onTokenBridged` with exactly `N` through `ExactGasCall`, for any receiver. ERC-677 data carries it after the receiver (20 bytes receiver,
   32 bytes gas, then the callback data; 21 to 51 bytes revert `MalformedTransferData`). A plain relay has no callback
   and no gas number. The token transfer, the mint and the flow limiter are called with all the gas (the transfer less
   `TRANSFER_GAS_RESERVE`); a call that fails after using up its gas reverts with `ReleaseOutOfGas`, and a call that
@@ -1363,6 +1364,48 @@ deploy scripts would pass 90% of the cap at 1,600 gas per byte.
   (`LibraryCodeMismatch`) and a factory that is other code (`BuiltCodeMismatch`).
 - `Immutability.t.sol`: the four libraries have no state and no state-changing entry point. `Bytecode.t.sol` scans
   them for MCOPY, TSTORE and TLOAD with the other contracts.
+
+### Bounds on the gas words of a sender (code review, 2026-11-18)
+
+The owner's words, verbatim but for one project name that the docs gate keeps out: "regarding 1) didn't we already fix
+this? router holds the funds and a retry occurs where message is submitted again? or maybe that was [another project]
+and not us. we should at least clamp the gas but hw would you handle
+too little gas getting through? i figured that this was a revert to reverse the transfers if it is an out of gas and
+emit a small log 2) same as above. do the fixes you know how to do."
+
+The rule: clamp at the source, so every message stays deliverable. Too little gas from an executor is already handled by
+`ExactGasCall`: the delivery reverts and can run again with more gas. There is no refund by a return message.
+
+- **Layer 2.** A relay with a call refuses a callback gas above `TokenMediator.MAX_CALLBACK_GAS` (10,468,731) with
+  `CallbackGasTooHigh(callbackGas, maximum)`, for `relayTokensAndCall` and for the ERC-677 data of `transferAndCall`
+  (the check is in `MediatorPayloads.send`). Before, only zero was refused, so a callback gas that no transaction can
+  give (EIP-7825 caps one at 16,777,216) locked or burned the tokens for a message that nobody could ever deliver. The
+  figure is the frontends' `MAX_CALLBACK_GAS`: a router's own work (300,000), a follow-up call of 10,000,000, its 63/64
+  share (158,731) and the router's reserve (10,000). `BridgeWorld.t.sol`
+  (`test_theLargestCallbackIsDeliveredUnderTheTransactionGasCap`) measures a delivery with that callback gas and a call
+  that burns 10,000,000 gas through the real bridge: 11,422,556 gas of execution, 11,593,700 with the transaction, the
+  calldata of the proof and 100,000 of room for the historical path, which leaves 5,183,516 under the cap. The first
+  message of a token also deploys its copy, about 7,000,000 gas on Sepolia (1,600 gas per byte of code); with a callback
+  gas above about 8,500,000 that message does not fit one Sepolia transaction, and waits until any first message of the
+  same token (a plain relay does) has deployed the copy.
+- **Layer 3.** The router's callback never reverts on the words of the terms. A `callGas` above
+  `DeliveryRouter.MAX_CALL_GAS` (10,000,000) with a call is terms that cannot be honoured: the router hands off the whole
+  value with `DeliveryFailed(..., InvalidTerms)`, takes no tip and makes no call. The fee is computed with no overflow: a
+  share with a multiplier of 1e18 or more is the whole value, a smaller share is exact for any value (computed in two
+  parts), and a gas based product that does not fit 256 bits gives the cap (`limit`, and never more than the value).
+  Before, `value * multiplier`, the gas product and `gasUsed + callGas` could overflow, the callback panicked, and the
+  tokens sat in the router with no `DeliveryFailed`. A callback gas too small for the router's own `callGas` still
+  reverts the callback (`InsufficientGas`), as designed above.
+- **Layer 1.** The constructor of `MessageBridge` refuses a `block.chainid` above 64 bits with `LocalChainIdTooLarge`
+  instead of cutting it.
+- **Redeploy.** `RedeployLayers` requires, before anything is sent, that the send cutoff that it copies from the old
+  bridge is zero or still ahead (`requireSendsOpen`, `SendCutoffPassed`): a new bridge with a passed cutoff refuses
+  every send for good, and the read-back found the value it expected.
+
+Sizes after the change (`forge build --sizes`, runtime bytes): `DeliveryRouter` 8,967 (was 8,638), `MediatorPayloads`
+6,160 (was 6,102), `TokenMediator` 8,557 (was 8,536), `MessageBridge` 9,370 (unchanged). All stay under the budget of
+`CreationGasCap.t.sol`. Tests: `mediator/TokenMediator.t.sol`, `mediator/TokenMediatorFuzz.t.sol`,
+`mediator/DeliveryRouterTerms.t.sol` (new), `BridgeWorld.t.sol`, `MessageBridgeSend.t.sol`, `RedeployLayers.t.sol`.
 
 ## Fork gate by shape (2026-10-27) (built)
 
