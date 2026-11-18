@@ -193,11 +193,11 @@ contract DeliveryRouterCallTest is MediatorFixture {
 
     // ------------------------------------------------------------------------------------------------ 1. success
 
-    /// Claim: after the payment the router calls the target with exactly the call data, from itself, with no coin.
-    /// Shows: the recorder holds the exact bytes, the caller is the router, the value is zero, the target is not the
+    /// Claim: after the payment the router calls the target with exactly the call data, through its caller, with no
+    /// coin. Shows: the recorder holds the exact bytes, the caller is `routerCaller` (not the router), the value is zero, the target is not the
     /// recipient, the tip and the payment are exact, and no `CallFailed` event exists. Matters: a call that changes
     /// the bytes, the sender or the value breaks every integration that relies on the call.
-    function test_aCallReachesTheTargetWithTheExactBytesFromTheRouterWithNoCoin() public {
+    function test_aCallReachesTheTargetWithTheExactBytesFromTheRouterCallerWithNoCoin() public {
         bytes memory callData = hex"deadbeef00112233445566778899";
         Vm.Log[] memory logs =
             _run(_withCall(_director(router.FIXED_FEE(), 3 ether, 0), address(recorder), callData), 100 ether);
@@ -205,7 +205,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
         assertNotEq(address(recorder), recipient, "the target is not the recipient");
         assertEq(recorder.calls(), 1, "one call");
         assertEq(recorder.lastData(), callData, "the exact call data");
-        assertEq(recorder.lastCaller(), address(router), "the router makes the call");
+        assertEq(recorder.lastCaller(), address(router.routerCaller()), "the router's caller makes the call");
         assertEq(recorder.lastValue(), 0, "no coin");
         assertEq(tokenA.balanceOf(reward), 3 ether, "the tip");
         assertEq(tokenA.balanceOf(recipient), 97 ether, "the payment");
@@ -353,8 +353,8 @@ contract DeliveryRouterCallTest is MediatorFixture {
 
     /// Claim: a target cannot pull tokens from the router with `transferFrom`, because the router grants no allowance.
     /// Shows: with 10 tokens stray in the router, the thief fails with the exact allowance error (spender is the
-    /// thief, allowance 0, needed 10), the attacker gets nothing, and the stray tokens stay. Matters: the call comes
-    /// from the router, so an allowance of the router would hand its tokens to any target.
+    /// thief, allowance 0, needed 10), the attacker gets nothing, and the stray tokens stay. Matters: an allowance of
+    /// the router would hand its tokens to any target, whichever account makes the call.
     function test_aTargetCannotPullTokensFromTheRouterWithTransferFrom() public {
         uint256 stray = 10 ether;
         tokenA.mint(address(router), stray);
@@ -373,18 +373,19 @@ contract DeliveryRouterCallTest is MediatorFixture {
         assertEq(tokenA.balanceOf(recipient), 97 ether);
     }
 
-    /// Claim: a call to the token itself can move only what the router holds after the payments, which is the stray
-    /// balance. Shows: with a stray balance S, a user call `transfer(attacker, S)` to the token moves exactly S, the
-    /// token saw a router balance of exactly S at that moment (the delivery value was gone), the tip and the payment
-    /// are exact, and the router ends empty. Matters: this bounds what a call can reach, and it shows that the value of
-    /// the delivery itself is never reachable.
-    function test_aCallToTheTokenMovesTheStrayBalanceAndNeverTheDeliveryValue() public {
+    /// Claim: a call to the token itself cannot move a stray balance of the router: the call comes from the router's
+    /// caller, which holds nothing, and `sweep` still hands the stray balance to the failed delivery address. Shows:
+    /// with a stray balance S in the router, a follow-up call `transfer(attacker, S)` to the token fails
+    /// (`CallFailed`), the attacker gets nothing, the tip and the payment are exact, the router still holds S, and
+    /// `sweep` then sends S to `failedDeliveryAddress`. Matters: the finding of the code review of 2026-11-18 (third
+    /// round): when the router made the call itself, any delivery could carry this call and take what a plain relay, a
+    /// failed callback or a refused hand-off left in the router, which belongs to `failedDeliveryAddress`.
+    function test_aCallToTheTokenCannotMoveTheStrayBalanceOfTheRouter() public {
         BalanceProbeToken probe = new BalanceProbeToken();
         probe.mint(alice, 1_000 ether);
         _enterChainB(IERC20(address(probe)), 500 ether);
         uint256 stray = 7 ether;
         probe.mint(address(router), stray);
-        probe.watch(attacker);
 
         bytes memory data = _withCall(
             _director(router.FIXED_FEE(), 3 ether, 0),
@@ -395,12 +396,16 @@ contract DeliveryRouterCallTest is MediatorFixture {
         vm.recordLogs();
         _execute(index);
 
-        assertEq(_failedCalls(vm.getRecordedLogs()).length, 0, "the call succeeded");
-        assertEq(probe.watchedTransfers(), 1);
-        assertEq(probe.senderBalanceAtWatchedTransfer(), stray, "the router held only the stray balance");
-        assertEq(probe.balanceOf(attacker), stray);
+        FailedCall[] memory failures = _failedCalls(vm.getRecordedLogs());
+        assertEq(failures.length, 1, "the transfer failed");
+        assertEq(failures[0].target, address(probe));
+        assertEq(probe.balanceOf(attacker), 0, "the attacker got nothing");
         assertEq(probe.balanceOf(reward), 3 ether);
         assertEq(probe.balanceOf(recipient), 97 ether);
+        assertEq(probe.balanceOf(address(router)), stray, "the stray balance stays in the router");
+
+        router.sweep(address(probe));
+        assertEq(probe.balanceOf(failedDelivery), stray, "sweep hands it to the failed delivery address");
         assertEq(probe.balanceOf(address(router)), 0);
     }
 
@@ -548,7 +553,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
         assertEq(reward.balance, 0.4 ether);
         assertEq(recorder.calls(), 1);
         assertEq(recorder.lastData(), callData);
-        assertEq(recorder.lastCaller(), address(router));
+        assertEq(recorder.lastCaller(), address(router.routerCaller()));
         assertEq(recorder.lastValue(), 0);
         assertEq(address(router).balance, 0);
         assertEq(weth.balanceOf(address(router)), 0);
@@ -636,7 +641,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
     }
 
     /// Claim: a target with no call data makes a call with empty data. Shows: 148 bytes of data make one call, and the
-    /// recorder sees empty call data from the router. Matters: the call data may be empty, and the call still runs.
+    /// recorder sees empty call data from the router's caller. Matters: the call data may be empty, and the call still runs.
     function test_aTargetWithNoCallDataMakesACallWithEmptyData() public {
         Vm.Log[] memory logs =
             _run(_withCall(_director(router.FIXED_FEE(), 1 ether, 0), address(recorder), ""), 10 ether);
@@ -644,7 +649,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
         assertEq(_failedCalls(logs).length, 0);
         assertEq(recorder.calls(), 1);
         assertEq(recorder.lastData().length, 0);
-        assertEq(recorder.lastCaller(), address(router));
+        assertEq(recorder.lastCaller(), address(router.routerCaller()));
         assertEq(tokenA.balanceOf(recipient), 9 ether);
     }
 
@@ -662,7 +667,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
 
     /// Claim: a direct delivery, without the router, pays the recipient everything and still makes the call. Shows:
     /// the bridge executes the message, the recipient gets 100 with no tip, and the recorder got the exact bytes from
-    /// the router. Matters: the bridge stays permissionless, and the call does not need the router to start it.
+    /// the router's caller. Matters: the bridge stays permissionless, and the call does not need the router to start it.
     function test_aDirectDeliveryTakesNoTipAndStillMakesTheCall() public {
         bytes memory callData = hex"0102030405";
         uint256 index = _sendBack(
@@ -676,7 +681,7 @@ contract DeliveryRouterCallTest is MediatorFixture {
         assertEq(tokenA.balanceOf(reward), 0);
         assertEq(recorder.calls(), 1);
         assertEq(recorder.lastData(), callData);
-        assertEq(recorder.lastCaller(), address(router));
+        assertEq(recorder.lastCaller(), address(router.routerCaller()));
     }
 
     /// @dev Calls the harness with exactly `gasSupplied` from a clean state. Returns whether it succeeded, its error, and

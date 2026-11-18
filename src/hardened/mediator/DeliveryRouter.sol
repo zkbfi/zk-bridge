@@ -9,6 +9,7 @@ import {MessageBridge} from "../MessageBridge.sol";
 import {ITokenMediator} from "./ITokenMediator.sol";
 import {IWETH} from "./IWETH.sol";
 import {ExactGasCall} from "./ExactGasCall.sol";
+import {RouterCaller} from "./RouterCaller.sol";
 
 /// @title DeliveryRouter
 /// @notice The one router of the bridge, on both chains. On the source chain it wraps the native coin and sends it
@@ -106,18 +107,29 @@ import {ExactGasCall} from "./ExactGasCall.sol";
 /// The call after a delivery. The data of `onTokenBridged` is the 160 byte director. Optional bytes may follow it: a 20
 /// byte target and then the call data, which fill the rest of the data. A director with no extra bytes, and a director
 /// with fewer than 20 extra bytes, mean delivery only. When the router paid the recipient in full (the token, or the
-/// native coin, or the wrapped token that replaced a refused coin), it makes one call to the target from itself, with the
-/// call data and no native value. The target may differ from the recipient. The call gets exactly `callGas` of the
-/// director (`ExactGasCall`), at most `MAX_CALL_GAS`: a larger `callGas` is handed off before any payout (above).
-/// When the gas left cannot give it `callGas` under the 63/64 rule plus the gas of the call itself
-/// (`ExactGasCall.CALL_OVERHEAD`) and `CALL_GAS_RESERVE`, which the router keeps to finish, the callback reverts: the
+/// native coin, or the wrapped token that replaced a refused coin), it makes one call to the target, with the call
+/// data and no native value. The target may differ from the recipient. The call goes out from `routerCaller`, a
+/// contract that the router creates in its constructor and that holds nothing, not from the router: the target sees
+/// `msg.sender == routerCaller`. A call from the router itself could move what the router holds at that moment, the
+/// stray tokens that `sweep` sends to `failedDeliveryAddress` (code review, 2026-11-18, third round). The call gets
+/// exactly `callGas` of the director (`ExactGasCall`, in `routerCaller`), at most `MAX_CALL_GAS`: a larger `callGas`
+/// is handed off before any payout (above). The router forwards all its gas to `routerCaller` but
+/// `CALLER_GAS_RESERVE`, which it keeps to finish. When the gas that reaches `routerCaller` cannot give the target
+/// `callGas` under the 63/64 rule plus the gas of the call itself (`ExactGasCall.CALL_OVERHEAD`) and
+/// `RouterCaller.RETURN_RESERVE`, `routerCaller` reverts and the router reverts the callback with its error: the
 /// mediator gave the callback the gas that the sender stated, so this means the sender's `callbackGas` is too small
 /// for its own `callGas`, and the mediator records `CallbackFailed` with the tokens left in the router (anyone may
 /// `sweep` them). A call that fails with its `callGas` never reverts the delivery and moves no tokens: the router
 /// emits `CallFailed`, and the recipient keeps the tokens. The router skips the call when the tip left nothing to pay
-/// the recipient, and when a payment failed and the amount was handed off. The router reads no data that the target
-/// returns. The call comes from the router, so it can reach only what the router holds at that moment. After the
-/// payments that is stray tokens, which anyone may already sweep. The router holds no allowance for the target to use.
+/// the recipient, and when a payment failed and the amount was handed off. Neither the router nor `routerCaller`
+/// reads data that the target returns. The router holds no allowance for the target to use, and `routerCaller` holds
+/// no tokens and gives no approval, so the call can reach nothing that belongs to the bridge or its users.
+///
+/// The gas of the hop. The call to `routerCaller` is a call of its own, so a second 63/64 rule applies: a callback
+/// needs about `callGas / 63` more gas than with a call from the router (158,731 at `MAX_CALL_GAS`), plus the
+/// address access of `routerCaller` and the copy of the call data. That comes out of the router's own work allowance
+/// of 300,000 in `TokenMediator.MAX_CALLBACK_GAS` and in the frontends' `routerCallbackGas`, which do not change:
+/// `test_theCoreCallbackGasCoversTheCostliestPathAtTheLargestCallGas` delivers the costliest path at `MAX_CALL_GAS`.
 ///
 /// The gas based tip counts the call. The router takes the tip before the payments and the call, so a measure of the gas
 /// that ran so far cannot cover the call. When a call is requested, the router adds `callGas`, the gas that the sender
@@ -193,9 +205,14 @@ contract DeliveryRouter is ReentrancyGuard {
     uint256 public constant NATIVE_SEND_GAS = 50_000;
 
     /// @notice The gas that the router keeps for itself after the call that follows a delivery: the event of a failed
-    /// call and the exit of the callback. The call needs this much gas left on top of `callGas`, its 63/64 share and
-    /// the gas of the call itself (`ExactGasCall.CALL_OVERHEAD`, 6,000).
+    /// call and the exit of the callback. It is the figure of the frontends' formula (`CALL_GAS_RESERVE` of the explorer
+    /// core); the router keeps `CALLER_GAS_RESERVE`, which adds the gas of its call to `routerCaller`.
     uint256 public constant CALL_GAS_RESERVE = 10_000;
+
+    /// @dev The gas that the router keeps back from its call to `routerCaller`: `CALL_GAS_RESERVE` and the gas of the
+    /// call itself (`ExactGasCall.CALL_OVERHEAD`, 6,000, which covers the address access of `routerCaller` and the
+    /// handling of its answer). It forwards the rest, and `routerCaller` checks that it gives the target `callGas`.
+    uint256 private constant CALLER_GAS_RESERVE = CALL_GAS_RESERVE + ExactGasCall.CALL_OVERHEAD;
 
     /// @notice The largest `callGas` that the terms of a call may name. A larger one is terms that cannot be honoured:
     /// the router hands off the whole value with the reason `InvalidTerms`. The figure is the one of the frontends
@@ -216,6 +233,9 @@ contract DeliveryRouter is ReentrancyGuard {
     uint256 private constant TARGET_LENGTH = 20;
     /// @dev Where the call data starts in the data: after the director and the target.
     uint256 private constant CALL_DATA_OFFSET = DIRECTOR_LENGTH + TARGET_LENGTH;
+    /// @dev Where the data for `routerCaller` starts in the data: at the last word of the director, `callGas`, which
+    /// the target and the call data follow. That is the packed form that `RouterCaller` reads.
+    uint256 private constant CALLER_DATA_OFFSET = DIRECTOR_LENGTH - 32;
 
     /// @notice The receiver of a relay is the zero address or this router.
     error InvalidReceiver(address receiver);
@@ -283,6 +303,9 @@ contract DeliveryRouter is ReentrancyGuard {
     /// @notice Where the router hands off what it cannot deliver. It may equal `rewardAddress`. It has no setter and no
     /// owner.
     address public immutable failedDeliveryAddress;
+    /// @notice The contract that makes the call after a delivery, created by this router in its constructor. Only this
+    /// router may use it. It holds nothing; anything sent to it is not protected and is not where funds go.
+    RouterCaller public immutable routerCaller;
 
     /// @param bridge_ The mediator on this chain.
     /// @param wNative_ The wrapped native token of this chain.
@@ -296,6 +319,7 @@ contract DeliveryRouter is ReentrancyGuard {
         wNative = wNative_;
         rewardAddress = rewardAddress_;
         failedDeliveryAddress = failedDeliveryAddress_;
+        routerCaller = new RouterCaller();
     }
 
     /// @notice Wraps the coin and relays it to the caller on the other chain.
@@ -487,13 +511,35 @@ contract DeliveryRouter is ReentrancyGuard {
         return value - fee;
     }
 
-    /// @dev Makes the call after a delivery: from the router, with no native value, to the target at the start of the
-    /// bytes after the director, with the call data that follows. It reads no answer, so a target cannot spend gas on a
-    /// large one. It gets exactly `callGas` (`ExactGasCall`, with `CALL_GAS_RESERVE` kept for the work after it): too
-    /// little gas reverts, and a failure with `callGas` emits `CallFailed` and changes nothing else.
+    /// @dev Makes the call after a delivery through `routerCaller`, with no native value, to the target at the start
+    /// of the bytes after the director, with the call data that follows. The router passes `callGas`, the target and
+    /// the call data in place (the bytes from `CALLER_DATA_OFFSET`), and forwards all its gas but `CALLER_GAS_RESERVE`.
+    /// `routerCaller` gives the target exactly `callGas` (`ExactGasCall`) and answers whether it succeeded; the target
+    /// cannot reach the answer, so it cannot spend gas on a large one. When `routerCaller` reverts, the gas did not
+    /// suffice (its code reverts for nothing else), and the router reverts with the same error. A failure with
+    /// `callGas` emits `CallFailed` and changes nothing else.
     function _callTarget(address target, address recipient, bytes memory data, uint256 callGas) private {
-        if (!ExactGasCall.callWithExactGas(target, callGas, CALL_GAS_RESERVE, data, CALL_DATA_OFFSET)) {
-            emit CallFailed(target, recipient, callGas);
+        if (!_callThroughCaller(data)) emit CallFailed(target, recipient, callGas);
+    }
+
+    /// @dev The call to `routerCaller`. It reverts with `ExactGasCall.InsufficientGas` when the router has less than
+    /// `CALLER_GAS_RESERVE` left, and with the error of `routerCaller` when that call reverts.
+    /// @return targetSucceeded The answer of `routerCaller`: whether the target succeeded.
+    function _callThroughCaller(bytes memory data) private returns (bool targetSucceeded) {
+        uint256 available = gasleft();
+        if (available <= CALLER_GAS_RESERVE) revert ExactGasCall.InsufficientGas(available, CALLER_GAS_RESERVE);
+        uint256 forwarded = available - CALLER_GAS_RESERVE;
+        address callee = address(routerCaller);
+        uint256 start = CALLER_DATA_OFFSET;
+        bool success;
+        assembly ("memory-safe") {
+            success := call(forwarded, callee, 0, add(add(data, 32), start), sub(mload(data), start), 0, 32)
+            if iszero(success) {
+                let pointer := mload(0x40)
+                returndatacopy(pointer, 0, returndatasize())
+                revert(pointer, returndatasize())
+            }
+            targetSucceeded := mload(0)
         }
     }
 

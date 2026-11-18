@@ -30,7 +30,7 @@ import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 ///   | n + 4 | `MediatorPayloads` (library of the mediator) | gas cap |
 ///   | n + 5 | `TokenFactory`, naming the mediator of n + 6 | gas cap (the mediator created it before the split) |
 ///   | n + 6 | `TokenMediator`, linked to `MediatorPayloads`, taking the factory | |
-///   | n + 7 | `DeliveryRouter` | |
+///   | n + 7 | `DeliveryRouter` (its constructor creates its `RouterCaller`, in the same transaction) | |
 ///
 ///   The split keeps every creation under the per-transaction gas cap of EIP-7825 (16,777,216) on Sepolia, which
 ///   charges about 1,580 gas per byte of runtime code (`LinkedCode`). The bridges and the mediators name their twins on
@@ -48,7 +48,8 @@ import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
 ///   requires `depositGate()` to be the new gate.
 /// - `router` (layer 3 only): on one chain (`REDEPLOY_CHAIN` = `chainA` or `chainB`), one delivery router at the
 ///   deployer nonce `n`, for the mediator of `previousMediator`. The bridge and the mediator do not change, so a router
-///   can be replaced at any time with no change on the other chain.
+///   can be replaced at any time with no change on the other chain. The router brings its own `RouterCaller`,
+///   created in its constructor; the read-back requires it (`requireRouterCaller`).
 ///
 /// Every value that the new contracts share with the old ones is read from the old contracts on chain, not from a
 /// file: the light client, the remote light client, the gate, the Capella era and the send cutoff of the bridge (a new
@@ -486,7 +487,8 @@ contract RedeployLayers is LinkedCode {
     }
 
     /// @notice Requires that every link site of the bridge and of the mediator of a plan holds the library of the plan, and
-    /// that the bridge, the mediator, the factory and the router are the compiled code (immutables aside).
+    /// that the bridge, the mediator, the factory, the router and the router's caller are the compiled code (immutables
+    /// aside).
     function verifyLinks(Planned memory planned) public view {
         Libraries memory libraries = librariesOf(planned);
         requireLinked("MessageBridge", planned.bridge, libraries);
@@ -495,6 +497,7 @@ contract RedeployLayers is LinkedCode {
         requireBuiltCode("TokenMediator", planned.mediator, libraries);
         requireBuiltCode("TokenFactory", planned.factory, libraries);
         requireBuiltCode("DeliveryRouter", planned.router, libraries);
+        requireRouterCaller(planned.router);
     }
 
     /// @notice Requires that each library of a plan holds the code of the build output.
@@ -526,6 +529,7 @@ contract RedeployLayers is LinkedCode {
         _requireAsPredicted("router", predicted, address(router));
         verifyRouter(router, chain.previousMediator, kept);
         requireBuiltCode("DeliveryRouter", address(router), none);
+        requireRouterCaller(address(router));
         return address(router);
     }
 

@@ -2,6 +2,8 @@
 pragma solidity 0.8.28;
 
 import {Script} from "forge-std/Script.sol";
+import {DeliveryRouter} from "../../src/hardened/mediator/DeliveryRouter.sol";
+import {RouterCaller} from "../../src/hardened/mediator/RouterCaller.sol";
 
 /// @title LinkedCode
 /// @notice Deploys the external libraries of the message bridge and the token mediator, and deploys the bridge and the
@@ -42,6 +44,9 @@ abstract contract LinkedCode is Script {
     error BuiltCodeMismatch(string name, address account);
     /// @notice The code of a deployed library differs from the build output.
     error LibraryCodeMismatch(string name, address account);
+    /// @notice The caller of a delivery router is not the contract that the router created first, or it names another
+    /// router.
+    error RouterCallerMismatch(address router, address caller);
 
     /// @notice Deploys a library from its creation code in the build output.
     /// @param name The library name, also the file name (`out/<name>.sol/<name>.json`).
@@ -130,6 +135,18 @@ abstract contract LinkedCode is Script {
             }
         }
         if (keccak256(actual) != keccak256(expected)) revert BuiltCodeMismatch(name, account);
+    }
+
+    /// @notice Requires that the caller of the delivery router at `router` (`routerCaller`, which makes the call after a
+    /// delivery) is the contract that the router created in its constructor: the first creation of the router (its
+    /// nonce 1), naming the router back, with the runtime code of `RouterCaller` in the build output. The router creates
+    /// it in the same transaction, so the deployer's nonces do not change.
+    function requireRouterCaller(address router) internal view {
+        address caller = address(DeliveryRouter(payable(router)).routerCaller());
+        if (caller != vm.computeCreateAddress(router, 1)) revert RouterCallerMismatch(router, caller);
+        Libraries memory none;
+        requireBuiltCode("RouterCaller", caller, none);
+        if (RouterCaller(caller).router() != router) revert RouterCallerMismatch(router, caller);
     }
 
     /// @notice Requires that the code at `account` is the runtime code of the library `name` in the build output. A

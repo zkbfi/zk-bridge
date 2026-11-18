@@ -268,7 +268,10 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     /// @dev A message executes once, with the target and data that the sender fixed, so an executor that runs ahead of
     /// another does no harm. The executor pays the gas and gets no fee from the bridge. When the call to the target
     /// fails, the delivery reverts with the error of the target (or `TargetCallFailed` when the target returned none),
-    /// and the message stays `NotDelivered`.
+    /// and the message stays `NotDelivered`. A target with no code (an account, an address where no contract exists
+    /// yet, a precompile that returns nothing) receives an empty call, which the EVM counts as a success: the message
+    /// is `Succeeded` and `AffirmationCompleted` reports true, as on the bridge that this one mimics, and it never runs
+    /// again. The target is the choice of the sender, and so is that mistake.
     /// @param proof The evidence.
     function executeMessage(MessageProof calldata proof) external {
         if (_activeMessageId != bytes32(0)) revert MessageInProgress(_activeMessageId);
@@ -326,7 +329,8 @@ contract MessageBridge is BeaconProofVerifier, IAMB {
     }
 
     /// @dev Sets the context, calls the target with all the gas that is left, and clears the context. A failed call
-    /// reverts the delivery with the error data of the target. A successful call copies no return data, so a target
+    /// reverts the delivery with the error data of the target. The bridge does not read the code of the target: a call
+    /// to an address with no code succeeds with nothing run, and the delivery completes. A successful call copies no return data, so a target
     /// cannot cost gas with a large answer. The error data of a failed call is copied, at the cost of the delivery that
     /// reverts anyway.
     function _callTarget(AmbMessageCodec.Header memory header, bytes memory data, bytes32 sourceTransactionHash)

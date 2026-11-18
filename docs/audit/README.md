@@ -156,6 +156,7 @@ Read `docs/light-client-layout/test-plan.md` Part A before this code. It is the 
 | `script/hardened/bridge.config.example.json`, `script/testnet/bridge.config.testnet.json` | data | The configuration the script reads. The example must be refused as is (a test checks this). |
 | `script/testnet/preflight.sh` | 151 (non-comment shell lines) | Checks a testnet before deployment. |
 | `src/hardened/mediator/DeliveryRouter.sol` | 308 | Optional. Wraps the native coin, delivers through the bridge, pays a voluntary tip to a fixed address, unwraps, makes one user call. It holds delivered value for one call frame and stray tokens. It cannot touch the mediator's books. |
+| `src/hardened/mediator/RouterCaller.sol` | 83 | Created by the router; the account that makes the user call after a delivery (since 2026-11-18), so the call cannot reach what the router holds. Only its router may use it; it holds nothing. Its exact-gas rule is `ExactGasCall` written out in assembly. |
 | `prover/src/checkpoint.rs` | 245 | Computes the four checkpoint values of a new light client (slot, header root, current and next committee hash). These values are trust assumption 3, so this one prover module sits in tier 2. Check the values by hand against several beacon nodes before a deployment whatever this code says. |
 
 ### Tier 3: prover and off-chain Rust (8,409 code lines)

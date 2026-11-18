@@ -117,7 +117,7 @@ contract TokenThief {
 }
 
 /// @notice A token that records the balance of the sender at each transfer to a watched account. A test uses it to see
-/// what the router holds at the moment that a call from the router moves tokens.
+/// what the sender of a transfer holds at that moment.
 contract BalanceProbeToken is ERC20 {
     address public watched;
     uint256 public watchedTransfers;

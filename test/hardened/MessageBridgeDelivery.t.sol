@@ -190,6 +190,27 @@ contract MessageBridgeDeliveryTest is MessageScenes {
         assertEq(uint8(bridge.deliveryStatus(named.messageId)), uint8(MessageBridge.DeliveryStatus.NotDelivered));
     }
 
+    /// Claim: a message whose target has no code completes as an empty call and is final. Shows: with the code of the
+    /// recorder removed, the delivery emits `AffirmationCompleted(..., true)` and the status is `Succeeded`; after code
+    /// is put back at that address the same proof is refused with `AlreadyDelivered`. Matters: this is the behaviour of
+    /// the bridge that this one mimics, kept by the owner's decision (code review, 2026-11-18, third round): "the
+    /// mistake is on the sender, not on us".
+    function test_revertUp_aTargetWithNoCodeCompletesAsAnEmptyCall() public {
+        Scene memory scene = _messageScene(bridge);
+        MessageFixtures.Named memory named = MessageFixtures.deliver();
+        MessageBridge.MessageProof memory proof = _messageProof(scene, named);
+        bytes memory code = address(recorder).code;
+        vm.etch(address(recorder), "");
+
+        _expectCompleted(named, address(recorder), true);
+        bridge.executeMessage(proof);
+        assertEq(uint8(bridge.deliveryStatus(named.messageId)), uint8(MessageBridge.DeliveryStatus.Succeeded));
+
+        vm.etch(address(recorder), code);
+        vm.expectRevert(abi.encodeWithSelector(MessageBridge.AlreadyDelivered.selector, named.messageId));
+        bridge.executeMessage(proof);
+    }
+
     // ================================================================ gas
 
     function _tryExecute(MessageBridge.MessageProof memory proof, uint256 gas) internal returns (bool ok, bytes memory data) {

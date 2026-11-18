@@ -9,6 +9,7 @@ import {BridgedToken} from "../../src/hardened/mediator/BridgedToken.sol";
 import {TokenFactory} from "../../src/hardened/mediator/TokenFactory.sol";
 import {LinkedCode} from "../../script/hardened/LinkedCode.sol";
 import {DeliveryRouter} from "../../src/hardened/mediator/DeliveryRouter.sol";
+import {RouterCaller} from "../../src/hardened/mediator/RouterCaller.sol";
 import {ITokenMediator} from "../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 import {RedeployLayers} from "../../script/hardened/RedeployLayers.s.sol";
@@ -139,7 +140,8 @@ contract RedeployLayersTest is WorldSupport {
     /// Claim: the read-back checks the code of every library and every link site of the bridge and the mediator.
     /// Shows: after an honest deployment both checks pass; a plan whose bridge is a bridge linked to other libraries (the
     /// old bridge of the world) fails with `LinkMismatch`; a plan that names one library at the address of another fails
-    /// with `LibraryCodeMismatch`; a plan whose factory is other code fails with `BuiltCodeMismatch`. Matters: a linked library is part of the immutable code of the bridge; a bridge linked
+    /// with `LibraryCodeMismatch`; a plan whose factory is other code fails with `BuiltCodeMismatch`, and so does a
+    /// router whose `RouterCaller` holds other code. Matters: a linked library is part of the immutable code of the bridge; a bridge linked
     /// to the wrong code would verify messages by other rules.
     function test_theReadBackChecksTheLibrariesAndTheLinks() public {
         RedeployLayers.ChainConfig memory chainA = _chain(uint64(CHAIN_A), NONCE_A, bridgeA, mediatorA, routerA);
@@ -161,6 +163,15 @@ contract RedeployLayersTest is WorldSupport {
         moved.factory = planA.router;
         vm.expectRevert(abi.encodeWithSelector(LinkedCode.BuiltCodeMismatch.selector, "TokenFactory", planA.router));
         script.verifyLinks(moved);
+
+        address caller = address(DeliveryRouter(payable(planA.router)).routerCaller());
+        assertEq(caller, vm.computeCreateAddress(planA.router, 1), "the router's first creation");
+        bytes memory callerCode = caller.code;
+        vm.etch(caller, planA.factory.code);
+        vm.expectRevert(abi.encodeWithSelector(LinkedCode.BuiltCodeMismatch.selector, "RouterCaller", caller));
+        script.verifyLinks(planA);
+        vm.etch(caller, callerCode);
+        script.verifyLinks(planA);
 
         moved = script.plan(deployer, NONCE_A);
         moved.openingProofLib = planA.receiptProofLib;
@@ -300,7 +311,8 @@ contract RedeployLayersTest is WorldSupport {
     }
 
     /// Claim: the router mode checks the code it deployed against the build output. Shows: the replaced router holds the
-    /// compiled `DeliveryRouter`, immutables aside, so `requireBuiltCode` passes inside `deployRouter`.
+    /// compiled `DeliveryRouter`, immutables aside, so `requireBuiltCode` passes inside `deployRouter`; the router created
+    /// its `RouterCaller` in the same transaction (`requireRouterCaller` passes too).
     function test_aReplacedRouterIsTheBuiltCode() public {
         RedeployLayers.ChainConfig memory chainA = _chain(uint64(CHAIN_A), NONCE_A, bridgeA, mediatorA, routerA);
         vm.chainId(CHAIN_A);
@@ -310,6 +322,10 @@ contract RedeployLayersTest is WorldSupport {
         address replaced = script.deployRouter(chainA, kept, deployer);
         assertGt(replaced.code.length, 0);
         assertEq(DeliveryRouter(payable(replaced)).NATIVE_GAS_OVERHEAD(), 105_000, "the router of this build");
+        address caller = address(DeliveryRouter(payable(replaced)).routerCaller());
+        assertEq(caller, vm.computeCreateAddress(replaced, 1), "the router created its caller");
+        assertEq(RouterCaller(caller).router(), replaced, "and the caller names it");
+        assertEq(vm.getNonce(deployer), NONCE_A + 1, "the caller took no nonce of the deployer");
     }
 }
 

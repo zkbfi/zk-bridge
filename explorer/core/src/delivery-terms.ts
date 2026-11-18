@@ -91,7 +91,7 @@ export const DELIVERY_CALL_TARGET_BYTES = 20;
 /** Where the call data starts: the director plus the target. Data shorter than this makes no call. */
 export const DELIVERY_CALL_OFFSET_BYTES = FEE_DIRECTOR_BYTES + DELIVERY_CALL_TARGET_BYTES;
 
-/** The call that the router makes after a delivery: from the router, with no native value. */
+/** The call that the router makes after a delivery, through its `routerCaller` (the target sees that contract as `msg.sender`, not the router), with no native value. */
 export interface DeliveryCall {
   /** The contract that the router calls. */
   readonly target: Address;
