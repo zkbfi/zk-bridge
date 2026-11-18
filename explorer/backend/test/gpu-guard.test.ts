@@ -8,10 +8,10 @@ const A = { id: "aaa111bbb222", apiKey: KEY, label: "gpu-24gb" };
 const B = { id: "bbb222ccc333", apiKey: KEY, label: "gpu-48gb" };
 const START = Date.parse("2026-11-17T12:30:00Z");
 const MINUTE = 60_000;
-const SETTINGS: GpuGuardSettings = { enabled: true, checkSeconds: 300, stuckMinutes: 15, spendCheckSeconds: 3600, maxUsdPerHour: 0.5, cooldownMinutes: 10, maxTripsPerDay: 2 };
+const SETTINGS: GpuGuardSettings = { enabled: true, checkSeconds: 300, stuckMinutes: 15, spendCheckSeconds: 3600, maxUsdPerHour: 0.5, cooldownMinutes: 10, maxTripsPerDay: 2, backoffSeconds: 900 };
 
 type Call = { url: string; method: string; authorization: string | null; body: unknown };
-type Tier = { workers: Array<{ id: string; status: string }> | "broken"; live: { min: number; max: number; idleTimeout: number }; records: unknown; patchStatus: number; down: boolean; getStatus: number };
+type Tier = { workers: Array<{ id: string; status: string }> | "broken"; live: { min: number; max: number; idleTimeout: number }; records: unknown; patchStatus: number; down: boolean; getStatus: number; retryAfter?: string };
 
 /** A RunPod v2 double with one state per endpoint id. A PATCH changes `live`, like RunPod does. */
 function fakeRunpod() {
@@ -26,7 +26,7 @@ function fakeRunpod() {
     const id = url.searchParams.get("serverlessId") ?? /\/serverless\/([a-z0-9]+)/.exec(url.pathname)?.[1] ?? "";
     const tier = tiers[id] as Tier;
     if (tier.down) throw new TypeError(`fetch failed for ${url}`);
-    if (tier.getStatus !== 200 && method === "GET") return Response.json({ title: "Unauthorized", status: tier.getStatus, detail: "bad key" }, { status: tier.getStatus });
+    if (tier.getStatus !== 200 && method === "GET") return Response.json({ title: "Unauthorized", status: tier.getStatus, detail: "bad key" }, { status: tier.getStatus, ...(tier.retryAfter === undefined ? {} : { headers: { "retry-after": tier.retryAfter } }) });
     if (method === "PATCH") {
       if (tier.patchStatus !== 200) return Response.json({ title: "Bad Request", status: tier.patchStatus, detail: "nope" }, { status: tier.patchStatus });
       tier.live = body.workers;
@@ -274,9 +274,9 @@ describe("the spend signal", () => {
     await guard.checkSpend();
     expect(patches()).toHaveLength(0);
     expect(lines.filter((line) => line.includes("gpu_guard_spend_unread") && line.includes("no list of records"))).toHaveLength(1);
-    runpod.tiers[B.id]!.getStatus = 429;
+    runpod.tiers[B.id]!.getStatus = 503;
     await guard.checkSpend();
-    expect(lines.some((line) => line.includes("gpu_guard_spend_unread") && line.includes("RunPod answered 429"))).toBe(true);
+    expect(lines.some((line) => line.includes("gpu_guard_spend_unread") && line.includes("RunPod answered 503"))).toBe(true);
     expect(lines.join("\n")).not.toContain(KEY);
   });
 });
@@ -355,10 +355,11 @@ describe("restore, hold and release", () => {
   it("releases a held tier when its live max is above 0 again", async () => {
     const { guard, advance, tier, stateOf, lines } = await tripped({ maxTripsPerDay: 1 });
     expect(stateOf("gpu-24gb")?.state).toBe("held");
-    advance(5);
+    advance(61);
     await guard.checkWorkers();
     expect(stateOf("gpu-24gb")?.state).toBe("held");
     tier.live = { min: 0, max: 1, idleTimeout: 5 };
+    advance(61);
     await guard.checkWorkers();
     expect(stateOf("gpu-24gb")).toMatchObject({ state: "ok", lastTrip: { signal: "stuck-worker" } });
     expect(lines.some((line) => line.startsWith("info gpu_guard_released"))).toBe(true);
@@ -368,6 +369,26 @@ describe("restore, hold and release", () => {
     advance(16);
     await guard.checkWorkers();
     expect(stateOf("gpu-24gb")?.state).toBe("held");
+  });
+
+  it("reads a held tier's endpoint only every spendCheckSeconds, not at every worker check", async () => {
+    const { guard, runpod, advance } = await tripped({ maxTripsPerDay: 1 });
+    const reads = () => runpod.calls.filter((call) => call.method === "GET" && call.url.endsWith(`/serverless/${A.id}`)).length;
+    const before = reads();
+    for (let check = 0; check < 6; check += 1) {
+      advance(5);
+      await guard.checkWorkers();
+    }
+    expect(reads()).toBe(before);
+    advance(31);
+    await guard.checkWorkers();
+    expect(reads()).toBe(before + 1);
+    advance(5);
+    await guard.checkWorkers();
+    expect(reads()).toBe(before + 1);
+    advance(55);
+    await guard.checkWorkers();
+    expect(reads()).toBe(before + 2);
   });
 
   it("counts only the trips of the last 24 hours", async () => {
@@ -509,6 +530,75 @@ describe("answers that are not what RunPod documents", () => {
     await guard.checkWorkers();
     expect(lines.some((line) => line.startsWith("gpu_guard_check_failed") && line.includes("no workers min, max and idleTimeout"))).toBe(true);
     expect(guard.state()[0]?.state).toBe("tripped");
+  });
+});
+
+describe("a 429 from RunPod", () => {
+  const callsOf = (runpod: ReturnType<typeof fakeRunpod>, id: string) => runpod.calls.filter((call) => call.url.includes(id)).length;
+
+  it("backs the tier off for backoffSeconds, skipping every call of both checks, and logs one warn per back-off", async () => {
+    const { guard, runpod, advance, lines } = make();
+    runpod.tiers[A.id]!.getStatus = 429;
+    await guard.checkWorkers();
+    await guard.checkSpend();
+    expect(callsOf(runpod, A.id)).toBe(1);
+    for (let check = 0; check < 2; check += 1) {
+      advance(5);
+      await guard.checkWorkers();
+      await guard.checkSpend();
+    }
+    expect(callsOf(runpod, A.id)).toBe(1);
+    expect(lines.filter((line) => line.includes("gpu_guard_rate_limited"))).toHaveLength(1);
+    expect(lines.filter((line) => line.startsWith("warn gpu_guard_rate_limited"))[0]).toContain('"backoffSeconds":900');
+    expect(lines.some((line) => line.includes("gpu_guard_check_failed") && line.includes("gpu-24gb"))).toBe(false);
+    // The other tier is not held back.
+    expect(callsOf(runpod, B.id)).toBeGreaterThanOrEqual(3);
+    // After the back-off the tier is read again; a second 429 starts a second back-off with its own warn.
+    advance(11);
+    await guard.checkWorkers();
+    expect(callsOf(runpod, A.id)).toBe(2);
+    expect(lines.filter((line) => line.includes("gpu_guard_rate_limited"))).toHaveLength(2);
+    runpod.tiers[A.id]!.getStatus = 200;
+    advance(16);
+    await guard.checkWorkers();
+    expect(callsOf(runpod, A.id)).toBe(3);
+    expect(lines.join("\n")).not.toContain(KEY);
+  });
+
+  it("uses Retry-After when RunPod sends it, and never waits longer than an hour", async () => {
+    const { guard, runpod, advance } = make();
+    runpod.tiers[A.id]!.getStatus = 429;
+    runpod.tiers[A.id]!.retryAfter = "120";
+    await guard.checkWorkers();
+    advance(1);
+    await guard.checkWorkers();
+    expect(callsOf(runpod, A.id)).toBe(1);
+    advance(1.5);
+    await guard.checkWorkers();
+    expect(callsOf(runpod, A.id)).toBe(2);
+    runpod.tiers[A.id]!.retryAfter = "86400";
+    advance(2);
+    await guard.checkWorkers();
+    expect(callsOf(runpod, A.id)).toBe(3);
+    advance(59);
+    await guard.checkWorkers();
+    expect(callsOf(runpod, A.id)).toBe(3);
+    advance(2);
+    await guard.checkWorkers();
+    expect(callsOf(runpod, A.id)).toBe(4);
+  });
+
+  it("backs off on a 429 of the spend check, and of a PATCH, too", async () => {
+    const { guard, runpod, advance, lines } = make();
+    runpod.tiers[A.id]!.workers = running();
+    await guard.checkWorkers();
+    advance(16);
+    runpod.tiers[A.id]!.patchStatus = 429;
+    await guard.checkWorkers();
+    expect(lines.filter((line) => line.includes("gpu_guard_rate_limited"))).toHaveLength(1);
+    const before = callsOf(runpod, A.id);
+    await guard.checkSpend();
+    expect(callsOf(runpod, A.id)).toBe(before);
   });
 });
 

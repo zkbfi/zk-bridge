@@ -1,5 +1,6 @@
 import { toFunctionSelector } from "viem";
 import { z } from "zod";
+import { ADDRESS, isObject } from "./values.ts";
 
 /**
  * The zkb.fi contracts of each chain, for the rules of rpc.zkb.fi (`rules.ts`). Three sources:
@@ -11,7 +12,9 @@ import { z } from "zod";
  * - the indexer: every token it knows (`GET /api/tokens`). These are kept APART ({@link AddressBook.tokensOf}): a token is
  *   not a zkb.fi contract, and only its Transfer and Approval logs pass (`rules.ts`); a token read passes on any address.
  *
- * A source that fails keeps what it gave last time; the deployment files never go away.
+ * A source that fails keeps what it gave last time; the deployment files never go away. Several entries may name the same
+ * chain (two deployment files, or an old and a redeployed bridge): a chain holds the union of what its entries named,
+ * and an entry whose read fails keeps its own last good result while the others are read afresh.
  */
 
 /** The contracts that one deployment file names for one chain. Addresses are lower case. */
@@ -22,10 +25,7 @@ export type DeploymentChain = {
   readonly forkRegistries: readonly string[];
 };
 
-const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const ZERO = `0x${"0".repeat(40)}`;
-
-const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Every address found anywhere inside a value (strings, arrays and objects), lower case. */
 function addressesIn(value: unknown): string[] {
@@ -141,6 +141,8 @@ export function createAddressBook(input: AddressBookInput): AddressBook {
     const fromDeployment = input.deployment.filter((chain) => chain.chainId === chainId).flatMap((chain) => chain.addresses);
     fixed.set(chainId, new Set([...fromDeployment, ...input.extraContracts(chainId).map((address) => address.toLowerCase())]));
   }
+  // What each deployment entry last read successfully, by its place in the list: two entries may share a chain id.
+  const lastRead = new Map<number, readonly string[]>();
   const discovered = new Map<number, readonly string[]>();
   let tokens = new Map<number, string[]>();
   const merged = new Map<number, Set<string>>();
@@ -157,13 +159,19 @@ export function createAddressBook(input: AddressBookInput): AddressBook {
     tokensOf: (chainId) => tokenSets.get(chainId) ?? new Set(),
     async refresh() {
       const failed: string[] = [];
-      for (const chain of input.deployment.filter((candidate) => input.chainIds.includes(candidate.chainId))) {
-        if (chain.gates.length === 0 && chain.forkRegistries.length === 0) continue;
+      for (const [place, chain] of input.deployment.entries()) {
+        if (!input.chainIds.includes(chain.chainId) || (chain.gates.length === 0 && chain.forkRegistries.length === 0)) continue;
         try {
-          discovered.set(chain.chainId, await discoverContracts(input.post, chain));
+          lastRead.set(place, await discoverContracts(input.post, chain));
         } catch (error) {
+          // This entry keeps its last good result; the other entries of the chain are unaffected.
           failed.push(`chain ${chain.chainId}: ${(error as Error).message}`);
         }
+      }
+      discovered.clear();
+      for (const [place, contracts] of lastRead) {
+        const chainId = (input.deployment[place] as DeploymentChain).chainId;
+        discovered.set(chainId, [...(discovered.get(chainId) ?? []), ...contracts]);
       }
       if (input.readTokens !== undefined) {
         try {

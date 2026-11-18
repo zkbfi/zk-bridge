@@ -5,7 +5,11 @@
  * `storage.ts`. A light client update is a job
  * of `jobs`, and a fork observation a row of `fork_observations`: those tables keep them.
  */
+import type { ProofDirection } from "@zk-bridge/shared";
 import type { Storage } from "../storage.ts";
+
+/** The error of a registry update that found nothing to prove: no GPU ran, so the GPU budget does not charge it. */
+export const UP_TO_DATE_REASON = "the light client already holds the newest final header";
 
 /** The kinds a step job row holds. */
 export type StepJobKind = "registry-light-client-update" | "open-deposits" | "layout-rows" | "deliver";
@@ -40,10 +44,14 @@ const toRow = (row: Row): StepRow => ({
   error: row.error,
 });
 
-/** Starts a job. Throws when a job of the same kind and subject runs (the unique index). */
-export function insertStepJob(storage: Storage, input: { id: string; kind: StepJobKind; subject: string; at: number; startSlot: number | null }): void {
-  storage.database.prepare("INSERT INTO step_jobs (id, kind, subject, status, started_at, updated_at, start_slot) VALUES (?, ?, ?, 'running', ?, ?, ?)")
-    .run(input.id, input.kind, input.subject, input.at, input.at, input.startSlot);
+/**
+ * Starts a job. Throws when a job of the same kind and subject runs (the unique index). `direction` is the direction
+ * whose GPU budget the job spends: given for a job that runs the GPU prover (the registry's light client update), so
+ * `recentJobSeconds` can charge it when it fails; `started_at` is taken just before the prover is called.
+ */
+export function insertStepJob(storage: Storage, input: { id: string; kind: StepJobKind; subject: string; at: number; startSlot: number | null; direction?: ProofDirection }): void {
+  storage.database.prepare("INSERT INTO step_jobs (id, kind, subject, status, started_at, updated_at, start_slot, direction) VALUES (?, ?, ?, 'running', ?, ?, ?, ?)")
+    .run(input.id, input.kind, input.subject, input.at, input.at, input.startSlot, input.direction ?? null);
 }
 
 /** Ends a job with its proof, or with a reason that is safe to show. */

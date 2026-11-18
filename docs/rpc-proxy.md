@@ -98,10 +98,16 @@ The rules:
     `maxCallGas`, so the upstream node's own default never applies;
   - no key twice in different cases (`to` and `To`), no `data` and `input` that differ, and no third parameter (a state
     or block override could run any code at a zkb.fi address).
-- `eth_getProof`, `eth_getStorageAt` (when served): a zkb.fi contract.
-- Every other served method passes as it is.
+- `eth_getProof`, `eth_getStorageAt` (when served): a zkb.fi contract, and exactly `[address, storage keys, block]` or
+  `[address, slot, block]`: each key a 32-byte hex word, the slot a hex quantity, the block a tag (`latest`, `earliest`,
+  `pending`, `safe`, `finalized`) or a hex quantity. A trailing or missing parameter refuses the request.
+- The other methods of the default list pass only with their own parameters, each field checked: none for `eth_chainId`,
+  `eth_blockNumber`, `eth_gasPrice` and `eth_maxPriorityFeePerGas`; `[address, block]` for `eth_getBalance`,
+  `eth_getCode` and `eth_getTransactionCount`; one 32-byte hash for `eth_getTransactionByHash` and
+  `eth_getTransactionReceipt`; `[block, boolean]` for `eth_getBlockByNumber`. A method added to `rpcProxy.methods` that
+  is not in these lists is refused with "has no parameter rule": it needs a rule in `rules.ts` before it is served.
 
-What goes to eRPC is rebuilt from what was checked, never the visitor's bytes: a fresh `{jsonrpc, id, method, params}`;
+What goes to eRPC is rebuilt from what was checked, never the visitor's bytes: a fresh `{jsonrpc, id, method, params}` whose parameters are the checked fields;
 a call object keeps only `from`, `to`, `gas`, `gasPrice`, `maxFeePerGas`, `maxPriorityFeePerGas`, `value`, `nonce`,
 `accessList` and the checked calldata as `data`; a log filter keeps only `address`, `topics`, `fromBlock`, `toBlock` and
 `blockHash`. A duplicate JSON key therefore reaches eRPC only as the value the filter checked.

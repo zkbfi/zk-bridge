@@ -204,6 +204,17 @@ describe("an update of the fork registry's light client", () => {
     expect(log.lines.join("\n")).toContain("gpu_budget_bypassed");
   });
 
+  it("charges a failed update of the registry's light client to the GPU budget, and then waits", async () => {
+    const { ask, provers, service, clock } = setup();
+    expect(await ask("registry-light-client-update", "369")).toMatchObject({ jobId: expect.any(String) });
+    // Three hours on the GPU at $2 an hour is $6 against the $5 budget, and no proof came back.
+    clock.advance(3 * 3_600_000);
+    provers.head.fail(new ProverCommandError("prove", 1, "boom"));
+    await service.settled();
+    clock.advance(61_000);
+    expect(await ask("registry-light-client-update", "369")).toMatchObject({ refused: "rate-limited", why: "gpu-budget", detail: "the 24 h GPU budget of $5.00 for second-to-first is spent: $6.00" });
+  });
+
   it("joins the job a concurrent request started", async () => {
     const { ask, storage, clock } = setup();
     // The read of the chain is the await between the check and the insert: another request inserts meanwhile.

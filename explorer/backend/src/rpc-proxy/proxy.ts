@@ -1,3 +1,4 @@
+import { isObject } from "./values.ts";
 import { checkRequest, type ChainRules, type JsonRpcRequest, type Refusal } from "./rules.ts";
 
 /**
@@ -41,8 +42,6 @@ const UPSTREAM_ERROR = -32603;
 const errorOf = (id: Id, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
 
 const answer = (status: number, value: unknown, headers: Readonly<Record<string, string>> = JSON_HEADERS): ProxyAnswer => ({ status, body: JSON.stringify(value), headers });
-
-const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** The id of an entry, when it has one that JSON-RPC allows; else null. */
 const idOf = (entry: unknown): Id => (isObject(entry) && (typeof entry.id === "string" || typeof entry.id === "number") ? entry.id : null);

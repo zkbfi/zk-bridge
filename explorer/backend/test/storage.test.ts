@@ -26,6 +26,22 @@ describe("storage", () => {
     }
   });
 
+  it("adds the direction to a step_jobs table of before 2026-11-18, keeping its rows (they have none, so they are not charged)", () => {
+    const directory = mkdtempSync(join(tmpdir(), "backend-storage-"));
+    try {
+      const path = join(directory, "backend.sqlite");
+      const old = new DatabaseSync(path);
+      old.exec("CREATE TABLE step_jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, subject TEXT NOT NULL, status TEXT NOT NULL, started_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, start_slot INTEGER, result TEXT, error TEXT)");
+      old.exec("INSERT INTO step_jobs (id, kind, subject, status, started_at, updated_at, error) VALUES ('step:a', 'registry-light-client-update', '369', 'failed', 0, 5000, 'x')");
+      old.close();
+      const storage = openStorage(path);
+      expect(storage.database.prepare("SELECT id, direction FROM step_jobs").all()).toEqual([{ id: "step:a", direction: null }]);
+      storage.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("creates the four tables in one file and keeps the data after a reopen", () => {
     const directory = mkdtempSync(join(tmpdir(), "backend-storage-"));
     try {

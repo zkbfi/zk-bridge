@@ -295,6 +295,34 @@ pull || status=$?
 if [ "$status" -eq 0 ] && grep -q 'taking it over' "$local_dir/pull.log"; then pass "a lock whose pid is not a number is taken over"; else fail "non-numeric pid (status $status)"; fi
 rm -rf "$lock"
 
+# Files a killed run left in the local directory are removed at the start of the next run: the list files and the
+# hash checker's error file.
+for leftover in .check-AbC123 .listed-AbC123 .checker-AbC123; do : >"$local_dir/$leftover"; done
+status=0
+pull || status=$?
+if [ "$status" -eq 0 ] && [ -z "$(find "$local_dir" -maxdepth 1 \( -name '.check-*' -o -name '.listed-*' -o -name '.checker-*' \))" ]; then pass "leftover .check-, .listed- and .checker- files are removed at the start"; else fail "leftovers (status $status): $(ls -A "$local_dir" | tr '\n' ' ')"; fi
+
+# A server without a trusted-manifests directory (an older export) is not a failed pull: the run goes on and verifies the
+# newest manifest against manifests.sha256 only, and says so. Any other rsync failure of that directory stays fatal.
+trusted=$root/var/backups/zk-bridge/proofs/trusted-manifests
+mv "$trusted" "$T/trusted.keep"
+rm -rf "$local_dir/trusted-manifests"
+status=0
+pull || status=$?
+if [ "$status" -eq 0 ] && grep -q 'the server has no trusted-manifests directory' "$local_dir/pull.log" && grep -q 'no trusted copy of 20261104T033000Z.json from the server' "$local_dir/pull.log" \
+  && grep -q 'verified against 20261104T033000Z.json' <(tail -2 "$local_dir/pull.log"); then
+  pass "a server without trusted-manifests is not fatal: the run falls back to manifests.sha256"
+else
+  fail "no trusted-manifests (status $status): $(tail -3 "$local_dir/pull.log")"
+fi
+mv "$T/trusted.keep" "$trusted"
+chmod 000 "$trusted"
+status=0
+pull || status=$?
+chmod 755 "$trusted"
+if [ "$status" -ne 0 ] && grep -q 'rsync of trusted-manifests from fakehost failed' "$local_dir/pull.log"; then pass "another rsync failure of trusted-manifests is still fatal"; else fail "unreadable trusted-manifests (status $status)"; fi
+pull || true
+
 # No manifest on the server: the run fails.
 rm -f "$remote"/manifests/*.json
 status=0

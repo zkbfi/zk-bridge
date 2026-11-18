@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { DEFAULT_RATE_LIMITS } from "../src/requests/rate-limit.ts";
+import { finishStepJob, insertStepJob, UP_TO_DATE_REASON } from "../src/steps/store.ts";
 import { insertJob, lastJobTargetSlot, recentJobSeconds, updateJob } from "../src/requests/jobs.ts";
 import { createRequestService, type RequestServiceInput } from "../src/requests/service.ts";
 import { recordProveTiming } from "../src/requests/timings.ts";
@@ -146,6 +147,24 @@ describe("the daily GPU budget per direction", () => {
     fail("posted", "first-to-second", 10_000, 500_000);
     provedJob(storage, "posted", 400_000, 300);
     expect(recentJobSeconds(storage, "first-to-second", 6_000)).toEqual([{ provedAt: 400_000, seconds: 300 }, { provedAt: 1_810_000, seconds: 1800 }]);
+  });
+
+  it("charges a failed fork-registry step job from its start to its failure, to its direction, and not an up-to-date one", () => {
+    const storage = openStorage(":memory:");
+    const step = (id: string, direction: "first-to-second" | "second-to-first" | undefined, startedAt: number, failedAt: number, error: string, kind: "registry-light-client-update" | "deliver" = "registry-light-client-update") => {
+      insertStepJob(storage, { id, kind, subject: id, at: startedAt, startSlot: null, ...(direction === undefined ? {} : { direction }) });
+      finishStepJob(storage, { id, at: failedAt, error });
+    };
+    step("step:failed", "first-to-second", 10_000, 700_000, "the prover stopped");
+    step("step:other-direction", "second-to-first", 10_000, 700_000, "the prover stopped");
+    step("step:old", "first-to-second", 0, 5_000, "the prover stopped");
+    step("step:no-gpu", undefined, 10_000, 700_000, "the prover stopped", "deliver");
+    step("step:up-to-date", "first-to-second", 10_000, 700_000, UP_TO_DATE_REASON);
+    insertStepJob(storage, { id: "step:running", kind: "registry-light-client-update", subject: "running", at: 10_000, startSlot: null, direction: "first-to-second" });
+    // A step that proved and then failed is priced by its timing row, once.
+    step("step:proved", "first-to-second", 10_000, 800_000, "the result could not be stored");
+    recordProveTiming(storage, { jobId: "registry-proved", direction: "first-to-second", startedAt: 10_000, provedAt: 600_000, timing: { worker_total_ms: 120_000 } });
+    expect(recentJobSeconds(storage, "first-to-second", 6_000)).toEqual([{ provedAt: 600_000, seconds: 120 }, { provedAt: 700_000, seconds: 690 }]);
   });
 
   it("waits for the budget after failed jobs alone have spent it", async () => {

@@ -61,7 +61,15 @@ one tier does not stop the others.
   guard itself zeroed is restored, and only if it still reads `max: 0` (someone else's change wins).
 - **Hold:** the trip that makes `maxTripsPerDay` trips of a tier within 24 h is not restored. Log `gpu_guard_held` at
   error level. A held tier stays at 0 for the life of the process unless its live `max` is seen above 0 again (the owner
-  ran `deploy/runpod/apply.mjs --apply`); then the hold clears and is logged as `gpu_guard_released`.
+  ran `deploy/runpod/apply.mjs --apply`); then the hold clears and is logged as `gpu_guard_released`. A held tier's
+  endpoint (`GET /v2/serverless/{id}`) is read for that release only every `spendCheckSeconds`, not at every worker
+  check: the owner acts in hours, and RunPod limits requests per day.
+- **Rate limit (added 2026-11-18):** RunPod limits requests per day, and the guard used to go on calling after a 429. A 429
+  from any call for a tier (worker check, spend check, release, trip, restore) puts that tier in back-off: no call
+  of either check for the answer's `Retry-After` in seconds (at most 3600, so a tier is probed at least hourly), or
+  else `backoffSeconds`. One `gpu_guard_rate_limited` warning (tier, endpoint, `backoffSeconds`) is logged per back-off,
+  not per skipped call and not as the ordinary failure line. Other tiers are not held back. The back-off is kept in memory
+  only; a restart probes again. A trip that was due during a back-off waits for it: the PATCH would be refused too.
 - A failed PATCH is logged and retried at the next check; the guard never marks a tier tripped that it did not change.
 - The spend check keeps only the bill records whose `serverlessId` is the tier's endpoint (a record without one is skipped,
   as in `parseBillingRows`) and adds the records of one `startTime` together before it compares with `maxUsdPerHour`.
@@ -86,11 +94,12 @@ guard goes on with the state in memory.
   "spendCheckSeconds": 3600,
   "maxUsdPerHour": 0.5,
   "cooldownMinutes": 10,
-  "maxTripsPerDay": 3
+  "maxTripsPerDay": 3,
+  "backoffSeconds": 900
 }
 ```
 
-`checkSeconds` 300 keeps v2 calls near 3 × 288 = 864 a day for the workers list. The defaults are the owner's $0.50/h.
+`checkSeconds` 300 keeps v2 calls near 3 × 288 = 864 a day for the workers list. `backoffSeconds` 900 is the wait after a 429 when RunPod sends no `Retry-After`. The defaults are the owner's $0.50/h.
 
 ### Visibility
 
@@ -110,5 +119,6 @@ guard goes on with the state in memory.
 - Unit tests with a fake fetch and clock for: stuck detection across checks (cleared by a gap, not tripped before
   `stuckMinutes`, tripped after), states that do not count (`IDLE`, `THROTTLED`), spend over and under the limit,
   bucket judged once, trip PATCH body, restore after cool-down, no restore when someone else changed `max`, hold at
-  `maxTripsPerDay`, release when live `max` > 0, one tier failing does not stop another, key never in a log line.
+  `maxTripsPerDay`, release when live `max` > 0, a held tier read only every `spendCheckSeconds`, back-off after a 429 (with and without
+  `Retry-After`, one warning per back-off, other tiers unaffected), one tier failing does not stop another, key never in a log line.
 - Backend coverage gates stay green; `tsc` clean.

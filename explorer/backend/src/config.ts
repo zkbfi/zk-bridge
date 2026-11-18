@@ -222,6 +222,8 @@ export const backendConfigSchema = z
      * The GPU spend guard (`gpu-guard.ts`): stops a RunPod tier whose worker stays busy for `stuckMinutes` or whose bill for
      * one hour is above `maxUsdPerHour`, without stopping the other tiers, and puts its workers back after `cooldownMinutes`.
      * A tier that trips `maxTripsPerDay` times in 24 hours stays stopped until `deploy/runpod/apply.mjs --apply` sets it again.
+     * RunPod limits requests per day: a held tier is read only every `spendCheckSeconds`, and after a 429 a tier is not called for
+     * its `Retry-After` (at most an hour) or else `backoffSeconds`.
      */
     gpuGuard: z
       .object({
@@ -232,6 +234,8 @@ export const backendConfigSchema = z
         maxUsdPerHour: z.number().positive().default(0.5),
         cooldownMinutes: positiveInteger.default(10),
         maxTripsPerDay: positiveInteger.default(3),
+        /** How long a tier is left alone after RunPod answers it 429 (its request limit), when RunPod sends no `Retry-After`. */
+        backoffSeconds: positiveInteger.default(900),
       })
       .strict()
       .prefault({}),

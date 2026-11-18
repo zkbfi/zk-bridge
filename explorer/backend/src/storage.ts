@@ -145,7 +145,8 @@ CREATE TABLE IF NOT EXISTS step_jobs (
   updated_at INTEGER NOT NULL,
   start_slot INTEGER,
   result TEXT,
-  error TEXT
+  error TEXT,
+  direction TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS step_jobs_one_running ON step_jobs (kind, subject) WHERE status = 'running';
 CREATE INDEX IF NOT EXISTS step_jobs_by_subject ON step_jobs (kind, subject, started_at);
@@ -175,6 +176,9 @@ function migrate(database: DatabaseSync): void {
   // The RunPod endpoint's idle timeout over time (see `idle-history.ts`): 60 s from the beginning until the owner set it to
   // 5 s by hand (a PATCH on the endpoint, 2026-11-08 about 01:59 UTC; the backend's sync then logged runpod_idle_timeout_ok).
   // The billing breakdown needs it: an idle tail is as long as the timeout that was in effect when the job ended.
+  // The direction whose GPU budget a step job spends (the fork registry's light client update); older rows have none.
+  const stepColumns = database.prepare("PRAGMA table_info(step_jobs)").all() as Array<{ name: string }>;
+  if (!stepColumns.some((column) => column.name === "direction")) database.exec("ALTER TABLE step_jobs ADD COLUMN direction TEXT");
   database.exec("INSERT OR IGNORE INTO idle_timeout_history (at, seconds) VALUES (0, 60), (1794103140000, 5)");
   database.exec("CREATE UNIQUE INDEX IF NOT EXISTS jobs_one_per_target ON jobs (direction, planned_start_slot, planned_new_slot) WHERE planned_start_slot IS NOT NULL");
 }

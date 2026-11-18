@@ -147,4 +147,52 @@ describe("createAddressBook", () => {
     expect(node.batches).toHaveLength(0);
     expect([...book.contractsOf(1)]).toEqual(["0x" + "f".repeat(40)]);
   });
+
+  describe("two deployment entries of one chain (an old and a redeployed bridge)", () => {
+    const GATE_A = "0xaaaa000000000000000000000000000000000001";
+    const GATE_B = "0xbbbb000000000000000000000000000000000002";
+    const REGISTRY_A = "0xaaaa000000000000000000000000000000000003";
+    const REGISTRY_B = "0xbbbb000000000000000000000000000000000004";
+    const LIGHT_A = "0xaaaa000000000000000000000000000000000005";
+    const LIGHT_B = "0xbbbb000000000000000000000000000000000006";
+    const entry = (gate: string, registry: string): DeploymentChain => ({ chainId: 943, addresses: [gate, registry], gates: [gate], forkRegistries: [registry] });
+    const table = {
+      [`${GATE_A}:lightClient()`]: word(LIGHT_A),
+      [`${REGISTRY_A}:lightClient()`]: word(LIGHT_A),
+      [`${REGISTRY_B}:lightClient()`]: word(LIGHT_B),
+    };
+
+    it("holds the union of what both entries name, not only the last entry's", async () => {
+      const book = createAddressBook({ chainIds: [943], deployment: [entry(GATE_A, REGISTRY_A), entry(GATE_B, REGISTRY_B)], extraContracts: () => [], post: fakeNode(table).post });
+      expect(await book.refresh()).toEqual([]);
+      expect(book.contractsOf(943).has(LIGHT_A)).toBe(true);
+      expect(book.contractsOf(943).has(LIGHT_B)).toBe(true);
+    });
+
+    it("keeps the failed entry's last good result while the other entry is read afresh", async () => {
+      const node = fakeNode(table);
+      let failB = false;
+      const post: NodePost = async (chainId, body) => {
+        if (failB && (JSON.parse(body) as Call[]).some((call) => call.params[0].to === REGISTRY_B)) throw new Error("registry B unreadable");
+        return node.post(chainId, body);
+      };
+      const book = createAddressBook({ chainIds: [943], deployment: [entry(GATE_A, REGISTRY_A), entry(GATE_B, REGISTRY_B)], extraContracts: () => [], post });
+      await book.refresh();
+      failB = true;
+      expect(await book.refresh()).toEqual(["chain 943: registry B unreadable"]);
+      expect(book.contractsOf(943).has(LIGHT_A)).toBe(true);
+      expect(book.contractsOf(943).has(LIGHT_B)).toBe(true);
+    });
+
+    it("drops what a successful read of an entry no longer names", async () => {
+      const answers: Record<string, string> = { ...table };
+      const post: NodePost = async (chainId, body) => fakeNode(answers).post(chainId, body);
+      const book = createAddressBook({ chainIds: [943], deployment: [entry(GATE_A, REGISTRY_A), entry(GATE_B, REGISTRY_B)], extraContracts: () => [], post });
+      await book.refresh();
+      delete answers[`${REGISTRY_B}:lightClient()`];
+      await book.refresh();
+      expect(book.contractsOf(943).has(LIGHT_B)).toBe(false);
+      expect(book.contractsOf(943).has(LIGHT_A)).toBe(true);
+    });
+  });
 });

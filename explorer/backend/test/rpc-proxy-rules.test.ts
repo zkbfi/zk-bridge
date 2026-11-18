@@ -227,3 +227,70 @@ describe("the rebuilt request", () => {
     expect(check("eth_getLogs", [{ address: BRIDGE, Address: OTHER }])?.reason).toBe("eth_getLogs has the key Address twice in different cases");
   });
 });
+
+describe("rebuilt parameters of the methods without a checked object", () => {
+  const SLOT = `0x${"00".repeat(31)}01`;
+  const HASH = `0x${"ab".repeat(32)}`;
+  const params = (method: string, given: readonly unknown[]) => {
+    const checked = checkRequest(request(method, given), RULES);
+    return checked.ok ? checked.request.params : checked.refusal.reason;
+  };
+
+  it("eth_getProof forwards [address, storage keys, block tag] and refuses anything else", () => {
+    expect(params("eth_getProof", [BRIDGE, [SLOT, HASH], "0x10"])).toEqual([BRIDGE, [SLOT, HASH], "0x10"]);
+    expect(params("eth_getProof", [BRIDGE, [], "finalized"])).toEqual([BRIDGE, [], "finalized"]);
+    expect(check("eth_getProof", [BRIDGE, [], "latest", "extra"])?.code).toBe(PARAMETERS_REFUSED);
+    expect(check("eth_getProof", [BRIDGE, [], "latest", { stateOverride: 1 }])?.code).toBe(PARAMETERS_REFUSED);
+    expect(check("eth_getProof", [BRIDGE, []])?.code).toBe(PARAMETERS_REFUSED);
+    for (const keys of ["0x01", [1], ["0x01"], [`${SLOT}00`], [{ a: 1 }]]) expect(check("eth_getProof", [BRIDGE, keys, "latest"])?.code).toBe(PARAMETERS_REFUSED);
+    for (const tag of ["soon", "0x", 5, null, { blockNumber: "0x1" }, "0x" + "1".repeat(65)]) expect(check("eth_getProof", [BRIDGE, [], tag])?.code).toBe(PARAMETERS_REFUSED);
+  });
+
+  it("eth_getStorageAt forwards [address, slot, block tag] and refuses anything else", () => {
+    expect(params("eth_getStorageAt", [MEDIATOR, "0x0", "latest"])).toEqual([MEDIATOR, "0x0", "latest"]);
+    expect(params("eth_getStorageAt", [MEDIATOR, SLOT, "0x5"])).toEqual([MEDIATOR, SLOT, "0x5"]);
+    expect(check("eth_getStorageAt", [MEDIATOR, SLOT, "latest", "extra"])?.code).toBe(PARAMETERS_REFUSED);
+    expect(check("eth_getStorageAt", [MEDIATOR, SLOT])?.code).toBe(PARAMETERS_REFUSED);
+    for (const slot of ["zz", 1, "0x", `0x${"11".repeat(33)}`, null]) expect(check("eth_getStorageAt", [MEDIATOR, slot, "latest"])?.code).toBe(PARAMETERS_REFUSED);
+    expect(check("eth_getStorageAt", [MEDIATOR, SLOT, "tomorrow"])?.code).toBe(PARAMETERS_REFUSED);
+  });
+
+  it("the parameterless methods take none, and drop nothing silently", () => {
+    for (const method of ["eth_chainId", "eth_blockNumber", "eth_gasPrice", "eth_maxPriorityFeePerGas"]) {
+      expect(params(method, [])).toEqual([]);
+      expect(params(method, undefined as never)).toEqual([]);
+      expect(check(method, ["x"])?.code).toBe(PARAMETERS_REFUSED);
+    }
+  });
+
+  it("the address reads take [address, block tag]", () => {
+    for (const method of ["eth_getBalance", "eth_getCode", "eth_getTransactionCount"]) {
+      expect(params(method, [USER, "latest"])).toEqual([USER, "latest"]);
+      expect(check(method, [USER, "latest", "extra"])?.code).toBe(PARAMETERS_REFUSED);
+      expect(check(method, [USER])?.code).toBe(PARAMETERS_REFUSED);
+      expect(check(method, ["nope", "latest"])?.code).toBe(PARAMETERS_REFUSED);
+      expect(check(method, [USER, "later"])?.code).toBe(PARAMETERS_REFUSED);
+    }
+  });
+
+  it("the transaction lookups take one 32-byte hash, and the block lookup [block tag, boolean]", () => {
+    for (const method of ["eth_getTransactionByHash", "eth_getTransactionReceipt"]) {
+      expect(params(method, [HASH])).toEqual([HASH]);
+      expect(check(method, [HASH, 1])?.code).toBe(PARAMETERS_REFUSED);
+      expect(check(method, ["0x12"])?.code).toBe(PARAMETERS_REFUSED);
+    }
+    expect(params("eth_getBlockByNumber", ["0x10", false])).toEqual(["0x10", false]);
+    expect(params("eth_getBlockByNumber", ["latest", true])).toEqual(["latest", true]);
+    expect(check("eth_getBlockByNumber", ["latest"])?.code).toBe(PARAMETERS_REFUSED);
+    expect(check("eth_getBlockByNumber", ["latest", "yes"])?.code).toBe(PARAMETERS_REFUSED);
+    expect(check("eth_getBlockByNumber", ["latest", false, 1])?.code).toBe(PARAMETERS_REFUSED);
+    expect(check("eth_getBlockByNumber", ["nonsense", false])?.code).toBe(PARAMETERS_REFUSED);
+  });
+
+  it("refuses a configured method that has no parameter rule", () => {
+    const rules = { ...RULES, methods: new Set([...RULES.methods, "eth_newFilter"]) };
+    const refusal = refusalOf(request("eth_newFilter", [{}]), rules);
+    expect(refusal?.code).toBe(PARAMETERS_REFUSED);
+    expect(refusal?.reason).toBe("eth_newFilter has no parameter rule here, so it is not forwarded");
+  });
+});

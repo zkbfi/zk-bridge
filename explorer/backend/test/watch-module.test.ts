@@ -60,7 +60,7 @@ describe("watchedDirections", () => {
   it("reads the billing refresh and retry times: an hour and 15 minutes by default", () => {
     expect(makeConfig().billing).toEqual({ refreshSeconds: 3600, retrySeconds: 900 });
     expect(makeConfig({ billing: { refreshSeconds: 7200 } }).billing).toEqual({ refreshSeconds: 7200, retrySeconds: 900 });
-    expect(makeConfig().gpuGuard).toEqual({ enabled: true, checkSeconds: 300, stuckMinutes: 15, spendCheckSeconds: 3600, maxUsdPerHour: 0.5, cooldownMinutes: 10, maxTripsPerDay: 3 });
+    expect(makeConfig().gpuGuard).toEqual({ enabled: true, checkSeconds: 300, stuckMinutes: 15, spendCheckSeconds: 3600, maxUsdPerHour: 0.5, cooldownMinutes: 10, maxTripsPerDay: 3, backoffSeconds: 900 });
     expect(makeConfig({ gpuGuard: { maxUsdPerHour: 0.25 } }).gpuGuard).toMatchObject({ enabled: true, maxUsdPerHour: 0.25 });
     expect(() => makeConfig({ gpuGuard: { maxUsdPerHour: 0 } })).toThrow();
     expect(() => makeConfig({ billing: { refreshSeconds: 0 } })).toThrow(BackendConfigError);

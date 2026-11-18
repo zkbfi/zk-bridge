@@ -451,7 +451,8 @@ Settings, all optional (`watch` in the configuration file):
 | `gpuGuard.spendCheckSeconds` | 3600 | How often the guard reads the bill of the last 3 hours of each tier (`GET /v2/billing/serverless?serverlessId=...&bucketSize=hour`). |
 | `gpuGuard.maxUsdPerHour` | 0.5 | A completed hour billed above this trips its tier. Each hour is judged once. |
 | `gpuGuard.cooldownMinutes` | 10 | How long a tripped tier stays at 0 workers before its workers are put back (only if it still reads `max: 0`). |
-| `gpuGuard.maxTripsPerDay` | 3 | The trip that makes this many in 24 hours is held: the tier stays at 0 until `deploy/runpod/apply.mjs --apply` sets its workers again. |
+| `gpuGuard.maxTripsPerDay` | 3 | The trip that makes this many in 24 hours is held: the tier stays at 0 until `deploy/runpod/apply.mjs --apply` sets its workers again. A held tier is read for its release only every `spendCheckSeconds`. |
+| `gpuGuard.backoffSeconds` | 900 | How long the guard leaves a tier alone after RunPod answers it 429 (its daily request limit), when the answer has no `Retry-After` (which is used instead, at most 3600 s). One `gpu_guard_rate_limited` warning per back-off. |
 | `warmup.dailyCapSeconds` | 3600 | The most warm-up seconds in any 24 hours, both directions together. |
 | `warmup.pingTimeoutSeconds` | 300 | How long one ping may wait for a cold worker. |
 | `warmup.leadSeconds` | none | The fixed lead time of before 2026-11-01. Still accepted; it does nothing and the start log warns (`config_ignored`). |

@@ -14,9 +14,11 @@
 import { remoteEndpoints, type BackendConfig, type BackendSecrets } from "./config.ts";
 import type { Logger } from "./logger.ts";
 import type { GpuGuardTierState } from "./gpu-guard.ts";
+import { RUNPOD_REST_URL, problemText, reasonOf, runPodRequest } from "./runpod-rest.ts";
+
+export { RUNPOD_REST_URL, problemText };
 
 /** The base address of RunPod's REST API v2. `createBillingReader` takes another one in `restUrl`. */
-export const RUNPOD_REST_URL = "https://api.runpod.io/v2";
 export const BILLING_URL = `${RUNPOD_REST_URL}/billing/serverless`;
 export const GRAPHQL_URL = "https://api.runpod.io/graphql";
 const BALANCE_QUERY = "query { myself { clientBalance currentSpendPerHr spendLimit } }";
@@ -100,17 +102,6 @@ export function billingEndpoints(config: BackendConfig, secrets: BackendSecrets)
 }
 
 const finite = (value: unknown): number | null => (typeof value === "number" && Number.isFinite(value) ? value : null);
-
-/** The longest text of a RunPod problem document that goes into a log line. */
-const PROBLEM_TEXT_LIMIT = 200;
-
-/** `title: detail` of an RFC 9457 problem document, cut to {@link PROBLEM_TEXT_LIMIT} characters; null when the body is not one. */
-export function problemText(body: unknown): string | null {
-  if (typeof body !== "object" || body === null) return null;
-  const { title, detail } = body as { title?: unknown; detail?: unknown };
-  const parts = [title, detail].filter((part): part is string => typeof part === "string" && part !== "");
-  return parts.length === 0 ? null : parts.join(": ").replace(/\s+/g, " ").slice(0, PROBLEM_TEXT_LIMIT);
-}
 
 /**
  * Reads the records of one `GET /v2/billing/serverless` answer (`{ records, metadata }`). A record has `startTime` (the
@@ -206,15 +197,9 @@ export function createBillingReader(input: {
   let nextTryAt = 0;
   let inFlight: Promise<void> | null = null;
 
-  async function getJson(url: string, init: RequestInit & { headers: Record<string, string> }): Promise<unknown> {
-    const answer = await doFetch()(url, { ...init, signal: AbortSignal.timeout(timeout) });
-    if (!answer.ok) {
-      // Error answers of REST v2 are RFC 9457 problem documents: say what RunPod says.
-      const problem = problemText(await answer.json().catch(() => null));
-      throw Object.assign(new Error(`RunPod answered ${answer.status}${problem === null ? "" : `: ${problem}`}`), { status: answer.status });
-    }
-    return answer.json();
-  }
+  /** One request with the key of the caller. A failure carries `status` (RunPodRequestError). */
+  const getJson = (url: string, apiKey: string, body?: unknown): Promise<unknown> =>
+    runPodRequest(doFetch(), url, { apiKey, timeoutMilliseconds: timeout, ...(body === undefined ? {} : { method: "POST", body }) });
 
   async function refresh(): Promise<void> {
     const at = input.now();
@@ -229,8 +214,7 @@ export function createBillingReader(input: {
       const perKey = await Promise.all(
         keys.map(async (key) => {
           const ids = new Set(input.endpoints.filter((endpoint) => endpoint.apiKey === key).map((endpoint) => endpoint.id));
-          const headers = { authorization: `Bearer ${key}` };
-          const [days, hours] = await Promise.all([getJson(query("day", startOfDay.toISOString()), { headers }), getJson(query("hour", day(26)), { headers })]);
+          const [days, hours] = await Promise.all([getJson(query("day", startOfDay.toISOString()), key), getJson(query("hour", day(26)), key)]);
           return { days: bucketRows(parseBillingRows(days, ids), 10), hours: bucketRows(parseBillingRows(hours, ids), 13) };
         }),
       );
@@ -238,7 +222,7 @@ export function createBillingReader(input: {
     };
     const balance = async () => {
       const first = input.endpoints[0] as BillingEndpoint;
-      const body = await getJson(GRAPHQL_URL, { method: "POST", headers: { authorization: `Bearer ${first.apiKey}`, "content-type": "application/json" }, body: JSON.stringify({ query: BALANCE_QUERY }) });
+      const body = await getJson(GRAPHQL_URL, first.apiKey, { query: BALANCE_QUERY });
       return { ...parseBalance(body), readAt: at };
     };
     const coldStarts = async () => {
@@ -246,7 +230,7 @@ export function createBillingReader(input: {
       const results = await Promise.allSettled(
         input.endpoints.map(async (endpoint) => {
           const label = endpoint.label ?? endpoint.id.slice(0, 6);
-          const body = await getJson(`${restBase}/serverless/${encodeURIComponent(endpoint.id)}/metrics/cold-starts?${query}`, { headers: { authorization: `Bearer ${endpoint.apiKey}` } });
+          const body = await getJson(`${restBase}/serverless/${encodeURIComponent(endpoint.id)}/metrics/cold-starts?${query}`, endpoint.apiKey);
           return parseColdStarts(body, label);
         }),
       );
@@ -283,12 +267,6 @@ export function createBillingReader(input: {
       return snapshot;
     },
   };
-}
-
-/** The text of a failure: our own message, or the name of a network error. It never holds the key, which travels in a header only. */
-function reasonOf(error: unknown): string {
-  const { name, message } = error as Error;
-  return name === "Error" ? message : name;
 }
 
 /** Figures derived from a snapshot at a time. */
