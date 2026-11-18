@@ -97,15 +97,24 @@ sha256_of() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}'; else sha256sum "$1" | awk '{print $1}'; fi
 }
 
-# sha256_check <list>: checks "<sha256>  <path>" lines from the mirror directory; prints the paths that fail.
+# sha256_check <list>: checks "<sha256>  <path>" lines from the mirror directory; prints the paths that fail and returns 0.
+# When the checker exits non-zero without naming a failed path (a malformed line, a missing tool, an unreadable list),
+# nothing was verified: it logs what the checker said and returns 1, so that the caller counts a failure.
 sha256_check() {
-  local out status=0
+  local out status=0 failed err
+  [ -s "$1" ] || return 0
+  err=$(mktemp "$LOCAL_DIR/.checker-XXXXXX")
   if command -v shasum >/dev/null 2>&1; then
-    out=$(cd "$MIRROR_DIR" && shasum -a 256 -c --quiet "$1" 2>/dev/null) || status=$?
+    out=$(cd "$MIRROR_DIR" && shasum -a 256 -c --quiet "$1" 2>"$err") || status=$?
   else
-    out=$(cd "$MIRROR_DIR" && sha256sum -c --quiet "$1" 2>/dev/null) || status=$?
+    out=$(cd "$MIRROR_DIR" && sha256sum -c --quiet "$1" 2>"$err") || status=$?
   fi
-  [ "$status" -eq 0 ] || printf '%s\n' "$out" | sed -n 's/: FAILED.*$//p'
+  if [ "$status" -eq 0 ]; then rm -f "$err"; return 0; fi
+  failed=$(printf '%s\n' "$out" | sed -n 's/: FAILED.*$//p')
+  if [ -n "$failed" ]; then rm -f "$err"; printf '%s\n' "$failed"; return 0; fi
+  log "the hash checker exited $status without naming a file that differs; nothing is verified: $(head -c 300 "$err" | tr '\n' ' ')"
+  rm -f "$err"
+  return 1
 }
 
 # files_of <directory>: the files under it, relative, sorted.
@@ -148,7 +157,7 @@ sync_once() {
 # verify: the newest manifest against the files here. Sets MISSING and CHANGED (counts), NEWEST (the mirror's copy)
 # and READ (the copy the file list is read from: the server's trusted copy when there is one).
 verify() {
-  local name lines line sha rel list listed unlisted failed n
+  local name lines line sha rel list listed unlisted failed checked n
   MISSING=0
   CHANGED=0
   NEWEST=""
@@ -187,6 +196,8 @@ verify() {
     [ -n "$line" ] || continue
     sha=${line%% *}
     rel=${line#* }
+    # A hash that is not 64 lowercase hex digits would make the checker skip or reject the line: refuse it here.
+    if ! [[ $sha =~ ^[0-9a-f]{64}$ && -n $rel && $rel != "$line" ]]; then log "the manifest has a malformed entry: $(printf '%s' "$line" | head -c 120)"; CHANGED=$((CHANGED + 1)); continue; fi
     case $rel in /* | *..*) log "the manifest lists a path outside the mirror: $rel"; CHANGED=$((CHANGED + 1)); continue ;; esac
     printf '%s\n' "$rel" >>"$listed"
     if [ -f "$MIRROR_DIR/$rel" ]; then
@@ -198,7 +209,9 @@ verify() {
   done <<EOF_LINES
 $lines
 EOF_LINES
-  failed=$(sha256_check "$list")
+  checked=0
+  failed=$(sha256_check "$list") || checked=$?
+  if [ "$checked" -ne 0 ]; then CHANGED=$((CHANGED + 1)); fi
   if [ -n "$failed" ]; then
     CHANGED=$((CHANGED + $(printf '%s\n' "$failed" | grep -c .)))
     printf '%s\n' "$failed" | sed -n '1,10p' | while IFS= read -r rel; do log "differs from the manifest: $rel"; done

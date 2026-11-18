@@ -129,7 +129,7 @@ export async function startBackend(input: StartBackendInput): Promise<RunningBac
   const idleHistory = createIdleHistory(storage);
   const idleReader =
     runpodEndpoints.length === 0 ? undefined : createIdleTimeoutReader({ endpoints: runpodEndpoints, logger, onObserved: (seconds) => idleHistory.record(now(), seconds) });
-  const gpuGuard = runpodEndpoints.length === 0 || !config.gpuGuard.enabled ? undefined : createGpuGuard({ endpoints: runpodEndpoints, settings: config.gpuGuard, now, logger });
+  const gpuGuard = runpodEndpoints.length === 0 || !config.gpuGuard.enabled ? undefined : createGpuGuard({ endpoints: runpodEndpoints, settings: config.gpuGuard, now, logger, storage });
   if (config.watch.warmup.syncIdleTimeout !== undefined) {
     logger.warn("config_deprecated", { key: "watch.warmup.syncIdleTimeout", detail: "ignored: the backend no longer writes the idle timeout; it is set in deploy/runpod/endpoints.json. Remove the key" });
   }

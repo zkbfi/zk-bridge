@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RUNPOD_REST_URL } from "../src/billing.ts";
+import { openStorage, type Storage } from "../src/storage.ts";
 import { createGpuGuard, type GpuGuardSettings } from "../src/gpu-guard.ts";
 
 const KEY = "fake-runpod-key-for-tests-0003";
@@ -38,17 +39,18 @@ function fakeRunpod() {
   return { tiers, calls, fetchFunction: () => fetchFunction };
 }
 
-function make(options: { settings?: Partial<GpuGuardSettings>; runpod?: ReturnType<typeof fakeRunpod> } = {}) {
+function make(options: { settings?: Partial<GpuGuardSettings>; runpod?: ReturnType<typeof fakeRunpod>; storage?: Storage; clock?: { at: number } } = {}) {
   const runpod = options.runpod ?? fakeRunpod();
   const lines: string[] = [];
   const record = (level: string) => (event: string, fields?: unknown) => void lines.push(`${level} ${event} ${JSON.stringify(fields)}`);
-  const clock = { at: START };
+  const clock = options.clock ?? { at: START };
   const guard = createGpuGuard({
     endpoints: [A, B],
     settings: { ...SETTINGS, ...options.settings },
     now: () => clock.at,
     logger: { debug: record("debug"), info: record("info"), warn: record("warn"), error: record("error") },
     fetchFunction: runpod.fetchFunction,
+    ...(options.storage === undefined ? {} : { storage: options.storage }),
   });
   const advance = (minutes: number) => void (clock.at += minutes * MINUTE);
   const patches = () => runpod.calls.filter((call) => call.method === "PATCH");
@@ -175,12 +177,12 @@ describe("the stuck worker signal", () => {
 });
 
 describe("the spend signal", () => {
-  const hour = (startTime: string, totalAmount: unknown) => ({ startTime, endTime: startTime, totalAmount });
+  const hour = (startTime: string, totalAmount: unknown, serverlessId: string = A.id) => ({ startTime, endTime: startTime, serverlessId, totalAmount });
 
   it("asks for the last 3 hours of one endpoint, trips on a completed hour above the limit and not on one at or below it", async () => {
     const { guard, runpod, patches, stateOf } = make();
     runpod.tiers[A.id]!.records = [hour("2026-11-17T09:00:00Z", 0.5), hour("2026-11-17T10:00:00Z", 0.51), hour("2026-11-17T11:00:00Z", 0.1)];
-    runpod.tiers[B.id]!.records = [hour("2026-11-17T11:00:00Z", 0.2)];
+    runpod.tiers[B.id]!.records = [hour("2026-11-17T11:00:00Z", 0.2, B.id)];
     await guard.checkSpend();
     const read = runpod.calls.find((call) => call.url.includes("/billing/serverless"))!;
     const query = new URL(read.url).searchParams;
@@ -193,6 +195,22 @@ describe("the spend signal", () => {
     expect(patches()[0]?.body).toEqual({ workers: { min: 0, max: 0, idleTimeout: 5 } });
     expect(stateOf("gpu-24gb")).toMatchObject({ state: "tripped", lastTrip: { signal: "spend", evidence: "hour 2026-11-17T10:00:00Z billed $0.51" } });
     expect(stateOf("gpu-48gb")?.state).toBe("ok");
+  });
+
+  it("keeps only the records of the tier's own endpoint, and skips a record without a serverlessId", async () => {
+    const { guard, runpod, patches, stateOf } = make();
+    runpod.tiers[A.id]!.records = [hour("2026-11-17T10:00:00Z", 9, B.id), { startTime: "2026-11-17T09:00:00Z", totalAmount: 9 }, hour("2026-11-17T11:00:00Z", 0.2)];
+    await guard.checkSpend();
+    expect(patches()).toHaveLength(0);
+    expect(stateOf("gpu-24gb")?.state).toBe("ok");
+  });
+
+  it("adds the records of one hour together before it compares with the limit", async () => {
+    const { guard, runpod, patches, stateOf } = make();
+    runpod.tiers[A.id]!.records = [hour("2026-11-17T10:00:00Z", 0.3), hour("2026-11-17T10:00:00Z", 0.3), hour("2026-11-17T11:00:00Z", 0.2), hour("2026-11-17T11:00:00Z", 0.2)];
+    await guard.checkSpend();
+    expect(patches()).toHaveLength(1);
+    expect(stateOf("gpu-24gb")?.lastTrip?.evidence).toBe("hour 2026-11-17T10:00:00Z billed $0.60");
   });
 
   it("names the dearest hour as the evidence when several are over the limit", async () => {
@@ -362,6 +380,93 @@ describe("restore, hold and release", () => {
     advance(16);
     await guard.checkWorkers();
     expect(stateOf("gpu-24gb")).toMatchObject({ state: "tripped", tripsLast24h: 1 });
+  });
+});
+
+describe("a restart", () => {
+  /** A guard on a shared database and clock, and the same again after a restart: a new guard on the same storage. */
+  function restartable(settings: Partial<GpuGuardSettings> = {}) {
+    const storage = openStorage(":memory:");
+    const runpod = fakeRunpod();
+    const clock = { at: START };
+    const first = make({ storage, runpod, clock, settings });
+    const second = () => make({ storage, runpod, clock, settings });
+    return { storage, runpod, clock, first, second };
+  }
+  const trip = async (guard: ReturnType<typeof make>) => {
+    guard.runpod.tiers[A.id]!.workers = running();
+    guard.runpod.tiers[A.id]!.live = { min: 1, max: 3, idleTimeout: 30 };
+    await guard.guard.checkWorkers();
+    guard.advance(16);
+    await guard.guard.checkWorkers();
+  };
+
+  it("continues a cool-down and restores the remembered workers after it", async () => {
+    const { runpod, first, second } = restartable();
+    await trip(first);
+    expect(runpod.tiers[A.id]!.live.max).toBe(0);
+    const again = second();
+    expect(again.stateOf("gpu-24gb")).toMatchObject({ state: "tripped", tripsLast24h: 1, lastTrip: { signal: "stuck-worker" } });
+    again.advance(5);
+    await again.guard.checkWorkers();
+    expect(runpod.tiers[A.id]!.live.max).toBe(0);
+    again.advance(6);
+    await again.guard.checkWorkers();
+    expect(runpod.tiers[A.id]!.live).toEqual({ min: 1, max: 3, idleTimeout: 30 });
+    expect(again.stateOf("gpu-24gb")?.state).toBe("ok");
+    expect(second().stateOf("gpu-24gb")).toMatchObject({ state: "ok", tripsLast24h: 1 });
+  });
+
+  it("keeps a hold, and keeps counting trips so a restart does not bypass maxTripsPerDay", async () => {
+    const { runpod, first, second } = restartable({ maxTripsPerDay: 2 });
+    await trip(first);
+    runpod.tiers[A.id]!.live = { min: 1, max: 3, idleTimeout: 30 };
+    first.advance(11);
+    await first.guard.checkWorkers();
+    const again = second();
+    expect(again.stateOf("gpu-24gb")).toMatchObject({ state: "ok", tripsLast24h: 1 });
+    await trip(again);
+    expect(again.stateOf("gpu-24gb")).toMatchObject({ state: "held", tripsLast24h: 2 });
+    const held = second();
+    expect(held.stateOf("gpu-24gb")).toMatchObject({ state: "held", until: null });
+    held.advance(120);
+    await held.guard.checkWorkers();
+    expect(runpod.tiers[A.id]!.live.max).toBe(0);
+  });
+
+  it("does not trip again after a restart on an hour it already judged", async () => {
+    const { runpod, first, second } = restartable();
+    runpod.tiers[A.id]!.records = [{ startTime: "2026-11-17T11:00:00Z", endTime: "2026-11-17T11:00:00Z", serverlessId: A.id, totalAmount: 0.9 }];
+    await first.guard.checkSpend();
+    expect(first.patches()).toHaveLength(1);
+    first.advance(11);
+    await first.guard.checkWorkers();
+    expect(runpod.tiers[A.id]!.live.max).toBe(1);
+    // The trip and the restore are two PATCHes on the shared RunPod double; no third one after the restart.
+    expect(first.patches()).toHaveLength(2);
+    const again = second();
+    await again.guard.checkSpend();
+    expect(again.patches()).toHaveLength(2);
+    expect(again.stateOf("gpu-24gb")).toMatchObject({ state: "ok", tripsLast24h: 1 });
+  });
+
+  it("reads a row saved before the judged hours were kept", async () => {
+    const { storage, second } = restartable();
+    const row = { zeroed: null, held: false, trips: [START - 60 * MINUTE], last: { at: START - 60 * MINUTE, signal: "spend", evidence: "hour x billed $0.90" } };
+    storage.database.prepare("INSERT INTO gpu_guard_state (endpoint_id, state) VALUES (?, ?)").run(A.id, JSON.stringify(row));
+    expect(second().stateOf("gpu-24gb")).toMatchObject({ state: "ok", tripsLast24h: 1, lastTrip: { signal: "spend" } });
+  });
+
+  it("logs a saved row it cannot read and a failed write, and goes on", async () => {
+    const { storage, first, second } = restartable();
+    storage.database.prepare("INSERT INTO gpu_guard_state (endpoint_id, state) VALUES (?, ?)").run(A.id, "not json");
+    const again = second();
+    expect(again.stateOf("gpu-24gb")?.state).toBe("ok");
+    expect(again.lines.some((line) => line.startsWith("warn gpu_guard_state_unreadable"))).toBe(true);
+    storage.database.exec("DROP TABLE gpu_guard_state");
+    await trip(first);
+    expect(first.stateOf("gpu-24gb")?.state).toBe("tripped");
+    expect(first.lines.some((line) => line.startsWith("warn gpu_guard_state_unsaved"))).toBe(true);
   });
 });
 

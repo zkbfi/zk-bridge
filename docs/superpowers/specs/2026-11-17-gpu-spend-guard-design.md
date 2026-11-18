@@ -63,6 +63,18 @@ one tier does not stop the others.
   error level. A held tier stays at 0 for the life of the process unless its live `max` is seen above 0 again (the owner
   ran `deploy/runpod/apply.mjs --apply`); then the hold clears and is logged as `gpu_guard_released`.
 - A failed PATCH is logged and retried at the next check; the guard never marks a tier tripped that it did not change.
+- The spend check keeps only the bill records whose `serverlessId` is the tier's endpoint (a record without one is skipped,
+  as in `parseBillingRows`) and adds the records of one `startTime` together before it compares with `maxUsdPerHour`.
+
+### Restart
+
+The state of each tier (`zeroed` with the workers to put back and `restoreAt`, `held`, the trip times and the last trip) is
+kept in the backend database, table `gpu_guard_state`, one row per endpoint id. It is written after every trip, restore,
+release and hold, and read when the guard is created (`gpu_guard_state_loaded`). A tier that was in a cool-down continues
+it (and is restored at the next check once `restoreAt` has passed), a held tier stays held until its live `max` is seen
+above 0, and trips keep counting within 24 h, so a restart cannot bypass `maxTripsPerDay`. An unreadable row is logged
+(`gpu_guard_state_unreadable`) and the tier starts clean; a failed write is logged (`gpu_guard_state_unsaved`) and the
+guard goes on with the state in memory.
 
 ### Configuration (`backend.json`, zod in `config.ts`, all with defaults)
 

@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
  * warm-up of the remote prover (`watch/warmup-store.ts`), and `job_timings` to the timings of each proof
  * (`requests/timings.ts`): what the prover reported, and when the webhook stored and the board took the proof.
  * `fork_observations` holds the fork observation proofs of the seal module (`seal/observations.ts`), one row per attempt.
+ * `gpu_guard_state` holds the GPU spend guard's state per tier, so a restart keeps a cool-down, a hold and the trip count (`gpu-guard.ts`).
  * `step_jobs` and `step_requests` hold the route steps' proofs that no other table keeps, and their callers (`steps/store.ts`).
  */
 const SCHEMA = `
@@ -94,6 +95,10 @@ CREATE INDEX IF NOT EXISTS job_timings_by_proved ON job_timings (proved_at);
 CREATE TABLE IF NOT EXISTS idle_timeout_history (
   at INTEGER PRIMARY KEY,
   seconds INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS gpu_guard_state (
+  endpoint_id TEXT PRIMARY KEY,
+  state TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS handoff_updates (
   chain_id INTEGER NOT NULL,
