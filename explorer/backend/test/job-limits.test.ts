@@ -132,6 +132,34 @@ describe("the daily GPU budget per direction", () => {
     expect(recentJobSeconds(storage, "first-to-second", 100_000)).toEqual([]);
   });
 
+  it("charges a failed job from its creation to its failure, once, and leaves a failure before the window out", () => {
+    const storage = openStorage(":memory:");
+    const fail = (id: string, direction: "first-to-second" | "second-to-first", createdAt: number, failedAt: number) => {
+      insertJob(storage, { id, direction, now: createdAt });
+      updateJob(storage, id, { status: "proving" }, createdAt + 1000, ["queued"]);
+      updateJob(storage, id, { status: "failed", error: "the prover ran longer than its limit" }, failedAt, ["proving"]);
+    };
+    fail("timed-out", "first-to-second", 10_000, 1_810_000);
+    fail("other", "second-to-first", 10_000, 1_810_000);
+    fail("old", "first-to-second", 0, 5_000);
+    // A job that proved and then failed at the board is already priced by its timing row.
+    fail("posted", "first-to-second", 10_000, 500_000);
+    provedJob(storage, "posted", 400_000, 300);
+    expect(recentJobSeconds(storage, "first-to-second", 6_000)).toEqual([{ provedAt: 400_000, seconds: 300 }, { provedAt: 1_810_000, seconds: 1800 }]);
+  });
+
+  it("waits for the budget after failed jobs alone have spent it", async () => {
+    const run = build();
+    const now = run.clock.now();
+    // Two hours of failed proving at $2.25 and then a bit: $5.04 against the $5.00 budget, and no proof came back.
+    for (const [id, seconds] of [["a", 3600], ["b", 3600 + 864]] as const) {
+      insertJob(run.storage, { id, direction: "first-to-second", now: now - 10 * HOUR });
+      updateJob(run.storage, id, { status: "proving" }, now - 10 * HOUR, ["queued"]);
+      updateJob(run.storage, id, { status: "failed", error: "the prover failed" }, now - 10 * HOUR + seconds * 1000, ["proving"]);
+    }
+    expect(await run.service.submit({ ...base, caller: "a", reason: "user" })).toMatchObject({ refused: "rate-limited", why: "gpu-budget" });
+  });
+
   it("refuses a job once the direction's spend in 24 h reaches the budget, says by how much, and logs it", async () => {
     const run = build();
     const now = run.clock.now();

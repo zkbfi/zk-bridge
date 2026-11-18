@@ -241,7 +241,20 @@ main() {
   # One run at a time. A lock left by a run that died is taken over.
   local run_lock=$LOCAL_DIR/.pull.lock
   if ! mkdir "$run_lock" 2>/dev/null; then
-    if kill -0 "$(cat "$run_lock/pid" 2>/dev/null || echo 0)" 2>/dev/null; then die "another run is going"; fi
+    # The pid must be a number: `kill -0 0` signals this process's own group and always succeeds. A lock with no pid
+    # (a run killed between its mkdir and writing the pid) is stale, but one younger than a minute may be a run that is
+    # starting right now, so it counts as live.
+    local holder
+    holder=$(cat "$run_lock/pid" 2>/dev/null || true)
+    case $holder in
+      '' | *[!0-9]*)
+        if [ -n "$(find "$run_lock" -maxdepth 0 -mmin -1 2>/dev/null)" ]; then die "another run is going (its lock is under a minute old and has no pid yet)"; fi
+        log "the lock has no valid pid and is over a minute old; taking it over"
+        ;;
+      *)
+        if kill -0 "$holder" 2>/dev/null; then die "another run is going"; fi
+        ;;
+    esac
     rm -rf "$run_lock"
     mkdir "$run_lock" || die "cannot take the lock"
   fi
