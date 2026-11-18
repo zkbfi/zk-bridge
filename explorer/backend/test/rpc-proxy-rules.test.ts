@@ -172,6 +172,31 @@ describe("exact lengths and the gas cap", () => {
   });
 });
 
+describe("the gas of a forwarded call", () => {
+  const forwarded = (method: string, call: Record<string, unknown>, rules = RULES) => {
+    const checked = checkRequest({ jsonrpc: "2.0", id: 5, method, params: [call, "latest"] } as JsonRpcRequest, rules);
+    if (!checked.ok) throw new Error(checked.refusal.reason);
+    return (checked.request.params as readonly Record<string, unknown>[])[0] ?? {};
+  };
+
+  it("names the cap when the call names no gas, so the upstream node's own default never applies", () => {
+    expect(forwarded("eth_call", { to: BRIDGE, data: bridgeRead }).gas).toBe("0x1c9c380");
+    expect(forwarded("eth_estimateGas", { to: BRIDGE, value: "0x1" }).gas).toBe("0x1c9c380");
+    expect(forwarded("eth_call", { to: BRIDGE, data: bridgeRead }, { ...RULES, maxCallGas: 21_000n }).gas).toBe("0x5208");
+  });
+
+  it("leaves a gas within the cap as it was named, and still refuses one above it", () => {
+    expect(forwarded("eth_call", { to: BRIDGE, data: bridgeRead, gas: "0x10" }).gas).toBe("0x10");
+    expect(forwarded("eth_call", { to: BRIDGE, data: bridgeRead, gas: "0x1c9c380" }).gas).toBe("0x1c9c380");
+    expect(call(BRIDGE, bridgeRead, { gas: "0x1c9c381" })?.reason).toBe("eth_call may name at most 30000000 gas");
+  });
+
+  it("covers the calls inside Multicall3 with the gas of the outer call", () => {
+    const data = aggregate3([{ target: BRIDGE, callData: bridgeRead }]);
+    expect(forwarded("eth_call", { to: RULES.multicall3, data }).gas).toBe("0x1c9c380");
+  });
+});
+
 describe("the rebuilt request", () => {
   const rebuilt = (method: string, params: readonly unknown[]) => {
     const checked = checkRequest({ jsonrpc: "2.0", id: 5, method, params, extra: "dropped" } as JsonRpcRequest, RULES);
@@ -186,7 +211,7 @@ describe("the rebuilt request", () => {
       method: "eth_call",
       params: [{ to: BRIDGE, gas: "0x10", from: USER, data: bridgeRead }, "latest"],
     });
-    expect(rebuilt("eth_estimateGas", [{ to: BRIDGE, value: "0x1" }]).params).toEqual([{ to: BRIDGE, value: "0x1" }]);
+    expect(rebuilt("eth_estimateGas", [{ to: BRIDGE, value: "0x1", gas: "0x5208" }]).params).toEqual([{ to: BRIDGE, value: "0x1", gas: "0x5208" }]);
   });
 
   it("keeps only the known keys of a log filter, and passes other methods' params as they are", () => {

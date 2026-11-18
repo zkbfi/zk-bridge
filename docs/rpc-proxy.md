@@ -94,7 +94,8 @@ The rules:
     `allowance(address,address)`, `totalSupply()`, the pool reads `getReserves()` and `token0()` (the PulseX pairs of
     the prices), and `approve(spender, amount)` when the spender is a zkb.fi contract, each with calldata of exactly its
     ABI length (4 bytes, 36 for `balanceOf`, 68 for `allowance` and `approve`);
-  - `gas`, when named, at most `rpcProxy.maxCallGas` (30,000,000);
+  - `gas`, when named, at most `rpcProxy.maxCallGas` (30,000,000); a call that names none is forwarded with `gas` set to
+    `maxCallGas`, so the upstream node's own default never applies;
   - no key twice in different cases (`to` and `To`), no `data` and `input` that differ, and no third parameter (a state
     or block override could run any code at a zkb.fi address).
 - `eth_getProof`, `eth_getStorageAt` (when served): a zkb.fi contract.

@@ -9,7 +9,7 @@ import { decodeFunctionData, parseAbi, toEventSelector, toFunctionSelector, type
  * - `eth_getProof` and `eth_getStorageAt` (when the configuration serves them) read a zkb.fi contract;
  * - `eth_call` and `eth_estimateGas` go to a zkb.fi contract (any function), to Multicall3 (each inner call is checked by
  *   the same rule), or to any other address with a token read of the exact ABI length (`anyAddressFunctions`) or an
- *   `approve` of the exact length whose spender is a zkb.fi contract; gas at most `maxCallGas`; no state or block override;
+ *   `approve` of the exact length whose spender is a zkb.fi contract; gas at most `maxCallGas` (the cap is forwarded as the gas of a call that names none); no state or block override;
  * - every other served method passes as it is.
  *
  * A request that passes is REBUILT from what was checked ({@link checkRequest}): a fresh `{ jsonrpc, id, method, params }`
@@ -200,8 +200,9 @@ function checkCall(method: string, params: readonly unknown[], rules: ChainRules
   if (gas !== undefined && (typeof gas !== "string" || !QUANTITY.test(gas) || BigInt(gas) > rules.maxCallGas)) return `${method} may name at most ${rules.maxCallGas} gas`;
   const reason = innerRefusal(call.to, calldata as Hex, rules, 0);
   if (reason !== null) return `${method}: ${reason}`;
-  // One calldata field, the one checked; a plain send keeps none.
-  return { ...pick(call, CALL_KEYS), ...(data === undefined && input === undefined ? {} : { data: calldata }) };
+  // One calldata field, the one checked; a plain send keeps none. A call that names no gas is forwarded with the cap as
+  // its gas, so the upstream node's own, larger default never applies (inner calls of Multicall3 run under this gas).
+  return { ...pick(call, CALL_KEYS), gas: gas ?? `0x${rules.maxCallGas.toString(16)}`, ...(data === undefined && input === undefined ? {} : { data: calldata }) };
 }
 
 /** Why a call (or a call inside Multicall3) leaves zkb.fi, or null. */

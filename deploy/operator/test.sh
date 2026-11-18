@@ -267,6 +267,34 @@ if [ "$status" -ne 0 ] && grep -q 'manifests/ holds zzz.json' "$local_dir/pull.l
 rm -f "$remote/manifests/zzz.json"
 pull || true
 
+# The run lock. A lock directory with no pid file that is over a minute old is stale and taken over; a younger one may be
+# a run that is starting, and a lock with a live pid is refused.
+lock=$local_dir/.pull.lock
+mkdir "$lock"
+touch -t 202001010000 "$lock"
+status=0
+pull || status=$?
+if [ "$status" -eq 0 ] && grep -q 'the lock has no valid pid and is over a minute old; taking it over' "$local_dir/pull.log"; then pass "a stale lock without a pid is taken over and the run proceeds"; else fail "lock without pid (status $status): $(tail -2 "$local_dir/pull.log")"; fi
+mkdir "$lock"
+status=0
+pull || status=$?
+if [ "$status" -ne 0 ] && grep -q 'another run is going (its lock is under a minute old' "$local_dir/pull.log"; then pass "a lock without a pid that is under a minute old is a run starting: refused"; else fail "young lock (status $status)"; fi
+rmdir "$lock"
+mkdir "$lock"
+sleep 30 >/dev/null 2>&1 &
+holder=$!
+echo "$holder" >"$lock/pid"
+status=0
+pull || status=$?
+if [ "$status" -ne 0 ] && grep -q 'another run is going$' "$local_dir/pull.log"; then pass "a lock with a live pid is refused"; else fail "live lock (status $status)"; fi
+kill "$holder" 2>/dev/null || true
+echo not-a-pid >"$lock/pid"
+touch -t 202001010000 "$lock"
+status=0
+pull || status=$?
+if [ "$status" -eq 0 ] && grep -q 'taking it over' "$local_dir/pull.log"; then pass "a lock whose pid is not a number is taken over"; else fail "non-numeric pid (status $status)"; fi
+rm -rf "$lock"
+
 # No manifest on the server: the run fails.
 rm -f "$remote"/manifests/*.json
 status=0

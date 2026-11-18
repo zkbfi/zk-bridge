@@ -56,7 +56,7 @@ const liveEndpoint = (over = {}) => ({
 const LIVE = [
   liveEndpoint(),
   liveEndpoint({ id: "muecz9pudncily", name: "zk-bridge-prover-gpu-32gb", gpu: { pools: ["ADA_32_PRO"], excludedTypes: [], minCudaVersion: "12.8", allowedCudaVersions: [], count: 1 } }),
-  liveEndpoint({ id: "nuax43o5zxyv9a", name: "zk-bridge-prover-gpu-48gb", gpu: { pools: ["ADA_48_PRO"], excludedTypes: ["NVIDIA L40"], minCudaVersion: "12.0", allowedCudaVersions: [], count: 1 } }),
+  liveEndpoint({ id: "nuax43o5zxyv9a", name: "zk-bridge-prover-gpu-48gb", gpu: { pools: ["ADA_48_PRO"], excludedTypes: ["NVIDIA L40"], minCudaVersion: "12.0", allowedCudaVersions: [], count: 1 }, workers: { min: 0, max: 0, idleTimeout: 5 } }),
 ];
 const TEMPLATES = [
   { id: "hsj330cqpf", name: "zk-bridge-prover-gpu-template", serverless: true, public: false },
@@ -112,9 +112,9 @@ test("every tier asks for CUDA 12.8, which the image needs (docker/Dockerfile: n
   assert.match(dockerfile, /nvidia\/cuda:12\.8\.\d+-runtime/);
 });
 
-test("the three tiers declare the live values of 2026-11-16: workers 0 to 1, idle timeout 5, FLASHBOOT, 600000 ms, REQUEST_COUNT 1, LOAD_BALANCER", () => {
+test("the three tiers declare the live values of 2026-11-16: workers 0 to 1 (0 to 0 for gpu-48gb since 2026-11-18), idle timeout 5, FLASHBOOT, 600000 ms, REQUEST_COUNT 1, LOAD_BALANCER", () => {
   for (const tier of config().endpoints) {
-    assert.deepEqual(tier.workers, { min: 0, max: 1 });
+    assert.deepEqual(tier.workers, { min: 0, max: tier.label === "gpu-48gb" ? 0 : 1 });
     assert.equal(tier.idleTimeout, 5);
     assert.equal(tier.flashboot, "FLASHBOOT");
     assert.equal(tier.timeoutMs, 600000);
@@ -248,6 +248,36 @@ test("the patch carries the fields that differ and nothing else; gpu goes whole,
   assert.equal("type" in everything, false, "an endpoint's type is not patchable");
   // An id or a label of the file, or anything the live endpoint reports (dataCenterIds, createdAt...), never reaches RunPod.
   for (const field of Object.keys(everything)) assert.ok(PATCH_FIELDS.includes(field));
+});
+
+test("scaling is compared by the fields the file names: extra or null fields and the order of keys are no difference, and nothing is patched for them", () => {
+  const { container, endpoints } = config();
+  const tier = endpoints[0];
+  for (const scaling of [{ requestCount: 1, type: "REQUEST_COUNT" }, { type: "REQUEST_COUNT", requestCount: 1, queueDelay: null, extra: 7 }]) {
+    const result = diffEndpoint(container, tier, liveEndpoint({ gpu: { ...liveEndpoint().gpu, minCudaVersion: "12.0" }, scaling }));
+    assert.deepEqual(result.changes.map((change) => change.field), ["gpu.minCudaVersion"]);
+    assert.deepEqual(Object.keys(result.patch), ["gpu"]);
+  }
+  const same = diffEndpoint(container, tier, liveEndpoint({ scaling: { requestCount: 1, type: "REQUEST_COUNT", queueDelay: null } }));
+  assert.equal(same.patch, null);
+  assert.deepEqual(same.changes, []);
+  const nothing = diffEndpoint(container, tier, liveEndpoint({ scaling: null }));
+  assert.deepEqual(nothing.changes.map((change) => change.field), ["scaling.type", "scaling.requestCount"]);
+});
+
+test("a real difference in scaling is listed and patched, and the patch lists what it sends", () => {
+  const { container, endpoints } = config();
+  const tier = endpoints[0];
+  const result = diffEndpoint(container, tier, liveEndpoint({ scaling: { requestCount: 4, type: "REQUEST_COUNT", queueDelay: null } }));
+  assert.deepEqual(result.changes, [{ field: "scaling.requestCount", from: 4, to: 1 }]);
+  assert.deepEqual(result.patch, { scaling: { type: "REQUEST_COUNT", requestCount: 1 } });
+});
+
+test("--apply does not patch scaling when only its key order or extra fields differ", async () => {
+  const reshaped = LIVE.map((endpoint) => (endpoint.id === "nuax43o5zxyv9a" ? { ...endpoint, scaling: { requestCount: 1, queueDelay: null, type: "REQUEST_COUNT" } } : endpoint));
+  const { client, writes } = fakeClient({ endpoints: reshaped });
+  assert.equal(await run({ argv: ["--apply"], env: { RUNPOD_API_KEY: "k" }, client, out: () => {} }), 0);
+  assert.ok(writes().every((write) => !("scaling" in write.body)));
 });
 
 test("a registry that the file does not name is left alone; the type of a live endpoint that differs is a warning, not a patch", () => {

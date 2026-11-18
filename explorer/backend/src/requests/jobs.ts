@@ -125,20 +125,26 @@ export function lastJobTargetSlot(storage: Storage, direction: ProofDirection): 
 }
 
 /**
- * The worker seconds of each job of the direction whose proof came back after `since`: the request on the worker
+ * The worker seconds of each job of the direction whose proof came back (or that failed) after `since`: the request on the worker
  * (`worker_total_ms`, else `remote_ms`, else from the job's start to its proof) and, for a job that met a cold worker,
- * its wait for the worker. They price the GPU budget.
+ * its wait for the worker. A job that failed without a timing row (the prover errored, or ran past its limit) is
+ * charged from its creation to its failure: the jobs table keeps no later start, so the queue wait is counted too, which
+ * errs on the side of the budget. They price the GPU budget.
  */
 export function recentJobSeconds(storage: Storage, direction: ProofDirection, since: number): Array<{ provedAt: number; seconds: number }> {
   type Row = { proved_at: number; started_at: number | null; worker_total_ms: number | null; remote_ms: number | null; wait_worker_ms: number | null; not_ready_count: number | null };
   const rows = storage.database
     .prepare("SELECT proved_at, started_at, worker_total_ms, remote_ms, wait_worker_ms, not_ready_count FROM job_timings WHERE direction = ? AND proved_at > ?")
     .all(direction, since) as Row[];
-  return rows.map((row) => {
+  const failed = storage.database
+    .prepare("SELECT updated_at, created_at FROM jobs WHERE direction = ? AND status = 'failed' AND updated_at > ? AND id NOT IN (SELECT job_id FROM job_timings)")
+    .all(direction, since) as Array<{ updated_at: number; created_at: number }>;
+  const charged = failed.map((row) => ({ provedAt: row.updated_at, seconds: Math.max(0, row.updated_at - row.created_at) / 1000 }));
+  return [...rows.map((row) => {
     const request = row.worker_total_ms ?? row.remote_ms ?? row.proved_at - (row.started_at ?? row.proved_at);
     const startUp = (row.not_ready_count ?? 0) > 0 ? (row.wait_worker_ms ?? 0) : 0;
     return { provedAt: row.proved_at, seconds: (request + startUp) / 1000 };
-  });
+  }), ...charged];
 }
 
 /** A job with the slots the watcher planned for it (null for a request from outside). */

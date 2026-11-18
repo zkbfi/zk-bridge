@@ -122,7 +122,7 @@ describe("handleRpc: passing to eRPC", () => {
     const { outcome } = await handleRpc(input(text, erpc.fetchFunction));
     expect(outcome).toBe("served");
     const sent = String(erpc.sent[0]?.init.body);
-    expect(sent).toBe(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: BRIDGE, data: "0x" }, "latest"] }));
+    expect(sent).toBe(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to: BRIDGE, gas: "0x1c9c380", data: "0x" }, "latest"] }));
     expect(sent).not.toContain(outsider);
     const refused = await handleRpc(input(text.replace(`"to":"${BRIDGE}"`, `"TO":"${BRIDGE}"`), erpc.fetchFunction));
     expect(refused.outcome).toBe("refused");

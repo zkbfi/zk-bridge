@@ -250,10 +250,10 @@ export function diffEndpoint(container, tier, live) {
   const workersChanged = WORKERS_FIELDS.filter((field) => want.workers[field] !== have.workers[field]);
   for (const field of workersChanged) note(`workers.${field}`, have.workers[field], want.workers[field]);
   if (workersChanged.length > 0) patch.workers = Object.fromEntries(workersChanged.map((field) => [field, wanted.workers[field]]));
-  if (!same(want.scaling, have.scaling)) {
-    for (const field of new Set([...Object.keys(want.scaling), ...Object.keys(have.scaling ?? {})])) if (want.scaling[field] !== have.scaling?.[field]) note(`scaling.${field}`, have.scaling?.[field], want.scaling[field]);
-    patch.scaling = wanted.scaling;
-  }
+  // Only the fields the file names, whatever order RunPod lists them in and whatever else it adds (null fields).
+  const scalingChanged = Object.keys(want.scaling).filter((field) => !same(want.scaling[field], have.scaling?.[field]));
+  for (const field of scalingChanged) note(`scaling.${field}`, have.scaling?.[field], want.scaling[field]);
+  if (scalingChanged.length > 0) patch.scaling = wanted.scaling;
   const warnings = [];
   if (have.type !== want.type) warnings.push(`is a ${have.type} endpoint at RunPod, not ${want.type}; RunPod cannot change the type of an endpoint, so delete and create it to change it`);
   return { exists: true, changes, patch: changes.length === 0 ? null : patch, create: null, warnings };
