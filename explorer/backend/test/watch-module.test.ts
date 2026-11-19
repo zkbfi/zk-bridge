@@ -167,7 +167,8 @@ describe("startWatch", () => {
     run.beacon.streamAnswers({ status: 501 });
     const stop = await startWatch({ context: run.context, service: run.service, dependencies: { fetchFunction: () => run.beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true } });
     await flush();
-    expect(run.named("watch_sse_failed")).toHaveLength(1);
+    expect(run.named("watch_sse_unsupported")).toHaveLength(1);
+    expect(run.named("watch_sse_failed")).toHaveLength(0);
     const sent = HEAD + 100;
     run.beacon.set(FEED, { items: [{ messageId: `0x${"ab".repeat(32)}`, sent: { timestamp: GENESIS + sent * SLOT } }] });
     const finalized = (Math.floor(sent / 32) + 1) * 32;

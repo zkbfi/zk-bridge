@@ -3,7 +3,9 @@
  * with the participation of the signatures over it.
  *
  * Transport: the event stream `/eth/v1/events` when the node serves it, else a poll every slot. A stream that fails to
- * open, closes or goes silent switches to the poll at once and is tried again with a growing wait.
+ * open, closes or goes silent switches to the poll at once and is tried again with a growing wait. A node that answers
+ * 404, 405 or 501 does not serve the stream at all (a provider without `/eth/v1/events`): the feed says so once at info
+ * level and tries again only every `UNSUPPORTED_STREAM_RETRY_MILLISECONDS` (an hour), in case the node starts to serve it.
  *
  * Mode, chosen by asking `/eth/v1/beacon/light_client/finality_update` once:
  *
@@ -29,6 +31,12 @@ export type FeedMode = "light-client" | "blocks";
 export type FinalityObservation = FinalityReading & { readonly source: Transport; readonly receivedAt: number };
 
 const LIGHT_CLIENT_TOPIC = "light_client_finality_update";
+
+/** The answers of a node that does not serve the event stream at all, as opposed to one that fails for a while. */
+const UNSUPPORTED_STREAM_STATUSES: ReadonlySet<number> = new Set([404, 405, 501]);
+
+/** How long the feed waits before it asks again a node that does not serve the event stream. */
+export const UNSUPPORTED_STREAM_RETRY_MILLISECONDS = 3_600_000;
 
 /** Input of {@link createFinalityFeed}. */
 export type FinalityFeedInput = {
@@ -193,6 +201,8 @@ export function createFinalityFeed(input: FinalityFeedInput): FinalityFeed {
 
   async function runStream(): Promise<void> {
     let delay = input.sseRetryMilliseconds.initial;
+    // Whether the node answered that it does not serve the stream, so the line is written once, not on every hourly look.
+    let streamUnsupported = false;
     while (!stopping.signal.aborted) {
       const topics = ["head", "finalized_checkpoint", ...(mode === "light-client" && !lightClientTopicRefused ? [LIGHT_CLIENT_TOPIC] : [])];
       connection = new AbortController();
@@ -205,6 +215,7 @@ export function createFinalityFeed(input: FinalityFeedInput): FinalityFeed {
           idleMilliseconds: input.sseIdleMilliseconds,
           signal: AbortSignal.any([stopping.signal, connection.signal]),
           onOpen: () => {
+            streamUnsupported = false;
             streamTopics = topics;
             delay = input.sseRetryMilliseconds.initial;
             setTransport("sse");
@@ -225,8 +236,18 @@ export function createFinalityFeed(input: FinalityFeedInput): FinalityFeed {
       }
       streamTopics = [];
       setTransport("poll");
-      logger.warn("watch_sse_failed", { chainId, error: failure, retryInSeconds: delay / 1000 });
       trigger({ source: "poll", receivedAt: input.now() });
+      if (failure instanceof EventStreamError && failure.status !== null && UNSUPPORTED_STREAM_STATUSES.has(failure.status)) {
+        // The node does not serve the stream: the poll is the transport, not a fallback. One line, then an hourly look.
+        if (!streamUnsupported) {
+          streamUnsupported = true;
+          logger.info("watch_sse_unsupported", { chainId, status: failure.status, retryInSeconds: UNSUPPORTED_STREAM_RETRY_MILLISECONDS / 1000 });
+        }
+        await sleep(UNSUPPORTED_STREAM_RETRY_MILLISECONDS, stopping.signal);
+        continue;
+      }
+      streamUnsupported = false;
+      logger.warn("watch_sse_failed", { chainId, error: failure, retryInSeconds: delay / 1000 });
       await sleep(delay, stopping.signal);
       delay = Math.min(delay * 2, input.sseRetryMilliseconds.max);
     }
