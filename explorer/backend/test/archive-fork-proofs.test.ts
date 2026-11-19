@@ -159,7 +159,7 @@ describe("the fork proof capture (2026-11-10)", () => {
 
   it("waits longer after each failure, at most six hours, and refuses a record of another block", async () => {
     let fail = true;
-    const run = setup({ answer: (blockNumber) => (blockNumber === 7 && fail ? new Error("the beacon block is not final yet") : blockNumber === 6 ? record(943, 99) : record(943, blockNumber)) });
+    const run = setup({ answer: (blockNumber) => (blockNumber === 7 && fail ? new Error("the beacon node answered 503") : blockNumber === 6 ? record(943, 99) : record(943, blockNumber)) });
     await run.capture.runOnce();
     expect(blocksAsked(run)).toEqual([5, 6, 7]);
     expect(events(run.log, "fork_proof_capture_failed")).toHaveLength(2);
@@ -181,6 +181,25 @@ describe("the fork proof capture (2026-11-10)", () => {
     await run.capture.runOnce();
     expect(hasForkProofOfBlock(run.storage, 943, 7)).toBe(true);
     expect(run.capture.status().failing).toBe(1);
+  });
+
+  it("waits without counting a failure while the block is not final yet, and keeps it once it is", async () => {
+    let final = false;
+    const notFinal = (blockNumber: number) => new Error(`zk-bridge-prover fork-proof exited with code 1: error: beacon: the beacon block of execution block ${blockNumber} is not final`);
+    const run = setup({ answer: (blockNumber) => (blockNumber === 7 && !final ? notFinal(blockNumber) : record(943, blockNumber)) });
+    await run.capture.runOnce();
+    expect(events(run.log, "fork_proof_capture_failed")).toHaveLength(0);
+    expect(events(run.log, "fork_proof_capture_not_final")).toHaveLength(1);
+    expect(events(run.log, "fork_proof_capture_not_final")[0]).toContain('"level":"info"');
+    expect(run.capture.status()).toEqual({ kept: 2, failing: 0 });
+    // Asked again on the next pass, with no growing wait.
+    for (let index = 0; index < 3; index += 1) await run.capture.runOnce();
+    expect(blocksAsked(run).filter((block) => block === 7)).toHaveLength(4);
+    expect(events(run.log, "fork_proof_capture_not_final")).toHaveLength(4);
+    final = true;
+    await run.capture.runOnce();
+    expect(hasForkProofOfBlock(run.storage, 943, 7)).toBe(true);
+    expect(run.capture.status()).toEqual({ kept: 3, failing: 0 });
   });
 
   it("logs a conflict when another record of the state arrived while the prover ran", async () => {

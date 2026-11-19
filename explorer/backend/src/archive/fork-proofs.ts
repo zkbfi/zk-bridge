@@ -34,6 +34,9 @@ export const LIVE_FORK_PROOF_MILLISECONDS = 7 * 86_400_000;
  */
 export const CAPTURED_STATUSES = "waiting_for_finality,covered";
 
+/** The prover's answer for a block whose beacon block is not final yet (`zk-bridge-prover fork-proof`). */
+const NOT_FINAL = /the beacon block of execution block \d+ is not final/;
+
 /** The page size of the feed (the indexer allows up to 200) and the most pages one pass reads per direction. */
 export const FEED_PAGE_SIZE = 200;
 export const MAX_FEED_PAGES = 5;
@@ -165,6 +168,13 @@ export function createForkProofCapture(input: {
       if (outcome === "conflict") logger.warn("fork_proof_capture_conflict", { chainId: target.chainId, stateRoot: record.stateRoot });
       else logger.info("fork_proof_captured", { chainId: target.chainId, blockNumber: message.blockNumber, slot: record.slot, stateRoot: record.stateRoot, shape: record.shape });
     } catch (error) {
+      if (NOT_FINAL.test(String(error))) {
+        // The indexer lists a message once its finality window has passed, which can be a little before its beacon block
+        // is final. That is a wait, not a failure: no backoff, not counted, asked again on the next pass.
+        failures.delete(key);
+        logger.info("fork_proof_capture_not_final", { chainId: target.chainId, blockNumber: message.blockNumber, messageId: message.messageId, retryInSeconds: Math.round(input.intervalMilliseconds / 1000) });
+        return;
+      }
       const count = (failure?.count ?? 0) + 1;
       const wait = Math.min(MAX_RETRY_MILLISECONDS, input.intervalMilliseconds * 2 ** (count - 1));
       failures.set(key, { count, nextAt: now() + wait });
