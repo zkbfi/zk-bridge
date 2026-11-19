@@ -7,7 +7,7 @@ import { useDeliveryCost, useSnapshots } from "../app/queries";
 import { formatRoute } from "../app/route";
 import { useServices } from "../app/services";
 import { useWallet } from "../wallet/wallet-port";
-import { dayOf, feeLineOf, groupOf, positionOf, relativeTime, stepsOf, stepWords, type ActivityGroup } from "./activity-model";
+import { dayOf, feeLineOf, groupOf, outcomeOfItem, positionOf, relativeTime, stepsOf, stepWords, type ActivityGroup } from "./activity-model";
 import { amountText, chainsFor } from "./bridge-model";
 import { Chevron, GasCan } from "./icons";
 import { iconSubjectOf } from "./image-source";
@@ -19,7 +19,7 @@ import { selfDeliveryState } from "./self-delivery";
 import { StepList } from "./StepList";
 import { TransferWaitLine, TransferWaitTime } from "../wait/WaitTimeline";
 import { TokenIcon } from "./TokenIcon";
-
+import { OUTCOME_TAGS } from "../explore/delivery-outcome";
 type Tab = "all" | ActivityGroup;
 
 /**
@@ -181,18 +181,21 @@ export const ActivityScreen = () => {
                   const { source, destination } = chainsFor(pair, row.direction);
                   const isOpen = open === row.id;
                   const detail = stepsOf(row, pair);
+                  const outcome = outcomeOfItem(row, destination);
                   return (
                     <div key={row.id} className="zb-drow" data-open={isOpen}>
                       <button type="button" className="zb-arow" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : row.id)}>
                         {tokenIcon(row.token)}
                         <b>{amount(row)}</b>
                         <Route from={source.chainId} to={destination.chainId} />
+                        {outcome === null ? null : <span className="zb-small" data-testid="activity-outcome-tag">{OUTCOME_TAGS[outcome.kind]}</span>}
                         <span className="zb-right zb-small">{relativeTime(row.deliveredAt ?? row.sentAt, now)}</span>
                         <Chevron dir={isOpen ? "down" : "right"} />
                       </button>
                       {isOpen ? (
                         <div className="zb-dopen">
-                          <ActivityPulse position={1} label={`Delivered to ${destination.name}`} />
+                          <ActivityPulse position={1} label={outcome === null ? `Delivered to ${destination.name}` : outcome.label} />
+                          {outcome === null ? null : <p className="zb-small" data-testid="activity-outcome">{outcome.short}</p>}
                           {feeLineOf(row) === null ? null : <p className="zb-small zb-fee-line">{feeLineOf(row)}</p>}
                           <StepList steps={detail.steps} current={detail.current} />
                           <a className="zb-pill" href={formatRoute({ name: "bridge", pairId: pair.id, dir: row.direction, ...(row.token === null ? {} : { form: { token: `${row.token.side}:${row.token.address}` } }) })}>

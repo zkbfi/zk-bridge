@@ -7,18 +7,15 @@ import type { ChainConfig, FeedItem, PairConfig } from "@terminal/model/types";
 import { chainsFor, transferSteps } from "./bridge-model";
 import type { Step } from "./StepList";
 import { nativeSymbolOf } from "@zk-bridge/shared";
+import { explorerLinks } from "@terminal/config/chain-metadata";
 import { feeSummaryText } from "../data/fee-summary";
+import { deliveryOutcome, type DeliveryOutcome } from "../explore/delivery-outcome";
 
-/** Block explorers of the chains zkb.fi serves. */
-const EXPLORERS: Readonly<Record<number, string>> = {
-  1: "https://etherscan.io/tx/",
-  11155111: "https://sepolia.etherscan.io/tx/",
-  369: "https://scan.pulsechain.com/tx/",
-  943: "https://scan.v4.testnet.pulsechain.com/tx/",
-};
-
-/** A transaction's page on its chain's explorer, or undefined for a chain without one. */
-export const txUrl = (chainId: number, hash: string | null): string | undefined => (hash === null || EXPLORERS[chainId] === undefined ? undefined : `${EXPLORERS[chainId]}${hash}`);
+/**
+ * A transaction's page on its chain's main explorer, or undefined for a chain without one. The links come from the one
+ * explorer table (`chain-metadata`), which knows that the PulseChain scans route by hash (`/#/tx/...`).
+ */
+export const txUrl = (chainId: number, hash: string | null): string | undefined => (hash === null ? undefined : explorerLinks(chainId, "tx", hash)[0]?.url);
 
 /** A proven transfer still undelivered after this long needs the user. */
 export { NEEDS_YOU_AFTER_SECONDS };
@@ -97,4 +94,28 @@ export const feeLineOf = (item: FeedItem): string | null => {
     decimals: token.decimals,
     symbol: nativeSymbolOf(token),
   });
+};
+
+/**
+ * What a delivered transfer really did when the router did not pay the recipient as asked: the tokens are in the router
+ * (its callback failed), the router handed them to its failed delivery address, or the call after the payout failed. Null
+ * for an ordinary delivery. The row does not read the router, so the failed delivery address is not named here; the
+ * message page names it.
+ *
+ * @param item The transfer.
+ * @param destination The destination chain.
+ */
+export const outcomeOfItem = (item: FeedItem, destination: ChainConfig): DeliveryOutcome | null => {
+  if (item.deliveredAt === null || item.status === "release_failed") return null;
+  const delivery = item.delivery ?? null;
+  return deliveryOutcome(
+    {
+      callbackFailed: item.callbackFailed === true,
+      viaRouter: delivery !== null,
+      handOffReason: delivery?.handOffReason ?? null,
+      handOffRefused: delivery?.handOffRefused === true,
+      callFailed: delivery?.callFailed ?? null,
+    },
+    { destination: destination.name, failedDelivery: null, amountText: null, recipient: null },
+  );
 };

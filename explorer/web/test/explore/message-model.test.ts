@@ -6,7 +6,7 @@ import { createFixtureIndexerClient } from "../../src/data/fixture-indexer-clien
 import type { MessageDetail } from "../../src/data/message-detail";
 import { CONTRACT_NAMES, contractKeyOf, contractNameOf } from "../../src/explore/contract-names";
 import type { ProofRow } from "../../src/explore/explore-source";
-import { appOf, calledFunction, coveringProof, messageSteps, payloadSummary, stepCostText } from "../../src/explore/message-model";
+import { appOf, calledFunction, coveringProof, messageSteps, outcomeOf, payloadSummary, stepCostText } from "../../src/explore/message-model";
 
 const feed = buildFixtureFeed(FIXTURE_NOW);
 const tokenItem = feed.find((item) => item.kind === "token" && item.status === "delivered" && item.direction === "first-to-second")!;
@@ -98,7 +98,8 @@ describe("the steps", () => {
     const base = await detail();
     const failed = messageSteps({ ...base, releaseFailed: true }, FIXTURE_PAIR, []);
     expect(failed[3]).toMatchObject({ label: "Release failed on PulseChain", done: false, tone: "error", detail: { kind: "delivery", reverted: true } });
-    const callback = messageSteps({ ...base, callbackFailed: true }, FIXTURE_PAIR, []);
+    // A recipient that is not a router got its tokens: the call after them failed.
+    const callback = messageSteps({ ...base, callbackFailed: true, transfer: { ...base.transfer!, delivery: null } }, FIXTURE_PAIR, []);
     expect(callback[3]).toMatchObject({ label: "Delivered on PulseChain, the call after it failed", done: true });
     expect(callback[3]!.tone).toBeUndefined();
     const pending = messageSteps({ ...base, coveredByHeadSlot: null, coveredAt: null, deliveredAt: null }, FIXTURE_PAIR, []);
@@ -125,5 +126,56 @@ describe("a step's cost", () => {
     expect(stepCostText(cost({ chainId: 11155111, costUsd: null, nativeUsd: null }), FIXTURE_PAIR)).toBe("0.0₃84 · —");
     expect(stepCostText(cost({ costUsd: "0" }), FIXTURE_PAIR)).toBe("0.0₃84 ETH · $0");
     expect(stepCostText(null, FIXTURE_PAIR)).toBeNull();
+  });
+});
+
+describe("what a router delivery really did", () => {
+  const ROUTER = "0x00000000000000000000000000000000000000e7" as const;
+  const FAILED = "0x00000000000000000000000000000000000000cd" as const;
+  const routed = async (changes: Partial<NonNullable<NonNullable<MessageDetail["transfer"]>["delivery"]>>, detailChanges: Partial<MessageDetail> = {}): Promise<MessageDetail> => {
+    const base = await detail();
+    const delivery = { router: ROUTER, amount: 100n, fee: null, received: null, deliverer: null, recipient: RECIPIENT, source: "logs" as const, handOffReason: null, handOffRefused: false, callFailed: null, ...changes };
+    return { ...base, ...detailChanges, transfer: { ...base.transfer!, delivery } };
+  };
+
+  it("says that a router whose callback failed holds the tokens, the recipient got nothing, and sweep sends them to the failed delivery address", async () => {
+    const message = await routed({}, { callbackFailed: true });
+    const step = messageSteps(message, FIXTURE_PAIR, [], FAILED)[3]!;
+    expect(step.label).toBe("Tokens reached the router on PulseChain, its callback failed");
+    expect(step.label).not.toMatch(/^Delivered/);
+    expect(step.tone).toBe("warning");
+    const text = step.outcome!.paragraphs.join(" ");
+    expect(text).toContain("callback gas that the sender gave was too small for the call gas");
+    expect(text).toContain("The recipient received nothing.");
+    expect(text).toContain(`anyone calls sweep, which sends them to the router's failed delivery address (${FAILED})`);
+    expect(outcomeOf(message, FIXTURE_PAIR)!.paragraphs.at(-1)).toContain("to the router's failed delivery address.");
+  });
+
+  it("says that the router could not pay the recipient and handed the amount off, with the reason", async () => {
+    const outcome = outcomeOf(await routed({ received: 0n, handOffReason: "InvalidTerms" }), FIXTURE_PAIR, FAILED)!;
+    expect(outcome.kind).toBe("handed-off");
+    expect(outcome.label).toBe("Handed off on PulseChain, the router could not pay the recipient");
+    expect(outcome.paragraphs[0]).toContain(`The router could not pay ${RECIPIENT}: the terms in the message were not valid for a payout. It handed`);
+    expect(outcome.paragraphs[0]).toContain(`to the router's failed delivery address (${FAILED}).`);
+    expect(outcome.paragraphs[1]).toBe("The recipient received nothing.");
+  });
+
+  it("says that the tokens stay in the router when the failed delivery address refused the hand-off", async () => {
+    const outcome = outcomeOf(await routed({ received: 0n, handOffReason: "PayoutRefused", handOffRefused: true }), FIXTURE_PAIR)!;
+    expect(outcome.paragraphs[1]).toContain("refused the hand-off too");
+    expect(outcome.paragraphs[1]).toContain("stay in the router until anyone calls sweep");
+  });
+
+  it("says that the recipient kept the tokens when the call after the payout failed, with the target and its gas", async () => {
+    const target = "0x00000000000000000000000000000000000000c1" as const;
+    const outcome = outcomeOf(await routed({ received: 100n, callFailed: { target, recipient: RECIPIENT, callGas: 50_000n } }), FIXTURE_PAIR)!;
+    expect(outcome.kind).toBe("call-failed");
+    expect(outcome.paragraphs).toEqual(["The recipient received the tokens and keeps them.", `The call to ${target} that followed failed with the 50,000 gas that the sender gave it. Nothing else changed.`]);
+  });
+
+  it("has no outcome for an ordinary delivery, an undelivered message or a failed release", async () => {
+    expect(outcomeOf(await routed({ received: 100n }), FIXTURE_PAIR)).toBeNull();
+    expect(outcomeOf(await routed({ handOffReason: "Reentered" }, { deliveredAt: null }), FIXTURE_PAIR)).toBeNull();
+    expect(outcomeOf(await routed({ handOffReason: "Reentered" }, { releaseFailed: true }), FIXTURE_PAIR)).toBeNull();
   });
 });

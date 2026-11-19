@@ -52,6 +52,11 @@ const transferRow = (messageId: `0x${string}`) => ({
   deliverer: null,
   finalRecipient: null,
   feeSource: null,
+  handOffReason: null,
+  handOffRefused: null,
+  callFailedTarget: null,
+  callFailedRecipient: null,
+  callFailedGas: null,
 });
 
 /** A feed row: the message joined to its transfer, or to nothing. */

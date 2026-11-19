@@ -20,12 +20,12 @@ const renderWithDelivery = async (delivery: NonNullable<NonNullable<MessageDetai
 
 describe("the fee line of a router delivery", () => {
   it("says the indexer does not record the fee when a delivery read from the logs has none", async () => {
-    const fee = await renderWithDelivery({ router, amount: 5n, fee: null, received: null, deliverer: null, recipient: null, source: "logs" });
+    const fee = await renderWithDelivery({ router, amount: 5n, fee: null, received: null, deliverer: null, recipient: null, source: "logs", handOffReason: null, handOffRefused: false, callFailed: null });
     expect(fee.querySelector(".zb-xv b span")).toHaveAttribute("title", "The indexer does not record this yet");
   });
 
   it("shows the fee without a share when what the recipient received is not known", async () => {
-    const fee = await renderWithDelivery({ router, amount: 5n, fee: 5n, received: null, deliverer: null, recipient: null, source: "logs" });
+    const fee = await renderWithDelivery({ router, amount: 5n, fee: 5n, received: null, deliverer: null, recipient: null, source: "logs", handOffReason: null, handOffRefused: false, callFailed: null });
     const figure = fee.querySelector(".zb-xv b")!;
     expect(figure.textContent).not.toContain("%");
     expect(figure.textContent).toMatch(/\d/);

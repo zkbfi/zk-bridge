@@ -136,3 +136,15 @@ describe("the sideways slide", () => {
     expect(within(document.body).getByTestId("page-name")).toHaveTextContent("Explore");
   });
 });
+
+describe("txUrl", () => {
+  it("links PulseChain transactions by hash route and Etherscan by path", () => {
+    const hash = `0x${"ab".repeat(32)}`;
+    expect(txUrl(943, hash)).toBe(`https://scan.v4.testnet.pulsechain.com/#/tx/${hash}`);
+    expect(txUrl(369, hash)).toBe(`https://scan.pulsechain.com/#/tx/${hash}`);
+    expect(txUrl(11155111, hash)).toBe(`https://sepolia.etherscan.io/tx/${hash}`);
+    expect(txUrl(1, hash)).toBe(`https://etherscan.io/tx/${hash}`);
+    expect(txUrl(424242, hash)).toBeUndefined();
+    expect(txUrl(943, null)).toBeUndefined();
+  });
+});

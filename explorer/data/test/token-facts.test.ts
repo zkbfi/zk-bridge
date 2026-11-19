@@ -106,6 +106,11 @@ describe("mergeTransfer", () => {
       deliverer: null,
       finalRecipient: null,
       feeSource: null,
+      handOffReason: null,
+      handOffRefused: null,
+      callFailedTarget: null,
+      callFailedRecipient: null,
+      callFailedGas: null,
     });
   });
 

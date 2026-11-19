@@ -37,7 +37,20 @@ export type RouterDelivery = {
   readonly payout: PayoutKind | null;
   /** True when the router handed the amount off to its failed delivery address (`DeliveryFailed`). */
   readonly handedOff: boolean;
+  /** Why the router handed the amount off (the `Reason` of `DeliveryFailed`), or null when it did not. */
+  readonly handOffReason: HandOffReason | null;
+  /** True when the failed delivery address refused the hand-off (`HandOffRefused`): the amount stays in the router until `sweep`. */
+  readonly handOffRefused: boolean;
+  /** The call after the delivery failed with the gas the sender gave it (`CallFailed`); the recipient kept the payout. Null when no such event. */
+  readonly callFailed: { readonly target: Hex; readonly recipient: Hex; readonly gasGiven: bigint } | null;
 };
+
+/** The `Reason` enum of the router's `DeliveryFailed`, by name. */
+export type HandOffReason = "PayoutRefused" | "InvalidTerms" | "Reentered";
+const HAND_OFF_REASONS: readonly HandOffReason[] = ["PayoutRefused", "InvalidTerms", "Reentered"];
+
+/** The fields that a router's own events add to the split. */
+type RouterEvents = Pick<RouterDelivery, "handOffReason" | "handOffRefused" | "callFailed">;
 
 /** A log as both viem receipts and test fixtures carry it. */
 export type DeliveryLog = {
@@ -86,6 +99,8 @@ const TRANSFER = topicOf(ERC20_AND_WETH, "Transfer");
 const WITHDRAWAL = topicOf(ERC20_AND_WETH, "Withdrawal");
 const DELIVERED = topicOf(deliveryRouterAbi, "Delivered");
 const DELIVERY_FAILED = topicOf(deliveryRouterAbi, "DeliveryFailed");
+const HAND_OFF_REFUSED = topicOf(deliveryRouterAbi, "HandOffRefused");
+const CALL_FAILED = topicOf(deliveryRouterAbi, "CallFailed");
 
 /** The `PaidAs` enum of the router: 1 Token, 2 Native, 3 Wrapped. */
 const PAID_AS: Readonly<Record<number, PayoutKind>> = { 1: "token", 2: "native", 3: "wrapped" };
@@ -102,7 +117,9 @@ const segmentOf = (input: RouterDeliveryInput): readonly DeliveryLog[] => {
   return end === -1 ? after : after.slice(0, end);
 };
 
-const fromEvent = (log: DeliveryLog): RouterDelivery => {
+type Split = Omit<RouterDelivery, keyof RouterEvents>;
+
+const fromEvent = (log: DeliveryLog): Split => {
   const decoded = decodeEventLog({ abi: deliveryRouterAbi, eventName: "Delivered", topics: log.topics as [Hex, ...Hex[]], data: log.data });
   const args = decoded.args as { recipient: Address; feeTo: Address; amount: bigint; fee: bigint; paidOut: bigint; paidAs: number };
   return {
@@ -127,6 +144,29 @@ const valueOf = (log: DeliveryLog): bigint => BigInt(log.data === "0x" ? 0 : log
  */
 export const routerDeliveryFromLogs = (input: RouterDeliveryInput): RouterDelivery | null => {
   const segment = segmentOf(input);
+  const split = splitOf(input, segment);
+  return split === null ? null : { ...split, ...routerEventsOf(input.router, segment) };
+};
+
+/** What the router's `DeliveryFailed`, `HandOffRefused` and `CallFailed` events in the delivery say. */
+const routerEventsOf = (router: Hex, segment: readonly DeliveryLog[]): RouterEvents => {
+  const failed = segment.find((log) => isFrom(log, router, DELIVERY_FAILED));
+  const callFailed = segment.find((log) => isFrom(log, router, CALL_FAILED));
+  let handOffReason: HandOffReason | null = null;
+  if (failed !== undefined) {
+    const decoded = decodeEventLog({ abi: deliveryRouterAbi, eventName: "DeliveryFailed", topics: failed.topics as [Hex, ...Hex[]], data: failed.data });
+    handOffReason = HAND_OFF_REASONS[Number((decoded.args as { reason: number }).reason)] ?? null;
+  }
+  let call: RouterEvents["callFailed"] = null;
+  if (callFailed !== undefined) {
+    const decoded = decodeEventLog({ abi: deliveryRouterAbi, eventName: "CallFailed", topics: callFailed.topics as [Hex, ...Hex[]], data: callFailed.data });
+    const args = decoded.args as { target: Address; recipient: Address; gasGiven: bigint };
+    call = { target: normalizeAddress(args.target) as Hex, recipient: normalizeAddress(args.recipient) as Hex, gasGiven: args.gasGiven };
+  }
+  return { handOffReason, handOffRefused: segment.some((log) => isFrom(log, router, HAND_OFF_REFUSED)), callFailed: call };
+};
+
+const splitOf = (input: RouterDeliveryInput, segment: readonly DeliveryLog[]): Split | null => {
   const event = segment.find((log) => isFrom(log, input.router, DELIVERED));
   if (event !== undefined) return fromEvent(event);
 

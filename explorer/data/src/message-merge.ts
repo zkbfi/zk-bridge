@@ -162,6 +162,11 @@ export const mergeTransfer = (input: MergeTransferInput): TransferRow => {
     deliverer: null,
     finalRecipient: null,
     feeSource: null,
+    handOffReason: null,
+    handOffRefused: null,
+    callFailedTarget: null,
+    callFailedRecipient: null,
+    callFailedGas: null,
   };
   return { ...base, ...input.patch };
 };

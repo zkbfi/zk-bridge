@@ -330,6 +330,7 @@ function feedItemOf(item: Record<string, unknown>, pair: PairConfig, sideOf: (ch
     sourceTransactionHash: hex(sent.transactionHash, 'sent.transactionHash'),
     destinationTransactionHash: delivered === null || delivered.transactionHash === null ? null : hex(delivered.transactionHash, 'delivered.transactionHash'),
     delivery: transfer === null ? null : deliveryOf(transfer, sideOf),
+    callbackFailed: item.callbackFailed === true,
   }
 }
 
@@ -337,7 +338,14 @@ function feedItemOf(item: Record<string, unknown>, pair: PairConfig, sideOf: (ch
 function deliveryOf(transfer: Record<string, unknown>, sideOf: (chainId: number) => ChainSide): FeedItem['delivery'] {
   if (typeof transfer.deliveryRouter !== 'string') return null
   const amountOrNull = (value: unknown, what: string): bigint | null => (value === null || value === undefined ? null : bigint(value, what))
-  return { token: viewToken(transfer.destinationToken, sideOf), fee: amountOrNull(transfer.fee, 'fee'), received: amountOrNull(transfer.received, 'received') }
+  const reasons = ['PayoutRefused', 'InvalidTerms', 'Reentered'] as const
+  const reason = reasons.find((name) => name === transfer.handOffReason) ?? null
+  const call = transfer.callFailed
+  const callFailed =
+    typeof call === 'object' && call !== null
+      ? { target: getAddress(string((call as Record<string, unknown>).target, 'callFailed.target')), recipient: getAddress(string((call as Record<string, unknown>).recipient, 'callFailed.recipient')), callGas: bigint((call as Record<string, unknown>).callGas, 'callFailed.callGas') }
+      : null
+  return { token: viewToken(transfer.destinationToken, sideOf), fee: amountOrNull(transfer.fee, 'fee'), received: amountOrNull(transfer.received, 'received'), handOffReason: reason, handOffRefused: transfer.handOffRefused === true, callFailed }
 }
 
 function viewToken(view: unknown, sideOf: (chainId: number) => ChainSide): TokenInfo | null {

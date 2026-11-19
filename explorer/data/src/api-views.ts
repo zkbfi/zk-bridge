@@ -78,6 +78,14 @@ export type TransferRow = {
   readonly finalRecipient: Hex | null;
   /** `event`, `logs` or `terms`: where the fee was read. */
   readonly feeSource: string | null;
+  /** Why the router handed the amount off to its failed delivery address (`PayoutRefused`, `InvalidTerms` or `Reentered`), or null when it did not. */
+  readonly handOffReason: string | null;
+  /** True when the failed delivery address refused the hand-off, so the amount stays in the router until `sweep`. Null when the router did not hand off. */
+  readonly handOffRefused: boolean | null;
+  /** The call after the delivery failed with its full gas (`CallFailed`): its target, the recipient that kept the payout, and the gas it was given. All null when it did not fail. */
+  readonly callFailedTarget: Hex | null;
+  readonly callFailedRecipient: Hex | null;
+  readonly callFailedGas: bigint | null;
 };
 
 /** The mediator balance of a native token on its home chain. */
@@ -239,6 +247,13 @@ export const deliveryFeeView = (message: MessageRow, transfer: TransferRow) => {
     deliverer: facts.deliverer,
     finalRecipient: facts.finalRecipient,
     feeSource: facts.feeSource,
+    // The router's own events. Null until the router reports one; `handOffRefused` is false when no hand-off happened.
+    handOffReason: transfer.handOffReason,
+    handOffRefused: transfer.handOffRefused === true,
+    callFailed:
+      transfer.callFailedTarget === null || transfer.callFailedRecipient === null || transfer.callFailedGas === null
+        ? null
+        : { target: transfer.callFailedTarget, recipient: transfer.callFailedRecipient, callGas: amountOf(transfer.callFailedGas) },
   };
 };
 

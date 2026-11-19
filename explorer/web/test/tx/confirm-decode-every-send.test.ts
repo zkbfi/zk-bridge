@@ -7,14 +7,16 @@
  */
 import { encodeFunctionData, erc20Abi, getAddress, parseAbi, type Address, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
-import { deliveryRouterAbi, tokenMediatorAbi, type GateConfirmation } from "@zk-bridge/shared";
+import { beaconForkGateAbi, deliveryRouterAbi, forkRegistryAbi, tokenMediatorAbi, type GateConfirmation } from "@zk-bridge/shared";
 import { buildMessageSteps } from "@terminal/app/actions";
 import { FIXTURE_PAIR, FIXTURE_TOKENS } from "@terminal/data/fixtures";
 import type { ChainConfig, PairConfig } from "@terminal/model/types";
 import { buildConfirmView } from "../../src/tx/confirm-model";
 import { computeBridgeDraft, DEFAULT_DELIVERY_OPTIONS } from "../../src/tx/bridge-draft";
 import { planBridgeSteps, type BridgeFormValues, type WebStep } from "../../src/tx/bridge-steps";
-import { planGateConfirm } from "@terminal/tx/gate-step";
+import { planForkObservation, planGateConfirm, planGateSeal } from "@terminal/tx/gate-step";
+import { planOpenDeposits } from "@terminal/tx/route-step";
+import { openingProof } from "../route/proofs";
 import { NO_ROUTER_NOTICE, WRAP_NO_FEE_NOTICE } from "../../src/tx/tip-copy";
 import { buildDeliveryReport, buildFixtureContext } from "../helpers";
 
@@ -225,6 +227,43 @@ describe("every send the dapp can produce decodes in the review", () => {
 
   it("confirm(bytes) on the gate", () => {
     expectSendable(gateConfirmStep(FIXTURE_PAIR.first), "confirm(bytes)");
+  });
+});
+
+describe("the three calls that only the generated ABIs hold decode and are sent", () => {
+  const gate = FIXTURE_PAIR.first.contracts.gate as Address;
+  const sealCall = { to: gate, data: encodeFunctionData({ abi: beaconForkGateAbi, functionName: "seal", args: ["0xabcd"] }) };
+  const observeCall = { to: gate, data: encodeFunctionData({ abi: forkRegistryAbi, functionName: "observe", args: ["0x1234", "0x5678"] }) };
+  const observation = {
+    chainId: 1, registry: gate, lightClient: gate, programKey: `0x${"66".repeat(32)}`, startHeadSlot: 100, observedVersion: "0x0000036b", shape: 8, shapeAllowed: false,
+    observedAttestedSlot: 900, foldSteps: 3, publicValues: "0x5678", proof: "0x1234", provedAt: 1, postedTransaction: null,
+  } as const;
+
+  it("openDeposits(OpeningProof) on the message bridge, with the proof's fields decoded", () => {
+    const chain = FIXTURE_PAIR.second;
+    const plan = planOpenDeposits(chain, openingProof() as Parameters<typeof planOpenDeposits>[1]);
+    const view = buildConfirmView({ plan, disclosure: noDisclosure });
+    expect(view.blockedReason).toBeNull();
+    expect(view.functionSignature).toBe(plan.functionSignature);
+    expect(view.functionSignature).toMatch(/^openDeposits\(/);
+    expect(view.arguments.length).toBe(plan.arguments.length);
+  });
+
+  it("seal(bytes) on the gate, and the decoded argument is the evidence", () => {
+    const plan = planGateSeal(FIXTURE_PAIR.first, { kind: "ready", call: sealCall, evidence: "0xabcd", gas: 90_000n, via: "beacon" });
+    expectSendable({ plan, disclosure: noDisclosure }, "seal(bytes)");
+    expect(buildConfirmView({ plan, disclosure: noDisclosure }).arguments).toMatchObject([{ name: "evidence", value: "0xabcd" }]);
+  });
+
+  it("observe(bytes,bytes) on the fork registry", () => {
+    const plan = planForkObservation(FIXTURE_PAIR.first, { kind: "ready", call: observeCall, gas: 280_000n, observation });
+    expectSendable({ plan, disclosure: noDisclosure }, "observe(bytes,bytes)");
+    expect(buildConfirmView({ plan, disclosure: noDisclosure }).arguments.map((argument) => argument.name)).toEqual(["proof", "publicValues"]);
+  });
+
+  it("still refuses a seal whose bytes are another call", () => {
+    const plan = planGateSeal(FIXTURE_PAIR.first, { kind: "ready", call: observeCall, evidence: "0xabcd", gas: 90_000n, via: "beacon" });
+    expect(buildConfirmView({ plan, disclosure: noDisclosure }).blockedReason).toMatch(/^The bytes call observe\(bytes,bytes\), but the page planned seal/);
   });
 });
 

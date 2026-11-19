@@ -40,6 +40,10 @@ const delivered = (fields: { token?: Hex; recipient?: Hex; feeTo: Hex; amount: b
     encodeEventTopics({ abi: deliveryRouterAbi, eventName: "Delivered", args: { token: fields.token ?? TOKEN, recipient: fields.recipient ?? RECIPIENT, feeTo: fields.feeTo } }) as Hex[],
     encodeAbiParameters(parseAbiParameters("uint256, uint256, uint256, uint8, address"), [fields.amount, fields.fee, fields.paidOut, fields.paidAs, fields.callTarget ?? at("00")]),
   );
+const handOffRefused = (token: Hex, value: bigint) =>
+  log(ROUTER, encodeEventTopics({ abi: deliveryRouterAbi, eventName: "HandOffRefused", args: { token } }) as Hex[], amount(value));
+const callFailed = (target: Hex, recipient: Hex, gasGiven: bigint) =>
+  log(ROUTER, encodeEventTopics({ abi: deliveryRouterAbi, eventName: "CallFailed", args: { target, recipient } }) as Hex[], amount(gasGiven));
 const deliveryFailed = (token: Hex, recipient: Hex, value: bigint) =>
   log(ROUTER, encodeEventTopics({ abi: deliveryRouterAbi, eventName: "DeliveryFailed", args: { token, recipient } }) as Hex[], encodeAbiParameters(parseAbiParameters("uint256, uint8"), [value, 0]));
 
@@ -81,6 +85,9 @@ describe("routerDeliveryFromLogs: the Delivered event", () => {
       feeSource: "event",
       payout: "token",
       handedOff: false,
+      handOffReason: null,
+      handOffRefused: false,
+      callFailed: null,
     });
   });
 
@@ -89,6 +96,14 @@ describe("routerDeliveryFromLogs: the Delivered event", () => {
     expect(routerDeliveryFromLogs(input(5n, native, { token: WRAPPED }))).toMatchObject({ payout: "native", fee: 1n, received: 4n, feeSource: "event" });
     const wrapped = deliveryLogs(5n, () => [delivered({ token: WRAPPED, feeTo: at("00"), amount: 5n, fee: 0n, paidOut: 5n, paidAs: 3 })]);
     expect(routerDeliveryFromLogs(input(5n, wrapped, { token: WRAPPED }))).toMatchObject({ payout: "wrapped", fee: 0n, received: 5n, deliverer: null });
+  });
+});
+
+describe("routerDeliveryFromLogs: CallFailed after a delivery", () => {
+  it("reads the target, the recipient and the gas of a call that failed; the recipient was paid", () => {
+    const target = at("c1");
+    const logs = deliveryLogs(100n, () => [delivered({ feeTo: at("00"), amount: 100n, fee: 0n, paidOut: 100n, paidAs: 1, callTarget: target }), callFailed(target, RECIPIENT, 50_000n)]);
+    expect(routerDeliveryFromLogs(input(100n, logs))).toMatchObject({ received: 100n, handedOff: false, handOffRefused: false, callFailed: { target, recipient: RECIPIENT, gasGiven: 50_000n } });
   });
 });
 
@@ -104,6 +119,9 @@ describe("routerDeliveryFromLogs: a router without the event (transfer logs)", (
       feeSource: "logs",
       payout: "token",
       handedOff: false,
+      handOffReason: null,
+      handOffRefused: false,
+      callFailed: null,
     });
   });
 
@@ -138,9 +156,17 @@ describe("routerDeliveryFromLogs: a router without the event (transfer logs)", (
       feeSource: "logs",
       payout: null,
       handedOff: true,
+      handOffReason: "PayoutRefused",
+      handOffRefused: false,
+      callFailed: null,
     });
     const noFee = deliveryLogs(100n, () => [deliveryFailed(TOKEN, RECIPIENT, 100n), transfer(TOKEN, ROUTER, FAILED, 100n)]);
     expect(routerDeliveryFromLogs(input(100n, noFee))).toMatchObject({ fee: 0n, deliverer: null, handedOff: true });
+  });
+
+  it("reads the reason of a hand-off and a refusal by the failed delivery address", () => {
+    const logs = deliveryLogs(100n, () => [deliveryFailed(TOKEN, RECIPIENT, 100n), handOffRefused(TOKEN, 100n)]);
+    expect(routerDeliveryFromLogs(input(100n, logs))).toMatchObject({ handedOff: true, handOffReason: "PayoutRefused", handOffRefused: true, callFailed: null });
   });
 
   it("leaves a native fee to the terms: the amount is the wrapped token's Withdrawal", () => {
@@ -154,6 +180,9 @@ describe("routerDeliveryFromLogs: a router without the event (transfer logs)", (
       feeSource: "terms",
       payout: "native",
       handedOff: false,
+      handOffReason: null,
+      handOffRefused: false,
+      callFailed: null,
     });
     expect(routerDeliveryFromLogs(input(5n, logs, { token: WRAPPED, feePossible: false }))).toMatchObject({ deliverer: null });
   });

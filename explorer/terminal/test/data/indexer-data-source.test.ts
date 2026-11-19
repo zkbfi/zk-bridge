@@ -88,8 +88,17 @@ describe('indexer data source', () => {
     const unknown = { ...feedItem, transfer: { ...feedItem.transfer, deliveryRouter: '0x00000000000000000000000000000000000000e7', fee: null } }
     const result = await source({ '/api/feed': { items: [routed, unknown, feedItem], nextCursor: null } }).getFeed('eth-pls', {}, 50)
     expect(result.items[0]?.delivery).toMatchObject({ fee: 12_300n, received: 12_287_700n, token: { symbol: 'zUSDC', decimals: 6 } })
-    expect(result.items[1]?.delivery).toEqual({ token: null, fee: null, received: null })
+    expect(result.items[1]?.delivery).toEqual({ token: null, fee: null, received: null, handOffReason: null, handOffRefused: false, callFailed: null })
     expect(result.items[2]?.delivery).toBeNull()
+  })
+
+  test('reads the router hand-off, its refusal, a failed call and the failed callback of the message', async () => {
+    const router = '0x00000000000000000000000000000000000000e7'
+    const call = { target: '0x00000000000000000000000000000000000000c1', recipient: '0x00000000000000000000000000000000000000c2', callGas: '50000' }
+    const handedOff = { ...feedItem, callbackFailed: true, transfer: { ...feedItem.transfer, deliveryRouter: router, received: '0', handOffReason: 'PayoutRefused', handOffRefused: true, callFailed: call } }
+    const result = await source({ '/api/feed': { items: [handedOff, feedItem], nextCursor: null } }).getFeed('eth-pls', {}, 50)
+    expect(result.items[0]).toMatchObject({ callbackFailed: true, delivery: { handOffReason: 'PayoutRefused', handOffRefused: true, callFailed: { callGas: 50_000n } } })
+    expect(result.items[1]?.callbackFailed).toBe(false)
   })
 
   test('refuses an amount that arrives as a JSON number, because digits may be lost', async () => {

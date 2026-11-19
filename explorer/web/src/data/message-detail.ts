@@ -59,7 +59,17 @@ export type DetailDelivery = {
   /** The account that the router paid. */
   readonly recipient: Address | null;
   readonly source: "event" | "logs" | "terms" | null;
+  /** Why the router handed the amount off to its failed delivery address (the router's `DeliveryFailed`), or null when it did not. */
+  readonly handOffReason: HandOffReason | null;
+  /** True when the failed delivery address refused the hand-off (the router's `HandOffRefused`): the amount stays in the router until `sweep`. */
+  readonly handOffRefused: boolean;
+  /** The call after the delivery failed with the gas the sender gave it (the router's `CallFailed`). The recipient kept the tokens. */
+  readonly callFailed: { readonly target: Address; readonly recipient: Address; readonly callGas: bigint } | null;
 };
+
+/** The reasons the router gives for a hand-off. */
+export type HandOffReason = "PayoutRefused" | "InvalidTerms" | "Reentered";
+const HAND_OFF_REASONS: readonly unknown[] = ["PayoutRefused", "InvalidTerms", "Reentered"];
 
 /** One message with the facts of both chains. */
 export type MessageDetail = {
@@ -141,7 +151,16 @@ const deliveryOf = (row: Record<string, unknown>): DetailDelivery | null => {
     deliverer: optionalAddress(row.deliverer, "transfer.deliverer"),
     recipient: optionalAddress(row.finalRecipient, "transfer.finalRecipient"),
     source,
+    handOffReason: HAND_OFF_REASONS.includes(row.handOffReason) ? (row.handOffReason as HandOffReason) : null,
+    handOffRefused: row.handOffRefused === true,
+    callFailed: callFailedOf(row.callFailed),
   };
+};
+
+const callFailedOf = (value: unknown): DetailDelivery["callFailed"] => {
+  if (value === null || value === undefined) return null;
+  const call = readRecord(value, "transfer.callFailed");
+  return { target: readAddress(call.target, "transfer.callFailed.target"), recipient: readAddress(call.recipient, "transfer.callFailed.recipient"), callGas: readAmount(call.callGas, "transfer.callFailed.callGas") };
 };
 
 /**

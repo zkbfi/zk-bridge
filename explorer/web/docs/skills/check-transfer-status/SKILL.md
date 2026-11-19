@@ -42,7 +42,7 @@ The public host of the indexer is the `indexer` entry of `ZKB_SITES` in `@zkb/da
    curl -s "https://indexer.zkb.fi/api/messages/<message id>"
    ```
 
-   The answer holds `status`, `direction` (`sourceChainId`, `destinationChainId`, `label` such as `943>11155111`), `sent`, `covered`, `delivered` (each null until it happens), `callbackFailed`, `releaseFailed`, `transfer` (tokens, `value`, `deliveredValue`), `data` and `costs`.
+   The answer holds `status`, `direction` (`sourceChainId`, `destinationChainId`, `label` such as `943>11155111`), `sent`, `covered`, `delivered` (each null until it happens), `callbackFailed`, `releaseFailed`, `transfer` (tokens, `value`, `deliveredValue`), `data` and `costs`. When a delivery router delivered the transfer, `transfer` also says what the router did if it did not simply pay the recipient: `handOffReason` (the router could not pay and handed the amount to its failed delivery address), `handOffRefused` (that address refused, so the tokens stay in the router until anyone calls `sweep`) and `callFailed` (the call after the payout failed; the recipient kept the tokens). `callbackFailed` true with a router recipient means the tokens are in the router and the recipient received nothing.
 2. By transaction hash (the hash of a send, a delivery or a light client update):
 
    ```sh
