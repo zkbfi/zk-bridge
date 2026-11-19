@@ -602,6 +602,25 @@ It runs the checks every 60 seconds: the services (indexer local and public, bac
 - Deploy (after `provision.sh`, which creates the user `zkb_status` and `/etc/zk-bridge/status`): copy `deploy/app-server/config/status/status.json.example` and `status.env.example` to `/etc/zk-bridge/status/` (mode 0640, owner root, group `zkb_status`), fill in the wallet addresses, the thresholds and the endpoints, then `ansible-playbook bots.yml -e commit=<hash> -e bots=status`. DNS: an A record for `status.zkb.fi` to the app server, like the other hosts; Caddy gets the certificate.
 - **The blind spot.** The service runs on the app server, so if the server is down, the page is down too, and it cannot tell you. Point a free external monitor at `https://status.zkb.fi/api/summary` (for example UptimeRobot or Better Stack, 5 minute interval). The route answers 200 while everything works or is degraded, and 503 when something is down or when the checks themselves stopped; add `?strict=1` to get 503 for degraded as well.
 
+## After a contract deployment: the record, the verification and the page
+
+Do this after every deployment of a contract on a pair (`DeployBridge`, `RedeployLayers` in any mode, a new router, the test tokens), on the same day. The page [Deployed contracts](../explorer/web/docs/pages/10-deployed-contracts.md) is generated from the record, and a test fails when the two differ.
+
+1. **Update the record.** In `deploy/deployments/<pair>.json`, change the address fields that the deployment changed (`bridge`, `mediator`, `delivery_router`, and so on; a replaced router moves to `delivery_routers`). In the `contracts` list of each chain section, add an entry for every new contract and move a replaced one to `"group": "retired"`. An entry needs `name`, `address`, `role` (one plain sentence), `group` (`live`, `tokens`, `third_party` or `retired`), `source` (`path:ContractName`), `libraries` (names of the libraries it links, which must be in the same list), `created_by: "factory"` for a token the token factory made, `source_commit` (the commit the contract was built from), `deployed_on` (the day, UTC) and `verified` (`{"blockscout": false, "sourcify": false, "etherscan": false}`, or `"unsupported"` on a chain the explorer does not serve).
+2. **Verify the source.** From the repository root, once per source commit that the deployment used:
+
+   ```
+   export ETHERSCAN_API_KEY=...   # optional: without it Etherscan is skipped
+   node deploy/contracts-page/verify.mjs --pair sepolia-pls943 --commit <source commit> --dry-run   # builds the inputs and submits nothing
+   node deploy/contracts-page/verify.mjs --pair sepolia-pls943 --commit <source commit>
+   ```
+
+   It builds each contract in a temporary worktree of the commit, takes the constructor arguments from the creation transaction, and submits to Blockscout (v2 standard JSON endpoint; the legacy keyless API is rate limited), to Sourcify (Sepolia and mainnet only; chain 943 is not served) and, with a key, to Etherscan (API v2; only Ethereum chains). A contract that an explorer already shows as verified is skipped, `--force` submits anyway. `--only Name` and `--chain <id>` narrow the run. The key is read from the environment and never printed.
+3. **Regenerate the page.** The verify script ends with `node deploy/contracts-page/generate.mjs --refresh`, which reads the status back from each explorer into the record and writes the page. Run it alone after any later verification, or run `node deploy/contracts-page/generate.mjs` (no network) after you edit the record by hand.
+4. **Commit** the record and `explorer/web/docs/pages/10-deployed-contracts.md` together. `node deploy/contracts-page/generate.mjs --check` and `pnpm --filter @zk-bridge/docs test` fail while they differ.
+
+Why Blockscout may say "partial match": `foundry.toml` sets no metadata hash, so the explorer has nothing to compare and calls it partial; Sourcify reports an exact match for the same code.
+
 ## Step 12: clean up
 
 ```sh

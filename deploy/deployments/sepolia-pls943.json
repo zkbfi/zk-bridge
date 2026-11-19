@@ -2,6 +2,256 @@
   "chain_a": {
     "bridge": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
     "chain_id": 11155111,
+    "contracts": [
+      {
+        "name": "MessageBridge",
+        "address": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
+        "role": "Sends messages to the other chain and delivers the ones that arrive, after it checks the proofs that link each one to a finalized header of the other chain.",
+        "group": "live",
+        "source": "src/hardened/MessageBridge.sol:MessageBridge",
+        "libraries": [
+          "ReceiptProofLib",
+          "OpeningProofLib",
+          "BeaconLayoutLib"
+        ],
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "TokenMediator",
+        "address": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
+        "role": "Moves tokens through the bridge: it locks a native token here and mints a bridged copy on the other chain, or burns a copy and unlocks the native token.",
+        "group": "live",
+        "source": "src/hardened/mediator/TokenMediator.sol:TokenMediator",
+        "libraries": [
+          "MediatorPayloads"
+        ],
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "BeaconForkGate",
+        "address": "0x85fbe4c5f7992fbd97a8e4dafc821fad3b0d20f3",
+        "role": "Refuses new sends when the other chain has moved to a state layout that the proof program cannot read.",
+        "group": "live",
+        "source": "src/hardened/BeaconForkGate.sol:BeaconForkGate",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "TokenFactory",
+        "address": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
+        "role": "Creates the bridged copy of a token the first time that token is sent here.",
+        "group": "live",
+        "source": "src/hardened/mediator/TokenFactory.sol:TokenFactory",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "DeliveryRouter",
+        "address": "0xa125684b9479fbab64218581763788bafb520a57",
+        "role": "Optional entry point for delivery: it wraps the native coin, delivers the message, pays a voluntary tip, unwraps, and makes the follow-up call.",
+        "group": "live",
+        "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "ReceiptProofLib",
+        "address": "0x6dcc32be1802b1747465dfb2d3a1bf171eaed611",
+        "role": "Library that checks the receipt, transaction and log proofs of a message against a block.",
+        "group": "live",
+        "source": "src/hardened/ReceiptProofLib.sol:ReceiptProofLib",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "OpeningProofLib",
+        "address": "0x9765bc0e7f57d0064b99a4ae855db16e5b5aa7ba",
+        "role": "Library that checks the opening proof that releases tokens locked by a one-way deposit.",
+        "group": "live",
+        "source": "src/hardened/OpeningProofLib.sol:OpeningProofLib",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "BeaconLayoutLib",
+        "address": "0x4acd9fcef648029931ce163d343feb6d94181322",
+        "role": "Library that checks the beacon state layout rows (block roots, block hashes, historical summaries) that a message proof relies on.",
+        "group": "live",
+        "source": "src/hardened/BeaconLayoutLib.sol:BeaconLayoutLib",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "MediatorPayloads",
+        "address": "0x1e68160762061624bb5fa31d589a8f31c3e44bc5",
+        "role": "Library that encodes and decodes the token messages that the mediator sends across the bridge.",
+        "group": "live",
+        "source": "src/hardened/mediator/MediatorPayloads.sol:MediatorPayloads",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "BeaconLightClient",
+        "address": "0x64ddc23ff43ea0cd2ce9a13ef6681ee651e76e4e",
+        "role": "Light client of the PulseChain testnet v4 beacon chain, kept on Sepolia. It stores finalized headers and accepts a new one only with a zero-knowledge proof.",
+        "group": "live",
+        "source": "src/hardened/BeaconLightClient.sol:BeaconLightClient",
+        "source_commit": "fbc62e9",
+        "deployed_on": "2026-10-29",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "SP1Verifier",
+        "address": "0xF7110fA5dF18509733C11B644eC3EDAC19E27f67",
+        "role": "Checks the Groth16 zero-knowledge proofs that the light clients accept (the vendored SP1 verifier, version 6.1.0).",
+        "group": "live",
+        "source": "src/hardened/vendor/sp1-contracts/v6.1.0/SP1VerifierGroth16.sol:SP1Verifier",
+        "source_commit": "fbc62e9",
+        "deployed_on": "2026-10-29",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "TestToken tUSD",
+        "address": "0x988a6160b5580895ea15a080a8d4ea763cf6538f",
+        "role": "Test token zkb Test Dollar (tUSD, 6 decimals). Only the deployer can mint it.",
+        "group": "tokens",
+        "source": "src/testnet/TestToken.sol:TestToken",
+        "source_commit": "91133524",
+        "deployed_on": "2026-11-01",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "TestToken tTKN",
+        "address": "0x23b69083d577bd8d1a9fbdf8ef1411b7285cf45e",
+        "role": "Test token zkb Test Token (tTKN, 18 decimals). Only the deployer can mint it.",
+        "group": "tokens",
+        "source": "src/testnet/TestToken.sol:TestToken",
+        "source_commit": "91133524",
+        "deployed_on": "2026-11-01",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "BridgedToken ztUSD",
+        "address": "0xdbe592A7d7614a10cDcA4B27D889F4f9E59F0Fa6",
+        "role": "Bridged copy of tUSD from PulseChain testnet v4, created by the token factory on the first transfer.",
+        "group": "tokens",
+        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
+        "created_by": "factory",
+        "source_commit": "91133524",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "BridgedToken ztTKN",
+        "address": "0x61FA294Fb1CA457B9F3a22e71b36971d4A1E3C20",
+        "role": "Bridged copy of tTKN from PulseChain testnet v4, created by the token factory on the first transfer.",
+        "group": "tokens",
+        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
+        "created_by": "factory",
+        "source_commit": "91133524",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "WETH",
+        "address": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9",
+        "role": "Wrapped ether on Sepolia, which the delivery router wraps the native coin into. Not deployed by this project.",
+        "group": "third_party",
+        "source": null,
+        "source_commit": null,
+        "deployed_on": null,
+        "verified": {
+          "blockscout": true,
+          "etherscan": null,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "DeliveryRouter (retired)",
+        "address": "0x3846e483c98cd0f164c29a5e40f7295a5765aba4",
+        "role": "The delivery router before the one above. It is retired, and the record still lists it so that deliveries made through it are recognised.",
+        "group": "retired",
+        "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
+        "source_commit": "91133524",
+        "deployed_on": "2026-11-08",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      }
+    ],
     "delivery_router": "0xa125684b9479fbab64218581763788bafb520a57",
     "delivery_routers": [
       "0x3846e483c98cd0f164c29a5e40f7295a5765aba4"
@@ -12,11 +262,290 @@
     "mediator": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
     "start_block": 12114196,
     "token_factory": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
+    "verification_checked": "2026-11-19",
     "wrapped_native": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9"
   },
   "chain_b": {
     "bridge": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
     "chain_id": 943,
+    "contracts": [
+      {
+        "name": "MessageBridge",
+        "address": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
+        "role": "Sends messages to the other chain and delivers the ones that arrive, after it checks the proofs that link each one to a finalized header of the other chain.",
+        "group": "live",
+        "source": "src/hardened/MessageBridge.sol:MessageBridge",
+        "libraries": [
+          "ReceiptProofLib",
+          "OpeningProofLib",
+          "BeaconLayoutLib"
+        ],
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "TokenMediator",
+        "address": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
+        "role": "Moves tokens through the bridge: it locks a native token here and mints a bridged copy on the other chain, or burns a copy and unlocks the native token.",
+        "group": "live",
+        "source": "src/hardened/mediator/TokenMediator.sol:TokenMediator",
+        "libraries": [
+          "MediatorPayloads"
+        ],
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "BeaconForkGate",
+        "address": "0x85fbe4c5f7992fbd97a8e4dafc821fad3b0d20f3",
+        "role": "Refuses new sends when the other chain has moved to a state layout that the proof program cannot read.",
+        "group": "live",
+        "source": "src/hardened/BeaconForkGate.sol:BeaconForkGate",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "TokenFactory",
+        "address": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
+        "role": "Creates the bridged copy of a token the first time that token is sent here.",
+        "group": "live",
+        "source": "src/hardened/mediator/TokenFactory.sol:TokenFactory",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "DeliveryRouter",
+        "address": "0xa125684b9479fbab64218581763788bafb520a57",
+        "role": "Optional entry point for delivery: it wraps the native coin, delivers the message, pays a voluntary tip, unwraps, and makes the follow-up call.",
+        "group": "live",
+        "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "ReceiptProofLib",
+        "address": "0x6dcc32be1802b1747465dfb2d3a1bf171eaed611",
+        "role": "Library that checks the receipt, transaction and log proofs of a message against a block.",
+        "group": "live",
+        "source": "src/hardened/ReceiptProofLib.sol:ReceiptProofLib",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": false,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "OpeningProofLib",
+        "address": "0x9765bc0e7f57d0064b99a4ae855db16e5b5aa7ba",
+        "role": "Library that checks the opening proof that releases tokens locked by a one-way deposit.",
+        "group": "live",
+        "source": "src/hardened/OpeningProofLib.sol:OpeningProofLib",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": false,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "BeaconLayoutLib",
+        "address": "0x4acd9fcef648029931ce163d343feb6d94181322",
+        "role": "Library that checks the beacon state layout rows (block roots, block hashes, historical summaries) that a message proof relies on.",
+        "group": "live",
+        "source": "src/hardened/BeaconLayoutLib.sol:BeaconLayoutLib",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": false,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "MediatorPayloads",
+        "address": "0x1e68160762061624bb5fa31d589a8f31c3e44bc5",
+        "role": "Library that encodes and decodes the token messages that the mediator sends across the bridge.",
+        "group": "live",
+        "source": "src/hardened/mediator/MediatorPayloads.sol:MediatorPayloads",
+        "source_commit": "66578376",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": false,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "BeaconLightClient (follows Sepolia)",
+        "address": "0x1dbbcc0bc25de5f6ae122fb0009b3ee4931fd958",
+        "role": "Light client of the Sepolia beacon chain, kept on PulseChain testnet v4. It stores finalized headers and accepts a new one only with a zero-knowledge proof.",
+        "group": "live",
+        "source": "src/hardened/BeaconLightClient.sol:BeaconLightClient",
+        "source_commit": "fbc62e9",
+        "deployed_on": "2026-10-29",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "BeaconLightClient (follows 943)",
+        "address": "0x759b764D7FE6e0adC97CfD00Eca886Ff53f6A329",
+        "role": "Light client of the PulseChain testnet v4 beacon chain, kept on PulseChain testnet v4 itself. The fork registry reads it.",
+        "group": "live",
+        "source": "src/hardened/BeaconLightClient.sol:BeaconLightClient",
+        "source_commit": "fbc62e9",
+        "deployed_on": "2026-10-29",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "ForkRegistry",
+        "address": "0x0f094a965f280599b41f57a5182955f4afad063f",
+        "role": "Records the fork version and state layout of this chain's own beacon chain from proofs, so the gate can tell when the layout changes.",
+        "group": "live",
+        "source": "src/hardened/ForkRegistry.sol:ForkRegistry",
+        "source_commit": "fbc62e9",
+        "deployed_on": "2026-10-29",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "SP1Verifier",
+        "address": "0xB01856AbEf5b971019F1d25630450cc6bcbAFB21",
+        "role": "Checks the Groth16 zero-knowledge proofs that the light clients accept (the vendored SP1 verifier, version 6.1.0).",
+        "group": "live",
+        "source": "src/hardened/vendor/sp1-contracts/v6.1.0/SP1VerifierGroth16.sol:SP1Verifier",
+        "source_commit": "fbc62e9",
+        "deployed_on": "2026-10-29",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "TestToken tUSD",
+        "address": "0x11b211e478105683096e5da4ce1abf019ff35961",
+        "role": "Test token zkb Test Dollar (tUSD, 6 decimals). Only the deployer can mint it.",
+        "group": "tokens",
+        "source": "src/testnet/TestToken.sol:TestToken",
+        "source_commit": "91133524",
+        "deployed_on": "2026-11-01",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "TestToken tTKN",
+        "address": "0xa8b9650a2021e014253a338629f8095d1f2e2910",
+        "role": "Test token zkb Test Token (tTKN, 18 decimals). Only the deployer can mint it.",
+        "group": "tokens",
+        "source": "src/testnet/TestToken.sol:TestToken",
+        "source_commit": "91133524",
+        "deployed_on": "2026-11-01",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "BridgedToken ztUSD",
+        "address": "0x75dE3c47773162Be247D145619B4266e255dfFF1",
+        "role": "Bridged copy of tUSD from Sepolia, created by the token factory on the first transfer.",
+        "group": "tokens",
+        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
+        "created_by": "factory",
+        "source_commit": "91133524",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": false,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "BridgedToken ztTKN",
+        "address": "0x96EF4e50E0BdffB2f4D1708568BdfF16416b8725",
+        "role": "Bridged copy of tTKN from Sepolia, created by the token factory on the first transfer.",
+        "group": "tokens",
+        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
+        "created_by": "factory",
+        "source_commit": "91133524",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "WPLS",
+        "address": "0x70499adebb11efd915e3b69e700c331778628707",
+        "role": "Wrapped PLS on PulseChain testnet v4, which the delivery router wraps the native coin into. Not deployed by this project.",
+        "group": "third_party",
+        "source": null,
+        "source_commit": null,
+        "deployed_on": null,
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "DeliveryRouter (retired)",
+        "address": "0xbea5f0fd3712b02c25bda32c7719fb9373c0fa20",
+        "role": "The delivery router before the one above. It is retired, and the record still lists it so that deliveries made through it are recognised.",
+        "group": "retired",
+        "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
+        "source_commit": "91133524",
+        "deployed_on": "2026-11-08",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      }
+    ],
     "delivery_router": "0xa125684b9479fbab64218581763788bafb520a57",
     "delivery_routers": [
       "0xbea5f0fd3712b02c25bda32c7719fb9373c0fa20"
@@ -28,6 +557,7 @@
     "mediator": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
     "start_block": 25877713,
     "token_factory": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
+    "verification_checked": "2026-11-19",
     "wrapped_native": "0x70499adebb11efd915e3b69e700c331778628707"
   }
 }

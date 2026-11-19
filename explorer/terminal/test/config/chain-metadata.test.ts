@@ -28,8 +28,8 @@ describe('the block explorer links of each chain', () => {
 
   test('Ethereum and Sepolia use path URLs', () => {
     expect(urls(1, 'tx', hash)).toEqual([`https://etherscan.io/tx/${hash}`])
-    expect(urls(11155111, 'block', '7')).toEqual(['https://sepolia.etherscan.io/block/7'])
-    expect(urls(11155111, 'address', account)).toEqual([`https://sepolia.etherscan.io/address/${account}`])
+    expect(urls(11155111, 'block', '7')).toEqual(['https://sepolia.etherscan.io/block/7', 'https://eth-sepolia.blockscout.com/block/7'])
+    expect(urls(11155111, 'address', account)).toEqual([`https://sepolia.etherscan.io/address/${account}`, `https://eth-sepolia.blockscout.com/address/${account}`])
   })
 
   test('PulseChain explorers use the hash router', () => {

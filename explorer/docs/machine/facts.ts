@@ -27,6 +27,8 @@ export type ChainsFile = { readonly schema: 1; readonly chains: Readonly<Record<
 /** One test token of a deployment. */
 export type TestTokenFact = { readonly address: string; readonly decimals: number; readonly name: string; readonly symbol: string };
 
+export type DeployedContractFact = { readonly name: string; readonly address: string; readonly group: string; readonly role: string };
+
 /** The contracts of one chain of a deployed pair. */
 export type ChainContractsFact = {
   readonly chainId: number;
@@ -41,6 +43,8 @@ export type ChainContractsFact = {
   readonly wrappedNative: string;
   readonly forkRegistry: string | null;
   readonly startBlock: number;
+  /** Every contract of the chain's `contracts` list in the deployment file (libraries, verifier, tokens, retired contracts), without verification status; the page `deployed-contracts` shows the status. */
+  readonly deployedContracts: readonly DeployedContractFact[];
   readonly testTokens: Readonly<Record<string, TestTokenFact>>;
 };
 
@@ -113,6 +117,12 @@ export const buildContractsFile = (deploymentsFolder: string): ContractsFile => 
         wrappedNative: addressOf(section.wrapped_native, `${where}: wrapped_native`),
         forkRegistry: optionalAddressOf(section.fork_registry, `${where}: fork_registry`),
         startBlock: typeof section.start_block === "number" ? section.start_block : 0,
+        deployedContracts: (Array.isArray(section.contracts) ? (section.contracts as Record<string, unknown>[]) : []).map((entry, index) => ({
+          name: String(entry.name),
+          address: addressOf(entry.address, `${where}: contracts[${index}].address`),
+          group: String(entry.group),
+          role: String(entry.role),
+        })),
         testTokens: Object.fromEntries(
           Object.entries(tokens[String(chainId)]?.tokens ?? {}).map(([symbol, token]) => [
             symbol,
@@ -133,6 +143,7 @@ export const allContractAddresses = (contracts: ContractsFile): Set<string> => {
       if (value !== null) found.add(value.toLowerCase());
     }
     for (const token of Object.values(chain.testTokens)) found.add(token.address.toLowerCase());
+    for (const contract of chain.deployedContracts) found.add(contract.address.toLowerCase());
   }
   return found;
 };

@@ -4,11 +4,13 @@
  * of the search.
  */
 
-/** One block explorer of a chain. `hashRouter` explorers keep the page after `#/` (Blockscout); the others use paths. */
+/** One block explorer of a chain. `hashRouter` explorers keep the page after `#/` (the PulseChain scans, which are Blockscout single-page apps served at the root); the others (Etherscan, the Blockscout of Sepolia) use paths. */
 export interface ExplorerInfo {
   readonly name: string;
   readonly base: string;
   readonly hashRouter: boolean;
+  /** Which software runs the explorer, so a page can say where a contract is verified. Left out when it does not matter. */
+  readonly software?: "etherscan" | "blockscout" | "otterscan";
 }
 
 export interface ChainMetadata {
@@ -24,15 +26,22 @@ export interface ChainMetadata {
 }
 
 export const CHAIN_METADATA: Readonly<Record<number, ChainMetadata>> = {
-  1: { name: "Ethereum", nativeSymbol: "ETH", explorers: [{ name: "Etherscan", base: "https://etherscan.io", hashRouter: false }] },
-  11155111: { name: "Sepolia", nativeSymbol: "SepETH", explorers: [{ name: "Sepolia Etherscan", base: "https://sepolia.etherscan.io", hashRouter: false }] },
-  369: { name: "PulseChain", nativeSymbol: "PLS", explorers: [{ name: "PulseChain scan", base: "https://scan.pulsechain.com", hashRouter: true }] },
+  1: { name: "Ethereum", nativeSymbol: "ETH", explorers: [{ name: "Etherscan", base: "https://etherscan.io", hashRouter: false, software: "etherscan" }] },
+  11155111: {
+    name: "Sepolia",
+    nativeSymbol: "SepETH",
+    explorers: [
+      { name: "Sepolia Etherscan", base: "https://sepolia.etherscan.io", hashRouter: false, software: "etherscan" },
+      { name: "Sepolia Blockscout", base: "https://eth-sepolia.blockscout.com", hashRouter: false, software: "blockscout" },
+    ],
+  },
+  369: { name: "PulseChain", nativeSymbol: "PLS", explorers: [{ name: "PulseChain scan", base: "https://scan.pulsechain.com", hashRouter: true, software: "blockscout" }] },
   943: {
     name: "PulseChain testnet v4",
     nativeSymbol: "v4tPLS",
     explorers: [
-      { name: "PulseChain testnet scan", base: "https://scan.v4.testnet.pulsechain.com", hashRouter: true },
-      { name: "Otterscan", base: "https://otter-testnet-pulsechain.g4mm4.io", hashRouter: false },
+      { name: "PulseChain testnet scan", base: "https://scan.v4.testnet.pulsechain.com", hashRouter: true, software: "blockscout" },
+      { name: "Otterscan", base: "https://otter-testnet-pulsechain.g4mm4.io", hashRouter: false, software: "otterscan" },
     ],
   },
 };
