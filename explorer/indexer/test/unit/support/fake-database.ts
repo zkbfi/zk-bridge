@@ -58,7 +58,7 @@ export type Write = {
 };
 
 /** One query that went through the `sql` handle. */
-export type SqlQuery = { readonly selection: unknown; readonly table: unknown };
+export type SqlQuery = { readonly selection: unknown; readonly table: unknown; readonly orderBy?: number; readonly limit?: number };
 
 /** The fake handle and its controls. */
 export type FakeDatabase = ReturnType<typeof createFakeDatabase>;
@@ -114,11 +114,28 @@ export const createFakeDatabase = () => {
   const sql = {
     select: (selection: unknown) => ({
       from: (table: unknown) => ({
-        where: async () => {
-          sqlQueries.push({ selection, table });
-          const answer = sqlQueue.shift();
-          if (answer === undefined) throw new Error("the test queued no answer for this sql query");
-          return answer;
+        // A query ends at `where`, or goes on with `orderBy` and `limit`; it is answered once, from the queue.
+        where: () => {
+          const query: { selection: unknown; table: unknown; orderBy?: number; limit?: number } = { selection, table };
+          const answer = (): Promise<unknown[]> => {
+            sqlQueries.push(query);
+            // A write of a send asks head_updates for the first update that reaches it; unqueued, no update has.
+            const rows = sqlQueue.shift() ?? (table === headUpdates ? [] : undefined);
+            if (rows === undefined) return Promise.reject(new Error("the test queued no answer for this sql query"));
+            return Promise.resolve(rows);
+          };
+          const chain = {
+            orderBy: (...columns: unknown[]) => {
+              query.orderBy = columns.length;
+              return chain;
+            },
+            limit: (count: number) => {
+              query.limit = count;
+              return answer();
+            },
+            then: <T>(resolve: (rows: unknown[]) => T, reject: (reason: unknown) => T) => answer().then(resolve, reject),
+          };
+          return chain;
         },
       }),
     }),
