@@ -57,11 +57,11 @@ describe("the proof page names what is authoritative", () => {
     await waitFor(() => expect(row("Slot time")).toHaveTextContent("2026-09-22 08:33:36 UTC"));
     await waitFor(() => expect(hrefs(row("Light client"))).toContain("https://sepolia.etherscan.io/address/" + SEPOLIA_PAIR.first.contracts.lightClient));
     expect(hrefs(row("Light client"))[0]).toBe(`#/explore/contract/11155111/${SEPOLIA_PAIR.first.contracts.lightClient}`);
-    expect(hrefs(row("Transaction"))).toEqual([`#/explore/tx/11155111/${TX}`, `https://sepolia.etherscan.io/tx/${TX}`]);
+    expect(hrefs(row("Transaction"))).toEqual([`#/explore/tx/11155111/${TX}`, `https://sepolia.etherscan.io/tx/${TX}`, `https://eth-sepolia.blockscout.com/tx/${TX}`]);
     expect(row("Block")).toHaveTextContent("12,021,502");
     expect(hrefs(row("Block"))).toContain("https://sepolia.etherscan.io/block/12021502");
     expect(row("Time")).toHaveTextContent("2026-10-29");
-    expect(hrefs(row("Sender"))).toEqual([`#/explore/address/${POSTER}`, `https://sepolia.etherscan.io/address/${POSTER}`]);
+    expect(hrefs(row("Sender"))).toEqual([`#/explore/address/${POSTER}`, `https://sepolia.etherscan.io/address/${POSTER}`, `https://eth-sepolia.blockscout.com/address/${POSTER}`]);
     expect(row("Gas used")).toHaveTextContent("604,091");
   });
 

@@ -135,7 +135,7 @@ describe("the real pages (moved here from the dapp's old docs view, with the che
   const helpPages = SITE_PAGES.filter((page) => page.group === "help");
 
   it("holds every help page, in reading order", () => {
-    expect(helpPages.map((page) => slugOfPageId(page.id))).toEqual(["getting-started", "how-the-bridge-works", "bridging-tokens", "sending-messages", "fees-explained", "safety", "running-a-bot", "settings-and-explore", "glossary"]);
+    expect(helpPages.map((page) => slugOfPageId(page.id))).toEqual(["getting-started", "how-the-bridge-works", "bridging-tokens", "sending-messages", "fees-explained", "safety", "running-a-bot", "settings-and-explore", "glossary", "deployed-contracts"]);
   });
 
   it("gives every help page a title and at least two headings that the search can find", () => {
@@ -184,7 +184,7 @@ describe("the real pages", () => {
   it("publishes every help page, and nothing from docs/superpowers", () => {
     const ids = SITE_PAGES.map((page) => page.id);
     expect(ids).toContain("help/getting-started");
-    expect(ids.filter((id) => id.startsWith("help/"))).toHaveLength(9);
+    expect(ids.filter((id) => id.startsWith("help/"))).toHaveLength(10);
     expect(ids.filter((id) => id.startsWith("superpowers"))).toEqual([]);
     expect(Object.keys(SITE_INPUT.operatorPages).filter((key) => key.includes("superpowers"))).toEqual([]);
   });

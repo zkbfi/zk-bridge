@@ -72,6 +72,8 @@ A token relay from PulseChain to Ethereum, step by step:
 
 ## 3. Scope
 
+The addresses of every deployed contract, with the source commit it was built from, its deploy date and where its source is verified (Blockscout, Sourcify, Etherscan), are on the page [Deployed contracts](../../explorer/web/docs/pages/10-deployed-contracts.md). It is generated from `deploy/deployments/<pair>.json`, which holds the same list. Use the source commit in its table to pin the code you review to the code that is on the chain.
+
 ### How lines are counted
 
 `cloc` is not installed on the machine that wrote this. The counts below are code lines: non-blank lines that are not wholly a comment. A comment is `//` to the end of the line (also `///` and `//!`) or a `/* ... */` block (also NatSpec `/** ... */`). For Rust, lines inside an inline `#[cfg(test)] mod name { ... }` block are counted apart as "inline test" and are not in the code total. The counter is a short Python script that tracks string literals, so that `//` inside a string is not a comment. To reproduce roughly without it:

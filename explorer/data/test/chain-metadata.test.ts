@@ -15,8 +15,9 @@ describe("chain metadata", () => {
     expect(chainNameOf(5)).toBeUndefined();
   });
 
-  it("builds path URLs for Etherscan and hash router URLs for PulseChain scans, one per explorer", () => {
-    expect(urls(11155111, "tx", hash)).toEqual([`https://sepolia.etherscan.io/tx/${hash}`]);
+  it("builds path URLs for Etherscan and the Blockscout of Sepolia and hash router URLs for PulseChain scans, one per explorer", () => {
+    expect(urls(11155111, "tx", hash)).toEqual([`https://sepolia.etherscan.io/tx/${hash}`, `https://eth-sepolia.blockscout.com/tx/${hash}`]);
+    expect(urls(943, "address", "0xabc")[0]).toBe("https://scan.v4.testnet.pulsechain.com/#/address/0xabc");
     expect(urls(943, "block", "7")).toEqual(["https://scan.v4.testnet.pulsechain.com/#/block/7", "https://otter-testnet-pulsechain.g4mm4.io/block/7"]);
     expect(explorerLinks(5, "tx", hash)).toEqual([]);
     expect(Object.keys(CHAIN_METADATA).map(Number).sort((a, b) => a - b)).toEqual([1, 369, 943, 11155111]);

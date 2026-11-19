@@ -172,3 +172,5 @@ addresses with the previous release of the off-chain code (it reads the old proo
 
 - Drain or a second runner: on testnet, drain (step 2) is enough; the old copies of test tokens stay old.
 - Release timing: the dapp release waits for the owner.
+
+After any of these deployments, update the deployment record, verify the source and regenerate the deployed contracts page: see "After a contract deployment" in [`testnet-run.md`](testnet-run.md).

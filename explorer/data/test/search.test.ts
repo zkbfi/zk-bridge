@@ -88,7 +88,7 @@ describe("crossLinks", () => {
     const links = crossLinks({ type: "address", address: a("99"), chainId: null, role: null }, context);
     expect(urlOf(links, "dapp")).toEqual([`https://next.zkb.fi/#/explore/address/${a("99")}`]);
     expect(urlOf(links, "status")).toEqual([]);
-    expect(links.filter((link) => link.surface === "explorer")).toHaveLength(3);
+    expect(links.filter((link) => link.surface === "explorer")).toHaveLength(4);
     // A role without a chain is a plain address; a missing chain field is the same.
     expect(urlOf(crossLinks({ type: "address", address: a("99") }, context), "dapp")).toEqual([`https://next.zkb.fi/#/explore/address/${a("99")}`]);
     expect(urlOf(crossLinks({ type: "address", address: a("99"), role: "gate" }, context), "dapp")).toEqual([`https://next.zkb.fi/#/explore/address/${a("99")}`]);
@@ -116,7 +116,7 @@ describe("crossLinks", () => {
     const links = crossLinks({ type: "block", chainId: 11155111, number: "7" }, context);
     expect(urlOf(links, "dapp")).toEqual(["https://next.zkb.fi/#/explore/block/11155111/7"]);
     expect(urlOf(links, "status")).toEqual(["https://status.zkb.fi/#check=rpc-11155111"]);
-    expect(urlOf(links, "explorer")).toEqual(["https://sepolia.etherscan.io/block/7"]);
+    expect(urlOf(links, "explorer")).toEqual(["https://sepolia.etherscan.io/block/7", "https://eth-sepolia.blockscout.com/block/7"]);
   });
 
   it("names a chain that is not in the pair by its number", () => {

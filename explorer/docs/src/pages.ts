@@ -31,6 +31,7 @@ export const SECTIONS: readonly DocsSiteSection[] = ["use", "trust", "run"];
 const HELP_SECTIONS: Readonly<Record<string, DocsSiteSection>> = {
   "how-the-bridge-works": "trust",
   safety: "trust",
+  "deployed-contracts": "trust",
   "running-a-bot": "run",
 };
 
