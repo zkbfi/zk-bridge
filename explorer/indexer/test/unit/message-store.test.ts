@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chainTips, lightClientHeads, messages, transfers } from "../../ponder.schema";
+import { chainTips, headUpdates, lightClientHeads, messages, transfers } from "../../ponder.schema";
 import { ageMessages, coverMessages, findTransfer, writeMessage } from "../../src/lib/message-store";
 import { createFakeDatabase } from "./support/fake-database";
 
@@ -69,40 +69,44 @@ describe("writeMessage", () => {
     expect((await write(database, send)).status).toBe("sent");
   });
 
-  it("covers the message at once when a stored head already reaches its block", async () => {
+  it("covers the message at once with the earliest stored update that reaches its block", async () => {
     const database = createFakeDatabase();
-    database.seed(lightClientHeads, head(100n));
+    database.queueSqlRows([{ slot: 77n, timestamp: 1_500n }]);
     const row = await write(database, send);
     expect(row).toMatchObject({ status: "covered", coveredByHeadSlot: 77n, coveredAtTimestamp: 1_500n });
+    expect(database.sqlQueries).toEqual([expect.objectContaining({ table: headUpdates, orderBy: 2, limit: 1 })]);
   });
 
-  it("does not cover the message when the stored head stops before its block", async () => {
+  // A reindex runs each chain at its own pace (multichain ordering), so the destination may already hold heads far
+  // past the send when the send is indexed. The cover is the first update that reached the send, not the newest head.
+  it("ignores the newest head and takes the first update, as on a reindex where the destination ran ahead", async () => {
     const database = createFakeDatabase();
-    database.seed(lightClientHeads, head(99n));
-    expect(await write(database, send)).toMatchObject({ status: "sent", coveredByHeadSlot: null });
+    database.seed(lightClientHeads, { ...head(900n), slot: 999n, updatedTimestamp: 9_000n });
+    database.queueSqlRows([{ slot: 78n, timestamp: 1_600n }]);
+    expect(await write(database, send)).toMatchObject({ status: "covered", coveredByHeadSlot: 78n, coveredAtTimestamp: 1_600n });
   });
 
-  it("does not cover the message with the head of the deployment, which holds no execution block", async () => {
+  it("does not cover the message when no stored update reaches its block", async () => {
     const database = createFakeDatabase();
-    database.seed(lightClientHeads, { ...head(0n), executionBlockNumber: null, updatedTimestamp: null, updateCount: 0, initialSlot: 77n });
+    database.queueSqlRows([]);
     expect(await write(database, send)).toMatchObject({ status: "sent", coveredByHeadSlot: null });
   });
 
   it("does not cover a message with no send block, as when the delivery arrives first", async () => {
     const database = createFakeDatabase();
-    database.seed(lightClientHeads, head(100n));
     expect(await write(database, { deliveredBlockNumber: 150n, deliveredTimestamp: 2_000n })).toMatchObject({
       status: "delivered",
       coveredByHeadSlot: null,
     });
+    expect(database.sqlQueries).toEqual([]);
   });
 
-  it("does not move the slot of a message that a head covered earlier", async () => {
+  it("does not move the slot of a message that an update covered earlier, and asks nothing again", async () => {
     const database = createFakeDatabase();
-    database.seed(lightClientHeads, head(100n));
+    database.queueSqlRows([{ slot: 77n, timestamp: 1_500n }]);
     await write(database, send);
-    database.seed(lightClientHeads, { ...head(500n), slot: 99n, updatedTimestamp: 1_900n });
     expect(await write(database, { sender })).toMatchObject({ coveredByHeadSlot: 77n, coveredAtTimestamp: 1_500n });
+    expect(database.sqlQueries).toHaveLength(1);
   });
 
   it("updates the row of a known message and keeps its earlier facts", async () => {

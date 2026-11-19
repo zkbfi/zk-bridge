@@ -1,6 +1,6 @@
-import { and, eq, inArray, isNull, lte } from "ponder";
-import { messages, chainTips, lightClientHeads, transfers } from "ponder:schema";
-import { isCovered, mergeMessage, sideOf, type MessageRow } from "@zk-bridge/shared";
+import { and, asc, eq, gte, inArray, isNull, lte } from "ponder";
+import { messages, chainTips, headUpdates, transfers } from "ponder:schema";
+import { mergeMessage, sideOf, type MessageRow } from "@zk-bridge/shared";
 import type { Hex } from "viem";
 import type { Context } from "ponder:registry";
 import { pair } from "./pair";
@@ -67,15 +67,23 @@ export const writeMessage = async (input: WriteMessageInput): Promise<MessageRow
 };
 
 /**
- * Looks up the newest stored head on the destination and returns the facts that cover the message, if it is covered
- * and was not marked yet. Returns null when nothing changes.
+ * Finds the first stored light client update on the destination whose execution block reaches the message, and returns
+ * the facts that cover the message, if it was not marked yet. Returns null when nothing changes.
+ *
+ * The first update, not the newest head: Ponder indexes each chain at its own pace (multichain ordering), so on a
+ * reindex the destination can be far ahead when the send is indexed, and its newest head is hours past the update that
+ * really covered the message. Live, the two are the same update.
  */
 const coverFromStoredHead = async (database: IndexingDatabase, row: MessageRow): Promise<Partial<MessageRow> | null> => {
   if (row.coveredByHeadSlot !== null || row.sentBlockNumber === null) return null;
-  const head = await database.find(lightClientHeads, { chainId: row.destinationChainId });
-  // The head of the deployment holds no execution block, so it covers nothing.
-  if (!head || head.executionBlockNumber === null || !isCovered(head.executionBlockNumber, row.sentBlockNumber)) return null;
-  return { coveredByHeadSlot: head.slot, coveredAtTimestamp: head.updatedTimestamp };
+  const [first] = await database.sql
+    .select({ slot: headUpdates.slot, timestamp: headUpdates.timestamp })
+    .from(headUpdates)
+    .where(and(eq(headUpdates.chainId, row.destinationChainId), gte(headUpdates.executionBlockNumber, row.sentBlockNumber)))
+    .orderBy(asc(headUpdates.executionBlockNumber), asc(headUpdates.slot))
+    .limit(1);
+  if (first === undefined) return null;
+  return { coveredByHeadSlot: first.slot, coveredAtTimestamp: first.timestamp };
 };
 
 /**
