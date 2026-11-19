@@ -93,6 +93,14 @@ export const transfers = onchainTable(
     finalRecipient: t.hex(),
     /** `event`, `logs` or `terms`. */
     feeSource: t.text(),
+    /** `PayoutRefused`, `InvalidTerms` or `Reentered` when the router handed the amount off (`DeliveryFailed`); null otherwise. */
+    handOffReason: t.text(),
+    /** True when the failed delivery address refused the hand-off (`HandOffRefused`): the amount stays in the router for `sweep`. */
+    handOffRefused: t.boolean(),
+    /** The router's `CallFailed`: the call after the delivery failed with its full gas. */
+    callFailedTarget: t.hex(),
+    callFailedRecipient: t.hex(),
+    callFailedGas: t.bigint(),
   }),
   (table) => ({
     sourceTokenIndex: index().on(table.sourceToken),

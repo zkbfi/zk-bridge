@@ -16,8 +16,8 @@ export type TrailStep = {
   readonly href?: string;
   readonly external?: boolean;
   readonly drawer?: ReactNode;
-  /** "error" draws the drawer's top line in red (a reverted call). */
-  readonly tone?: "error";
+  /** "error" draws the drawer's top line in red (a reverted call); "warning" in amber (a delivery that did not pay the recipient as asked). */
+  readonly tone?: "error" | "warning";
 };
 
 /** The step list. `initiallyOpen` opens one step's drawer at first (the step where a message stopped). */

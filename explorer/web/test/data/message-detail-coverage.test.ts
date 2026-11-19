@@ -128,9 +128,16 @@ describe("parseMessageDetail, the transfer", () => {
 
   it("reads the delivery fee of a router delivery, and only its known sources", () => {
     const router = { ...transfer, deliveryRouter: OTHER, routerAmount: "10", fee: "1", received: "9", deliverer: ADDRESS, finalRecipient: OTHER, feeSource: "event" };
-    expect(parseMessageDetail({ ...base, transfer: router }).transfer?.delivery).toEqual({ router: getAddress(OTHER), amount: 10n, fee: 1n, received: 9n, deliverer: CHECKSUM, recipient: getAddress(OTHER), source: "event" });
+    expect(parseMessageDetail({ ...base, transfer: router }).transfer?.delivery).toEqual({ router: getAddress(OTHER), amount: 10n, fee: 1n, received: 9n, deliverer: CHECKSUM, recipient: getAddress(OTHER), source: "event", handOffReason: null, handOffRefused: false, callFailed: null });
     const unknown = { ...transfer, deliveryRouter: OTHER, feeSource: "guess" };
-    expect(parseMessageDetail({ ...base, transfer: unknown }).transfer?.delivery).toEqual({ router: getAddress(OTHER), amount: null, fee: null, received: null, deliverer: null, recipient: null, source: null });
+    expect(parseMessageDetail({ ...base, transfer: unknown }).transfer?.delivery).toEqual({ router: getAddress(OTHER), amount: null, fee: null, received: null, deliverer: null, recipient: null, source: null, handOffReason: null, handOffRefused: false, callFailed: null });
+  });
+
+  it("reads the router's hand-off, its refusal and a failed call, and ignores a reason it does not know", () => {
+    const events = { handOffReason: "PayoutRefused", handOffRefused: true, callFailed: { target: OTHER, recipient: ADDRESS, callGas: "50000" } };
+    const delivery = parseMessageDetail({ ...base, transfer: { ...transfer, deliveryRouter: OTHER, feeSource: "event", ...events } }).transfer?.delivery;
+    expect(delivery).toMatchObject({ handOffReason: "PayoutRefused", handOffRefused: true, callFailed: { target: getAddress(OTHER), recipient: CHECKSUM, callGas: 50_000n } });
+    expect(parseMessageDetail({ ...base, transfer: { ...transfer, deliveryRouter: OTHER, handOffReason: "Other" } }).transfer?.delivery?.handOffReason).toBeNull();
   });
 
   it("reads the user who sent the tokens and the block of the delivery when the answer carries them", () => {

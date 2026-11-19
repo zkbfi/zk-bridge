@@ -11,7 +11,7 @@ import type { Hex } from "viem";
 import type { MessageCosts } from "@zk-bridge/shared";
 import type { PairConfig, TokenInfo } from "@terminal/model/types";
 import { formatRoute, type ExplorePage } from "../app/route";
-import { useMessage } from "../app/queries";
+import { useMessage, useRouterAddresses } from "../app/queries";
 import { useServices } from "../app/services";
 import { amountText, arrivesAsSymbol } from "../bridge/bridge-model";
 import { Chevron, CopyIcon, ExternalLink } from "../bridge/icons";
@@ -26,7 +26,8 @@ import type { RouteStep } from "@zk-bridge/shared";
 import { useBlockingStep, type BlockingView } from "../route/route-board";
 import { StepCard } from "../route/StepCard";
 import { durationText, statusWord } from "../explore/explore-model";
-import { appOf, calledFunction, messageSteps, payloadBytes, payloadSummary, stepCostText, type MessageApp, type MessageStep } from "../explore/message-model";
+import { OUTCOME_TAGS, type DeliveryOutcome } from "../explore/delivery-outcome";
+import { appOf, calledFunction, messageSteps, outcomeOf, payloadBytes, payloadSummary, stepCostText, type MessageApp, type MessageStep } from "../explore/message-model";
 import { KV, RouteIcons, shortHex, XBand, XGroup } from "../explore/parts";
 import { DrawerGrid, StepTrail, type TrailStep } from "../explore/StepTrail";
 import { explorerUrl } from "../explore/chain-reader";
@@ -213,7 +214,7 @@ const CostCell = ({ text }: { readonly text: string | null }) => (text === null 
 const COST_NOTE = "Gas used × the effective gas price, in the chain's coin; dollars at the PulseX price of the block the indexer read (for Ethereum, the PulseChain block nearest the transaction).";
 
 /** The drawer of the delivery step: the transaction, its block, gas and what it paid out; or, for a release that failed, the reason first. */
-const DeliveryDrawer = ({ detail, reverted, pair }: { readonly detail: MessageDetail; readonly reverted: boolean; readonly pair: PairConfig }) => {
+const DeliveryDrawer = ({ detail, reverted, pair, outcome }: { readonly detail: MessageDetail; readonly reverted: boolean; readonly pair: PairConfig; readonly outcome: DeliveryOutcome | null }) => {
   const cost = <CostCell text={stepCostText(detail.costs?.delivered ?? null, pair)} />;
   const gasUsed = detail.costs?.delivered == null ? null : Number(detail.costs.delivered.gasUsed).toLocaleString("en-US");
   const hash = detail.destinationTransactionHash;
@@ -234,6 +235,7 @@ const DeliveryDrawer = ({ detail, reverted, pair }: { readonly detail: MessageDe
   return (
     <DrawerGrid
       rows={[
+        ...(outcome === null ? [] : [["What happened", <div className="zb-outcome">{outcome.paragraphs.map((text) => <p key={text}>{text}</p>)}</div>] as const]),
         transaction,
         ["Block", detail.deliveredBlockNumber === null ? <Missing why={NOT_RECORDED} /> : <a href={explore({ kind: "block", chainId: detail.destinationChainId, id: String(detail.deliveredBlockNumber) })}>{detail.deliveredBlockNumber.toLocaleString("en-US")}</a>],
         ["Gas", gasUsed ?? <Missing why={NOT_RECORDED} />],
@@ -278,7 +280,7 @@ const trailOf = (steps: readonly MessageStep[], detail: MessageDetail, pair: Pai
               ) : step.detail.kind === "tx" ? (
                 <TxDrawer detail={step.detail} cost={<CostCell text={stepCostText(detail.costs?.sent ?? null, pair)} />} />
               ) : (
-                <DeliveryDrawer detail={detail} reverted={step.detail.reverted} pair={pair} />
+                <DeliveryDrawer detail={detail} reverted={step.detail.reverted} pair={pair} outcome={step.outcome ?? null} />
               ),
           }),
     };
@@ -314,6 +316,10 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
   const loaded = message.data ?? null;
   const blocking = useBlockingStep(loaded === null ? null : { messageId: loaded.id, direction: loaded.sourceChainId === pair.first.chainId ? "first-to-second" : "second-to-first", covered: loaded.coveredByHeadSlot !== null || loaded.deliveredAt !== null });
   const proofs = useQuery({ queryKey: ["explore", "proofs"], queryFn: () => indexed.proofs() }).data ?? [];
+  // The router's failed delivery address, for the words of a failed delivery. Read only when the message was delivered through a router.
+  const router = loaded?.deliveredAt != null ? (loaded.transfer?.delivery?.router ?? null) : null;
+  const routerAddresses = useRouterAddresses(loaded === null ? null : loaded.destinationChainId, router, { enabled: router !== null });
+  const failedDelivery = routerAddresses.data?.kind === "read" ? routerAddresses.data.failedDeliveryAddress : null;
   const names = chainNamer(pair);
   if (message.error !== null && message.data === undefined) {
     return (
@@ -336,7 +342,8 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
   const transfer = detail.transfer;
   const source = { chainId: detail.sourceChainId, name: names(detail.sourceChainId) };
   const destination = { chainId: detail.destinationChainId, name: names(detail.destinationChainId) };
-  const steps = messageSteps(detail, pair, proofs);
+  const steps = messageSteps(detail, pair, proofs, failedDelivery);
+  const outcome = outcomeOf(detail, pair, failedDelivery);
   const stopped = steps.findIndex((step) => step.tone === "error");
   const reverted = stopped >= 0;
   const status = statusWord(detail.status);
@@ -373,6 +380,7 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
         tags={
           <>
             <span className="zb-xtag">{status}</span>
+            {outcome === null ? null : <span className="zb-xtag">{OUTCOME_TAGS[outcome.kind]}</span>}
             {detail.deliveredAt === null || reverted ? null : <span className="zb-xtag">{durationText(detail.deliveredAt - detail.sentAt)}</span>}
           </>
         }
@@ -408,6 +416,8 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
               {(transfer.delivery === null ? transfer.deliveredValue : transfer.delivery.received) === null ? (
                 detail.deliveredAt === null && transfer.destinationToken === null ? (
                   <span className="zb-small">arrives as {arrivingAs(transfer).symbol} once delivered</span>
+                ) : outcome?.kind === "router-callback-failed" ? (
+                  <span className="zb-small">nothing: the tokens are in the router</span>
                 ) : (
                   <Missing why={detail.deliveredAt === null ? "Not delivered yet" : transfer.delivery === null ? NOT_RECORDED : feeMissingWhy(transfer.delivery)} />
                 )
@@ -423,6 +433,11 @@ export const MessageView = ({ messageId }: { readonly messageId: Hex }) => {
               <p className="zb-small zb-xsummary">
                 {feeSummaryText({ sent: transfer.value, sentDecimals: transfer.sourceToken.decimals, sentSymbol: transfer.sourceToken.symbol, fee: transfer.delivery.fee, received: transfer.delivery.received, decimals: arrivingAs(transfer).decimals, symbol: arrivingAs(transfer).symbol })}
               </p>
+            )}
+            {outcome === null ? null : (
+              <div className="zb-small zb-xsummary zb-outcome" data-testid="delivery-outcome">
+                {outcome.paragraphs.map((text) => <p key={text}>{text}</p>)}
+              </div>
             )}
             {deliveredBy}
           </>

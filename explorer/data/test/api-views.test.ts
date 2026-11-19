@@ -113,11 +113,23 @@ describe("feedItemView", () => {
     deliverer: null,
     finalRecipient: null,
     feeSource: null,
+    handOffReason: null,
+    handOffRefused: null,
+    callFailedTarget: null,
+    callFailedRecipient: null,
+    callFailedGas: null,
   };
 
   it("shows the delivery fee of a router delivery: the fee, what the recipient received, the deliverer and the source", () => {
     const view = feedItemView(sent, { ...transfer, deliveryRouter: addressOf("e7"), routerAmount: 12_300n, fee: 12n, received: 12_288n, deliverer: addressOf("77"), finalRecipient: addressOf("88"), feeSource: "event" }, index);
     expect(view.transfer).toMatchObject({ deliveryRouter: addressOf("e7"), routerAmount: "12300", fee: "12", received: "12288", deliverer: addressOf("77"), finalRecipient: addressOf("88"), feeSource: "event" });
+  });
+
+  it("shows the router's hand-off, a refused hand-off and a failed call", () => {
+    const handedOff = feedItemView(sent, { ...transfer, deliveryRouter: addressOf("e7"), received: 0n, handOffReason: "PayoutRefused", handOffRefused: true }, index).transfer;
+    expect(handedOff).toMatchObject({ handOffReason: "PayoutRefused", handOffRefused: true, callFailed: null });
+    const called = feedItemView(sent, { ...transfer, deliveryRouter: addressOf("e7"), callFailedTarget: addressOf("c1"), callFailedRecipient: addressOf("88"), callFailedGas: 50_000n }, index).transfer;
+    expect(called).toMatchObject({ handOffReason: null, handOffRefused: false, callFailed: { target: addressOf("c1"), recipient: addressOf("88"), callGas: "50000" } });
   });
 
   it("shows no fee for a transfer that no router delivered", () => {

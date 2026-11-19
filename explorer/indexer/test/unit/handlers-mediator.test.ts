@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { encodeAbiParameters, encodeEventTopics, parseAbiParameters, type Hex } from "viem";
+import { deliveryRouterAbi } from "@zk-bridge/shared";
 import {
   bridgedSupply,
   escrow,
@@ -131,6 +133,44 @@ describe("TokenMediator:TokensBridged to a delivery router", () => {
       feeSource: "logs",
     });
     expect(client.readContract).toHaveBeenCalledWith(expect.objectContaining({ address: OLD_ROUTER, functionName: "rewardAddress", blockNumber: 100n }));
+  });
+
+  it("records a hand-off with its reason, a refusal by the failed delivery address, and a failed call after a delivery", async () => {
+    const routerLog = (logIndex: number, eventName: "DeliveryFailed" | "HandOffRefused" | "CallFailed", args: Record<string, string>, data: Hex) => ({
+      address: ROUTER,
+      topics: encodeEventTopics({ abi: deliveryRouterAbi, eventName, args } as never) as Hex[],
+      data,
+      logIndex,
+    });
+    const event = createEvent({ token, recipient: ROUTER, value: 100n, messageId }, { transaction: { hash: hashOf("aa"), from: addressOf("f0"), to: BRIDGE }, log: { address: MEDIATOR_ON_PULSECHAIN, logIndex: 1 } });
+
+    const handOff = createContext(369, routerAnswers);
+    handOff.client.getTransactionReceipt.mockResolvedValue({
+      logs: [
+        bridgedLog,
+        routerLog(2, "DeliveryFailed", { token, recipient: RECIPIENT }, encodeAbiParameters(parseAbiParameters("uint256, uint8"), [100n, 2])),
+        routerLog(3, "HandOffRefused", { token }, encodeAbiParameters(parseAbiParameters("uint256"), [100n])),
+      ],
+    });
+    await callHandler("TokenMediator:TokensBridged", { event, context: handOff.context });
+    expect(handOff.database.row(transfers, { messageId })).toMatchObject({ received: 0n, handOffReason: "Reentered", handOffRefused: true, callFailedTarget: null });
+
+    const called = createContext(369, routerAnswers);
+    const target = addressOf("c1");
+    called.client.getTransactionReceipt.mockResolvedValue({
+      logs: [
+        bridgedLog,
+        routerLog(
+          2,
+          "CallFailed",
+          { target, recipient: RECIPIENT },
+          encodeAbiParameters(parseAbiParameters("uint256"), [50_000n]),
+        ),
+        { address: ROUTER, topics: encodeEventTopics({ abi: deliveryRouterAbi, eventName: "Delivered", args: { token, recipient: RECIPIENT, feeTo: ZERO as Hex } }) as Hex[], data: encodeAbiParameters(parseAbiParameters("uint256, uint256, uint256, uint8, address"), [100n, 0n, 100n, 1, target]), logIndex: 3 },
+      ],
+    });
+    await callHandler("TokenMediator:TokensBridged", { event, context: called.context });
+    expect(called.database.row(transfers, { messageId })).toMatchObject({ received: 100n, handOffReason: null, handOffRefused: null, callFailedTarget: target, callFailedRecipient: RECIPIENT, callFailedGas: 50_000n });
   });
 
   it("records the router alone when the receipt shows no trace of its callback, and reads on when the router does not answer", async () => {

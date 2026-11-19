@@ -135,7 +135,7 @@ describe("the message page, a token transfer", () => {
     const deliverer = "0x00000000000000000000000000000000000000a7";
     const { container } = renderDetail({
       ...detail,
-      transfer: { ...transfer, value: 123n * unit / 10n, deliveredValue: 123n * unit / 10n, delivery: { router: "0x00000000000000000000000000000000000000e7", amount: 123n * unit / 10n, fee: 123n * unit / 10_000n, received: 122_877n * unit / 10_000n, deliverer, recipient, source: "logs" } },
+      transfer: { ...transfer, value: 123n * unit / 10n, deliveredValue: 123n * unit / 10n, delivery: { router: "0x00000000000000000000000000000000000000e7", amount: 123n * unit / 10n, fee: 123n * unit / 10_000n, received: 122_877n * unit / 10_000n, deliverer, recipient, source: "logs", handOffReason: null, handOffRefused: false, callFailed: null } },
     });
     const fee = await screen.findByRole("button", { name: /^Fee/ });
     expect(fee.querySelector(".zb-xv")).toHaveTextContent("0.0123 (0.1%)");
@@ -149,9 +149,26 @@ describe("the message page, a token transfer", () => {
     expect(drawer.getByText("Read from").nextSibling).toHaveTextContent("the token transfers of the delivery");
   });
 
+  it("says what happened to a router delivery whose callback failed: the tokens are in the router, the recipient got nothing, and where sweep sends them", async () => {
+    const detail = await detailOf(tokenItem.id);
+    renderDetail({
+      ...detail,
+      callbackFailed: true,
+      transfer: { ...detail.transfer!, delivery: { router: "0x00000000000000000000000000000000000000e7", amount: 5n, fee: null, received: null, deliverer: null, recipient: null, source: null, handOffReason: null, handOffRefused: false, callFailed: null } },
+    });
+    const outcome = await screen.findByTestId("delivery-outcome");
+    expect(outcome).toHaveTextContent("The recipient received nothing.");
+    expect(outcome).toHaveTextContent("until anyone calls sweep, which sends them to the router's failed delivery address");
+    // The address of the fixture router, read from the chain.
+    await waitFor(() => expect(screen.getByTestId("delivery-outcome")).toHaveTextContent(/failed delivery address \(0x[0-9a-fA-F]{40}\)/));
+    expect(row(/^Received on/).querySelector(".zb-xv")).toHaveTextContent("nothing: the tokens are in the router");
+    expect(screen.getByText("Tokens reached the router on PulseChain, its callback failed")).toBeInTheDocument();
+    expect(screen.queryByText(/^Delivered on PulseChain/)).toBeNull();
+  });
+
   it("says why a router delivery has no fee figure: a native gas-based fee leaves no log", async () => {
     const detail = await detailOf(tokenItem.id);
-    renderDetail({ ...detail, transfer: { ...detail.transfer!, delivery: { router: "0x00000000000000000000000000000000000000e7", amount: 5n, fee: null, received: null, deliverer: null, recipient: null, source: "terms" } } });
+    renderDetail({ ...detail, transfer: { ...detail.transfer!, delivery: { router: "0x00000000000000000000000000000000000000e7", amount: 5n, fee: null, received: null, deliverer: null, recipient: null, source: "terms", handOffReason: null, handOffRefused: false, callFailed: null } } });
     const fee = await screen.findByRole("button", { name: /^Fee/ });
     expect(fee.querySelector(".zb-xv")).toHaveTextContent(/^—$/);
     expect(row(/^Received on/).querySelector(".zb-xv")).toHaveTextContent("—");

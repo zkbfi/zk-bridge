@@ -249,6 +249,12 @@ export const buildIndexerSpec = (): OpenApiDocument => {
             received: { type: ["string", "null"], description: "What the recipient received after the fee; 0 when the router handed the amount off." },
             deliverer: { oneOf: [ADDRESS, { type: "null" }], description: "The account that received the fee (the router's reward address); null when no fee was paid." },
             finalRecipient: { oneOf: [ADDRESS, { type: "null" }], description: "The account that the router paid." },
+            handOffReason: { type: ["string", "null"], enum: ["PayoutRefused", "InvalidTerms", "Reentered", null], description: "Why the router handed the amount off to its failed delivery address (the router's DeliveryFailed); null when it did not." },
+            handOffRefused: { type: "boolean", description: "True when the failed delivery address refused the hand-off (the router's HandOffRefused): the amount stays in the router until anyone calls sweep." },
+            callFailed: {
+              oneOf: [{ type: "object", properties: { target: ADDRESS, recipient: ADDRESS, callGas: { type: "string", description: "The gas the call was given, a decimal string." } }, required: ["target", "recipient", "callGas"] }, { type: "null" }],
+              description: "The call after the delivery failed with its full gas (the router's CallFailed). The recipient kept the tokens.",
+            },
             feeSource: {
               type: ["string", "null"],
               enum: ["event", "logs", "terms", null],

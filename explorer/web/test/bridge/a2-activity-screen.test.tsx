@@ -102,6 +102,22 @@ describe("the Activity screen with a wallet", () => {
     expect(screen.queryByText(/ fee \(/)).toBeNull();
   });
 
+  it("does not show a delivery that left the tokens in the router, or handed them off, as a plain delivery", async () => {
+    const delivery = { token: null, fee: null, received: null, handOffReason: null, handOffRefused: false, callFailed: null } as const;
+    renderFeed([
+      item({ id: `0x${"0a".repeat(32)}`, callbackFailed: true, delivery }),
+      item({ id: `0x${"0b".repeat(32)}`, delivery: { ...delivery, received: 0n, handOffReason: "PayoutRefused" } }),
+      item({ id: `0x${"0c".repeat(32)}`, delivery: { ...delivery, received: 5n, callFailed: { target: "0x00000000000000000000000000000000000000c1", recipient: "0x00000000000000000000000000000000000000c2", callGas: 50_000n } } }),
+      item({ id: `0x${"0d".repeat(32)}` }),
+    ]);
+    await screen.findByText("Today");
+    expect(screen.getAllByTestId("activity-outcome-tag").map((tag) => tag.textContent)).toEqual(["Tokens in the router", "Handed off", "Call failed"]);
+    const rows = screen.getAllByRole("button", { expanded: false });
+    await userEvent.click(rows[0]!);
+    expect(screen.getByTestId("activity-outcome")).toHaveTextContent("the recipient received nothing. They wait in the router until anyone calls sweep");
+    expect(screen.getByRole("img", { name: /^Tokens reached the router on .*, its callback failed$/ })).toBeInTheDocument();
+  });
+
   it("lists a transfer just submitted, and drops it once the feed has its transaction", async () => {
     const hash = `0x${"99".repeat(32)}` as const;
     addPending({ sourceTransactionHash: hash, direction: "first-to-second", token: FIXTURE_TOKENS[0]!, amount: 5n * 10n ** 18n, sentAt: NOW });

@@ -31,7 +31,7 @@ describe("an in-flight transfer whose destination token is not known yet", () =>
 
   it("reads null fee fields beside a router as unknown, not as an error", () => {
     const transfer = { ...(answer as { transfer: Record<string, unknown> }).transfer, deliveryRouter: "0x00000000000000000000000000000000000000d1" };
-    expect(parseMessageDetail({ ...(answer as object), transfer }).transfer?.delivery).toEqual({ router: "0x00000000000000000000000000000000000000D1", amount: null, fee: null, received: null, deliverer: null, recipient: null, source: null });
+    expect(parseMessageDetail({ ...(answer as object), transfer }).transfer?.delivery).toEqual({ router: "0x00000000000000000000000000000000000000D1", amount: null, fee: null, received: null, deliverer: null, recipient: null, source: null, handOffReason: null, handOffRefused: false, callFailed: null });
   });
 
   it("a bridged copy going home arrives as its native token", () => {

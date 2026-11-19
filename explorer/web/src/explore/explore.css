@@ -111,6 +111,8 @@
 .zb-xfee-total dt { color: var(--zb-ink) !important; }
 /* A reverted call: the drawer's top line is red, not the accent. */
 .zb-trail-drawer[data-tone="error"]::before { background: var(--zb-bad, #c8102e); }
+.zb-trail-drawer[data-tone="warning"]::before { background: var(--zb-warn, #b7791f); }
+.zb-outcome p { margin: 0 0 6px; }
 .zb-xretry { color: var(--zb-accent-text); border-color: var(--zb-accent); }
 .zb-xretry:disabled { opacity: .5; cursor: not-allowed; }
 .zb-xband .zb-xroute { color: inherit; }

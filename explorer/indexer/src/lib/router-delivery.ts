@@ -66,5 +66,10 @@ export const routerDeliveryPatch = async (input: RouterDeliveryPatchInput): Prom
     deliverer: split.deliverer,
     finalRecipient: split.finalRecipient,
     feeSource: split.feeSource,
+    handOffReason: split.handOffReason,
+    handOffRefused: split.handOffRefused || null,
+    callFailedTarget: split.callFailed?.target ?? null,
+    callFailedRecipient: split.callFailed?.recipient ?? null,
+    callFailedGas: split.callFailed?.gasGiven ?? null,
   };
 };

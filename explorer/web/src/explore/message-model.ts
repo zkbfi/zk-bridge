@@ -11,6 +11,7 @@ import { amountText } from "../bridge/bridge-model";
 import { dollarsText, shortAmountText } from "../bridge/number";
 import type { MessageDetail } from "../data/message-detail";
 import { contractNameOf } from "./contract-names";
+import { deliveryOutcome, type DeliveryOutcome } from "./delivery-outcome";
 import type { ProofRow } from "./explore-source";
 import { shortHex } from "./parts";
 import { deploymentCallOf, shortChain, type StepDetail } from "./tx-model";
@@ -71,7 +72,10 @@ export type MessageStep = {
   readonly at: number | null;
   readonly href?: string;
   readonly detail?: MessageStepDetail;
-  readonly tone?: "error";
+  /** "error" is where a message stopped. "warning" is a delivery that did not pay the recipient as asked (see `deliveryOutcome`). */
+  readonly tone?: "error" | "warning";
+  /** What a delivery that did not pay as asked really did, for the drawer. */
+  readonly outcome?: DeliveryOutcome;
 };
 
 const chainName = (pair: PairConfig, chainId: number): string => {
@@ -91,14 +95,47 @@ export const coveringProof = (detail: Pick<MessageDetail, "destinationChainId" |
 };
 
 /**
+ * What the router did when it did not pay the recipient as asked, from the delivery that the indexer recorded: a failed
+ * callback of the router, a hand-off to its failed delivery address, or a call after the payout that failed. Null for an
+ * ordinary delivery, a message the router did not deliver, and a delivery that failed to release.
+ *
+ * @param detail The message.
+ * @param pair The pair.
+ * @param failedDelivery The router's `failedDeliveryAddress()`, or null when it is not known.
+ */
+export const outcomeOf = (detail: MessageDetail, pair: PairConfig, failedDelivery: Address | null = null): DeliveryOutcome | null => {
+  const transfer = detail.transfer;
+  if (detail.deliveredAt === null || detail.releaseFailed) return null;
+  const delivery = transfer?.delivery ?? null;
+  const arriving = transfer === null ? null : (transfer.destinationToken ?? { symbol: transfer.sourceToken.symbol, decimals: transfer.sourceToken.decimals });
+  const amount = delivery?.amount ?? transfer?.deliveredValue ?? null;
+  return deliveryOutcome(
+    {
+      callbackFailed: detail.callbackFailed,
+      viaRouter: delivery !== null,
+      handOffReason: delivery?.handOffReason ?? null,
+      handOffRefused: delivery?.handOffRefused ?? false,
+      callFailed: delivery?.callFailed ?? null,
+    },
+    {
+      destination: chainName(pair, detail.destinationChainId),
+      failedDelivery,
+      amountText: amount === null || arriving === null ? null : `${amountText(amount, arriving.decimals)} ${arriving.symbol}`,
+      recipient: delivery?.recipient ?? null,
+    },
+  );
+};
+
+/**
  * The steps of a message: sent, the block final on the source chain, the proof posted to the destination, and the
  * delivery (or the release that failed). Each step that happened opens a drawer.
  *
  * @param detail The message.
  * @param pair The pair.
  * @param proofs The proofs that the indexer recorded.
+ * @param failedDelivery The delivery router's `failedDeliveryAddress()` when the page has read it, for the words of a failed delivery.
  */
-export const messageSteps = (detail: MessageDetail, pair: PairConfig, proofs: readonly ProofRow[]): readonly MessageStep[] => {
+export const messageSteps = (detail: MessageDetail, pair: PairConfig, proofs: readonly ProofRow[], failedDelivery: Address | null = null): readonly MessageStep[] => {
   const source = chainName(pair, detail.sourceChainId);
   const destination = chainName(pair, detail.destinationChainId);
   const covered = detail.coveredByHeadSlot !== null || detail.deliveredAt !== null;
@@ -106,7 +143,9 @@ export const messageSteps = (detail: MessageDetail, pair: PairConfig, proofs: re
   const delivered = detail.deliveredAt !== null;
   const failed = delivered && detail.releaseFailed;
   // A delivery that fails reverts as a whole and leaves no log, so the page never shows a failed bridge call. A callback that failed still delivers.
-  const deliveryLabel = failed ? `Release failed on ${destination}` : detail.callbackFailed ? `Delivered on ${destination}, the call after it failed` : `Delivered on ${destination}`;
+  const outcome = outcomeOf(detail, pair, failedDelivery);
+  // A callback that failed on a recipient that is not a router still delivered: the mediator paid the recipient. On a router, the tokens never reached the recipient (see `deliveryOutcome`).
+  const deliveryLabel = failed ? `Release failed on ${destination}` : outcome !== null ? outcome.label : detail.callbackFailed ? `Delivered on ${destination}, the call after it failed` : `Delivered on ${destination}`;
   return [
     {
       label: `Sent on ${source}`,
@@ -132,7 +171,7 @@ export const messageSteps = (detail: MessageDetail, pair: PairConfig, proofs: re
       done: delivered && !failed,
       at: detail.deliveredAt,
       ...(delivered ? { detail: { kind: "delivery" as const, chainId: detail.destinationChainId, reverted: failed } } : {}),
-      ...(failed ? { tone: "error" as const } : {}),
+      ...(failed ? { tone: "error" as const } : outcome === null ? {} : { tone: "warning" as const, outcome }),
     },
   ];
 };

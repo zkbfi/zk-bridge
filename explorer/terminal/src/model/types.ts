@@ -169,6 +169,8 @@ export interface FeedItem {
   readonly destinationTransactionHash: Hex | null
   /** What a delivery router took and paid, when one delivered the transfer and the indexer read it. */
   readonly delivery?: FeedDelivery | null
+  /** The mediator's `CallbackFailed` was emitted for the message. With a router as the recipient, the tokens are in the router. */
+  readonly callbackFailed?: boolean
 }
 
 /** The delivery fee of a transfer: in base units of the destination token. */
@@ -179,6 +181,12 @@ export interface FeedDelivery {
   readonly fee: bigint | null
   /** What the recipient received, or null when unknown. */
   readonly received: bigint | null
+  /** Why the router handed the amount off to its failed delivery address, or null/absent when it did not. */
+  readonly handOffReason?: 'PayoutRefused' | 'InvalidTerms' | 'Reentered' | null
+  /** True when the failed delivery address refused the hand-off, so the amount stays in the router. */
+  readonly handOffRefused?: boolean
+  /** The call after the delivery failed with its full gas; the recipient kept the payout. */
+  readonly callFailed?: { readonly target: Address; readonly recipient: Address; readonly callGas: bigint } | null
 }
 
 /** The time ranges that the feed header offers. */
