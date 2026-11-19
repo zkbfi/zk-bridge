@@ -141,14 +141,41 @@ describe("the finality feed, light-client mode", () => {
 });
 
 describe("the finality feed, falling back to the poll", () => {
-  it("polls every slot while the node refuses the stream, and tries the stream again with a growing wait", async () => {
+  it.each([404, 405, 501])("takes a %i as a node that does not serve the stream: one info line, the poll, and a new try only after an hour", async (status) => {
     const beacon = fakeBeacon();
     beacon.set(FINALITY, finalityUpdate(320, 500));
-    beacon.streamAnswers({ status: 404 });
+    beacon.streamAnswers({ status });
     const run = startFeed(beacon);
     await flush();
     expect(run.feed.state().transport).toBe("poll");
-    expect(run.named("watch_sse_failed")).toMatchObject([{ chainId: 11155111, retryInSeconds: 5, error: { message: "the beacon node answered 404" } }]);
+    expect(run.named("watch_sse_failed")).toHaveLength(0);
+    expect(run.named("watch_sse_unsupported")).toMatchObject([{ chainId: 11155111, status, retryInSeconds: 3600 }]);
+    beacon.set(FINALITY, finalityUpdate(352, 500));
+    await vi.advanceTimersByTimeAsync(SLOT_MS);
+    expect(run.observations.at(-1)).toMatchObject({ finalizedSlot: 352, source: "poll" });
+    const tries = () => beacon.requests.filter((path) => path.startsWith("/eth/v1/events")).length;
+    const before = tries();
+    // The hour counts from the refusal at the start; one slot of it has passed.
+    await vi.advanceTimersByTimeAsync(3_600_000 - SLOT_MS - 1_000);
+    expect(tries()).toBe(before);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(tries()).toBe(before + 1);
+    // The node still refuses: no second line, the wait stays an hour.
+    expect(run.named("watch_sse_unsupported")).toHaveLength(1);
+    expect(run.named("watch_sse_failed")).toHaveLength(0);
+    beacon.streamAnswers("open");
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    expect(run.feed.state().transport).toBe("sse");
+  });
+
+  it("polls every slot while the node refuses the stream, and tries the stream again with a growing wait", async () => {
+    const beacon = fakeBeacon();
+    beacon.set(FINALITY, finalityUpdate(320, 500));
+    beacon.streamAnswers({ status: 503 });
+    const run = startFeed(beacon);
+    await flush();
+    expect(run.feed.state().transport).toBe("poll");
+    expect(run.named("watch_sse_failed")).toMatchObject([{ chainId: 11155111, retryInSeconds: 5, error: { message: "the beacon node answered 503" } }]);
     beacon.set(FINALITY, finalityUpdate(352, 500));
     await vi.advanceTimersByTimeAsync(SLOT_MS);
     expect(run.observations.at(-1)).toMatchObject({ finalizedSlot: 352, source: "poll" });
