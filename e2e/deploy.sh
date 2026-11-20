@@ -3,7 +3,7 @@
 # deployment.json (the explorer deployment file), prover.toml (the proof producer) and run.json (tokens and accounts).
 #
 # The verifier is the vendored SP1 Groth16 verifier, and the program key is the light-client key of
-# light-client/program-keys.json. With E2E_BACKEND=oracle the verifier is the oracle verifier of src/mocks (a rehearsal).
+# light-client/program-keys.json. With E2E_BACKEND=oracle the verifier is the oracle verifier of test/mocks (a rehearsal).
 # The checkpoint of each light client, the genesis time and the genesis validators root come from the signed beacon node,
 # so each light client starts on the synthetic beacon chain of the other chain.
 #
@@ -93,17 +93,17 @@ done
 e2e_wait_for_nonce "$E2E_RPC_B" "$DEPLOYER" 24
 start_block_b="$(e2e_block_number "$E2E_RPC_B")"
 if [ "$E2E_BACKEND" = oracle ]; then
-  VERIFIER_A="$(create "$E2E_RPC_A" src/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$ORACLE")"
-  VERIFIER_B="$(create "$E2E_RPC_B" src/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$ORACLE")"
+  VERIFIER_A="$(create "$E2E_RPC_A" test/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$ORACLE")"
+  VERIFIER_B="$(create "$E2E_RPC_B" test/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$ORACLE")"
 else
   VERIFIER_A="$(create "$E2E_RPC_A" "$VERIFIER_SOURCE")"
   VERIFIER_B="$(create "$E2E_RPC_B" "$VERIFIER_SOURCE")"
 fi
-WRAPPED_A="$(create "$E2E_RPC_A" src/mocks/MockWrappedNative.sol:MockWrappedNative)"
-WRAPPED_B="$(create "$E2E_RPC_B" src/mocks/MockWrappedNative.sol:MockWrappedNative)"
-TOKEN_A="$(create "$E2E_RPC_A" src/mocks/MockERC20.sol:MockERC20 "Token A" TKNA)"
-BLOCKABLE_A="$(create "$E2E_RPC_A" src/mocks/BlockableToken.sol:BlockableToken "Blockable A" BLKA)"
-TOKEN_B="$(create "$E2E_RPC_B" src/mocks/MockERC20.sol:MockERC20 "Token B" TKNB)"
+WRAPPED_A="$(create "$E2E_RPC_A" test/mocks/MockWrappedNative.sol:MockWrappedNative)"
+WRAPPED_B="$(create "$E2E_RPC_B" test/mocks/MockWrappedNative.sol:MockWrappedNative)"
+TOKEN_A="$(create "$E2E_RPC_A" test/mocks/MockERC20.sol:MockERC20 "Token A" TKNA)"
+BLOCKABLE_A="$(create "$E2E_RPC_A" test/mocks/BlockableToken.sol:BlockableToken "Blockable A" BLKA)"
+TOKEN_B="$(create "$E2E_RPC_B" test/mocks/MockERC20.sol:MockERC20 "Token B" TKNB)"
 for value in "$VERIFIER_A" "$VERIFIER_B" "$WRAPPED_A" "$WRAPPED_B" "$TOKEN_A" "$BLOCKABLE_A" "$TOKEN_B"; do
   [ -n "$value" ] && [ "$value" != null ] || e2e_fail "a contract did not deploy"
 done

@@ -12,8 +12,8 @@ import {DeliveryRouter} from "../../../../../src/hardened/mediator/DeliveryRoute
 import {MessageBridge} from "../../../../../src/hardened/MessageBridge.sol";
 import {Multicall3} from "../../../../../src/hardened/vendor/multicall3/Multicall3.sol";
 import {ISP1Verifier} from "../../../../../src/hardened/ISP1Verifier.sol";
-import {MockERC20} from "../../../../../src/mocks/MockERC20.sol";
-import {MockWrappedNative} from "../../../../../src/mocks/MockWrappedNative.sol";
+import {MockERC20} from "../../../../../test/mocks/MockERC20.sol";
+import {MockWrappedNative} from "../../../../../test/mocks/MockWrappedNative.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /// @dev Accepts what the real Groth16 verifier shape is: 356 proof bytes, of which bytes 4 to 68 hold a 65 byte signature

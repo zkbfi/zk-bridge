@@ -18,7 +18,7 @@
 #   vendor   - src/hardened/vendor is vendored third party code.
 #   test     - test files are not contract code.
 #   script   - deploy scripts are not contract code.
-#   mocks    - src/mocks and src/revision-2/mocks are test support.
+#   mocks    - test/mocks is test support.
 #
 # Test exclusions: `forge coverage` compiles without the optimizer. Twelve
 # tests depend on optimized bytecode (gas budgets, the contract size limit,

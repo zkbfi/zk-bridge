@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {BeaconLightClient} from "../../../src/hardened/BeaconLightClient.sol";
 import {BeaconForkGate} from "../../../src/hardened/BeaconForkGate.sol";
-import {OracleSP1Verifier} from "../../../src/mocks/OracleSP1Verifier.sol";
+import {OracleSP1Verifier} from "../../mocks/OracleSP1Verifier.sol";
 import {HardenedProofs} from "./HardenedProofs.sol";
 
 /// @title HardenedFixture

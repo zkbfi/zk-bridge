@@ -4,8 +4,8 @@ pragma solidity ^0.8.24;
 import {StdInvariant} from "forge-std/StdInvariant.sol";
 import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {MockERC20} from "../../../src/mocks/MockERC20.sol";
-import {FeeOnTransferToken} from "../../../src/mocks/FeeOnTransferToken.sol";
+import {MockERC20} from "../../mocks/MockERC20.sol";
+import {FeeOnTransferToken} from "../../mocks/FeeOnTransferToken.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 import {MediatorFixture, MockAMB, DenyListToken} from "./utils/MediatorSupport.sol";
 

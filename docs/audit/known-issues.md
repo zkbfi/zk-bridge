@@ -11,7 +11,7 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 ### 1.1 No refunds (H-09)
 - **What.** A message sent just before an unsupported fork, or a release that the token refuses, is never refunded on the source chain.
 - **Why accepted.** User decision (2026-10-22). A refund without a cross-chain cancellation proof lets one deposit be paid twice: once on the destination and once as a refund. Leaving refunds out removes that path.
-- **Link.** [`README.md`](../../README.md) "Open items"; [`docs/red-team-revision-2.md`](../red-team-revision-2.md) "H-09 — Out of scope".
+- **Link.** [`README.md`](../../README.md) "Open items"; [`docs/red-team-revision-2.md`](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team-revision-2.md) "H-09 — Out of scope".
 
 ### 1.2 A failed release is final
 - **What.** When a native token refuses the transfer to the recipient (block list, pause, revert, gas burn), the mediator emits `ReleaseFailed`, lowers its record by the value, and keeps the tokens. Nobody can claim them. The mediator has no fallback address and no claim.
@@ -34,12 +34,12 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 - **When the beacon node cannot be reached** (changed 2026-11-10; it was "allow with a warning") the decision uses the newest copy of the schedule: the one this program saved the last time a beacon node answered (`localStorage` in the dapp, `fork-schedules/` in the terminal's configuration directory, memory and a file next to the database in the status service), or the one bundled with the release (`explorer/core/src/bundled-fork-schedules.ts`, written at release time by `pnpm --filter @zkb/core run fork-schedules` from the public beacon node of each chain). It says which copy it used and when it was fetched. Only when no copy is at most 7 days old is the verdict `blocked`: the Bridge button is disabled ("sends wait for the fork schedule") and the terminal refuses before signing. The residual: a fork scheduled after the newest copy was fetched and less than 12 hours away while every beacon node is unreachable. Forks are announced weeks ahead, so a copy at most 7 days old holds them in practice; the bundled copy is fetched rather than taken from the light client's chain table (`lc-core/src/chain.rs`), because that table is fixed with the program keys and cannot hold the next fork.
 - **Built 2026-11-11.** Posting a fork observation (`ForkRegistry.observe`) from the page: the backend serves its newest observation proof (`GET /fork-observations/:chainId/latest`), and Explore offers "Post the fork observation" when `observe` simulates and adds a newer slot to the registry. The backend posts the same proof itself (1.23).
 - **Why accepted.** No contract can see a fork before it activates. This is the one place where safety relies on the interface.
-- **Link.** [`docs/red-team-revision-2.md`](../red-team-revision-2.md) HB-02; [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Interface cutover (HB-02 window 2)".
+- **Link.** [`docs/audit/hardened-findings.md`](hardened-findings.md) HB-02; [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Interface cutover (HB-02 window 2)".
 
 ### 1.6 Sends just before an unsupported fork are stranded
 - **What.** A message needs a stored finalized anchor after it. Finality trails the head by about two epochs, so a message in roughly the last two or three epochs before an unsupported fork can never be delivered: about 13 to 19 minutes on Ethereum, 11 to 16 minutes on PulseChain. Before a fork of an allowed shape nothing strands: the light client keeps storing heads, and an anchor after the fork proves a source from before it, because the source carries the fork proof of its own state (1.22).
 - **Why accepted.** The cure is refusing those sends (only the interface can, see 1.5: from 12 hours before the fork) or refunds (1.1, rejected). A direct caller who ignores the interface can still send in that window, and after the activation until the seal (1.23).
-- **Link.** [`docs/red-team-revision-2.md`](../red-team-revision-2.md) HB-02, "Two windows lose funds".
+- **Link.** [`docs/audit/hardened-findings.md`](hardened-findings.md) HB-02, "Two windows lose funds".
 
 ### 1.7 Sync committee concentration on PulseChain
 - **What.** About 18 withdrawal credentials hold 342 of 512 PulseChain sync committee seats (measured 2026-10-21). One operator may use many credentials, so the true number of parties is probably smaller. Sync committee signatures are not slashable.
@@ -194,38 +194,38 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 
 ## 3. Earlier internal findings and their status
 
-### 3.1 Revision 1 of the proposal (H-01 to H-23)
+### 3.1 Revision 1 of proposal v0 (H-01 to H-23)
 
-These were found in the third-party proposal (`spec/`). The column "Hardened design" says how the rebuild handles each one.
+These were found in proposal v0 (`spec/`, [the specification](https://github.com/zkbfi/zk-bridge/tree/e25337322e0004fee8f033a993a3b3e052cc382c/spec)). Proposal v0 and its red team (the specification, its contracts, the attack tests, `harness/`, `checks/` and the reports) were removed from the tree on 2026-11-20. They live at commit `e25337322e0004fee8f033a993a3b3e052cc382c`, and every link in this section points there. The column "Hardened design" says how the rebuild handles each one.
 
 | Id | What (in the proposal) | Hardened design | Link |
 |---|---|---|---|
-| H-01 | Unsigned `nextCommitteeRoot`; anyone installs a committee | Fixed: the next committee is proven from the attested state, and its hash is bound (HB-01) | [red-team.md](../red-team.md) |
-| H-02 | Fake deposit emitter | Fixed: the log emitter must be the remote bridge (`WrongEmitter`) | [red-team.md](../red-team.md) |
-| H-03 | Same-address token mapping across a forked chain | Fixed by design: copies live at a `CREATE2` address from the home chain and the native token; no mapping table | [red-team.md](../red-team.md) |
-| H-04 | ECDSA "committee" chosen by the deployer | Fixed: BLS aggregate verification of the real sync committee inside the SP1 program | [red-team.md](../red-team.md) |
-| H-05 | No circuit exists | Fixed: two guest programs, reproducible program keys | [red-team.md](../red-team.md) |
-| H-06 | Light clients wired to the wrong chain | Fixed: the deploy script checks each light client's root and clock against the other chain | [red-team.md](../red-team.md) |
-| H-07 | One block root per period | Fixed: every finalized head is stored; folds of up to 64 updates | [red-team.md](../red-team.md) |
-| H-08 | No finality | Fixed: only finalized headers, proven by the finality branch | [red-team.md](../red-team.md) |
-| H-09 | No liquidity model, no refund | Out of scope by user decision (see 1.1) | [red-team-revision-2.md](../red-team-revision-2.md) |
-| H-10 | Unchecked target chain | Fixed: the message names its destination chain (`WrongDestinationChain`); the send has no chain parameter | [red-team.md](../red-team.md) |
-| H-11 | Wrong verifier interface | Fixed: `verifyProof`, which reverts; tested against the real verifier | [red-team.md](../red-team.md) |
-| H-12 | Nonce collision | Fixed: a bridge nonce in the identifier | [red-team.md](../red-team.md) |
-| H-13 | Unsafe token handling | Fixed: `SafeERC20` and received-amount accounting | [red-team.md](../red-team.md) |
-| H-14 | One malformed signature fails the update | Not applicable: one aggregate signature with participation bits | [red-team.md](../red-team.md) |
-| H-15 | Update gas with no fee | One proof check per update (about 337,000 gas with the real verifier); funded operator (see 2.5) | [red-team-revision-2.md](../red-team-revision-2.md) |
-| H-16 | No source chain check | Fixed: `WrongSourceChain` in the bridge and in the mediator | [red-team.md](../red-team.md) |
-| H-17 | Deploy script cannot deploy | Not applicable: new deploy script with tests | [red-team.md](../red-team.md) |
-| H-18, H-20, H-22, H-23 | Front end, build and setup notes of the proposal | Not applicable to the rebuild | [red-team.md](../red-team.md) |
-| H-19 | Immutable contracts against hard forks | Addressed: layout from evidence, fork gate, registry, fork rule of each message from proof (2026-11-10), new routes; residuals in 1.5, 1.6, 1.9, 1.10, 1.22, 1.23 | [red-team.md](../red-team.md) |
-| H-21 | Setup notes install an npm package that does not exist | Contained: never installed; the rebuild uses the Rust crate `sp1-sdk` only | [red-team.md](../red-team.md) "Containment" |
+| H-01 | Unsigned `nextCommitteeRoot`; anyone installs a committee | Fixed: the next committee is proven from the attested state, and its hash is bound (HB-01) | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-02 | Fake deposit emitter | Fixed: the log emitter must be the remote bridge (`WrongEmitter`) | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-03 | Same-address token mapping across a forked chain | Fixed by design: copies live at a `CREATE2` address from the home chain and the native token; no mapping table | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-04 | ECDSA "committee" chosen by the deployer | Fixed: BLS aggregate verification of the real sync committee inside the SP1 program | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-05 | No circuit exists | Fixed: two guest programs, reproducible program keys | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-06 | Light clients wired to the wrong chain | Fixed: the deploy script checks each light client's root and clock against the other chain | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-07 | One block root per period | Fixed: every finalized head is stored; folds of up to 64 updates | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-08 | No finality | Fixed: only finalized headers, proven by the finality branch | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-09 | No liquidity model, no refund | Out of scope by user decision (see 1.1) | [red-team-revision-2.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team-revision-2.md) |
+| H-10 | Unchecked target chain | Fixed: the message names its destination chain (`WrongDestinationChain`); the send has no chain parameter | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-11 | Wrong verifier interface | Fixed: `verifyProof`, which reverts; tested against the real verifier | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-12 | Nonce collision | Fixed: a bridge nonce in the identifier | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-13 | Unsafe token handling | Fixed: `SafeERC20` and received-amount accounting | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-14 | One malformed signature fails the update | Not applicable: one aggregate signature with participation bits | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-15 | Update gas with no fee | One proof check per update (about 337,000 gas with the real verifier); funded operator (see 2.5) | [red-team-revision-2.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team-revision-2.md) |
+| H-16 | No source chain check | Fixed: `WrongSourceChain` in the bridge and in the mediator | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-17 | Deploy script cannot deploy | Not applicable: new deploy script with tests | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-18, H-20, H-22, H-23 | Front end, build and setup notes of the proposal | Not applicable to the rebuild | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-19 | Immutable contracts against hard forks | Addressed: layout from evidence, fork gate, registry, fork rule of each message from proof (2026-11-10), new routes; residuals in 1.5, 1.6, 1.9, 1.10, 1.22, 1.23 | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) |
+| H-21 | Setup notes install an npm package that does not exist | Contained: never installed; the rebuild uses the Rust crate `sp1-sdk` only | [red-team.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) "Containment" |
 
-### 3.2 Revision 2 of the proposal (R2-01 to R2-15)
+### 3.2 Revision 2 of proposal v0 ("proposal v0, revision 2") (R2-01 to R2-15)
 
 | Id | What | Hardened design | Link |
 |---|---|---|---|
-| R2-01, R2-04, R2-11 | The proposal's vault and circuit do not compile | Not applicable | [red-team-revision-2.md](../red-team-revision-2.md) |
+| R2-01, R2-04, R2-11 | The proposal's vault and circuit do not compile | Not applicable | [red-team-revision-2.md](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team-revision-2.md) |
 | R2-02 | The circuit's event topic matches nothing | Fixed: topic tested against the OmniBridge event signature | same |
 | R2-03 | The BLS check checks nothing | Fixed (as H-04) | same |
 | R2-05 | Typed receipts cannot be decoded | Fixed: receipt types 0 to 4 | same |
@@ -243,7 +243,7 @@ These were found in the third-party proposal (`spec/`). The column "Hardened des
 
 | Id | Severity | What | Status | Link |
 |---|---|---|---|---|
-| HB-01 | Critical | An unbound next committee could sign a forged head | Fixed (`628e30a`, `0aa1d0a`); `startNextSyncCommitteeHash` added for folds | [red-team-revision-2.md](../red-team-revision-2.md) |
+| HB-01 | Critical | An unbound next committee could sign a forged head | Fixed (`628e30a`, `0aa1d0a`); `startNextSyncCommitteeHash` added for folds | [hardened-findings.md](hardened-findings.md) |
 | HB-02 | High | Sends into a route that cannot follow a fork | Built, not audited: gate (seal-only modes since 2026-11-10), registry, interface pause 12 h before every fork, backend auto-seal. Residuals in 1.5, 1.6, 1.9, 1.23 | same |
 | HB-03 | Critical | A block roots layout row could point at proposer-written votes | Fixed (`2119d5d`): own field position only | same |
 | HB-04 | Critical | A block hash layout row could point at graffiti | Fixed (`2119d5d`) | same |

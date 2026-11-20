@@ -1,5 +1,5 @@
 /**
- * The interface cutover before a fork (known-issues 1.5 and 1.6, red-team HB-02 window 2): a light client's program key
+ * The interface cutover before a fork (known-issues 1.5 and 1.6, hardened-findings HB-02 window 2): a light client's program key
  * fixes the fork schedule it understands, and no contract can see a fork before it activates. A send in the last hours
  * before a fork that the light client on the other chain cannot follow is stranded. The cure lives in the interface:
  * refuse sends from twelve hours (and at least three epochs) before the next scheduled fork of the source chain, until

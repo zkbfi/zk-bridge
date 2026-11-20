@@ -3,8 +3,8 @@ pragma solidity ^0.8.24;
 
 import {MediatorBuild} from "../utils/MediatorBuild.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {MockERC20} from "../../../src/mocks/MockERC20.sol";
-import {FeeOnTransferToken} from "../../../src/mocks/FeeOnTransferToken.sol";
+import {MockERC20} from "../../mocks/MockERC20.sol";
+import {FeeOnTransferToken} from "../../mocks/FeeOnTransferToken.sol";
 import {BridgedToken} from "../../../src/hardened/mediator/BridgedToken.sol";
 import {TokenFactory} from "../../../src/hardened/mediator/TokenFactory.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";

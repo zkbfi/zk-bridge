@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {MockERC20} from "../../../src/mocks/MockERC20.sol";
+import {MockERC20} from "../../mocks/MockERC20.sol";
 import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
 import {RouterCaller} from "../../../src/hardened/mediator/RouterCaller.sol";
 import {ExactGasCall} from "../../../src/hardened/mediator/ExactGasCall.sol";
