@@ -1446,10 +1446,11 @@ mod tests {
         assert_eq!(built.unwrap().name(), "oracle");
     }
 
-    /// A real Groth16 proof of a real Ethereum update, with its program key and public values.
+    /// A real Groth16 proof of the current light-client program for a real Sepolia update, with its program key and public
+    /// values (made by the testnet backend; see `tests/backend_proof_fixture.rs`).
     fn real_proof() -> (String, String, String) {
         let path = format!(
-            "{}/../test/hardened/fixtures/sp1-proof-ethereum-update.json",
+            "{}/../test/hardened/fixtures/sp1-proof-sepolia-update.json",
             env!("CARGO_MANIFEST_DIR")
         );
         let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
