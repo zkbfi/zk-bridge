@@ -26,8 +26,8 @@ browser ──TLS──> Caddy (rpc.zkb.fi) ──> backend, rpc-proxy module (1
 2. **The filter**, the backend's `rpc-proxy` module (`explorer/backend/src/rpc-proxy/`), checks every request of the
    body. One refused request refuses the whole batch. Accepted requests go to eRPC with the visitor's address in
    `X-Forwarded-For`.
-3. **eRPC**, from valve's fork [`valve-tech/erpc`](https://github.com/valve-tech/erpc) release `0.3.0.15-valve`
-   (`deploy/app-server/config/erpc/erpc.yaml.example`), holds the valve.city key and does the rate limits, the cache
+3. **eRPC**, valve's fork, release `0.3.0.15-valve` (the download is pinned in `deploy/ansible/erpc.yml`; the config is
+   `deploy/app-server/config/erpc/erpc.yaml.example`), holds the valve.city key and does the rate limits, the cache
    and the failover between upstreams.
 
 The fork offers method allowlists (`ignoreMethods: ["*"]` with `allowMethods`), per-IP rate limits, CORS, a
