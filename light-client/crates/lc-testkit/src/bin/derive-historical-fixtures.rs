@@ -1,6 +1,10 @@
-//! Derives `pulsechain/historical_paths.json`: real historical-path ancestry proofs, and the check of the era formula.
+//! Derives `pulsechain/historical_paths.json` and `ethereum/historical_paths.json`: real historical-path ancestry proofs,
+//! and the check of the era formula.
 //!
-//! Usage: `derive-historical-fixtures <era-dir> <anchor-dir> <fixture-dir> <beacon-url> <fetched-on> <name=slot>...`
+//! Usage: `derive-historical-fixtures [--chain pulsechain|ethereum] <era-dir> <anchor-dir> <fixture-dir> <beacon-url>
+//! <fetched-on> <name=slot>...` (the chain defaults to `pulsechain`). The anchor state and the source blocks are parsed in
+//! the layout of the fork of their slots on that chain: Capella for PulseChain, Fulu (Electra layout, 45 entry branch) for
+//! Ethereum today.
 //!
 //! Input (written by `scripts/fetch-fixtures.sh historical` into the two cache directories):
 //! - `<anchor-dir>`: `attested_state.ssz` and `attested_header.json`, the anchor state (about 18 MB) and its header.
@@ -18,13 +22,15 @@
 
 use alloy_primitives::B256;
 use lc_core::ancestry::historical_leaf_gindex;
-use lc_core::chain::PULSECHAIN;
+use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
 use lc_core::era::{era_block_roots, historical_ancestry_branch};
-use lc_core::layout::CAPELLA_DENEB_STATE_LAYOUT;
+use lc_core::layout::state_layout_for_fork;
 use lc_core::ssz::{hash_pair, is_valid_exact_branch, merkleize};
-use lc_testkit::derive_support::{header_json, hex_list, read_block, read_json, write_fixture};
+use lc_testkit::derive_support::{
+    header_json, hex_list, read_block, read_block_for_fork, read_json, write_fixture, CheckedBlock,
+};
 use lc_testkit::json::{beacon_header, hex_b256};
-use lc_testkit::ssz_state::parse_state;
+use lc_testkit::ssz_state::{parse_state, try_parse_state_for_fork, ParsedState};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -48,11 +54,56 @@ fn read_era_roots(era_dir: &Path, era: u64) -> Vec<B256> {
     era_block_roots(era, &known).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
+/// The chain of the fixture, from an optional leading `--chain <name>`.
+#[derive(Clone, Copy, PartialEq)]
+enum Chain {
+    Pulsechain,
+    Ethereum,
+}
+
+impl Chain {
+    fn spec(self) -> &'static ChainSpec {
+        match self {
+            Chain::Pulsechain => &PULSECHAIN,
+            Chain::Ethereum => &ETHEREUM_MAINNET,
+        }
+    }
+
+    /// The anchor state. PulseChain keeps the Capella parser it always used.
+    fn parse_anchor(self, bytes: &[u8], slot: u64) -> ParsedState {
+        match self {
+            Chain::Pulsechain => parse_state(bytes),
+            Chain::Ethereum => try_parse_state_for_fork(bytes, self.spec().fork_at_slot(slot))
+                .unwrap_or_else(|e| panic!("the anchor state does not parse: {e}")),
+        }
+    }
+
+    /// A source block. PulseChain keeps the Capella reader it always used.
+    fn read_block(self, block: &Path, header: &Path, slot: u64) -> CheckedBlock {
+        match self {
+            Chain::Pulsechain => read_block(block, header),
+            Chain::Ethereum => read_block_for_fork(block, header, self.spec().fork_at_slot(slot)),
+        }
+    }
+}
+
 fn main() {
-    let arguments: Vec<String> = std::env::args().collect();
+    let mut arguments: Vec<String> = std::env::args().collect();
+    let chain = if arguments.get(1).map(String::as_str) == Some("--chain") {
+        let name = arguments.get(2).cloned().unwrap_or_default();
+        arguments.drain(1..3);
+        match name.as_str() {
+            "pulsechain" => Chain::Pulsechain,
+            "ethereum" => Chain::Ethereum,
+            other => panic!("unknown chain {other}: use pulsechain or ethereum"),
+        }
+    } else {
+        Chain::Pulsechain
+    };
+    let spec = chain.spec();
     assert!(
         arguments.len() >= 7,
-        "usage: derive-historical-fixtures <era-dir> <anchor-dir> <fixture-dir> <beacon-url> <fetched-on> <name=slot>..."
+        "usage: derive-historical-fixtures [--chain pulsechain|ethereum] <era-dir> <anchor-dir> <fixture-dir> <beacon-url> <fetched-on> <name=slot>..."
     );
     let (era_dir, anchor_dir, out) = (Path::new(&arguments[1]), Path::new(&arguments[2]), Path::new(&arguments[3]));
     let (beacon, fetched_on) = (&arguments[4], &arguments[5]);
@@ -68,9 +119,14 @@ fn main() {
     let anchor_json = read_json(&anchor_dir.join("attested_header.json"));
     let anchor_header = beacon_header(&anchor_json["data"]["header"]["message"]);
     assert_eq!(anchor_header.hash_tree_root(), hex_b256(&anchor_json["data"]["root"]), "anchor header root");
-    let anchor = parse_state(&std::fs::read(anchor_dir.join("attested_state.ssz")).expect("anchor state"));
+    let anchor = chain
+        .parse_anchor(&std::fs::read(anchor_dir.join("attested_state.ssz")).expect("anchor state"), anchor_header.slot);
     assert_eq!(anchor.root(), anchor_header.state_root, "the SSZ state hasher disagrees with the node at the anchor");
-    let capella_era = PULSECHAIN.capella_era().expect("PulseChain has a Capella entry");
+    let capella_era = spec.capella_era().expect("the chain has a Capella entry");
+    let layout = state_layout_for_fork(spec.fork_at_slot(anchor_header.slot)).expect("a layout for the anchor fork");
+    // 13 levels in the era, the state summary, 24 list levels, the length, then the field levels of the state.
+    let field_depth = 63 - layout.historical_summaries_gindex.leading_zeros() as usize;
+    let branch_length = 13 + 1 + 24 + 1 + field_depth;
     let anchor_era = anchor_header.slot / SLOTS_PER_ERA;
     assert_eq!(
         anchor.historical_summaries.len() as u64,
@@ -130,8 +186,11 @@ fn main() {
         });
 
         // The deposit block: real header and body, checked against the node.
-        let block =
-            read_block(&era_dir.join(format!("block_{slot}.ssz")), &era_dir.join(format!("header_{slot}.json")));
+        let block = chain.read_block(
+            &era_dir.join(format!("block_{slot}.ssz")),
+            &era_dir.join(format!("header_{slot}.json")),
+            *slot,
+        );
         let deposit = &block.block.header;
         assert_eq!(deposit.slot, *slot);
         let leaf = deposit.hash_tree_root();
@@ -141,13 +200,12 @@ fn main() {
         let branch = historical_ancestry_branch(&anchor, capella_era, *slot, &era_roots)
             .unwrap_or_else(|e| panic!("the ancestry branch of slot {slot}: {e}"));
         let gindex =
-            historical_leaf_gindex(CAPELLA_DENEB_STATE_LAYOUT.historical_summaries_gindex, index as u64, *slot)
-                .expect("index in range");
+            historical_leaf_gindex(layout.historical_summaries_gindex, index as u64, *slot).expect("index in range");
         assert!(
             is_valid_exact_branch(&leaf, &branch, gindex, &anchor_header.state_root),
             "the ancestry branch of slot {slot} does not verify at generalized index {gindex}"
         );
-        assert_eq!(branch.len(), 44);
+        assert_eq!(branch.len(), branch_length);
         println!("{name}: slot {slot} era {era} index {index} verifies at generalized index {gindex}");
         entries.push(json!({
             "name": name,

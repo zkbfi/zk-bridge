@@ -8,10 +8,10 @@ import {SP1Verifier} from "../../src/hardened/vendor/sp1-contracts/v6.1.0/SP1Ver
 import {SP1Verifier as SP1VerifierV600} from "./vendor-sp1-contracts-v6.0.0/v6.0.0/SP1VerifierGroth16.sol";
 
 /// @notice Tests of the vendored SP1 Groth16 verifier (circuit v6.1.0, the circuit of sp1-sdk 6.8.x).
-/// @dev The release ships no proof for circuit v6.1.0. The tests of the v6.1.0 verifier use the proof that our own
-/// prover made on a server (`test/hardened/fixtures/sp1-proof-ethereum-update.json`, the light-client program on a real
-/// Ethereum update). The release's own proof is for circuit v6.0.0, so its acceptance and tamper tests run against the
-/// v6.0.0 verifier (test use only).
+/// @dev The release ships no proof for circuit v6.1.0. The tests of the v6.1.0 verifier use a proof of the current
+/// light-client program that the testnet backend made on a GPU worker (`test/hardened/fixtures/sp1-proof-sepolia-update.json`,
+/// a real Sepolia update, posted to the light client on PulseChain testnet v4). The release's own proof is for circuit
+/// v6.0.0, so its acceptance and tamper tests run against the v6.0.0 verifier (test use only).
 contract SP1VerifierGroth16Test is Test {
     // The proof of release v6.1.1 (contracts/test/SP1VerifierGroth16V6.sol), valid for circuit v6.0.0.
     bytes32 internal constant PROGRAM_VKEY = 0x004a55ed3c7a07d0233a027278a8b7ff8681ffbd5d1ec4795c18966f6e693090;
@@ -25,14 +25,16 @@ contract SP1VerifierGroth16Test is Test {
         0x4388a21c687fdd5f218d7e3d13190cac4c5355818d3605fd5fb811df468ee696;
     bytes32 internal constant EXPECTED_VK_ROOT = 0x002f850ee998974d6cc00e50cd0814b098c05bfade466d28573240d057f25352;
 
-    // Where our own proof for circuit v6.1.0 lives. The proof comes from `Sp1Prover` (sp1-sdk 6.8.1, Groth16) for the
-    // light-client program with the key below, on a real Ethereum update.
-    string internal constant OWN_PROOF_FILE = "test/hardened/fixtures/sp1-proof-ethereum-update.json";
+    // Where our own proof for circuit v6.1.0 lives. The proof comes from the backend's GPU worker (sp1-sdk 6.8.1,
+    // Groth16) for the light-client program with the key below, on a real Sepolia update.
+    string internal constant OWN_PROOF_FILE = "test/hardened/fixtures/sp1-proof-sepolia-update.json";
+    // The key of `light-client/program-keys.json` (the current light-client program; the deployed testnet light clients
+    // hold it). `prover/tests/remote_prover.rs` checks that the fixture key equals the file.
     bytes32 internal constant LIGHT_CLIENT_PROGRAM_VKEY =
-        0x00ae8429b1bb3ed61eee12f070e5e3b5dcb388fc67c5550a13b331ac57608bbe;
-    // The genesis validators root of Ethereum mainnet. The proof binds its output to this chain.
-    bytes32 internal constant ETHEREUM_GENESIS_VALIDATORS_ROOT =
-        0x4b363db94e286120d76eb905340fdd4e54bfe9f06bf33ff6cf5ad27f511bfe95;
+        0x000854b9b72ab6bfca191c95cb131971a17a458c2faebdd216d9dbe874eb4730;
+    // The genesis validators root of Sepolia. The proof binds its output to this chain.
+    bytes32 internal constant SEPOLIA_GENESIS_VALIDATORS_ROOT =
+        0xd8ea171f3c94aea21ebc42a1ed61052acf3f9209c00e4efbaaddac09ed9b8078;
 
     SP1Verifier internal verifier;
     SP1VerifierV600 internal verifierV600;
@@ -129,18 +131,19 @@ contract SP1VerifierGroth16Test is Test {
         proof = vm.parseJsonBytes(json, ".proof");
     }
 
-    /// Claim: the fixture holds a proof of the light-client program of this repository, for a real Ethereum update.
-    /// The key is the key of `light-client/program-keys.json`, the proof starts with the selector of circuit v6.1.0, and
-    /// the public values decode to a head that moves forward on the chain with the Ethereum genesis validators root.
+    /// Claim: the fixture holds a proof of the current light-client program of this repository, for a real Sepolia
+    /// update. The key is the key of `light-client/program-keys.json`, the proof starts with the selector of circuit
+    /// v6.1.0, and the public values decode to a head that moves forward on the chain with the Sepolia genesis validators
+    /// root.
     /// Why it matters: the acceptance test below proves something about the bridge only if the fixture is this program on
     /// this chain. A proof of some other program would pass the verifier just as well.
-    function test_ownProofIsTheLightClientProgramOnAnEthereumUpdate() public view {
+    function test_ownProofIsTheCurrentLightClientProgramOnASepoliaUpdate() public view {
         (bytes32 programVKey, bytes memory publicValues, bytes memory proof) = _ownProof();
         assertEq(programVKey, LIGHT_CLIENT_PROGRAM_VKEY);
         assertEq(bytes4(proof), bytes4(EXPECTED_VERIFIER_HASH), "the selector of circuit v6.1.0");
         BeaconLightClient.LightClientOutput memory output =
             abi.decode(publicValues, (BeaconLightClient.LightClientOutput));
-        assertEq(output.genesisValidatorsRoot, ETHEREUM_GENESIS_VALIDATORS_ROOT);
+        assertEq(output.genesisValidatorsRoot, SEPOLIA_GENESIS_VALIDATORS_ROOT);
         assertGt(output.newHeadSlot, output.previousHeadSlot, "the head moves forward");
         assertEq(publicValues.length, 11 * 32, "the length that BeaconLightClient.update demands");
     }

@@ -27,12 +27,23 @@ serve them, and the update parser leaves the branch of `genesis_validators_root`
 the branch of `genesis_validators_root` under it (5 entries, node 40). It was derived on 2026-10-27 from the attested states served by
 https://lodestar-sepolia.chainsafe.io; the derived roots equal the attested state roots of the updates.
 
-`ethereum/state_proofs.json` is NOT on file yet. No public mainnet beacon node tried on 2026-10-27 serves old debug states
-(lodestar-mainnet answers 403, publicnode 501, ethstaker 500). Fetch the attested states
-(`GET /eth/v2/debug/beacon/states/<state_root>`, SSZ, from a node that keeps them) and run
-`cargo run -p lc-testkit --bin derive-attested-state-proofs -- <ethereum|sepolia> <output-file> <fetched-on> <state.ssz>...`.
-The ignored tests `ethereum_state_proofs_are_on_file` and `every_golden_case_is_computed` fail until the Ethereum file
-exists. The real Ethereum tests run a reduced check until then (see `lc_testkit::real_proofs`).
+`ethereum/state_proofs.json` holds the branch for ONE real mainnet update: the finality update in
+`ethereum/attested_state_finality_update.json` (attested slot 15698818, Fulu, 6 entries), with the bootstrap of the same
+period (`attested_state_bootstrap.json`) and the execution block of its finalized header
+(`attested_state_finalized_execution_block.json`). All were fetched on 2026-11-20 from one.valve.city (mainnet beacon API
+and execution RPC; the endpoint path holds a key and is not recorded); the attested state (about 340 MB, not on file) came
+from `GET /eth/v2/debug/beacon/states/15698818` while the node still kept it, and `derive-attested-state-proofs` derived the
+branch. The test is `crates/lc-testkit/tests/ethereum_real_attested_state.rs` (the full check, branch included).
+
+The attested states of the OLDER Ethereum updates (`finality_update.json` and `updates_two_periods.json`, fetched
+2026-10-20; attested slots 15476597, 15466561 and 15474754) are still not on file. No public mainnet beacon node tried on
+2026-10-27 serves old debug states (lodestar-mainnet answers 403, publicnode 501, ethstaker 500), and the one.valve.city
+mainnet beacon node (Lighthouse) keeps states only from its finalized checkpoint onward: `/eth/v1/beacon/states/<slot>/root`
+and `/eth/v2/debug/beacon/states/<slot>` answer 404 for those slots (checked 2026-11-20). With a node that keeps them, run
+`cargo run -p lc-testkit --bin derive-attested-state-proofs -- <ethereum|sepolia> <output-file> <fetched-on> <state.ssz>...`
+and merge the entries into the file. The ignored tests `ethereum_state_proofs_are_on_file` and
+`every_golden_case_is_computed` fail until then, and the tests of those updates run a reduced check (see
+`lc_testkit::real_proofs`).
 
 ## Real Sepolia Gloas head (`sepolia/gloas_head_*`, `sepolia/gloas_fork_version.json`)
 
@@ -83,7 +94,7 @@ One case per file. Each case is one call of `MessageBridge.executeMessage`. Keys
 |---|---|
 | `name` | Same as the file stem. Names start with `capella_` or `electra_` (synthetic data in that layout). |
 | `description` | What the case shows. |
-| `beaconData`, `receiptData` | `"synthetic"` in every case. The real fixtures hold no transaction bodies, so real data stops before the transaction proof (see "Real data" below). |
+| `beaconData`, `receiptData` | `"synthetic"` in every case. The transaction stage on real data is tested in Rust with real transaction bytes (see "Real data" below). |
 | `chain` | Source chain: `pulsechain` (Capella layout) or `ethereum` (Electra layout, Fulu). |
 | `layout` | `capella` or `electra`. |
 | `calldata` | Hex of the full calldata of `executeMessage(MessageProof)`: selector `0x63f08d5e` then the ABI encoding of the struct (with `sourceFork` since 2026-11-10). |
@@ -120,10 +131,21 @@ chain, 7 has malformed event data, 8 a bad version, 9 a bad data type, 10 a topi
 
 ## Real data
 
-The real PulseChain and Ethereum blocks in `pulsechain/` and `ethereum/` hold the transaction hashes of each block and not the
-transactions. A real transaction proof needs the transaction bytes, so real data cannot pass the transaction stage. The Rust
-tests `real_beacon_path_reaches_the_log_checks` and `real_historical_message_reaches_the_transaction_stage` run the stages
-before it (beacon path, header, receipt proof, receipt) on real data, and `receipts_real.rs` proves every real receipt.
+The real PulseChain and Ethereum blocks in `pulsechain/` and `ethereum/` list the transaction hashes of each block. The
+transaction bytes are in a sibling file: `execution_block.json` -> `execution_transactions.json` (Ethereum and PulseChain),
+`path_<name>_block.json` -> `path_<name>_transactions.json` (`finalized`, `ancestor`, `historical`). Each holds, in block
+order, the raw EIP-2718 bytes that `eth_getRawTransactionByHash` returned for each listed hash. They were fetched on
+2026-11-20 from one.valve.city (Ethereum mainnet and PulseChain mainnet execution RPC; the endpoint path holds a key, so the
+files record the host only) with `scripts/fetch-fixtures.sh transactions`. The loader (`lc_testkit::pulsechain::rebuild_block`)
+checks that each transaction hashes to the listed hash and builds the transactions trie.
+
+`receipts_real.rs` proves every real receipt and every real transaction: the rebuilt transactions trie has the
+`transactionsRoot` of the real header (`real_transactions_rebuild_the_transactions_root_and_prove`), and damaged proofs are
+refused with `TransactionProofInvalid` (`real_transaction_proof_rejects_tampering`). The real message proofs of
+`pulsechain_real.rs` carry the real transaction proof, so the walk by parts (`real_log`) passes the transaction stage
+(`real_message_proofs_pass_the_transaction_stage`: the stage yields the listed hash for every transaction of the three path
+blocks, and refuses the proof of another transaction, a flipped byte and an empty proof). `verify_message` itself still stops
+at the fork proof of the source state, because no state of these source blocks is on file.
 
 ## Historical ancestry
 
@@ -141,6 +163,20 @@ the check of the era formula. `source_url` lists the endpoints, `fetched_on` the
 | `anchor_header`, `anchor_header_root` | The anchor header and the root the node reported for it. |
 | `era_formula_checks[]` | Per era: `index = era - capella_era`; `block_summary_root_in_anchor_state` (from the anchor state) and `hash_tree_root_of_era_block_roots` (rebuilt from the canonical block roots of the era), `equal`; `slots_compared_with_anchor_block_roots` (where the era overlaps the anchor state's own `block_roots`, both agree). |
 | `entries[]` | Per block: `deposit_header`, `ancestry_branch` (44 entries), `block_hash_branch`, `execution_block_number`, `execution_block_hash`. |
+
+`ethereum/historical_paths.json` is the same check on real Ethereum mainnet data (tests: `crates/lc-testkit/tests/ethereum_historical_real.rs`).
+The anchor is the finalized Fulu state at slot 15698784 (era 1916, Electra layout, 45 entry branch, `historical_summaries` at
+generalized index 91, capellaEra 758, so the list index is `era - 758`). The entries: both sides of the era edge 1913/1914
+(slots 15679487 and 15679488), a middle block of era 1914 (15682959), the last block of era 1914 (15687679), a block of era 1910
+(15650000), and the last block of era 1915 (15695871), which is fewer than 8192 slots before the anchor and so is the reverse
+mix-up on the recent path. Each entry also has its block hash branch (index 812, 9 entries); `ethereum/historical_execution_blocks.json`
+holds the execution blocks of the entries (`eth_getBlockByNumber`) as an independent source of the block hashes. Fetched on
+2026-11-20 from https://one.valve.city (Ethereum mainnet beacon API and execution RPC; the endpoint path holds a key and is not
+recorded). That node serves states only from its finalized checkpoint on, so the anchor must be a state near the head at the
+time of the fetch; it serves block roots and blocks back to at least slot 13,500,000. The eras were rebuilt from 8192 calls of
+`GET /eth/v1/beacon/blocks/<slot>/root` each; the derive tool runs as
+`derive-historical-fixtures --chain ethereum <era-dir> <anchor-dir> <fixture-dir> <source> <fetched-on> <name=slot>...`
+(without `--chain` it derives the PulseChain file as before).
 
 `pulsechain/path_historical_block.json` and `path_historical_receipts.json` are the execution block and receipts of the entry
 `era_middle_block` (one transaction). The states are not stored: `scripts/fetch-fixtures.sh historical` downloads the anchor

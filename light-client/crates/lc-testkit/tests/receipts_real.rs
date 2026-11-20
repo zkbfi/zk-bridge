@@ -1,7 +1,8 @@
 //! Real receipts from both chains: rebuild the block header and the receipts trie, then prove and decode every receipt.
 //!
 //! All blocks here are REAL data fetched on 2026-10-20 (`tests/fixtures/*/execution_block.json`, `block_receipts.json`,
-//! `path_*_block.json`, `path_*_receipts.json`). Each test shows the header decodes in the chain's own format.
+//! `path_*_block.json`, `path_*_receipts.json`). Each test shows the header decodes in the chain's own format. The
+//! transaction bytes of the same blocks (`*_transactions.json`) were fetched on 2026-11-20.
 
 use alloy_primitives::{Bytes, B256};
 use alloy_trie::root::ordered_trie_root_encoded;
@@ -109,4 +110,77 @@ fn real_receipt_proof_rejects_tampering() {
     extra.push(proof[0].clone());
     assert!(extract_receipt(root, index, &extra).is_err(), "unused extra node");
     assert!(extract_receipt(B256::repeat_byte(1), index, &proof).is_err(), "wrong root");
+}
+
+/// The real blocks whose transactions are on file: the block fixture and the receipts fixture.
+const BLOCKS_WITH_TRANSACTIONS: [(&str, &str); 5] = [
+    ("ethereum/execution_block.json", "ethereum/block_receipts.json"),
+    ("pulsechain/execution_block.json", "pulsechain/block_receipts.json"),
+    ("pulsechain/path_finalized_block.json", "pulsechain/path_finalized_receipts.json"),
+    ("pulsechain/path_ancestor_block.json", "pulsechain/path_ancestor_receipts.json"),
+    ("pulsechain/path_historical_block.json", "pulsechain/path_historical_receipts.json"),
+];
+
+/// Claim: the real transaction bytes of each block (fetched with `eth_getRawTransactionByHash`) rebuild the trie whose root
+/// is the `transactionsRoot` of the real header, every transaction proof walks to the bytes, and the keccak256 of the bytes
+/// at each index is the transaction hash that the node listed at that index.
+/// Why it matters: the bridge takes the hash of the proven transaction as the source transaction hash of a message. This is
+/// the transaction stage of a message proof on real data, for both chains and every transaction type on file.
+#[test]
+fn real_transactions_rebuild_the_transactions_root_and_prove() {
+    use lc_core::message::extract_transaction;
+    let mut types = Vec::new();
+    for (block_fixture, receipts_fixture) in BLOCKS_WITH_TRANSACTIONS {
+        let block = rebuild_block(block_fixture, receipts_fixture);
+        let header_json = load_response(block_fixture);
+        let root = hex_b256(&header_json["transactionsRoot"]);
+        let hashes: Vec<B256> = header_json["transactions"].as_array().expect("hashes").iter().map(hex_b256).collect();
+        assert_eq!(block.transactions.len(), hashes.len(), "{block_fixture}: one transaction for each hash");
+        assert_eq!(block.transactions_rebuilt_root, root, "{block_fixture}: the rebuilt trie has the transactionsRoot");
+        assert_eq!(ordered_trie_root_encoded(&block.transactions), root, "{block_fixture}: alloy-trie reference root");
+        let header = decode_execution_header(&block.header_rlp).expect("header");
+        assert_eq!(header.transactions_root, root, "{block_fixture}: the header that the message proof carries");
+        for (index, hash) in hashes.iter().enumerate() {
+            let proven =
+                extract_transaction(root, index as u64, &block.transaction_proofs[index]).expect("proof verifies");
+            assert_eq!(proven, block.transactions[index].to_vec(), "{block_fixture}: transaction {index}");
+            assert_eq!(alloy_primitives::keccak256(&proven), *hash, "{block_fixture}: hash of transaction {index}");
+            let first = proven[0];
+            types.push(if first >= 0xc0 { 0 } else { first });
+        }
+    }
+    types.sort_unstable();
+    types.dedup();
+    assert!(types.contains(&0) && types.contains(&2), "legacy and type 2 transactions, got {types:?}");
+}
+
+/// Claim: damaged transaction proofs of a real block are refused with `TransactionProofInvalid`: a flipped byte in any
+/// node, the proof of the neighbouring transaction, a proof under another index, a missing leaf, an extra node and another
+/// root. The untouched proof verifies first (control).
+#[test]
+fn real_transaction_proof_rejects_tampering() {
+    use lc_core::message::extract_transaction;
+    use lc_core::Error;
+    let block = rebuild_block("pulsechain/path_finalized_block.json", "pulsechain/path_finalized_receipts.json");
+    let root = block.transactions_rebuilt_root;
+    let index = 3u64;
+    let proof = block.transaction_proofs[index as usize].clone();
+    assert!(extract_transaction(root, index, &proof).is_ok(), "control: the untouched proof verifies");
+    let refused = |result: Result<Vec<u8>, Error>| matches!(result, Err(Error::TransactionProofInvalid(_)));
+    for node in 0..proof.len() {
+        let mut broken = proof.clone();
+        let mut bytes = broken[node].to_vec();
+        let middle = bytes.len() / 2;
+        bytes[middle] ^= 0x01;
+        broken[node] = Bytes::from(bytes);
+        assert!(refused(extract_transaction(root, index, &broken)), "flipped byte in node {node}");
+    }
+    let neighbour = &block.transaction_proofs[index as usize + 1];
+    assert!(refused(extract_transaction(root, index, neighbour)), "the proof of another transaction");
+    assert!(refused(extract_transaction(root, index + 1, &proof)), "proof of another index");
+    assert!(refused(extract_transaction(root, index, &proof[..proof.len() - 1])), "missing leaf");
+    let mut extra = proof.clone();
+    extra.push(proof[0].clone());
+    assert!(refused(extract_transaction(root, index, &extra)), "unused extra node");
+    assert!(refused(extract_transaction(B256::repeat_byte(1), index, &proof)), "wrong root");
 }

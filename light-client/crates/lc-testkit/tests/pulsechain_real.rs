@@ -4,11 +4,11 @@
 //! The sync aggregate is the real aggregate of the block after the attested block. The committee is the real committee
 //! of the state. Nothing in this file is synthetic.
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{keccak256, Address, B256};
 use lc_core::ancestry::ancestry_leaf_gindex;
 use lc_core::chain::{ChainSpec, ETHEREUM_MAINNET, PULSECHAIN};
 use lc_core::execution::{decode_execution_header, decode_receipt, Log};
-use lc_core::message::{extract_receipt, message_of_log, MessageContext};
+use lc_core::message::{extract_receipt, extract_transaction, message_of_log, MessageContext};
 use lc_core::ssz::is_valid_exact_branch;
 use lc_core::update::{
     advance_light_client_store, table_fork_version, verify_light_client_update,
@@ -191,9 +191,8 @@ fn beacon_path_by_parts(proof: &MessageProof, anchor_root: B256) -> Result<B256,
 }
 
 /// The real log that a message proof names. It walks the stages of `verify_message` that real data can reach: the beacon
-/// path (by its parts, see `beacon_path_by_parts`), the header, the receipt proof and the receipt. The fixtures hold no
-/// transactions, so this helper skips the transaction stage that `verify_message` runs between the receipt proof and the
-/// receipt.
+/// path (by its parts, see `beacon_path_by_parts`), the header, the receipt proof, the transaction proof (real transaction
+/// bytes, `path_*_transactions.json`) and the receipt, in the order of `verify_message`.
 fn real_log(proof: &MessageProof, anchor_root: B256) -> Log {
     assert_eq!(
         verify_beacon_path(&PULSECHAIN, proof, &anchor_root),
@@ -205,8 +204,72 @@ fn real_log(proof: &MessageProof, anchor_root: B256) -> Log {
     let header = decode_execution_header(&proof.executionHeaderRlp).expect("header");
     let index = u64::try_from(proof.receiptIndex).unwrap();
     let receipt = extract_receipt(header.receipts_root, index, &proof.receiptProof).expect("receipt proof");
+    extract_transaction(header.transactions_root, index, &proof.transactionProof).expect("transaction proof");
     let receipt = decode_receipt(&receipt).expect("receipt");
     receipt.logs[usize::try_from(proof.logIndex).unwrap()].clone()
+}
+
+/// The source transaction hash that the transaction stage of `verify_message` yields for a real proof: keccak256 of the
+/// transaction bytes that the proof walks to under the `transactionsRoot` of the real header.
+fn real_source_transaction_hash(proof: &MessageProof) -> Result<B256, Error> {
+    let header = decode_execution_header(&proof.executionHeaderRlp).expect("header");
+    let index = u64::try_from(proof.transactionIndex).unwrap();
+    extract_transaction(header.transactions_root, index, &proof.transactionProof).map(keccak256)
+}
+
+/// Claim: the real message proofs carry real transaction proofs, so the transaction stage runs on real data. For each real
+/// beacon path entry (the finalized block, its ancestor and the historical-path block) and every transaction of the block,
+/// the stage yields the hash that the node listed at that index. The proof of the neighbouring transaction, a proof with
+/// one flipped byte and an empty proof are refused with `TransactionProofInvalid`.
+/// Why it matters: the bridge records this hash as the source transaction of the message. Until 2026-11-20 the fixtures
+/// held the hashes and not the transactions, and real data stopped before this stage.
+#[test]
+fn real_message_proofs_pass_the_transaction_stage() {
+    let blocks: Vec<(&str, Box<dyn Fn(u64) -> (MessageProof, B256, lc_testkit::pulsechain::RealBlock)>)> = vec![
+        ("finalized", Box::new(|index| real_message_proof("finalized", index, 0))),
+        ("ancestor", Box::new(|index| real_message_proof("ancestor", index, 0))),
+        ("historical", Box::new(|index| real_historical_message_proof(index, 0))),
+    ];
+    for (name, proof_at) in blocks {
+        let (_, _, block) = proof_at(0);
+        let hashes: Vec<B256> = load_response(&format!("pulsechain/path_{name}_block.json"))["transactions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(hex_b256)
+            .collect();
+        assert_eq!(block.transactions.len(), hashes.len(), "{name}");
+        for (index, hash) in hashes.iter().enumerate() {
+            let (proof, _, _) = proof_at(index as u64);
+            assert_eq!(real_source_transaction_hash(&proof), Ok(*hash), "{name}: transaction {index}");
+        }
+        let (proof, anchor_root, _) = proof_at(0);
+        let _ = real_log_if_any(&proof, anchor_root, &block);
+        let refused = |proof: &MessageProof| {
+            matches!(real_source_transaction_hash(proof), Err(Error::TransactionProofInvalid(_)))
+        };
+        let mut empty = proof.clone();
+        empty.transactionProof = Vec::new();
+        assert!(refused(&empty), "{name}: empty proof");
+        let mut flipped = proof.clone();
+        let last = flipped.transactionProof.len() - 1;
+        let mut bytes = flipped.transactionProof[last].to_vec();
+        let middle = bytes.len() / 2;
+        bytes[middle] ^= 1;
+        flipped.transactionProof[last] = bytes.into();
+        assert!(refused(&flipped), "{name}: flipped byte");
+        if hashes.len() > 1 {
+            let mut other = proof.clone();
+            other.transactionProof = block.transaction_proofs[1].clone();
+            assert!(refused(&other), "{name}: the proof of another transaction");
+        }
+    }
+}
+
+/// Walks `real_log` when the first receipt of the block has a log (the historical block may have none).
+fn real_log_if_any(proof: &MessageProof, anchor_root: B256, block: &lc_testkit::pulsechain::RealBlock) -> Option<Log> {
+    let has_log = !block.receipts_json[0]["logs"].as_array().unwrap().is_empty();
+    has_log.then(|| real_log(proof, anchor_root))
 }
 
 /// Claim: the real beacon path works for a real PulseChain block (anchor state -> block_roots -> beacon header -> block hash

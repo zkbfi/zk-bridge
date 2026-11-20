@@ -1,18 +1,15 @@
 //! The remote backend against a fake worker: an HTTP server in this process.
 //!
-//! The good answer is a real Groth16 proof of the real Ethereum update that `tests/sp1_execute.rs` proves
-//! (`test/hardened/fixtures/sp1-proof-ethereum-update.json`). So the accept test runs the real local verification
-//! of `sp1-verifier`, and the refusal tests change one thing in a proof that is known to verify.
+//! The good answer is a real Groth16 proof of the current light-client program: a proof that the testnet backend made on
+//! a GPU worker for the Sepolia to PulseChain testnet v4 route, and that the light client on PulseChain testnet v4
+//! accepted (`test/hardened/fixtures/sp1-proof-sepolia-update.json`, written by `tests/backend_proof_fixture.rs`). The
+//! fixture also holds the program input of the statement, so the backend runs its real native check and the real local
+//! verification of `sp1-verifier`, and the refusal tests change one thing in a proof that is known to verify.
 //!
 //! Each test names what the backend must refuse and why that refusal protects a message delivery.
-//!
-//! These tests are ignored since the programs began to prove the branch of `genesis_validators_root`. The real Ethereum
-//! update of the fixtures has no such branch (a beacon node does not serve it, and the attested state is not on file), so
-//! the program refuses it, and the stored proof belongs to the old program. Run them again after the fixture is made anew
-//! from a real update with its attested state and a real proof of the rebuilt program.
 
 use alloy_primitives::{hex, B256};
-use lc_testkit::json::{bootstrap, light_client_update, load_response, store_from_bootstrap};
+use lc_core::wire::{decode_guest_input, ChainSelector};
 use lc_testkit::synthetic::{build_update, UpdateRecipe};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -27,16 +24,17 @@ use zk_bridge_prover::remote::{ProveRequestBody, ProveResponseBody, RemoteProver
 
 const API_KEY: &str = "test-key-0123456789";
 
-/// A real proof: the program key, the public values and the proof bytes.
+/// A real proof: the program key, the public values, the proof bytes and the program input of the statement.
 struct Fixture {
     program_key: B256,
     public_values: Vec<u8>,
     proof: Vec<u8>,
+    guest_input: Vec<u8>,
 }
 
 fn fixture() -> Fixture {
     let path = format!(
-        "{}/../test/hardened/fixtures/sp1-proof-ethereum-update.json",
+        "{}/../test/hardened/fixtures/sp1-proof-sepolia-update.json",
         env!("CARGO_MANIFEST_DIR")
     );
     let text = std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
@@ -46,19 +44,24 @@ fn fixture() -> Fixture {
         program_key: B256::from_str(&field("programVKey")).unwrap(),
         public_values: hex::decode(field("publicValues")).unwrap(),
         proof: hex::decode(field("proof")).unwrap(),
+        guest_input: hex::decode(field("guestInput")).unwrap(),
     }
 }
 
-fn real_ethereum_input() -> UpdateInput {
-    let update = light_client_update(&load_response("ethereum/finality_update.json")["data"]);
-    let store = store_from_bootstrap(
-        &bootstrap(&load_response("ethereum/bootstrap_same_period.json")["data"]),
-        None,
-    );
+/// The statement of the real proof: a real Sepolia update (assembled from Sepolia blocks and states, with its branch of
+/// `genesis_validators_root`) over the store at the head that the light client held.
+fn real_input() -> UpdateInput {
+    let input = decode_guest_input(&fixture().guest_input).expect("the fixture input decodes");
+    let chain = match input.chain {
+        ChainSelector::EthereumMainnet => ChainKind::Ethereum,
+        ChainSelector::Pulsechain => ChainKind::Pulsechain,
+        ChainSelector::Sepolia => ChainKind::Sepolia,
+        ChainSelector::PulsechainTestnetV4 => ChainKind::PulsechainTestnetV4,
+    };
     UpdateInput {
-        chain: ChainKind::Ethereum,
-        store,
-        steps: steps_with_table_versions(ChainKind::Ethereum, vec![update]),
+        chain,
+        store: input.store,
+        steps: input.steps,
     }
 }
 
@@ -221,7 +224,7 @@ impl Drop for FakeWorker {
 }
 
 fn real_statement() -> ProofStatement {
-    ProofStatement::Verified(real_ethereum_input())
+    ProofStatement::Verified(real_input())
 }
 
 fn long() -> Duration {
@@ -234,23 +237,44 @@ fn good_worker() -> (FakeWorker, Fixture) {
     (FakeWorker::start(move |_| reply.clone()), fixture)
 }
 
-/// Claim: the real fixture proof is the proof of the statement. Without this, every accept test below would prove
-/// nothing.
+/// Claim: the real fixture proof is the proof of the statement, its program key is the key of
+/// `light-client/program-keys.json`, and the input is a real Sepolia update that carries its branch of
+/// `genesis_validators_root`. Without this, every accept test below would prove nothing.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
-fn the_fixture_belongs_to_the_real_ethereum_update() {
+fn the_fixture_belongs_to_the_real_sepolia_update() {
     let fixture = fixture();
+    let input = real_input();
+    assert_eq!(input.chain, ChainKind::Sepolia);
+    assert!(input
+        .steps
+        .iter()
+        .all(|step| !step.update.genesis_validators_root_branch.is_empty()));
     let native = zk_bridge_prover::light_client::public_values(
-        &zk_bridge_prover::light_client::verify_update_natively(&real_ethereum_input()).unwrap(),
+        &zk_bridge_prover::light_client::verify_update_natively(&input).unwrap(),
     );
     assert_eq!(fixture.public_values, native);
+
+    let keys: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(format!(
+            "{}/../light-client/program-keys.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    let current = B256::from_str(keys["light-client"]["program_key"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        fixture.program_key, current,
+        "a proof of the current program"
+    );
+    zk_bridge_prover::remote::verify_groth16(fixture.program_key, &native, &fixture.proof)
+        .expect("the real proof verifies for the native public values");
 }
 
 /// Claim: a good answer is accepted and returned unchanged, and the request has the documented shape: a POST to
 /// `/prove` with the API key as a bearer token, the program key, the statement kind and the guest input as hex.
 /// Why it matters: this is the whole contract between the prover and a RunPod endpoint.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn a_good_proof_is_accepted() {
     let (worker, fixture) = good_worker();
     let proof = worker
@@ -276,7 +300,7 @@ fn a_good_proof_is_accepted() {
     assert_eq!(body.statement_kind, ProgramKind::LightClient);
     assert_eq!(
         body.guest_input,
-        hex::encode_prefixed(guest_input_bytes(&real_ethereum_input()))
+        hex::encode_prefixed(guest_input_bytes(&real_input()))
     );
 }
 
@@ -284,7 +308,6 @@ fn a_good_proof_is_accepted() {
 /// Why it matters: a worker that proves another statement would move a light client to a header that the program did
 /// not check. The proof may even verify; only the native comparison catches the swap.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn wrong_public_values_are_refused() {
     let fixture = fixture();
     let mut values = fixture.public_values.clone();
@@ -304,7 +327,6 @@ fn wrong_public_values_are_refused() {
 
 /// Claim: a proof one byte short or one byte long is refused before verification, with the lengths in the message.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn a_wrong_proof_length_is_refused() {
     let fixture = fixture();
     let mut longer = fixture.proof.clone();
@@ -327,7 +349,6 @@ fn a_wrong_proof_length_is_refused() {
 /// Claim: a proof with another selector than the pinned verifier's `0x4388a21c` is refused, and the message names both.
 /// Why it matters: the verifier contract rejects such a proof. The local check saves the transaction.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn a_wrong_selector_is_refused() {
     let fixture = fixture();
     let mut proof = fixture.proof.clone();
@@ -349,7 +370,6 @@ fn a_wrong_selector_is_refused() {
 /// Why it matters: the contract stores one key. A proof of any other program must never reach it, and the key
 /// is bound by the Groth16 verification, not by what the worker says.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn a_proof_for_another_program_key_is_refused() {
     let (worker, fixture) = good_worker();
     let mut other_key = fixture.program_key;
@@ -364,7 +384,6 @@ fn a_proof_for_another_program_key_is_refused() {
 /// Claim: one flipped bit inside the Groth16 part makes the proof fail verification.
 /// Why it matters: shape checks alone accept this. The local verification is what shows that the bytes are a proof.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn a_tampered_groth16_proof_is_refused() {
     let fixture = fixture();
     let mut proof = fixture.proof.clone();
@@ -380,7 +399,6 @@ fn a_tampered_groth16_proof_is_refused() {
 
 /// Claim: when the worker says it does not hold the key (400), the refusal is final: one request, no retries.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn a_refusal_by_the_worker_is_not_retried() {
     for status in [400, 401, 422] {
         let worker = FakeWorker::start(move |_| {
@@ -435,7 +453,6 @@ fn a_statement_the_program_rejects_is_not_sent() {
 /// Claim: a request that outlives the timeout is sent again, and the second answer is accepted.
 /// Why it matters: a cold RunPod worker can take minutes. The client must not give up on the first silence.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn a_timeout_is_retried() {
     let fixture = fixture();
     let good = Reply::ok(&fixture.proof, &fixture.public_values);
@@ -456,7 +473,6 @@ fn a_timeout_is_retried() {
 /// Claim: cold-start answers are retried until the worker is ready: a 503, a 502 and the "no workers available"
 /// answer, then success.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn cold_start_answers_are_retried() {
     let fixture = fixture();
     let good = Reply::ok(&fixture.proof, &fixture.public_values);
@@ -476,7 +492,6 @@ fn cold_start_answers_are_retried() {
 /// Claim: when every attempt fails with an error that is not a cold start (here a 500), the backend stops after exactly the configured attempts, says how many it made
 /// and why the last one failed, and never prints the API key.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn the_attempts_run_out() {
     let worker = FakeWorker::start(|_| Reply::with(500, r#"{"error":"the proof failed"}"#));
     let error = worker
@@ -494,7 +509,6 @@ fn the_attempts_run_out() {
 
 /// Claim: an answer with status 200 that is not a proof is refused, and so is hex that is not hex.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn a_malformed_success_is_refused() {
     let worker = FakeWorker::start(|_| Reply::with(200, "<html>hello</html>"));
     let error = worker
@@ -515,7 +529,6 @@ fn a_malformed_success_is_refused() {
 /// GPU client that returns the real proof.
 /// Why it matters: it catches a mismatch between the two ends of the JSON contract, which separate unit tests miss.
 #[test]
-#[ignore = "needs a real Ethereum update with the branch of genesis_validators_root and a real proof of the rebuilt light-client program (fixture regeneration)"]
 fn the_backend_and_the_worker_agree_over_http() {
     use zk_bridge_prover::prover::{GuestJob, Proof};
     use zk_bridge_prover::worker::{serve, GuestProver, Worker};

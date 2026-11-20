@@ -1,0 +1,14 @@
+{
+  "fetched_on": "2026-11-20",
+  "response": {
+    "0x93c2742c7b3910a8efc0eba7c78c6d469b7e8c79caf6f3f228ead44159afa6eb": [
+      "0x5730c65f00000000000000000000000000000000000000000000000000000000",
+      "0x04a7e9d0b832465c533858d4b6871b5e6f9b919030275f874ec6cfa56ac42ac8",
+      "0x198902b0445b4862c2515dd4ad258372a6eea94c40c83918d1d8ef79346a7e0f",
+      "0x9e6f0a031f3c30ad38dfa1b6d1380ab7b12d2b6fe72e40463d31eaf6c1d2f562",
+      "0x850a60d68b1c020c3a85dff51938627133ed243688ece57428832a11ef728559",
+      "0x07ba78f8b0bb5b94e7fb00ca3144c0ff0ec2c91db5a58b68851d2a78d06b123c"
+    ]
+  },
+  "source_url": "derived by derive-attested-state-proofs from the serialized attested state of the update in attested_state_finality_update.json (GET /eth/v2/debug/beacon/states/15698818, one.valve.city Ethereum mainnet beacon API, host only)"
+}
