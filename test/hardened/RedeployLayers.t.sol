@@ -209,10 +209,12 @@ contract RedeployLayersTest is WorldSupport {
         script.readKept(chainA);
     }
 
-    /// Claim: the configuration is read, names the running contracts, and a placeholder nonce is refused. Shows: the
-    /// testnet file (filled for the seal-only gate run, nonces read on 2026-11-11) parses, its previous contracts are the
-    /// bridge, the mediator and the router of `deploy/deployments/sepolia-pls943.json`, its `gateConfig` is the testnet
-    /// bridge configuration, and the same file with a placeholder nonce is refused by name.
+    /// Claim: the seal-only gate configuration names the contracts it replaced and refuses a placeholder nonce. Shows:
+    /// the testnet file as run on 2026-11-11 (nonce 36 on both chains) parses, its previous contracts are the bridge, the
+    /// mediator and the router of the record of that day before the run
+    /// (`deploy/deployments/archive/sepolia-pls943.2026-11-08.json`), its `gateConfig` is the testnet bridge
+    /// configuration, and the same file with a placeholder nonce is refused by name. Matters: a configuration is checked
+    /// against the record of the contracts it replaced, which does not move when a later run changes the live record.
     function test_theTestnetConfigurationRefusesItsPlaceholderNonce() public {
         string memory json = vm.readFile("script/testnet/redeploy.config.testnet.json");
         RedeployLayers.ChainConfig memory chainA = script.readChain(json, ".chainA");
@@ -220,27 +222,24 @@ contract RedeployLayersTest is WorldSupport {
         assertEq(vm.parseJsonAddress(json, ".deployer"), 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc);
         assertEq(vm.parseJsonString(json, ".gateConfig"), "script/testnet/bridge.config.testnet.json");
         assertEq(chainA.chainId, 11155111);
-        assertEq(chainA.deployerNonce, 23);
+        assertEq(chainA.deployerNonce, 36);
         assertEq(chainB.chainId, 943);
-        assertEq(chainB.deployerNonce, 27);
-        string memory deployment = vm.readFile("deploy/deployments/sepolia-pls943.json");
-        assertEq(chainA.previousBridge, vm.parseJsonAddress(deployment, ".chain_a.bridge"));
-        assertEq(chainA.previousMediator, vm.parseJsonAddress(deployment, ".chain_a.mediator"));
-        assertEq(chainA.previousRouter, vm.parseJsonAddress(deployment, ".chain_a.delivery_router"));
-        assertEq(chainB.previousBridge, vm.parseJsonAddress(deployment, ".chain_b.bridge"));
-        assertEq(chainB.previousMediator, vm.parseJsonAddress(deployment, ".chain_b.mediator"));
-        assertEq(chainB.previousRouter, vm.parseJsonAddress(deployment, ".chain_b.delivery_router"));
+        assertEq(chainB.deployerNonce, 36);
+        _assertNamesTheRecord(chainA, chainB, "deploy/deployments/archive/sepolia-pls943.2026-11-08.json", ".delivery_router");
 
-        string memory placeholder = vm.replace(json, '"deployerNonce": "23"', '"deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_SEPOLIA"');
+        string memory placeholder = vm.replace(json, '"deployerNonce": "36"', '"deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE"');
         vm.expectRevert(abi.encodeWithSelector(RedeployLayers.PlaceholderValue.selector, ".chainA.deployerNonce"));
         script.readChain(placeholder, ".chainA");
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.PlaceholderValue.selector, ".chainB.deployerNonce"));
+        script.readChain(placeholder, ".chainB");
     }
 
     /// Claim: the router configuration names the contracts of 2026-11-08 and refuses its placeholder nonces. Shows: the
-    /// file as run (nonces 22 and 26) names the bridge and the mediator of `deploy/deployments/sepolia-pls943.json` and,
-    /// as the previous router, the router that the deployment file now keeps in `delivery_routers`; the same file with a
-    /// placeholder nonce is refused by name. Matters: the router run replaces the router of the running mediator, and
-    /// nothing is sent with a guessed nonce.
+    /// file as run (nonces 22 and 26) names the bridge and the mediator of the record after that run
+    /// (`deploy/deployments/archive/sepolia-pls943.2026-11-08.json`) and, as the previous router, the router that the
+    /// record keeps in `delivery_routers`, while `delivery_router` is the router that the run created; the same file
+    /// with a placeholder nonce is refused by name. Matters: the router run replaces the router of the running mediator,
+    /// and nothing is sent with a guessed nonce.
     function test_theRouterConfigurationNamesTheRunningContractsAndRefusesItsPlaceholders() public {
         string memory json = vm.readFile("script/testnet/router-redeploy.config.testnet.json");
         RedeployLayers.ChainConfig memory chainA = script.readChain(json, ".chainA");
@@ -256,13 +255,9 @@ contract RedeployLayersTest is WorldSupport {
         assertEq(chainB.previousMediator, 0x8eeF4098D3726955F7D227C4D1D92487C99F7e62);
         assertEq(chainB.previousRouter, 0xBEa5F0fd3712B02c25Bda32C7719fB9373C0fA20);
 
-        string memory deployment = vm.readFile("deploy/deployments/sepolia-pls943.json");
-        assertEq(chainA.previousBridge, vm.parseJsonAddress(deployment, ".chain_a.bridge"));
-        assertEq(chainA.previousMediator, vm.parseJsonAddress(deployment, ".chain_a.mediator"));
-        assertEq(chainA.previousRouter, vm.parseJsonAddress(deployment, ".chain_a.delivery_routers[0]"));
-        assertEq(chainB.previousBridge, vm.parseJsonAddress(deployment, ".chain_b.bridge"));
-        assertEq(chainB.previousMediator, vm.parseJsonAddress(deployment, ".chain_b.mediator"));
-        assertEq(chainB.previousRouter, vm.parseJsonAddress(deployment, ".chain_b.delivery_routers[0]"));
+        string memory record = "deploy/deployments/archive/sepolia-pls943.2026-11-08.json";
+        _assertNamesTheRecord(chainA, chainB, record, ".delivery_routers[0]");
+        string memory deployment = vm.readFile(record);
         assertEq(vm.parseJsonAddress(deployment, ".chain_a.delivery_router"), 0x1c4627D76e6b423e06C61f055C2ce0d3E944Ce8a);
         assertEq(vm.parseJsonAddress(deployment, ".chain_b.delivery_router"), 0x6e0178049277442d5BF58963f9a1E0469B46Fce3);
 
@@ -272,6 +267,52 @@ contract RedeployLayersTest is WorldSupport {
         string memory placeholderB = vm.replace(json, '"deployerNonce": "26"', '"deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE_ON_943"');
         vm.expectRevert(abi.encodeWithSelector(RedeployLayers.PlaceholderValue.selector, ".chainB.deployerNonce"));
         script.readChain(placeholderB, ".chainB");
+    }
+
+    /// Claim: the configuration of the layers redeploy of 2026-11-20 names the contracts that it replaces and plans one
+    /// address for each new contract on both chains. Shows: the file parses with nonce 45 on both chains, its previous
+    /// contracts are the bridge, the mediator and the router of the record of 2026-11-11
+    /// (`deploy/deployments/archive/sepolia-pls943.2026-11-11.json`), both plans are the same eight addresses, and a
+    /// placeholder nonce is refused by name. Matters: the bridges and the mediators name their twins by predicted
+    /// address, and the new contracts copy their kept values from the previous contracts.
+    function test_theLayersConfigurationOf20NovemberNamesTheContractsOf11November() public {
+        string memory json = vm.readFile("script/testnet/redeploy-2026-11-20.config.testnet.json");
+        RedeployLayers.ChainConfig memory chainA = script.readChain(json, ".chainA");
+        RedeployLayers.ChainConfig memory chainB = script.readChain(json, ".chainB");
+        address configDeployer = vm.parseJsonAddress(json, ".deployer");
+        assertEq(configDeployer, 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc);
+        assertEq(chainA.chainId, 11155111);
+        assertEq(chainA.deployerNonce, 45);
+        assertEq(chainB.chainId, 943);
+        assertEq(chainB.deployerNonce, 45);
+        _assertNamesTheRecord(chainA, chainB, "deploy/deployments/archive/sepolia-pls943.2026-11-11.json", ".delivery_router");
+        assertEq(chainA.previousBridge, 0x5897D3DE91d59FB691E3887D6Ffbba072384293A);
+        assertEq(chainA.previousRouter, 0xa125684B9479FbAB64218581763788bafb520A57);
+
+        RedeployLayers.Planned memory planA = script.plan(configDeployer, chainA.deployerNonce);
+        RedeployLayers.Planned memory planB = script.plan(configDeployer, chainB.deployerNonce);
+        assertEq(keccak256(abi.encode(planA)), keccak256(abi.encode(planB)));
+
+        string memory placeholder = vm.replace(json, '"deployerNonce": "45"', '"deployerNonce": "REPLACE_WITH_DEPLOYER_NONCE"');
+        vm.expectRevert(abi.encodeWithSelector(RedeployLayers.PlaceholderValue.selector, ".chainA.deployerNonce"));
+        script.readChain(placeholder, ".chainA");
+    }
+
+    /// @dev Requires that the previous contracts of both chains are those of a deployment record: the bridge and the
+    /// mediator of each chain section, and the router at `routerKey` of it.
+    function _assertNamesTheRecord(
+        RedeployLayers.ChainConfig memory chainA,
+        RedeployLayers.ChainConfig memory chainB,
+        string memory record,
+        string memory routerKey
+    ) private view {
+        string memory deployment = vm.readFile(record);
+        assertEq(chainA.previousBridge, vm.parseJsonAddress(deployment, ".chain_a.bridge"));
+        assertEq(chainA.previousMediator, vm.parseJsonAddress(deployment, ".chain_a.mediator"));
+        assertEq(chainA.previousRouter, vm.parseJsonAddress(deployment, string.concat(".chain_a", routerKey)));
+        assertEq(chainB.previousBridge, vm.parseJsonAddress(deployment, ".chain_b.bridge"));
+        assertEq(chainB.previousMediator, vm.parseJsonAddress(deployment, ".chain_b.mediator"));
+        assertEq(chainB.previousRouter, vm.parseJsonAddress(deployment, string.concat(".chain_b", routerKey)));
     }
 
     /// Claim: the kept router values come only from a router of the running mediator. Shows: a previous router bound to

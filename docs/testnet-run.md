@@ -602,6 +602,17 @@ It runs the checks every 60 seconds: the services (indexer local and public, bac
 - Deploy (after `provision.sh`, which creates the user `zkb_status` and `/etc/zk-bridge/status`): copy `deploy/app-server/config/status/status.json.example` and `status.env.example` to `/etc/zk-bridge/status/` (mode 0640, owner root, group `zkb_status`), fill in the wallet addresses, the thresholds and the endpoints, then `ansible-playbook bots.yml -e commit=<hash> -e bots=status`. DNS: an A record for `status.zkb.fi` to the app server, like the other hosts; Caddy gets the certificate.
 - **The blind spot.** The service runs on the app server, so if the server is down, the page is down too, and it cannot tell you. Point a free external monitor at `https://status.zkb.fi/api/summary` (for example UptimeRobot or Better Stack, 5 minute interval). The route answers 200 while everything works or is degraded, and 503 when something is down or when the checks themselves stopped; add `?strict=1` to get 503 for degraded as well.
 
+## Redeploy the message layers
+
+New bridges, mediators, factories and routers on both chains, keeping the verifiers, light clients, fork registry and
+gates: `RedeployLayers` in `REDEPLOY_MODE=layers`, eight creations per chain in one run. The run prepared on 2026-11-20
+(the three code-review rounds of 2026-11-18, configuration `script/testnet/redeploy-2026-11-20.config.testnet.json`), with
+the addresses, the gas of each creation, the rehearsal, the drain, the switch of the server (deployment file, runner
+state, indexer blue/green, backend, bots), the release and the rollback, is in
+[the redeploy plan](redeploy-2026-11-gas.md), "The layers of 2026-11-20 (prepared, not sent)". After the run,
+`script/testnet/redeploy-check.sh <rpc> <rpc of the other chain> <old router> <new router> <new router on the other chain>`
+checks the wiring of one chain, read only.
+
 ## After a contract deployment: the record, the verification and the page
 
 Do this after every deployment of a contract on a pair (`DeployBridge`, `RedeployLayers` in any mode, a new router, the test tokens), on the same day. The page [Deployed contracts](../explorer/web/docs/pages/10-deployed-contracts.md) is generated from the record, and a test fails when the two differ.
