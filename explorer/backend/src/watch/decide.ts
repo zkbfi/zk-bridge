@@ -311,6 +311,50 @@ export function decideProof(input: DecisionInput): ProofDecision {
   return { due: false, why: "nothing-due", detail: noProgressDetail(assessment, facts, policy, nowSeconds) };
 }
 
+/**
+ * Whether a direction is the companion of a proof the other direction of its pair just started, and the proof it would
+ * start. `messages`: a waiting message the light client can cover now. `keep-alive`: the keep-alive planner calls for a
+ * proof that can make progress now or within the direction's minimum interval.
+ */
+export type CompanionVerdict =
+  | { readonly eligible: true; readonly why: "messages" | "keep-alive"; readonly decision: Extract<ProofDecision, { due: true; why: "message" | "keep-alive" }> }
+  | { readonly eligible: false; readonly reason: Extract<ProofDecision, { due: false }>["why"]; readonly detail: string };
+
+/** Input of {@link companionDecision}: a decision without the batch and the urgent facts, and the direction's minimum interval. */
+export type CompanionInput = Omit<DecisionInput, "batch" | "urgent"> & { readonly minIntervalSeconds: number };
+
+/**
+ * Decides whether a direction proves as the companion of the other direction's proof
+ * (docs/superpowers/specs/2026-11-19-one-gpu-session-both-directions-design.md, decision 2): it would start a proof now
+ * if its minimum interval had passed. That is {@link decideProof} without the batch rule (the interval is the only thing
+ * a batch waits for; a batch that pays is due anyway), so every other check still applies: a finality newer than the
+ * covered head, enough signatures, a light client that is not stranded, no pending proof from the head. With no message
+ * the light client can cover now, a keep-alive counts when the planner calls for one at the end of the interval, with
+ * the finality the direction has now. The two directions then share one worker start.
+ */
+export function companionDecision(input: CompanionInput): CompanionVerdict {
+  const { minIntervalSeconds, ...decisionInput } = input;
+  const decision = decideProof(decisionInput);
+  if (decision.due) {
+    // Without the batch and the urgent facts only these two can be due.
+    const due = decision as Extract<ProofDecision, { why: "message" | "keep-alive" }>;
+    return { eligible: true, why: due.why === "message" ? "messages" : "keep-alive", decision: due };
+  }
+  if (decision.why === "nothing-due" && minIntervalSeconds > 0) {
+    const { facts, policy, finalizedSlot, history } = input;
+    const later = assess({ facts, source: { finalizedSlot }, history, policy, nowSeconds: input.nowSeconds + minIntervalSeconds });
+    const call = later.waitForFinality ? null : keepAliveCall(later, facts, policy);
+    if (call !== null) {
+      return {
+        eligible: true,
+        why: "keep-alive",
+        decision: { due: true, why: "keep-alive", handoff: call === "handoff", detail: `the keep-alive is due within the minimum interval (${minIntervalSeconds} s): ${later.reason}` },
+      };
+    }
+  }
+  return { eligible: false, reason: decision.why, detail: decision.detail };
+}
+
 /** What the warm-up looks at: the time a proof is expected (at most one target), and the keys that still wait for one. */
 export type WarmupPlan = { readonly targets: readonly WarmupTarget[]; readonly live: ReadonlySet<string> };
 

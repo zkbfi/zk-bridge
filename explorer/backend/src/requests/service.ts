@@ -65,6 +65,15 @@ export type ProofRequest = {
    */
   readonly urgent?: WatchUrgentReason;
   /**
+   * The watcher starts the proof as the companion of a proof the other direction of the pair just started
+   * (`companionDecision` in `watch/decide.ts`): it would prove now had its minimum interval passed. `keep-alive`: the
+   * keep-alive planner calls for a proof within that interval, before the indexer's age rule does, so the service takes
+   * it past that rule. `messages`: a waiting message, which meets the indexer's need like any message proof. Taken only
+   * with reason `finality`, which no HTTP request can carry. A companion never goes past the GPU budget; every other
+   * check still applies.
+   */
+  readonly companion?: "messages" | "keep-alive";
+  /**
    * The proof the watcher plans: from the head it read to the finalized slot it acts on. The service starts one job per
    * target and direction, ever: a second request for it is refused as `duplicate`, also after a restart or a failure.
    */
@@ -273,7 +282,7 @@ export function createRequestService(input: RequestServiceInput): RequestService
 
   /**
    * The GPU budget of the direction: refused while the spend of its jobs in the last 24 hours reaches it. A liveness
-   * proof (a planned handoff, or a keep-alive of the age rule) goes past it, logged.
+   * proof (a planned handoff, or a keep-alive of the age rule) goes past it, logged; a companion proof does not.
    */
   async function overBudget(request: ProofRequest, need: Extract<ProofNeed, { needed: true }>, current: number): Promise<SubmitResult | null> {
     const usdPerHour = await readUsdPerHour();
@@ -282,7 +291,8 @@ export function createRequestService(input: RequestServiceInput): RequestService
     if (spent === null) return null;
     const detail = `the 24 h GPU budget of $${budgetUsd.toFixed(2)} for ${request.direction} is spent: $${spent.spentUsd.toFixed(2)}`;
     const fields = { direction: request.direction, reason: request.reason, budgetUsd, spentUsd: Math.round(spent.spentUsd * 10_000) / 10_000, usdPerHour, detail };
-    if (need.why === "keep-alive") {
+    // A companion only saves a worker start: it waits for the budget like any proof.
+    if (need.why === "keep-alive" && request.companion === undefined) {
       logger.warn("gpu_budget_bypassed", { ...fields, why: "liveness: the proof keeps the light client alive" });
       return null;
     }
@@ -323,6 +333,7 @@ export function createRequestService(input: RequestServiceInput): RequestService
       }
       if (!need.needed && request.reason === "finality" && request.plannedHandoff === true) need = { needed: true, why: "keep-alive" };
       if (!need.needed && request.reason === "finality" && request.urgent !== undefined) need = { needed: true, why: request.urgent };
+      if (!need.needed && request.reason === "finality" && request.companion === "keep-alive") need = { needed: true, why: "keep-alive" };
       if (!need.needed) return { refused: "nothing-to-prove", why: "no-need" };
       // Never prove again what a proof we have can still land: it starts at the head, and the next proof starts from
       // the head it makes. Only a proof that waited past its time lets a new one start from the same head.
@@ -354,7 +365,7 @@ export function createRequestService(input: RequestServiceInput): RequestService
         const latency = request.since === undefined ? {} : { latencyMs: current - request.since };
         // The reasons that started it before the watcher's minimum interval: a user's request never waits for it.
         const urgent = [...(request.urgent === undefined ? [] : [request.urgent]), ...urgentReasons({ nowSeconds: current / 1000, requested: request.reason !== "finality" })];
-        logger.info("job_started", { jobId: startedJobId, direction: request.direction, why: need.why, reason: request.reason, ...latency, ...(urgent.length === 0 ? {} : { urgent }) });
+        logger.info("job_started", { jobId: startedJobId, direction: request.direction, why: need.why, reason: request.reason, ...latency, ...(urgent.length === 0 ? {} : { urgent }), ...(request.companion === undefined ? {} : { companion: request.companion }) });
         start(startedJobId, request.direction);
       }
       return result;

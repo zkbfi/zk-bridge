@@ -368,8 +368,23 @@ as `POST /requests` (reason `finality`, caller `watch`), so the gates above appl
   source's finality unless the head has aged past the keep-alive age. While a proof we have still starts at the head,
   nothing starts from that head (see "Proofs we already have"). One finalized header starts at most one job, and no
   job starts while one runs.
+- **Companion proofs.** When the watcher starts a proof for one direction, it looks at the other direction of the pair
+  in the same tick. If that direction would start a proof now had its minimum interval passed (a waiting message the
+  light client can cover now, or a keep-alive the planner calls for within its `minIntervalSeconds`), it starts it at
+  once, as an ordinary job: both requests go to the same endpoint one after the other, so the second finds the worker
+  the first started (one cold start for both). Only the minimum interval is skipped: a running or pending proof, too few
+  signatures, a stranded light client, a GPU guard that has zeroed every tier, and every gate of the request service
+  (the daily GPU budget among them, with no liveness bypass) still stop it. A keep-alive companion goes past the
+  indexer's age rule, as a planned handoff does. A companion never asks for a companion of its own. Logs:
+  `proof_companion` (`direction`, `triggeredBy`, `why` `messages` or `keep-alive`, `jobId`) and, when a message waits
+  and the direction was not started, `proof_companion_skipped` (`reason`, `detail`, `messages`); `job_started` carries
+  `companion`. `companionProofs: false` on a pair or a direction turns it off (see the table below). See
+  docs/superpowers/specs/2026-11-19-one-gpu-session-both-directions-design.md.
 - **Warm-up.** The backend wakes the remote prover (`GET <first endpoint>/ping`, with that endpoint's key if it has one) a learned
-  lead time before a proof is expected, and keeps the worker warm until the job starts.
+  lead time before a proof is expected, and keeps the worker warm until the job starts. It is off on the server
+  (`watch.warmup.enabled: false`, since 2026-11-19): it saved no GPU time (the cold start it paid for is billed to the
+  proof without it), only about 31 s of latency, and its idle waits cost about $0.60 a day
+  (docs/superpowers/specs/2026-11-19-one-gpu-session-both-directions-design.md). The code stays behind the flag.
   - *When a proof is expected:* the first moment at which the real decision (`decideProof`) would say due, asked for
     the future. One function, `warmupPlan` (`src/watch/decide.ts`), collects the moments that can change the answer
     (now, the expected finality of each waiting message, the end of the minimum interval and the moment the batch is
@@ -435,7 +450,8 @@ Settings, all optional (`watch` in the configuration file):
 | `profitMargin` | 1.0 | A batch proves early when its fees reach the cost times this. |
 | `unpricedAtMaximumPays` | `true` | Whether a message whose token has no price and whose tip is at the automatic maximum (1% of the amount) makes its batch pay at once. `false`: such a message waits for `minIntervalSeconds` like any other; priced fees still count. Resolved like `minIntervalSeconds`: a direction's value beats its pair's, a pair's beats the global one. The testnet pair sets it to `false`, so the traffic bot's transfers share one light-client update an hour per direction. |
 | `pairs` | none | Overrides per pair and per direction: `{ "sepolia-pls943": { "minIntervalSeconds": 3600, "directions": { "first-to-second": { "minIntervalSeconds": 1800 } } } }`. A direction's field beats its pair's, a pair's beats the global one. Unknown pair names and directions are refused. |
-| `warmup.enabled` | `true` | `false` sends no ping. |
+| `companionProofs` | `true` | When the other direction of the pair starts a proof, this direction proves in the same tick if it would prove now had its minimum interval passed (see "Companion proofs" above). `false` on a direction: it is never started as a companion. Resolved like `minIntervalSeconds`: a direction's value beats its pair's, a pair's beats the global one. |
+| `warmup.enabled` | `true` | `false` sends no ping. The server sets `false` (2026-11-19; see "Warm-up" above). |
 | `warmup.leadP`, `leadObservations`, `leadMarginSeconds` | 0.75, 20, 5 | The quantile of the newest observations that the lead time takes, and the seconds added to it. A higher quantile or margin spares the proof a wait and costs idle GPU time. |
 | `warmup.defaultLeadSeconds`, `minLeadSeconds`, `maxLeadSeconds` | 90, 20, 600 | The lead time without observations, and its bounds. |
 | `warmup.holdIntervalSeconds` | the idle timeout in use minus 2, at least 1 (3) | The ping that keeps a warm worker, after its last ready answer. When set, it must be below `idleTimeoutSeconds` (the start-up refuses the file otherwise). Leave it out and it follows RunPod's idle timeout, worked out at run time. |

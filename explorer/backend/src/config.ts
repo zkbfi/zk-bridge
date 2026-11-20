@@ -38,6 +38,12 @@ const batchFields = {
    * Default `true`. `false`: such a message waits for `minIntervalSeconds` like any other (priced fees still count).
    */
   unpricedAtMaximumPays: z.boolean().optional(),
+  /**
+   * When the other direction of the pair starts a proof, this direction proves in the same tick if it would prove now
+   * had its minimum interval passed, so both proofs share one worker start. Default `true`. `false`: this direction is
+   * never started as a companion. See docs/superpowers/specs/2026-11-19-one-gpu-session-both-directions-design.md.
+   */
+  companionProofs: z.boolean().optional(),
 };
 
 /** The batching of one direction of a pair. */

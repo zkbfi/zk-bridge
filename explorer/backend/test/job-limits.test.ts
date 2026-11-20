@@ -206,6 +206,27 @@ describe("the daily GPU budget per direction", () => {
   });
 });
 
+describe("a companion proof of the watcher (2026-11-19, one GPU session for both directions)", () => {
+  it("takes a keep-alive companion past the indexer's age rule, only from the watcher, and logs it as a companion", async () => {
+    // The watcher found the keep-alive due within the minimum interval: the indexer's age rule does not call for it yet.
+    const run = build({}, fakeProofNeed({ needed: false }));
+    expect(await run.service.submit({ ...base, caller: "203.0.113.9", reason: "user", companion: "keep-alive" })).toEqual({ refused: "nothing-to-prove", why: "no-need" });
+    // A message companion meets the indexer's need like any message proof.
+    expect(await run.service.submit({ ...base, caller: "watch", reason: "finality", companion: "messages", target: { startSlot: 1, newSlot: 2 } })).toEqual({ refused: "nothing-to-prove", why: "no-need" });
+    const started = await run.service.submit({ ...base, caller: "watch", reason: "finality", companion: "keep-alive", target: { startSlot: 1, newSlot: 2 } });
+    expect(started).toMatchObject({ jobId: expect.any(String) });
+    expect(run.named("job_started")).toMatchObject([{ why: "keep-alive", reason: "finality", companion: "keep-alive" }]);
+  });
+
+  it("never lets a companion past a spent GPU budget, not even a keep-alive", async () => {
+    const run = build({ readUsdPerHour: async () => 10 }, fakeProofNeed({ needed: true, why: "keep-alive" }));
+    provedJob(run.storage, "a", run.clock.now() - HOUR, 1800);
+    expect(await run.service.submit({ ...base, caller: "watch", reason: "finality", companion: "keep-alive", target: { startSlot: 1, newSlot: 2 } })).toMatchObject({ refused: "rate-limited", why: "gpu-budget" });
+    expect(run.named("gpu_budget_bypassed")).toEqual([]);
+    expect(run.named("gpu_budget_spent")).toMatchObject([{ direction: "first-to-second" }]);
+  });
+});
+
 describe("the GPU budget and an unpriced tip at the automatic maximum (review, 2026-11-10)", () => {
   it("refuses the finality proof of a message that pays only by its unpriced 1% tip once the budget is spent: no liveness bypass", async () => {
     // A worthless token can carry a 1% tip, and such a tip counts as paying (owner: "yes, deliver straight away"), so

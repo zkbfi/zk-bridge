@@ -11,7 +11,7 @@
   "prover": { "binary": "/opt/zk-bridge/current/bin/zk-bridge-prover", "timeoutSeconds": 1800 },
   "remote": {
     "endpoints": [
-      { "label": "gpu-24gb", "url": "https://43nsvfb8svkosr.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY", "startWaitSeconds": 30 },
+      { "label": "gpu-24gb", "url": "https://43nsvfb8svkosr.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY", "startWaitSeconds": 60 },
       { "label": "gpu-32gb", "url": "https://muecz9pudncily.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY", "startWaitSeconds": 30 },
       { "label": "gpu-48gb", "url": "https://nuax43o5zxyv9a.api.runpod.ai", "apiKeyVariable": "RUNPOD_API_KEY" }
     ]
@@ -51,7 +51,8 @@
   },
   "watch": {
     "pairs": {
-      "sepolia-pls943": { "minIntervalSeconds": 3600, "unpricedAtMaximumPays": false }
-    }
+      "sepolia-pls943": { "minIntervalSeconds": 3600, "unpricedAtMaximumPays": false, "companionProofs": true }
+    },
+    "warmup": { "enabled": false }
   }
 }
