@@ -54,3 +54,13 @@ Expected effect: about one session an hour instead of two. With warm-ups off, a 
 
 - Unit tests: a due proof in one direction starts a companion when the other has a coverable waiting message or a keep-alive due within its interval; no companion when the other direction is proving, pending, blocked by participation, zeroed by the guard, over budget, or has `companionProofs: false`; a companion never starts a third job; the companion skips only the interval. Backend coverage stays 100%, `tsc` clean.
 - Live, the 24 hours after the deploy: count sessions (jobs of both directions starting within 2 minutes of each other count as one), `wait_worker_ms` of companions (expect near 0), no `warmup_*` events, and the per-endpoint bill. Target: at most ~$1.35 for the day; report the real figure.
+
+## Result after 9 hours, and the start wait raised to 150 s (2026-11-20 14:54 UTC)
+
+- The directions now prove together (06:26, 07:26, ... 14:24), 17 jobs, no warm-ups, no guard trips.
+- But in 5 of the 8 paired hours the second job went to gpu-32gb: it pinged gpu-24gb while the tier's one worker was
+  still busy with the first proof, waited 94–117 s, passed the 60 s start wait and booted a 5090. gpu-32gb billed
+  $0.225 in those hours. GPU spend 06:00–14:53 was $0.66, about $1.76 a day (before: about $2.10).
+- A companion has to wait for boot plus the first proof: ~30 s + ~65 s, up to ~141 s at the p99 boot. The gpu-24gb
+  `startWaitSeconds` is now 150 on the server and in the example, so the second job waits for the warm 4090 instead of
+  booting another card. A cold start over 150 s (max seen 151 s) still fails over.
