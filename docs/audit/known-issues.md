@@ -6,6 +6,22 @@ Terms (SP1, SSZ, RLP, BLS, EIP) are explained at the top of [`README.md`](README
 
 Where two documents disagree, the code wins, and in `docs/hardened-build-contract.md` the latest dated section wins. Some older documents are stale; the team keeps a list and is fixing them.
 
+## Read first: `DeliveryRouter.sweep` is not a drain
+
+- **What it does.** `DeliveryRouter.sweep(token)` can be called by anyone. It sends the router's whole balance of one
+  token to `failedDeliveryAddress`, an immutable set at deployment, and emits `Swept`. When the token refuses the push,
+  it emits `HandOffRefused` and the tokens stay.
+- **Why it exists.** A delivery through the router receives and pays out in one transaction, so the router holds
+  nothing between deliveries. A balance appears only from tokens sent to the router with no delivery (a plain
+  transfer, or a relay to the router without a callback) or from a hand-off the token refused. With no owner and no
+  claim path, `sweep` is the only way such tokens leave, and they can only go to the one fixed address. Since round 3
+  of the code review, a delivery's follow-up call runs from `RouterCaller`, not from the router, so a call cannot spend
+  stray tokens the router holds either (on main; on testnet after the layer redeploy, 2.4).
+- **The address.** On Sepolia and PulseChain testnet v4 it is the deployer wallet
+  `0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc` (read from both routers on 2026-11-20). The mainnet address is open
+  (2.12).
+- **Link.** `src/hardened/mediator/DeliveryRouter.sol` (`sweep`, `_push`), 1.20.
+
 ## 1. Accepted risks and user decisions
 
 ### 1.1 No refunds (H-09)
@@ -134,14 +150,15 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 
 ## 2. Open items
 
-### 2.1 The real Ethereum mainnet genesis validators root branch fixture is missing
-- **What.** `light-client/tests/fixtures/ethereum/state_proofs.json` does not exist. No public mainnet node tried on 2026-10-27 serves old debug states. The real Ethereum tests run a reduced check (see `lc_testkit::real_proofs`), and two tests are ignored: `ethereum_state_proofs_are_on_file`, `every_golden_case_is_computed`.
-- **What is left.** Fetch the attested states from a node that keeps them and run `derive-attested-state-proofs`.
+### 2.1 The real Ethereum mainnet genesis validators root branch fixture is partly on file
+- **Status.** Partly fixed on 2026-11-20.
+- **What is there.** `light-client/tests/fixtures/ethereum/state_proofs.json` holds the genesis validators root branch of one real mainnet update (attested slot 15698818, `attested_state_finality_update.json`). Its attested state was fetched from an archive provider (one.valve.city) while its node still kept it, and `ethereum_real_attested_state.rs` runs the full check, branch included, with tamper cases.
+- **What is left.** The attested states of the 2026-10-20 updates (slots 15476597, 15466561, 15474754). The provider's mainnet beacon node (Lighthouse) keeps states only from its finalized checkpoint onward, and `/eth/v2/debug/beacon/states/{slot}` answers 404 for them. `ethereum_state_proofs_are_on_file` and `every_golden_case_is_computed` stay ignored until a node that keeps old states serves them.
 - **Link.** [`light-client/tests/fixtures/README.md`](../../light-client/tests/fixtures/README.md).
 
-### 2.2 No real Groth16 proof of the current program keys
-- **What.** The 13 tests in `prover/tests/remote_prover.rs` are ignored: their real Ethereum update has no genesis validators root branch, and the stored proof belongs to an older program. `test/hardened/SP1VerifierGroth16.t.sol` runs a real proof of an older program, so it tests the verifier, not today's key.
-- **What is left.** Make a real proof of the rebuilt program from an update with its attested state, regenerate the fixture, and un-ignore the tests.
+### 2.2 A real Groth16 proof of the current program keys
+- **Status.** Fixed on 2026-11-20.
+- **What is there.** `test/hardened/fixtures/sp1-proof-sepolia-update.json` is a real Groth16 proof of the current light-client key (`0x000854b9…`, equal to `light-client/program-keys.json` and to `programVKey()` of both deployed testnet light clients). The testnet GPU worker made it for Sepolia slot 11622912 → 11623200, and the light client on PulseChain testnet v4 accepted it on chain. The fixture also holds an input whose native run gives the proof's public values (a real Sepolia update with its genesis validators root branch), rebuilt by `prover/tests/backend_proof_fixture.rs`. The 13 tests of `prover/tests/remote_prover.rs` run again, and `test/hardened/SP1VerifierGroth16.t.sol` tests the current key.
 - **Link.** Header of `prover/tests/remote_prover.rs`.
 
 ### 2.3 Groth16 proving is not reproduced in continuous integration
@@ -149,29 +166,29 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 - **What is left.** A reproducible proving job.
 - **Link.** [`docs/server-prover.md`](../server-prover.md), [`docs/gpu-prover.md`](../gpu-prover.md).
 
-### 2.4 No deployment and no end-to-end run on the current contracts
-- **What.** Nothing is deployed on any chain, including testnets. The last end-to-end run with real proofs used an older contract stack and the archived relayer. The new harness in `e2e/` is not committed.
-- **What is left.** An Anvil end-to-end run with real proofs on the final contracts, then the testnet run (Sepolia and PulseChain testnet v4).
-- **Link.** [`docs/testnet-run.md`](../testnet-run.md), [`docs/end-to-end-real-proofs.md`](../end-to-end-real-proofs.md).
+### 2.4 Testnet runs the 2026-11-11 contracts, not the current main
+- **What.** The bridge has run on Sepolia and PulseChain testnet v4 since 2026-11-11 (the contracts in [`deploy/deployments/sepolia-pls943.json`](../../deploy/deployments/sepolia-pls943.json)), end to end with real proofs: the backend proves light-client updates on a GPU worker every hour, a traffic bot sends tokens both ways, and a runner delivers them. The e2e harness is in `e2e/`. The fixes of code review rounds 1 to 3 (the mediator's callback gas cap, `MediatorPayloads`, `ExactGasCall`, `MessageBridge`, and `RouterCaller`) are on main but not on testnet.
+- **What is left.** A redeploy of the bridge layer (bridge, mediator, factory, router) from main, so the audited code is the deployed code; prepared and rehearsed on forks before it is sent.
+- **Link.** [`docs/testnet-run.md`](../testnet-run.md), [`docs/redeploy-2026-11-gas.md`](../redeploy-2026-11-gas.md).
 
 ### 2.5 Who pays for proving (H-15)
-- **What.** Decided: a funded operator runs the prover and pays gas; the contracts take no proving fee. The operator server is not in this repository and does not exist yet. Delivery tips are voluntary.
-- **What is left.** The operator server and its funding.
-- **Link.** [`README.md`](../../README.md) "Funded operator"; [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Launch sequence".
+- **What.** Decided: a funded operator runs the prover and pays gas; the contracts take no proving fee. Delivery tips are voluntary. The operator server exists and is in this repository: `explorer/backend` schedules light-client updates and runs the prover on rented GPU workers, a publisher posts the updates, and the runner bot delivers messages and pays their gas (`deploy/app-server/`, `docs/bots.md`). On testnet the GPU cost was about $1.30 a day on 2026-11-20 (hourly updates in both directions).
+- **What is left.** Funding for mainnet, and its budget limits (`docs/superpowers/specs/2026-11-18-two-pairs-gas-and-proving-design.md`).
+- **Link.** [`README.md`](../../README.md); [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Launch sequence".
 
-### 2.6 The GPU worker image holds old program keys
-- **What.** The documented worker image (v5) was built for earlier program keys.
-- **What is left.** Rebuild with `script/build-gpu-image.sh` and update the worker.
-- **Link.** [`docs/gpu-prover.md`](../gpu-prover.md).
+### 2.6 The GPU worker image holds the current program keys
+- **Status.** Fixed. The worker that proves on testnet made the proof in `test/hardened/fixtures/sp1-proof-sepolia-update.json`, which is a proof of the current light-client key (2.2).
+- **Link.** [`docs/gpu-prover.md`](../gpu-prover.md), `deploy/runpod/endpoints.json`.
 
-### 2.7 Real data stops before the transaction proof
-- **What.** The real fixtures hold transaction hashes, not transaction bytes, so real-chain message tests stop before the transaction trie proof. The transaction proof is tested on synthetic data.
-- **What is left.** Real transaction bytes in the fixtures. The prover needs a node that serves `eth_getRawTransactionByHash`.
+### 2.7 Real transaction bytes are on file
+- **Status.** Fixed on 2026-11-20.
+- **What is there.** Every real Ethereum and PulseChain block on file has its transaction bytes (`*_transactions.json`, from `eth_getRawTransactionByHash` at an archive provider, one.valve.city). `receipts_real.rs` rebuilds each `transactionsRoot` and refuses damaged proofs, and `pulsechain_real.rs` passes the transaction stage on the three real path blocks.
+- **Limit.** The full message check on real data still stops at the source-state fork proof, because no state of those source blocks is on file.
 - **Link.** [`light-client/tests/fixtures/README.md`](../../light-client/tests/fixtures/README.md) "Real data".
 
-### 2.8 No real Ethereum historical-path check
-- **What.** The historical ancestry path is confirmed on real PulseChain data (eras 0, 1325, 1326) but not on real Ethereum data.
-- **What is left.** A real Ethereum fixture for the historical path.
+### 2.8 A real Ethereum historical-path check
+- **Status.** Fixed on 2026-11-20.
+- **What is there.** `light-client/tests/fixtures/ethereum/historical_paths.json` holds real Ethereum mainnet historical ancestry: anchor at slot 15698784 (Fulu), sources in eras 1910, 1913 and 1914 on both sides of an era edge, and the era formula checked for eras 1910 and 1913 to 1915 against the anchor's historical summaries. The tests are in `ethereum_historical_real.rs`. The PulseChain path was already confirmed (eras 0, 1325, 1326).
 - **Link.** [`docs/hardened-build-contract.md`](../hardened-build-contract.md) "Ancestry: two paths".
 
 ### 2.9 Prover cannot build message evidence from Ethereum mainnet blocks
@@ -183,14 +200,16 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 - **Link.** `prover/src/light_client.rs` (`BlockView::parse_for_chain`), `prover/src/beacon/http.rs` (`message_path`), `prover/src/evidence.rs`.
 
 ### 2.10 Mainnet deployment gas
-- **What.** On Sepolia after its gas repricing, the deployment cost about 108.7 million gas per chain (TokenMediator 40.5 million, MessageBridge 35.8 million). A per-transaction gas cap on Ethereum mainnet could block the two largest deployments.
-- **What is left.** Measure on mainnet conditions before launch; split contracts into libraries if needed. `MessageBridge` is close to the 24,576-byte size limit (2,111 bytes of room when last measured).
-- **Link.** The internal progress log (not published), checkpoints "dry deploy and Sepolia gas" and "funded, image v4, fuzz".
+- **What.** Contract sizes on main (2026-11-20): `MessageBridge` 9,370 bytes, `DeliveryRouter` 9,028, `TokenMediator` 8,570, `BeaconForkGate` 7,701, `TokenFactory` 7,272; the largest has 15,206 bytes of room under the 24,576-byte limit. The per-transaction gas cap (16,777,216 under EIP-7825) is the tighter limit: creating `DeliveryRouter` with its `RouterCaller` takes about 15.1 million gas on Sepolia (90% of the cap), and Sepolia's storage repricing makes creation costlier than on PulseChain.
+- **What is left.** Measure every creation under mainnet conditions before launch (the layer redeploy rehearsal measures each one on Sepolia); split a contract into libraries if one passes the cap.
+- **Link.** `test/hardened/CreationGasCap.t.sol`, [`docs/redeploy-2026-11-gas.md`](../redeploy-2026-11-gas.md).
 
 ### 2.11 Release housekeeping
-- **What.** No remote repository yet; the first commit (`3df2f14`) needs re-signing before it is pushed; no `LICENSE` file (files say MIT, not confirmed); the brand name is not chosen.
-- **What is left.** User decisions.
-- **Link.** The internal progress log (not published), last checkpoint.
+- **Status.** Done. The repository is public at `github.com/zkbfi/zk-bridge` (2026-11-19) and licensed MIT (`LICENSE`, 2026-11-20; the source headers say MIT). The brand is zkb.fi. On 2026-11-19 the history was rewritten to remove the internal progress log; the rewritten commits carry no signatures, and commits since are signed.
+
+### 2.12 `sweep` destination on mainnet
+- **What.** `failedDeliveryAddress` is immutable and receives what `sweep` collects ("Read first"). On the testnets it is the deployer wallet.
+- **What is left.** Owner decision for mainnet (for example a multisignature wallet), set in the deploy configuration.
 
 ## 3. Earlier internal findings and their status
 

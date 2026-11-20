@@ -1,19 +1,50 @@
-# zk-bridge: a red team and a hardened rebuild
+# zk-bridge: the zkb.fi bridge between Ethereum and PulseChain
 
-This repository holds two things. The first is a red team of proposal v0, the specification for an Ethereum and PulseChain zero-knowledge bridge that this project started from. Proposal v0 and its red team were removed from the tree on 2026-11-20; they live at [commit `e253373`](https://github.com/zkbfi/zk-bridge/tree/e25337322e0004fee8f033a993a3b3e052cc382c), and none of it was ever deployed or used by zkb.fi. The second is a hardened rebuild of that bridge. The rebuild has no administrator, no upgrade path, no pause and no timelock.
+This repository is the code of [zkb.fi](https://zkb.fi), a zero-knowledge bridge between Ethereum and PulseChain. Each
+chain runs a light client of the other chain's beacon chain, and every light client update carries a Groth16 proof
+made with SP1 (Succinct's zero-knowledge virtual machine). The contracts have no administrator, no upgrade path, no
+pause and no timelock.
 
-## Status
+## What is deployed, and where the code is
 
-- The hardened code is **not audited**. Do not put real funds in it.
-- Nothing is deployed. Nothing is pushed to any remote.
-- The repository makes proofs and hands them to other, stateful servers. It holds no relayer: no database, no wallet and no transaction code. The full relayer lives on the branch `archive/full-relayer`.
-- The SP1 backends exist (processor, GPU worker) and have produced real Groth16 proofs of real updates. SP1 is the Succinct zero-knowledge virtual machine. No real chain has seen one.
-- The oracle backend runs on Anvil and stands in for the SP1 verifier. It proves nothing about a real chain.
-- A real deployment needs a stateful server that posts the updates, opens the bridges and delivers the messages, an audit, and the open items listed below.
+- **Testnet only.** The bridge runs between Sepolia and PulseChain testnet v4 (chain 943). Every address is in the
+  deployment record [`deploy/deployments/sepolia-pls943.json`](deploy/deployments/sepolia-pls943.json) and on the
+  docs page [Deployed contracts](explorer/web/docs/pages/10-deployed-contracts.md), with links to the verified source.
+  Nothing is deployed on Ethereum mainnet or PulseChain.
+- **Not audited.** Do not put real funds in it. The audit starts at [`docs/audit/README.md`](docs/audit/README.md).
+- **The code that is deployed:**
+  - [`src/hardened/`](src/hardened/): the contracts (light client, fork gate and registry, message bridge, token
+    mediator and factory, delivery router), and the vendored SP1 verifier.
+  - [`light-client/`](light-client/): the light client logic and the two SP1 guest programs.
+  - [`prover/`](prover/): the prover that makes the proofs and the message evidence.
+  - [`explorer/`](explorer/): the dapp, the indexer, the backend that schedules proofs, and the bots.
+  - [`src/testnet/`](src/testnet/): test tokens that exist on the testnets only.
+- **Test doubles** are in [`test/mocks/`](test/mocks/). Each one says it is never deployed. One of them,
+  `OracleSP1Verifier`, accepts a signature in place of a proof; it exists for local tests, and the deploy script pins
+  the real verifier's code hash.
+
+### Proposal v0
+
+This project started from a specification, proposal v0 (the first commit of the repository). Our red team broke it,
+and the hardened design in `src/hardened/` replaced it. Proposal v0 and its red team (attacks that pass when they drain
+proposal v0's vault) were removed from the tree on 2026-11-20; they live at
+[commit `e253373`](https://github.com/zkbfi/zk-bridge/tree/e25337322e0004fee8f033a993a3b3e052cc382c). The table of its
+holes and how the hardened design answers each one is in [`docs/audit/known-issues.md`](docs/audit/known-issues.md),
+section 3.
+
+### `DeliveryRouter.sweep` is not a drain
+
+`DeliveryRouter.sweep(token)` can be called by anyone. It sends the router's whole balance of one token to the
+router's `failedDeliveryAddress`, which is fixed at deployment and cannot change. The router never holds a user's
+tokens between deliveries: it receives and pays out in the same transaction. A balance appears only when someone sends
+tokens to the router directly, with no delivery attached, or when a token refuses the router's hand-off to
+`failedDeliveryAddress` (the router then emits `HandOffRefused` and keeps them); `sweep` collects those. On the testnets
+`failedDeliveryAddress` is the deployer wallet `0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc`. See
+[`docs/audit/known-issues.md`](docs/audit/known-issues.md) "Read first".
 
 ## Audit
 
-Auditors start at [`docs/audit/README.md`](docs/audit/README.md). It gives the scope with priority tiers, the trust assumptions, the claimed properties, the pinned toolchains and the commands to build and test. [`docs/audit/known-issues.md`](docs/audit/known-issues.md) lists accepted risks and open items, and [`docs/audit/invariants.md`](docs/audit/invariants.md) maps each invariant to its code and tests.
+Auditors start at [`docs/audit/README.md`](docs/audit/README.md). It gives the scope with priority tiers, the trust assumptions, the claimed properties, the pinned toolchains and the commands to build and test. [`docs/audit/known-issues.md`](docs/audit/known-issues.md) lists accepted risks and open items, [`docs/audit/invariants.md`](docs/audit/invariants.md) maps each invariant to its code and tests, and [`docs/audit/hardened-findings.md`](docs/audit/hardened-findings.md) holds our red team's findings against the hardened design.
 
 ## How the hardened bridge works
 
