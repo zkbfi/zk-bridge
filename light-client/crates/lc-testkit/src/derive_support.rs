@@ -1,9 +1,10 @@
 //! Helpers shared by the tools in `src/bin/` that derive fixtures from raw beacon data (SSZ states and blocks).
 
 use crate::json::beacon_header;
-use crate::ssz_state::{parse_signed_block, ParsedBlock};
+use crate::ssz_state::{parse_signed_block, try_parse_signed_block_for_fork, ParsedBlock};
 use alloy_primitives::{hex, B256};
-use lc_core::layout::ExecutionHeaderForm;
+use lc_core::chain::ForkName;
+use lc_core::layout::{execution_header_form_for_fork, ExecutionHeaderForm};
 use lc_core::ssz::branch_for_leaf;
 use lc_core::types::BeaconBlockHeader;
 use serde_json::{json, Value};
@@ -54,6 +55,22 @@ pub struct CheckedBlock {
 /// Panics when the slot, the body root or the state root differs from the node's header (the SSZ hasher would be wrong).
 pub fn read_block(path: &Path, header_file: &Path) -> CheckedBlock {
     let block = parse_signed_block(&std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())));
+    check_block(block, path, header_file, ExecutionHeaderForm::Capella)
+}
+
+/// Parses a `SignedBeaconBlock` of `fork` (Capella, Deneb, Electra or Fulu) and checks it against the header JSON that the
+/// node served for it. The block hash branch uses the payload form of the fork (17 fields from Deneb on).
+///
+/// # Panics
+/// Panics when the block does not parse in the layout of `fork`, or as [`read_block`] does.
+pub fn read_block_for_fork(path: &Path, header_file: &Path, fork: ForkName) -> CheckedBlock {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let block = try_parse_signed_block_for_fork(&bytes, fork).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let form = execution_header_form_for_fork(fork).unwrap_or_else(|e| panic!("{fork:?}: {e}"));
+    check_block(block, path, header_file, form)
+}
+
+fn check_block(block: ParsedBlock, path: &Path, header_file: &Path, form: ExecutionHeaderForm) -> CheckedBlock {
     let expected = beacon_header(&read_json(header_file)["data"]["header"]["message"]);
     assert_eq!(block.header.slot, expected.slot, "slot of {}", path.display());
     assert_eq!(
@@ -64,7 +81,7 @@ pub fn read_block(path: &Path, header_file: &Path) -> CheckedBlock {
     );
     assert_eq!(block.header.state_root, expected.state_root);
     let (_, execution_branch) = branch_for_leaf(&block.body_field_roots, BODY_FIELD_EXECUTION_PAYLOAD);
-    let leaves = block.payload.field_roots(ExecutionHeaderForm::Capella).expect("payload leaves");
+    let leaves = block.payload.field_roots(form).expect("payload leaves");
     let (_, mut block_hash_branch) = branch_for_leaf(&leaves, PAYLOAD_FIELD_BLOCK_HASH);
     block_hash_branch.extend(&execution_branch);
     CheckedBlock { block, execution_branch, block_hash_branch }

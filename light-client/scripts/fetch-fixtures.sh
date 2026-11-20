@@ -5,6 +5,7 @@
 #   scripts/fetch-fixtures.sh ethereum      Ethereum mainnet: chain specification, light-client data, receipts
 #   scripts/fetch-fixtures.sh pulsechain    PulseChain: chain specification, beacon blocks, state, receipts
 #   scripts/fetch-fixtures.sh historical    PulseChain: real historical-path ancestry (needs `pulsechain` run first; same anchor)
+#   scripts/fetch-fixtures.sh transactions  the raw transactions of every real execution block on file (*_transactions.json)
 #   scripts/fetch-fixtures.sh all
 #
 # Needs: bash, curl, jq, cargo. It calls the derive tool for PulseChain (the beacon state is 18 MB and is not committed).
@@ -255,11 +256,46 @@ fetch_historical() {
   rpc_json "${pulsechain_execution}" eth_getBlockReceipts "[\"${number_hex}\"]" "${fixtures}/pulsechain/path_historical_receipts.json"
 }
 
+# fetch_transactions <execution-endpoint> <source-label> <block-fixture>: the raw bytes of every transaction of a block
+# fixture (eth_getRawTransactionByHash, in block order) into the sibling file `*transactions.json`
+# (`execution_block.json` -> `execution_transactions.json`, `path_<name>_block.json` -> `path_<name>_transactions.json`).
+# The endpoint may hold a key in its path, so the file records <source-label>, never the endpoint.
+fetch_transactions() {
+  local endpoint="$1" label="$2" block="$3"
+  local output="${block%block.json}transactions.json" hash request raw="${cache}/work/raw_transactions.txt"
+  : > "${raw}"
+  for hash in $(jq -r '.response.transactions[]' "${block}"); do
+    request="$(jq -nc --arg hash "${hash}" '{jsonrpc:"2.0",id:1,method:"eth_getRawTransactionByHash",params:[$hash]}')"
+    curl -sf --retry 3 -m 60 -H 'content-type: application/json' -d "${request}" "${endpoint}" \
+      | jq -er '.result | select(. != null)' >> "${raw}"
+  done
+  jq -R . "${raw}" | jq -s --arg url "${label}" --arg on "${today}" \
+    --arg number "$(jq -r .response.number "${block}")" --arg hash "$(jq -r .response.hash "${block}")" \
+    '{source_url: $url, fetched_on: $on,
+      request: {method: "eth_getRawTransactionByHash", params: "each hash of response.transactions of the block fixture, in block order", block_number: $number, block_hash: $hash},
+      response: .}' > "${output}"
+  echo "wrote ${output}: $(wc -l < "${raw}") transactions"
+}
+
+# fetch_all_transactions: the transaction bytes of every real execution block on file. The Rust tests rebuild the
+# transactions trie from them (`receipts_real.rs`, `pulsechain_real.rs`). Set ETHEREUM_TX_EXECUTION / PULSECHAIN_TX_EXECUTION
+# to nodes that serve eth_getRawTransactionByHash (2026-11-20: one.valve.city), and *_TX_LABEL to what the files record.
+fetch_all_transactions() {
+  local ethereum="${ETHEREUM_TX_EXECUTION:-${ethereum_execution}}" pulsechain="${PULSECHAIN_TX_EXECUTION:-${pulsechain_execution}}"
+  local ethereum_label="${ETHEREUM_TX_LABEL:-${ethereum}}" pulsechain_label="${PULSECHAIN_TX_LABEL:-${pulsechain}}"
+  fetch_transactions "${ethereum}" "${ethereum_label}" "${fixtures}/ethereum/execution_block.json"
+  local block
+  for block in "${fixtures}/pulsechain/execution_block.json" "${fixtures}"/pulsechain/path_*_block.json; do
+    fetch_transactions "${pulsechain}" "${pulsechain_label}" "${block}"
+  done
+}
+
 case "${1:-all}" in
   ethereum) fetch_ethereum ;;
   pulsechain) fetch_pulsechain ;;
   path-blocks) fetch_path_blocks ;;
   historical) fetch_historical ;;
-  all) fetch_ethereum; fetch_pulsechain ;;
-  *) echo "usage: $0 ethereum|pulsechain|historical|all"; exit 2 ;;
+  transactions) fetch_all_transactions ;;
+  all) fetch_ethereum; fetch_pulsechain; fetch_all_transactions ;;
+  *) echo "usage: $0 ethereum|pulsechain|path-blocks|historical|transactions|all"; exit 2 ;;
 esac

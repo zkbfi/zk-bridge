@@ -191,9 +191,7 @@ Read `docs/light-client-layout/test-plan.md` Part A before this code. It is the 
 
 | Path | Why |
 |---|---|
-| `spec/` | The original third-party proposal. It is the subject of the red team, not our code. Read only. Never deploy it. |
-| `src/` outside `src/hardened/` (`src/ZKBridgeVault.sol`, `src/LightClientSync.sol`, `src/revision-2/`), `test/` outside `test/hardened/`, `harness/`, `checks/` | The red team of that proposal. Its tests pass when an attack on the proposal succeeds. |
-| `src/mocks/` | Test doubles only: `OracleSP1Verifier`, `MockSP1Verifier`, `RealShapeSP1Verifier`, hostile and odd tokens, `MockWrappedNative`. Nothing in the deploy script uses them. |
+| `test/mocks/` | Test doubles only, each marked as a test double in its first NatSpec line: `OracleSP1Verifier`, `MockSP1Verifier`, `RealShapeSP1Verifier`, hostile and odd tokens, `MockWrappedNative`. Nothing in the deploy script uses them. The local rehearsals (`docker/deploy.sh`, `e2e/deploy.sh`) deploy some of them on local Anvil chains only. |
 | `test/hardened/utils/`, `light-client/crates/lc-testkit/`, `prover/src/local_network/`, `prover/src/bin/signed_beacon.rs` | Test support and a development beacon chain (feature `signed-beacon`; a production build uses `--no-default-features`). |
 | `explorer/` | Interface, indexer and bots. It holds no funds and no trusted role. It does give users advice, see "interface cutover" in `known-issues.md`. |
 | `docker/`, `e2e/`, `explorer/e2e/` | Local networks and an unfinished end-to-end harness (`e2e/` and `explorer/e2e/` are not committed). |
@@ -268,7 +266,7 @@ Clone with submodules (`git submodule update --init`). The times below are wall-
 
 | What | Command | Result measured | Time |
 |---|---|---|---|
-| All contract tests | `forge test` | 852 passed, 0 failed, 0 skipped, in 72 suites (796 hardened, 56 red team) | 53 s |
+| All contract tests | `forge test` | 852 passed, 0 failed, 0 skipped, in 72 suites (796 hardened, 56 red team; the 56 proposal v0 attack tests and one comparison test were removed with proposal v0 on 2026-11-20, so a run now holds only our tests) | 53 s |
 | Contract coverage gate | `script/coverage-check.sh` | 839 tests under coverage, then 13 optimizer-dependent tests with `forge test`; 100.0 percent lines, branches and functions on every measured file (`vendor`, `test`, `script` and `mocks` excluded) | 2 min 32 s |
 | Light client | `cd light-client && cargo test --offline` | 295 passed, 0 failed, 2 ignored | 79 s |
 | Prover | `cd prover && cargo test --offline` | 206 passed, 0 failed, 14 ignored | 26 s |
@@ -298,7 +296,7 @@ Notes:
 | Rust and Solidity agreement | `light-client/tests/fixtures/message/` (91 cases) run by `light-client/crates/lc-testkit/tests/fixtures_agree.rs` and `test/hardened/LightClientFixtures.t.sol`; fork observation fixtures run by `ForkRegistry.t.sol` | Both sides must give the same accept or reject. |
 | Unit and property tests, programs | `light-client/crates/lc-testkit/tests/*.rs`, inline tests in `lc-core` | Synthetic updates with real BLS signatures over 512-key committees, every layout. |
 | Real-chain fixtures | `light-client/tests/fixtures/{ethereum,pulsechain,sepolia,pulsechain-testnet-v4}/`, see `light-client/tests/fixtures/README.md`; tests `pulsechain_real.rs`, `ethereum_real.rs`, `gloas_real.rs`, `receipts_real.rs`, `layout_real_accepts.rs` | Real updates, states, receipts and Sepolia Gloas data. Real transactions are not on file, so real data stops before the transaction proof. |
-| Real Groth16 proof | `test/hardened/SP1VerifierGroth16.t.sol` with `test/hardened/fixtures/sp1-proof-ethereum-update.json` | A real proof from our prover against the vendored verifier, with tampering cases. It is a proof of an earlier program, so it tests the verifier, not the current key. |
+| Real Groth16 proof | `test/hardened/SP1VerifierGroth16.t.sol` and `prover/tests/remote_prover.rs` with `test/hardened/fixtures/sp1-proof-sepolia-update.json` | A real proof of the current light-client program key, made by the testnet backend for a real Sepolia update, against the vendored verifier and the remote backend's checks, with tampering cases. |
 | Prover tests | `prover/tests/*.rs`, inline tests | A signed synthetic beacon chain (feature `signed-beacon`), the evidence and opening builders, the remote backend against a fake worker. |
 | Two-chain Anvil (local node) | `explorer/indexer/test/integration/real-stack.test.ts` deploys the real contracts on two Anvil chains, but it forces the bridge open with `anvil_setStorageAt` and replaces the gate code: it tests the indexer, not the proofs. | No committed end-to-end test with real proofs on the current contracts exists. An earlier run is in `docs/end-to-end-real-proofs.md` (it used the relayer on the branch `archive/full-relayer`). |
 | Mutation lists | `docs/light-client-layout/test-plan.md` Part C (M-1 to M-47) | Each mutation names the tests that must turn red. The team reports M-39 to M-47 (gate) red; run the others yourself. |
@@ -309,6 +307,6 @@ Notes:
 1. This file, then `known-issues.md` and `invariants.md`.
 2. `README.md` (the system and the open items) and `docs/hardened-build-contract.md`. The build contract is a log of dated decisions; later sections supersede earlier ones. The last section, "Fork gate by shape (2026-10-27)", supersedes every older gate note. "As built (2026-10-24)" is the exact contract of the message and token layers.
 3. `docs/light-client-layout/test-plan.md` Part A (threats T1 to T24) and `docs/light-client-layout/decisions.md` (D1 to D3). `design.md` in the same folder predates D1 and D2 (see `known-issues.md`).
-4. `docs/red-team-revision-2.md`, "Findings in the hardened design" (HB-01 to HB-06), for the reasoning behind the position rules and the committee binding.
+4. `docs/audit/hardened-findings.md` (HB-01 to HB-06), for the reasoning behind the position rules and the committee binding.
 5. Tier 1 code: `lc-core` `update.rs`, `layout.rs`, `wire.rs`, `observation.rs`, then `BeaconLightClient.sol`, `BeaconProofVerifier.sol`, `MessageBridge.sol`, `BeaconForkGate.sol` with `ForkShape.sol`, `ForkRegistry.sol`, `TokenMediator.sol`.
 6. `docs/sp1-version-policy.md` and `docs/zk-bridge-comparison.md` (the gap list G-01 to G-08 and the committee concentration measurement).

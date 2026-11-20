@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Vm} from "forge-std/Vm.sol";
-import {PausableToken} from "../../../src/mocks/PausableToken.sol";
+import {PausableToken} from "../../mocks/PausableToken.sol";
 import {AmbMessageCodec} from "../../../src/hardened/AmbMessageCodec.sol";
 import {BridgedToken} from "../../../src/hardened/mediator/BridgedToken.sol";
 import {Multicall3} from "../../../src/hardened/vendor/multicall3/Multicall3.sol";

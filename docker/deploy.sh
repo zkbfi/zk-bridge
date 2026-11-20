@@ -28,7 +28,7 @@ REPO="${REPO:-/repo}"
 # The beacon clock of both gates. Any time in the past works.
 GATE_GENESIS_TIME=1600000000
 # The wrapped native token mock of the native coin router.
-WRAPPED_NATIVE_CONTRACT=src/mocks/MockWrappedNative.sol:MockWrappedNative
+WRAPPED_NATIVE_CONTRACT=test/mocks/MockWrappedNative.sol:MockWrappedNative
 
 # The EIP-4788 contract: address and the genuine runtime code of the specification.
 BEACON_ROOTS=0x000F3df6D732807Ef1319fB7B8bB8522d0Beac02
@@ -114,11 +114,11 @@ start_block_b="$(cast block-number --rpc-url "$RPC_B")"
 cd "$REPO"
 WRAPPED_NATIVE_A="$(create "$RPC_A" "$WRAPPED_NATIVE_CONTRACT")"
 WRAPPED_NATIVE_B="$(create "$RPC_B" "$WRAPPED_NATIVE_CONTRACT")"
-TOKEN_A="$(create "$RPC_A" src/mocks/MockERC20.sol:MockERC20 "Token A" TKNA)"
-TOKEN_B="$(create "$RPC_B" src/mocks/MockERC20.sol:MockERC20 "Token B" TKNB)"
+TOKEN_A="$(create "$RPC_A" test/mocks/MockERC20.sol:MockERC20 "Token A" TKNA)"
+TOKEN_B="$(create "$RPC_B" test/mocks/MockERC20.sol:MockERC20 "Token B" TKNB)"
 # The oracle of the verifier is the second Anvil account: the oracle backend of the producer signs proofs with its key.
-VERIFIER_A="$(create "$RPC_A" src/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$ORACLE_ACCOUNT")"
-VERIFIER_B="$(create "$RPC_B" src/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$ORACLE_ACCOUNT")"
+VERIFIER_A="$(create "$RPC_A" test/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$ORACLE_ACCOUNT")"
+VERIFIER_B="$(create "$RPC_B" test/mocks/OracleSP1Verifier.sol:OracleSP1Verifier "$ORACLE_ACCOUNT")"
 for value in "$WRAPPED_NATIVE_A" "$WRAPPED_NATIVE_B" "$TOKEN_A" "$TOKEN_B" "$VERIFIER_A" "$VERIFIER_B"; do
   [ -n "$value" ] || fail "a contract did not deploy"
 done

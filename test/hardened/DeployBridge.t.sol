@@ -13,8 +13,8 @@ import {ITokenMediator} from "../../src/hardened/mediator/ITokenMediator.sol";
 import {IWETH} from "../../src/hardened/mediator/IWETH.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
-import {OracleSP1Verifier} from "../../src/mocks/OracleSP1Verifier.sol";
-import {MockWrappedNative} from "../../src/mocks/MockWrappedNative.sol";
+import {OracleSP1Verifier} from "../mocks/OracleSP1Verifier.sol";
+import {MockWrappedNative} from "../mocks/MockWrappedNative.sol";
 import {DeployFlowLimiter} from "./utils/DeployMocks.sol";
 
 /// @notice Tests of the deploy script logic. One Foundry chain plays both chains: the test switches `block.chainid`

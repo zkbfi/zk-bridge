@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {console2} from "forge-std/console2.sol";
-import {MockERC20} from "../../../src/mocks/MockERC20.sol";
+import {MockERC20} from "../../mocks/MockERC20.sol";
 import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
 import {ExactGasCall} from "../../../src/hardened/mediator/ExactGasCall.sol";
 import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";

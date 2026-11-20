@@ -1,7 +1,7 @@
 //! `verify_message` on SYNTHETIC beacon chains, receipts and transactions for both layouts (Capella for PulseChain, Electra
 //! for Ethereum). The receipts trie, the transactions trie, the header RLP and the SSZ branches are built by the test-only
-//! builders in `lc_testkit::synthetic`. Real-data coverage of the stages before the transaction proof is in
-//! `pulsechain_real.rs` and `receipts_real.rs`: the real fixtures hold no transaction bodies.
+//! builders in `lc_testkit::synthetic`. Real-data coverage of the stages up to the transaction proof and the receipt
+//! (real transaction bytes since 2026-11-20) is in `pulsechain_real.rs` and `receipts_real.rs`.
 //!
 //! Each rejection test also shows the honest path passes (control).
 

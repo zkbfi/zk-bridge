@@ -1,11 +1,11 @@
 //! Loaders for the real PulseChain fixtures derived by `derive-pulsechain-fixtures`.
 
-use crate::json::{beacon_header, branch, hex_b256, light_client_update, load_response, sync_committee};
+use crate::json::{beacon_header, branch, hex_b256, hex_to_bytes, light_client_update, load_response, sync_committee};
 use crate::lc_message::abi::{ForkProof, MessageProof};
 use crate::receipts::{
     build_indexed_trie, encode_execution_header, execution_header_from_json, header_hash, receipts_from_json,
 };
-use alloy_primitives::{Bytes, B256, U256};
+use alloy_primitives::{keccak256, Bytes, B256, U256};
 use lc_core::types::{LightClientStore, LightClientUpdate};
 
 /// The branches of the real attested state that a beacon node does not serve. The derive tool reads them from the state.
@@ -64,9 +64,42 @@ pub struct RealBlock {
     pub proofs: Vec<Vec<Bytes>>,
     /// The trie root rebuilt from the receipts.
     pub rebuilt_root: B256,
+    /// EIP-2718 transaction bytes by transaction index (`eth_getRawTransactionByHash`).
+    pub transactions: Vec<Bytes>,
+    /// Transaction proof nodes by transaction index.
+    pub transaction_proofs: Vec<Vec<Bytes>>,
+    /// The trie root rebuilt from the transactions.
+    pub transactions_rebuilt_root: B256,
 }
 
-/// Rebuilds a real block: the header from JSON and the receipts trie from the receipts JSON.
+/// The transactions fixture of a block fixture: `<dir>/execution_block.json` -> `<dir>/execution_transactions.json`,
+/// `<dir>/path_<name>_block.json` -> `<dir>/path_<name>_transactions.json`.
+pub fn transactions_fixture(block_fixture: &str) -> String {
+    block_fixture
+        .strip_suffix("block.json")
+        .map(|stem| format!("{stem}transactions.json"))
+        .unwrap_or_else(|| panic!("{block_fixture}: a block fixture name ends in block.json"))
+}
+
+/// The real transaction bytes of a block, in block order. Each one hashes to the hash that the block lists at its index.
+///
+/// # Panics
+/// Panics when the fixture is missing, holds another count, or a hash differs.
+pub fn real_transactions(block_fixture: &str) -> Vec<Bytes> {
+    let block = load_response(block_fixture);
+    let fixture = transactions_fixture(block_fixture);
+    let raw: Vec<Bytes> =
+        load_response(&fixture).as_array().expect("an array of raw transactions").iter().map(hex_to_bytes).collect();
+    let hashes = block["transactions"].as_array().expect("the transaction hashes of the block");
+    assert_eq!(raw.len(), hashes.len(), "{fixture}: one transaction for each hash of the block");
+    for (index, (bytes, hash)) in raw.iter().zip(hashes).enumerate() {
+        assert_eq!(keccak256(bytes), hex_b256(hash), "{fixture}: transaction {index} hashes to the listed hash");
+    }
+    raw
+}
+
+/// Rebuilds a real block: the header from JSON, the receipts trie from the receipts JSON and the transactions trie from
+/// the real transaction bytes ([`real_transactions`]).
 pub fn rebuild_block(block_fixture: &str, receipts_fixture: &str) -> RealBlock {
     let block = load_response(block_fixture);
     let receipts_json = load_response(receipts_fixture);
@@ -76,7 +109,19 @@ pub fn rebuild_block(block_fixture: &str, receipts_fixture: &str) -> RealBlock {
     assert_eq!(block_hash, hex_b256(&block["hash"]), "the rebuilt header must hash to the node's block hash");
     let receipts = receipts_from_json(&receipts_json);
     let trie = build_indexed_trie(&receipts);
-    RealBlock { header_rlp, block_hash, receipts, receipts_json, proofs: trie.proofs, rebuilt_root: trie.root }
+    let transactions = real_transactions(block_fixture);
+    let transaction_trie = build_indexed_trie(&transactions);
+    RealBlock {
+        header_rlp,
+        block_hash,
+        receipts,
+        receipts_json,
+        proofs: trie.proofs,
+        rebuilt_root: trie.root,
+        transactions,
+        transaction_proofs: transaction_trie.proofs,
+        transactions_rebuilt_root: transaction_trie.root,
+    }
 }
 
 /// The fork proof that the real PulseChain message proofs carry: an empty one. The fixtures hold no state of their source
@@ -92,9 +137,8 @@ pub fn missing_fork_proof() -> ForkProof {
 }
 
 /// A real beacon path entry: the message proof for one receipt log of a real PulseChain block.
-/// The fixtures hold the transaction hashes of the block and not the transactions, so the transaction proof is empty, and
-/// they hold no state of the source block, so the fork proof is empty too ([`missing_fork_proof`]): `verify_message` stops
-/// at the fork proof. The log is not a message event (no bridge exists on PulseChain). The tests walk the other stages one
+/// The transaction proof is real (the transaction bytes are on file since 2026-11-20). The fixtures hold no state of the
+/// source block, so the fork proof is empty ([`missing_fork_proof`]): `verify_message` stops at the fork proof. The log is not a message event (no bridge exists on PulseChain). The tests walk the other stages one
 /// by one.
 pub fn real_message_proof(entry_name: &str, transaction_index: u64, log_index: u64) -> (MessageProof, B256, RealBlock) {
     let paths = load_response("pulsechain/beacon_paths.json");
@@ -123,7 +167,7 @@ pub fn real_message_proof(entry_name: &str, transaction_index: u64, log_index: u
         executionHeaderRlp: block.header_rlp.clone(),
         receiptProof: block.proofs[transaction_index as usize].clone(),
         receiptIndex: U256::from(transaction_index),
-        transactionProof: Vec::new(),
+        transactionProof: block.transaction_proofs[transaction_index as usize].clone(),
         transactionIndex: U256::from(transaction_index),
         logIndex: U256::from(log_index),
     };
@@ -172,7 +216,7 @@ impl RealHistoricalPaths {
 }
 
 /// The message proof for the middle block of the historical fixture, with its real execution block and receipts.
-/// The transaction proof and the fork proof are empty, as in [`real_message_proof`].
+/// The transaction proof is real and the fork proof is empty, as in [`real_message_proof`].
 pub fn real_historical_message_proof(transaction_index: u64, log_index: u64) -> (MessageProof, B256, RealBlock) {
     let paths = real_historical_paths();
     let entry = paths.entry("era_middle_block");
@@ -191,7 +235,7 @@ pub fn real_historical_message_proof(transaction_index: u64, log_index: u64) -> 
         executionHeaderRlp: block.header_rlp.clone(),
         receiptProof: block.proofs[transaction_index as usize].clone(),
         receiptIndex: U256::from(transaction_index),
-        transactionProof: Vec::new(),
+        transactionProof: block.transaction_proofs[transaction_index as usize].clone(),
         transactionIndex: U256::from(transaction_index),
         logIndex: U256::from(log_index),
     };

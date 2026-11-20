@@ -5,7 +5,7 @@ import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
 import {MessageBridge} from "../../src/hardened/MessageBridge.sol";
 import {ForkRegistry} from "../../src/hardened/ForkRegistry.sol";
-import {OracleSP1Verifier} from "../../src/mocks/OracleSP1Verifier.sol";
+import {OracleSP1Verifier} from "../mocks/OracleSP1Verifier.sol";
 import {GateSupport} from "./utils/GateSupport.sol";
 
 /// @notice Tests of `ForkRegistry` (hole HB-02 on PulseChain) and of the gate mode that reads it. The light client is

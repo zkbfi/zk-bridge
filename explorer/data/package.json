@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "description": "The data layer of the zkb.fi bridge screen: proofs from the msgboard, the proof queue client, the indexer API views, RPC reads that name their block, and the endpoint settings with their fallback. Browser and Node.",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22"

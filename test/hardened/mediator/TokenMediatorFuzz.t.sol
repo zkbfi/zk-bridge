@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {FeeOnTransferToken} from "../../../src/mocks/FeeOnTransferToken.sol";
+import {FeeOnTransferToken} from "../../mocks/FeeOnTransferToken.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 import {MediatorFixture, MockAMB} from "./utils/MediatorSupport.sol";
 
