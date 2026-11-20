@@ -89,7 +89,7 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 ### 1.16 The Sepolia Gloas boundary waits about two epochs
 - **What.** The Sepolia Gloas fork starts exactly at sync committee period 1379. The transition update (pre-Gloas finalized header, Gloas signature) is refused with `SignatureInNextPeriodWithoutCrossing`. Later updates in that period apply.
 - **Why accepted.** Reviewed 2026-10-27: a wait of about two epochs, not a stall. Every Ethereum mainnet fork has the same short gap.
-- **Link.** `progress.txt`, checkpoint "review fixed, keys rebuilt, audit preparation".
+- **Link.** The internal progress log (not published), checkpoint "review fixed, keys rebuilt, audit preparation".
 
 ### 1.17 Token behaviour the mediator does not support
 - **What.** Rebasing and interest-bearing tokens are not supported: the record can exceed the balance and releases then fail for that token. A token with no `decimals()` gets a copy with 0 decimals. A fee-on-transfer token bridges the amount that arrived. Decimals above 255 are refused.
@@ -185,12 +185,12 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 ### 2.10 Mainnet deployment gas
 - **What.** On Sepolia after its gas repricing, the deployment cost about 108.7 million gas per chain (TokenMediator 40.5 million, MessageBridge 35.8 million). A per-transaction gas cap on Ethereum mainnet could block the two largest deployments.
 - **What is left.** Measure on mainnet conditions before launch; split contracts into libraries if needed. `MessageBridge` is close to the 24,576-byte size limit (2,111 bytes of room when last measured).
-- **Link.** `progress.txt`, checkpoints "dry deploy and Sepolia gas" and "funded, image v4, fuzz".
+- **Link.** The internal progress log (not published), checkpoints "dry deploy and Sepolia gas" and "funded, image v4, fuzz".
 
 ### 2.11 Release housekeeping
 - **What.** No remote repository yet; the first commit (`3df2f14`) needs re-signing before it is pushed; no `LICENSE` file (files say MIT, not confirmed); the brand name is not chosen.
 - **What is left.** User decisions.
-- **Link.** `progress.txt`, last checkpoint.
+- **Link.** The internal progress log (not published), last checkpoint.
 
 ## 3. Earlier internal findings and their status
 
@@ -271,10 +271,10 @@ These were found in the third-party proposal (`spec/`). The column "Hardened des
 | 2026-10-21 | Layout ranges could cover unvalidated slots of another position | Fixed (`0bbe2db`): `LayoutRangeConflict` | same, "Decision: source-chain forks" |
 | 2026-10-21 | Asymmetric token tables paid the wrong token | Retired with the vault: copies are computed | same, "Destination token binding" |
 | 2026-10-21 | Registry freshness read a light client nobody updated | Addressed: the own-chain light client is a route the operator updates (1.15) | same, "Own-chain light client freshness" |
-| 2026-10-21 | Duplicated SSZ calldata and memory code | Kept: removing it costs about 1,500 gas per delivery | `progress.txt` |
+| 2026-10-21 | Duplicated SSZ calldata and memory code | Kept: removing it costs about 1,500 gas per delivery | Internal progress log (not published) |
 | 2026-10-25 | A hostile token could erase a nested lock in the mediator record | Fixed: write after the call; `test_aTokenThatRelaysDuringAReleaseAndThenRefusesKeepsTheNestedLock` | same, "As built", "Mediator" |
 | 2026-10-26 | The delivery router could strand tokens (refused payout, router as recipient, odd data) | Fixed: hand-off to `failedDeliveryAddress`, no revert in the callback | same, "Fees: a router that delivers a message and pays a tip from it" |
 | 2026-10-27 | OmniBridge gap audit: a token needing more than the release gas, a very long name, the native router stranding coins | Fixed: sender-set gas limit, deploy gas grows with name length, native router removed, decimals above 255 refused | same, "As built", "Mediator" |
 | 2026-10-27 | Branch review: the observation could not report a disallowed shape, so the PulseChain gate could never seal on a real proof (medium) | Fixed (`34b37c5`): the observation proves plain depths 8 to 31 | [decisions.md](../light-client-layout/decisions.md) "D2 addendum" |
-| 2026-10-27 | Branch review: the prover trusted stored genesis validators root branches (low) | Fixed (`a43339d`): checked, dropped and rebuilt when bad | `progress.txt` |
+| 2026-10-27 | Branch review: the prover trusted stored genesis validators root branches (low) | Fixed (`a43339d`): checked, dropped and rebuilt when bad | Internal progress log (not published) |
 | 2026-10-22 | Local attack run on two chains | No real-chain hole. Artefacts of the local setup only (public oracle key, an Anvil chain revert) | [local-attack-report.md](../local-attack-report.md) |

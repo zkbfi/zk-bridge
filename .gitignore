@@ -11,3 +11,6 @@ __pycache__/
 
 # Ansible collections that ansible-galaxy installs (deploy/ansible/requirements.yml); never committed
 deploy/ansible/.ansible/
+
+# The working progress log stays local; it is not published.
+progress.txt

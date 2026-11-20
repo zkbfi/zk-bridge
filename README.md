@@ -124,7 +124,6 @@ Requirements: Foundry (`forge`, `anvil`), Node.js with pnpm, and Rust with Cargo
 | [`docs/build-contract.md`](docs/build-contract.md) | The shared interfaces that the red team suites follow |
 | [`docs/spec-deviations.md`](docs/spec-deviations.md) | Changes made to compile the specification (line endings only) |
 | [`docs/rpc-proxy.md`](docs/rpc-proxy.md) | rpc.zkb.fi: the dapp's RPC (a filter in the backend in front of eRPC), its rules and limits, and how to deploy it |
-| `progress.txt` | Session checkpoints and next steps |
 
 ## Safety
 
