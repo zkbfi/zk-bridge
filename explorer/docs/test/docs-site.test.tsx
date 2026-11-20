@@ -153,7 +153,7 @@ describe("the search", () => {
   it("lists the pages by group with no query, finds headings, and opens the chosen row with Enter", () => {
     show();
     fireEvent.click(screen.getByRole("button", { name: /Search the docs/ }));
-    expect(screen.getAllByRole("option").map((option) => option.querySelector(".zb-palette-title")?.textContent)).toEqual(["First", "Second", "Bots"]);
+    expect(screen.getAllByRole("option").map((option) => option.querySelector(".zb-m-title")?.textContent)).toEqual(["First", "Second", "Bots"]);
     const field = screen.getByRole("combobox");
     fireEvent.change(field, { target: { value: "detail" } });
     expect(screen.getByRole("option", { selected: true })).toHaveTextContent("DetailSecond");
