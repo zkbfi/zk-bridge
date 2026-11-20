@@ -1,6 +1,6 @@
 # zk-bridge: a red team and a hardened rebuild
 
-This repository holds two things. The first is a red team of the proposed Ethereum and PulseChain zero-knowledge bridge. The proposal sits in `spec/`, unchanged from the original zip. The second is a hardened rebuild of that bridge. The rebuild has no administrator, no upgrade path, no pause and no timelock.
+This repository holds two things. The first is a red team of proposal v0, the specification for an Ethereum and PulseChain zero-knowledge bridge that this project started from. Proposal v0 and its red team were removed from the tree on 2026-11-20; they live at [commit `e253373`](https://github.com/zkbfi/zk-bridge/tree/e25337322e0004fee8f033a993a3b3e052cc382c), and none of it was ever deployed or used by zkb.fi. The second is a hardened rebuild of that bridge. The rebuild has no administrator, no upgrade path, no pause and no timelock.
 
 ## Status
 
@@ -41,7 +41,7 @@ You must trust all of the following.
 
 ## Findings
 
-Revision 1 findings (H-01 to H-23) are in [`docs/red-team.md`](docs/red-team.md). Every one of them is confirmed against the original specification.
+Revision 1 findings (H-01 to H-23) are in [`docs/red-team.md`](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) at that commit. Every one of them is confirmed against proposal v0.
 
 | Severity | Count | Findings |
 |---|---|---|
@@ -50,9 +50,9 @@ Revision 1 findings (H-01 to H-23) are in [`docs/red-team.md`](docs/red-team.md)
 | Medium | 5 | H-12 to H-16 |
 | Low | 6 | H-17 to H-20, H-22, H-23 |
 
-Revision 2 (the specification's second version) is in [`docs/red-team-revision-2.md`](docs/red-team-revision-2.md). It lists findings R2-01 to R2-15.
+Revision 2 (proposal v0, revision 2) is in [`docs/red-team-revision-2.md`](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team-revision-2.md) at that commit. It lists findings R2-01 to R2-15.
 
-Findings in the hardened design (HB) are in the same file.
+Findings in the hardened design (HB) are in [`docs/audit/hardened-findings.md`](docs/audit/hardened-findings.md).
 
 | Id | Severity | Status | Summary |
 |---|---|---|---|
@@ -80,15 +80,13 @@ The code review and the comparison also produced fixes: the verifier code hash p
 
 ## What runs
 
-The red team tests pass when an attack **succeeds**. A green red team run means the specification fails. The hardened tests are ordinary tests. Test counts are as of 2026-10-27.
+The hardened tests are ordinary tests. Test counts are as of 2026-10-27.
 
 | Suite | What it proves | Command | Count |
 |---|---|---|---|
-| Forge, root | The specification's contract holes (red team), and the hardened contracts: light client, message bridge, token mediator and routers, fork gate, registry, layouts, deploy script, and two chains in one test with real proofs | `forge test` | 852 passed |
+| Forge, root | The hardened contracts: light client, message bridge, token mediator and routers, fork gate, registry, layouts, deploy script, and two chains in one test with real proofs | `forge test` | Not rerun for this note |
 | Light client | The Rust reference programs: update verification, folds, fork observation, layouts, state parsing, message proofs | `cargo test --offline` in `light-client/` | 295 passed, 2 ignored |
 | Prover | The proof producer and the message evidence builder, on a signed beacon chain, and the remote backend against a fake worker | `cargo test --offline` in `prover/` | 206 passed, 14 ignored |
-| Harness | End-to-end red team exploits on two Anvil chains (chain 1 on port 18545, chain 369 on port 18546) | `pnpm --dir harness install && pnpm --dir harness test` | Not rerun for this note |
-| Checks | The specification's circuit does not compile, the frontend fails, the deploy script cannot deploy, and the npm package does not exist | `bash checks/run.sh` | Not rerun for this note |
 
 To check the contracts, run `script/coverage-check.sh`. It is the single gate: it runs every forge test (thirteen of them in a second step with the optimizer, because coverage compiles without it) and checks for full line, branch and function coverage. It exits with an error and a table when a test fails or a file is below 100 percent. You do not need `forge test` as well. The header of the script lists the exclusions.
 To run every suite at once (contracts, light client, prover, explorer, terminal) and see the time of each step, run `script/test-all.sh`. Add `--serial` for the time of each step alone.
@@ -97,38 +95,30 @@ To run two local chains in Docker with the bridge contracts deployed, see `docs/
 For a run on two local chains with real SP1 Groth16 proofs and the real SP1 verifier contract (on a server, without Docker), see `docs/end-to-end-real-proofs.md`. That run used the full relayer, so it lives on the branch `archive/full-relayer`.
 To make proofs and message evidence, see `prover/README.md`. The commands are `zk-bridge-prover prove` and `zk-bridge-prover evidence`.
 
-Requirements: Foundry (`forge`, `anvil`), Node.js with pnpm, and Rust with Cargo. Clone with `--recurse-submodules`, or run `git submodule update --init`. The Anvil tests of the harness skip with a message when `anvil` or `forge` is missing. The tests of the prover need neither.
+Requirements: Foundry (`forge`, `anvil`), Node.js with pnpm, and Rust with Cargo. Clone with `--recurse-submodules`, or run `git submodule update --init`. The tests of the prover need neither `anvil` nor `forge`.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `spec/` | The original specification. Read only. |
-| `src/` | The specification's contracts, copied verbatim, plus test doubles in `src/mocks/` |
 | `src/hardened/` | The hardened contracts: light client, message bridge (`MessageBridge`, `BeaconProofVerifier`, `AmbMessageCodec`, `IAMB`), fork gate, fork registry, clock, receipt and tree libraries |
 | `src/hardened/mediator/` | The token layer: `TokenMediator`, `TokenFactory`, `BridgedToken`, `DeliveryRouter` and their interfaces |
 | `script/hardened/` | The deploy script (both chains, with predicted addresses) and an example configuration |
-| `test/` | Red team forge tests |
 | `test/hardened/` | Forge tests for the hardened contracts |
+| `test/mocks/` | Test doubles (never deployed) used by the forge tests and the local rehearsals |
 | `light-client/` | Rust reference programs and SP1 guest programs (`lc-core`, `lc-testkit`, `guests/`) |
 | `prover/` | The proof producer and the message evidence builder. A library and two commands. It keeps no state and sends no transaction. See [`prover/README.md`](prover/README.md). |
 | `docker/` | The local network (two Anvil chains and a deploy job) and the images of the proof producer for a server and for a GPU worker |
-| `harness/` | Two-chain TypeScript red team tests |
-| `checks/` | Static red team checks |
-| [`docs/red-team.md`](docs/red-team.md) | Revision 1 findings H-01 to H-23, by severity |
-| [`docs/red-team-revision-2.md`](docs/red-team-revision-2.md) | Revision 2 findings and the hardened findings HB-01 to HB-06 |
+| [`docs/audit/hardened-findings.md`](docs/audit/hardened-findings.md) | The findings in the hardened design, HB-01 to HB-06 |
 | [`docs/hardened-build-contract.md`](docs/hardened-build-contract.md) | The design and interfaces of the hardened build, with every decision |
 | [`docs/zk-bridge-comparison.md`](docs/zk-bridge-comparison.md) | Comparison with other zero-knowledge bridges, the PulseChain concentration measurement, and the gap list |
 | [`docs/sp1-version-policy.md`](docs/sp1-version-policy.md) | How we pin the SP1 release, and what to do after an advisory |
 | [`docs/zkbridge-paper-review.md`](docs/zkbridge-paper-review.md) | A review of the zkBridge paper |
-| [`docs/build-contract.md`](docs/build-contract.md) | The shared interfaces that the red team suites follow |
-| [`docs/spec-deviations.md`](docs/spec-deviations.md) | Changes made to compile the specification (line endings only) |
 | [`docs/rpc-proxy.md`](docs/rpc-proxy.md) | rpc.zkb.fi: the dapp's RPC (a filter in the backend in front of eRPC), its rules and limits, and how to deploy it |
 
 ## Safety
 
-- **Never use the code in `spec/`.** The tests show that an attacker can take over its light client and drain both vaults of the specification.
+- **Never use the code of proposal v0** (removed from the tree, see the top of this file). Its tests showed that an attacker can take over its light client and drain both vaults.
 - **Deploy the hardened code only after an audit.**
-- `spec/Deployments/deploy.sh` and the shell commands in `spec/frontend-setup-notes.md` are bricked. Every original line carries a `#BRICKED# ` prefix, and the script exits before any of them. Do not un-brick them. See "Containment" in [`docs/red-team.md`](docs/red-team.md).
-- Never run `npm install @succinctlabs/sp1-sdk` from `spec/frontend-setup-notes.md`. That package does not exist, and anyone can register the name (H-21).
+- The deploy script and the setup notes of proposal v0 were disabled before they were removed (every original line carried a `#BRICKED# ` prefix). Never run `npm install @succinctlabs/sp1-sdk`: that package does not exist, and anyone can register the name (H-21, see [`docs/red-team.md`](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) at that commit).
 - This repository never installs the SP1 toolchain or `sp1-sdk`.

@@ -34,6 +34,8 @@ WORKDIR /repo
 COPY --chown=foundry:foundry foundry.toml remappings.txt ./
 COPY --chown=foundry:foundry lib ./lib
 COPY --chown=foundry:foundry src ./src
+# The test doubles that docker/deploy.sh deploys. They live in test/mocks.
+COPY --chown=foundry:foundry test/mocks ./test/mocks
 COPY --chown=foundry:foundry script ./script
 # Build once, so the deploy step needs no compiler download and no long compile.
 RUN forge build --skip test

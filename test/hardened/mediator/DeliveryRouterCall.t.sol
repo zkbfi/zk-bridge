@@ -5,7 +5,7 @@ import {Vm} from "forge-std/Vm.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {MockERC20} from "../../../src/mocks/MockERC20.sol";
+import {MockERC20} from "../../mocks/MockERC20.sol";
 import {DeliveryRouter} from "../../../src/hardened/mediator/DeliveryRouter.sol";
 import {ExactGasCall} from "../../../src/hardened/mediator/ExactGasCall.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";

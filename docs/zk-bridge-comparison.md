@@ -2,7 +2,7 @@
 
 Date: 2026-10-21. This document compares the hardened bridge with other zero-knowledge light-client bridges and with public bridge exploits. It ends with a gap list: each defense that another project has and we lack or do differently, with a judgement.
 
-Read `docs/hardened-build-contract.md` and `docs/red-team-revision-2.md` first. They define our design. In short:
+Read `docs/hardened-build-contract.md` and `docs/audit/hardened-findings.md` first. They define our design. In short:
 
 - An Altair sync committee light client, proved with SP1 (Succinct's zero-knowledge virtual machine) and wrapped in a Groth16 proof.
 - `update()` is open to anyone. One proof folds 1 to 64 updates.

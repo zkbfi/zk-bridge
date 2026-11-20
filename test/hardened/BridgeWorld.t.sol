@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Vm} from "forge-std/Vm.sol";
-import {MockERC20} from "../../src/mocks/MockERC20.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
 import {AmbMessageCodec} from "../../src/hardened/AmbMessageCodec.sol";
 import {BeaconForkGate} from "../../src/hardened/BeaconForkGate.sol";
 import {BeaconProofVerifier} from "../../src/hardened/BeaconProofVerifier.sol";

@@ -4,9 +4,7 @@ pragma solidity ^0.8.24;
 import {console2} from "forge-std/console2.sol";
 import {StdStorage, stdStorage} from "forge-std/StdStorage.sol";
 import {BeaconLightClient} from "../../src/hardened/BeaconLightClient.sol";
-import {OracleSP1Verifier} from "../../src/mocks/OracleSP1Verifier.sol";
-import {LightClientSync} from "../../src/LightClientSync.sol";
-import {Committee} from "../utils/Committee.sol";
+import {OracleSP1Verifier} from "../mocks/OracleSP1Verifier.sol";
 import {HardenedFixture} from "./utils/HardenedFixture.sol";
 
 /// @notice Tests of the hardened light client: constructor, every revert path of `update`,
@@ -934,27 +932,5 @@ contract BeaconLightClientTest is HardenedFixture {
         }
         assertLt(highest, 120_000, "an update stays under 120k gas");
         assertLt(highest - lowest, 10_000, "gas does not grow from one update to the next");
-    }
-
-    /// Claim: the hardened update is far cheaper than the revision-1 update with 342 signatures (H-15). Shows: the
-    /// measured gas of both and a ratio of at least 10. Matters: the cost that made relaying irrational is gone.
-    function test_H15_gas_cheaperThanRevisionOneUpdate() public {
-        Committee.Set memory honest = Committee.build("chainA");
-        LightClientSync legacy = new LightClientSync(honest.root, 1);
-        Committee.Signed memory signed = Committee.attest(honest, keccak256("header"), 1, Committee.THRESHOLD);
-        uint256 beforeLegacy = gasleft();
-        legacy.updateSyncState(1, keccak256("header"), signed.signatures, signed.proofs, honest.root);
-        uint256 legacyGas = beforeLegacy - gasleft();
-
-        BeaconLightClient.LightClientOutput memory output = _nextOutput(client, GENESIS_ROOT_A, keccak256("b"));
-        bytes memory values = abi.encode(output);
-        bytes memory proof = _lightClientProof(output);
-        uint256 beforeHardened = gasleft();
-        client.update(proof, values);
-        uint256 hardenedGas = beforeHardened - gasleft();
-
-        console2.log("revision 1 update gas", legacyGas);
-        console2.log("hardened update gas", hardenedGas);
-        assertGt(legacyGas, hardenedGas * 10);
     }
 }

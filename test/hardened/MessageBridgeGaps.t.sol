@@ -10,7 +10,7 @@ import {BeaconBlockHeader, SSZ} from "../../src/hardened/SSZ.sol";
 import {TokenMediator} from "../../src/hardened/mediator/TokenMediator.sol";
 import {UnexpectedString} from "../../src/hardened/vendor/optimism/rlp/RLPErrors.sol";
 import {ReceiptBuilder} from "./utils/ReceiptBuilder.sol";
-import {MockERC20} from "../../src/mocks/MockERC20.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
 import {MessageScenes} from "./utils/MessageScenes.sol";
 import {MessageFixtures} from "./utils/MessageFixtures.sol";
 import {MessageRecorder, MessageGate} from "./utils/MessageTargets.sol";

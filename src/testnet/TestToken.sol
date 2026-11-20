@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /// @title TestToken
-/// @notice A plain ERC-20 for the testnets, with its own decimals and one minter. It has no value. The traffic bot moves
+/// @notice A testnet token, deployed on testnet only (never on a mainnet). A plain ERC-20 with its own decimals and one minter. It has no value. The traffic bot moves
 /// it across the bridge, and people who test the bridge ask the minter for some.
 /// @dev Only the minter mints, so the supply on each chain stays what the operator chose: a public mint would let anyone
 /// print an amount near the 256 bit limit and send it through the mediator. The minter is fixed at deployment and

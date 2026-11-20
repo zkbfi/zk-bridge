@@ -2,10 +2,10 @@
 
 This document fixes the names, paths, and interfaces for two pieces of work that run in parallel:
 
-1. A red team of revision 2 of the specification (`spec/revision-2/`).
+1. A red team of proposal v0, revision 2 ([`spec/revision-2/`](https://github.com/zkbfi/zk-bridge/tree/e25337322e0004fee8f033a993a3b3e052cc382c/spec/revision-2)).
 2. A hardened bridge that fixes the holes that revision 2 left open.
 
-Read `docs/red-team.md` first. It lists holes H-01 to H-23 against revision 1.
+Read [`docs/red-team.md`](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/red-team.md) first. It lists holes H-01 to H-23 against revision 1.
 
 **Status (2026-10-24).** The single contract `BridgeVault` is retired and deleted. Two layers replace it: `MessageBridge` (proof, lock, send and execute of messages) and `TokenMediator` (tokens, flow limiter hook). The section "Message layer and token mediator" is built, and its last part ("As built") lists where the build differs from the design. Sections that describe the vault below stay as the record of the rules. Each carries a note that says where the rule lives now.
 
@@ -55,7 +55,7 @@ Fetch Ethereum mainnet values (fork versions, fork epochs, genesis validators ro
 
 ## Ground rules for every agent
 
-- Write only inside the paths you own (table below). Never edit `spec/`.
+- Write only inside the paths you own (table below). Never edit [`spec/`](https://github.com/zkbfi/zk-bridge/tree/e25337322e0004fee8f033a993a3b3e052cc382c/spec).
 - Red-team tests **pass when the attack succeeds** and carry a control assertion that shows they can fail.
 - Hardened tests **pass when the defense holds**. Each attack test on the hardened code must also show the honest path still works.
 - Name tests after the identifier they cover, for example `test_R2_01_...`, `test_H08_hardened_rejectsUnfinalizedBlock`.
@@ -69,10 +69,10 @@ Fetch Ethereum mainnet values (fork versions, fork epochs, genesis validators ro
 
 | Path | Owner |
 |---|---|
-| `src/revision-2/`, `test/revision-2/`, `checks/revision-2/`, `checks/run.sh`, the "Revision 2" section of `docs/spec-deviations.md` | revision 2 agent |
-| `src/hardened/`, `src/mocks/OracleSP1Verifier.sol`, `test/hardened/`, `script/hardened/` | hardened contracts agent |
+| [`src/revision-2/`](https://github.com/zkbfi/zk-bridge/tree/e25337322e0004fee8f033a993a3b3e052cc382c/src/revision-2), [`test/revision-2/`](https://github.com/zkbfi/zk-bridge/tree/e25337322e0004fee8f033a993a3b3e052cc382c/test/revision-2), [`checks/revision-2/`](https://github.com/zkbfi/zk-bridge/tree/e25337322e0004fee8f033a993a3b3e052cc382c/checks/revision-2), [`checks/run.sh`](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/checks/run.sh), the "Revision 2" section of [`docs/spec-deviations.md`](https://github.com/zkbfi/zk-bridge/blob/e25337322e0004fee8f033a993a3b3e052cc382c/docs/spec-deviations.md) | revision 2 agent |
+| `src/hardened/`, `test/mocks/OracleSP1Verifier.sol`, `test/hardened/`, `script/hardened/` | hardened contracts agent |
 | `light-client/` | light-client agent |
-| `harness/` | harness agent (starts after the hardened contracts exist) |
+| [`harness/`](https://github.com/zkbfi/zk-bridge/tree/e25337322e0004fee8f033a993a3b3e052cc382c/harness) | harness agent (starts after the hardened contracts exist) |
 | `foundry.toml`, `docs/` (except the section above), `README.md` | coordinator |
 
 ## Hardened contracts
@@ -89,7 +89,7 @@ interface ISP1Verifier {
 }
 ```
 
-### `src/mocks/OracleSP1Verifier.sol`
+### `test/mocks/OracleSP1Verifier.sol`
 
 Implements `ISP1Verifier`. `constructor(address oracle)`. `verifyProof` succeeds only when `proofBytes` is a 65-byte ECDSA signature by `oracle` over the raw digest `keccak256(abi.encodePacked(programVKey, sha256(publicValues)))`. Otherwise it reverts with `InvalidProof()`. This models a sound proof system: a proof exists only when the reference program accepts the statement.
 
@@ -210,7 +210,7 @@ No withdrawal program exists. The native reference check is now `lc_message::mes
 
 ## Harness (`harness/`)
 
-**Decision (2026-10-20):** the hardened two-chain tests live in Rust, in `prover/tests/`, on the prover's existing two-Anvil setup. The prover is the reference prover, so this avoids a second stack and a fresh Node install on a nearly full disk. `harness/` keeps the red-team tests against revision 1. The list below still defines what the hardened tests must cover. Chain A (id 1) runs `cancun`, so EIP-4788 exists; chain B (id 369) runs `shanghai`.
+**Decision (2026-10-20):** the hardened two-chain tests live in Rust, in `prover/tests/`, on the prover's existing two-Anvil setup. The prover is the reference prover, so this avoids a second stack and a fresh Node install on a nearly full disk. [`harness/`](https://github.com/zkbfi/zk-bridge/tree/e25337322e0004fee8f033a993a3b3e052cc382c/harness) keeps the red-team tests against revision 1. The list below still defines what the hardened tests must cover. Chain A (id 1) runs `cancun`, so EIP-4788 exists; chain B (id 369) runs `shanghai`.
 
 - Chain B (the PulseChain role, id 369) runs Anvil with `--hardfork shanghai`. Chain A (id 1) keeps `prague`.
 - Add hardened tests under `harness/test/hardened/` on two Anvil chains: the happy path both ways, the fake emitter (H-02), the same-address token (H-03), an unfinalized block after a reorganization (H-08), cross-chain replay of a light-client output (H-01), a deposit and withdrawal with a second deposit in the same transaction (R2-06), a typed receipt (R2-05), the deploy procedure with predicted addresses (R2-08), and `MCOPY` bytecode failing on chain B while the Shanghai build works (R2-10).
@@ -444,7 +444,7 @@ The prover uses the fold to catch up a light client that lags by several sync co
 
 The `MessageBridge` takes the place of the vault. Its send calls `admit("")` with empty evidence, and there is no way to pass evidence through a send. See "Gate evidence: confirm, then send" at the end of this file. Read "vault" in this section as "message bridge", and "deposit" as "send".
 
-The Ethereum vault refuses a deposit unless the chain's current fork version is one its route supports. This closes HB-02 window 1 on Ethereum. Window 2 (the epochs before activation) is the interface's job; see `docs/red-team-revision-2.md`, HB-02.
+The Ethereum vault refuses a deposit unless the chain's current fork version is one its route supports. This closes HB-02 window 1 on Ethereum. Window 2 (the epochs before activation) is the interface's job; see [`docs/audit/hardened-findings.md`](audit/hardened-findings.md), HB-02.
 
 ### Shape
 
@@ -1199,7 +1199,7 @@ The build follows the design. This list holds every place where it differs from 
 - `test/hardened/mediator/TokenMediatorHostileGas.t.sol` (tokens in `utils/HostileTokens.sol`): the real bridge and a token that burns 300,000 gas on transfer, a token that runs the INVALID opcode (with the default gas and with 5,000,000), a token that reverts on every transfer, and a blocked recipient. Each ends with the handler not reverting, one `ReleaseFailed` event, no payout, the record lowered by the release and the whole amount still in the mediator. Unblocking the recipient later pays nothing. The heavy token is paid when the sender asks for 800,000 gas, and `relayTokensAndCall` with a gas limit pays a contract recipient that the default gas cannot.
 - `test/hardened/mediator/TokenMediatorDeployGas.t.sol`: a 5,000-byte name deploys through the real bridge and a later message of that token delivers; the limit of the message follows the rule for six lengths of name and symbol; a first message with a call adds the callback limit; a name beyond the bridge maximum is refused at the source.
 - `test/hardened/mediator/TokenMediatorDecimals.t.sol` and `TokenReader.t.sol`: decimals above 255 are refused at the source and at the destination in all four deploy forms, 255 passes, and a token with no `decimals()` gives a copy with 0 decimals.
-- `test/hardened/mediator/TokenMediatorMetadata.t.sol` and `TokenMediatorPause.t.sol`: a token with only a name, only a symbol, or `bytes32` metadata, bridged there and back with exact events and balances; a pausable token (`src/mocks/PausableToken.sol`, the OpenZeppelin `ERC20Pausable` pattern) frozen during a release (`ReleaseFailed`, the record lowered, the tokens still in the mediator, nothing paid after the unpause); a contract recipient (Multicall3) paid, and a contract recipient that the token refuses (final failure); a contract sender whose two messages carry the same payload.
+- `test/hardened/mediator/TokenMediatorMetadata.t.sol` and `TokenMediatorPause.t.sol`: a token with only a name, only a symbol, or `bytes32` metadata, bridged there and back with exact events and balances; a pausable token (`test/mocks/PausableToken.sol`, the OpenZeppelin `ERC20Pausable` pattern) frozen during a release (`ReleaseFailed`, the record lowered, the tokens still in the mediator, nothing paid after the unpause); a contract recipient (Multicall3) paid, and a contract recipient that the token refuses (final failure); a contract sender whose two messages carry the same payload.
 - `test/hardened/mediator/TokenMediatorGaps.t.sol`, `TokenMediatorInvariant.t.sol`, `TokenMediatorFuzz.t.sol`: token behaviour, the limiter and fee rules, and the solvency invariants of the mediator.
 
 **Gas of the stack** (`forge test`, one transaction per test, without the base cost and the calldata; `--isolate` figures in brackets): a token round trip costs 2,065,511 gas in four steps (2,146,744): send on chain A 155,589; execute on chain B with the deployment of the copy 1,423,690; send on chain B 90,499; execute on chain A 395,733. A later relay of the same token costs 410,423 to execute on chain B in the short form. An arbitrary message costs 37,405 to send and 484,919 to execute, 522,324 in all (588,844).

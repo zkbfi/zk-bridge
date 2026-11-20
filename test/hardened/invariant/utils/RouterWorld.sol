@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {MockERC20} from "../../../../src/mocks/MockERC20.sol";
-import {MockWrappedNative} from "../../../../src/mocks/MockWrappedNative.sol";
+import {MockERC20} from "../../../mocks/MockERC20.sol";
+import {MockWrappedNative} from "../../../mocks/MockWrappedNative.sol";
 import {TokenMediator} from "../../../../src/hardened/mediator/TokenMediator.sol";
 import {DeliveryRouter} from "../../../../src/hardened/mediator/DeliveryRouter.sol";
 import {ITokenMediator} from "../../../../src/hardened/mediator/ITokenMediator.sol";

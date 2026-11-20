@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Vm} from "forge-std/Vm.sol";
 import {console2} from "forge-std/console2.sol";
-import {MockERC20} from "../../../src/mocks/MockERC20.sol";
+import {MockERC20} from "../../mocks/MockERC20.sol";
 import {BeaconLightClient} from "../../../src/hardened/BeaconLightClient.sol";
 import {MessageBridge} from "../../../src/hardened/MessageBridge.sol";
 import {Multicall3} from "../../../src/hardened/vendor/multicall3/Multicall3.sol";

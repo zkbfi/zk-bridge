@@ -8,10 +8,8 @@
 out
 cache
 broadcast
-harness
-checks
-spec
 test
+!test/mocks
 docs
 progress.txt
 light-client/fetch-cache

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {MockERC20} from "../../../src/mocks/MockERC20.sol";
+import {MockERC20} from "../../mocks/MockERC20.sol";
 import {TokenMediator} from "../../../src/hardened/mediator/TokenMediator.sol";
 import {MediatorFixture, MockAMB, RecordingReceiver, TEST_CALLBACK_GAS} from "./utils/MediatorSupport.sol";
 
