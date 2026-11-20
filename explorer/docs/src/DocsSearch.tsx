@@ -72,35 +72,37 @@ export const DocsSearch = ({ pages, onSelect, onClose }: DocsSearchProps) => {
     <Sheet label="Search the docs" showTitle={false} bare top onClose={onClose}>
       <div className="zd-contents" onKeyDown={keepTabInside}>
         <div className="zb-picker-search">
-          <SearchIcon />
-          <input
-            role="combobox"
-            aria-label="Search the docs: pages, sections and the theme"
-            aria-expanded="true"
-            aria-controls={listId}
-            aria-autocomplete="list"
-            aria-activedescendant={active === null ? undefined : optionId(active)}
-            placeholder="Search the docs"
-            autoComplete="off"
-            spellCheck={false}
-            value={query}
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setHighlight(0);
-            }}
-            onKeyDown={onKeyDown}
-          />
-          <button type="button" className="zb-picker-close" aria-label="Close" onClick={onClose}>
-            <svg viewBox="0 0 12 12" className="zb-icon" aria-hidden="true" focusable="false">
-              <path d="M3 3l6 6M9 3 3 9" />
-            </svg>
-          </button>
+          <div className="zb-picker-in">
+            <SearchIcon />
+            <input
+              role="combobox"
+              aria-label="Search the docs: pages, sections and the theme"
+              aria-expanded="true"
+              aria-controls={listId}
+              aria-autocomplete="list"
+              aria-activedescendant={active === null ? undefined : optionId(active)}
+              placeholder="Search the docs"
+              autoComplete="off"
+              spellCheck={false}
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setHighlight(0);
+              }}
+              onKeyDown={onKeyDown}
+            />
+            <button type="button" className="zb-picker-close" aria-label="Close" onClick={onClose}>
+              <svg viewBox="0 0 12 12" className="zb-icon" aria-hidden="true" focusable="false">
+                <path d="M3 3l6 6M9 3 3 9" />
+              </svg>
+            </button>
+          </div>
         </div>
         <div className="zb-picker zb-palette">
           <div id={listId} role="listbox" aria-label="Results" className="zb-palette-list">
             {groups.map((group) => (
               <div key={group.id} role="group" aria-labelledby={`${listId}-g-${group.id}`}>
-                <div id={`${listId}-g-${group.id}`} className="zb-palette-group">
+                <div id={`${listId}-g-${group.id}`} className="zb-m-head">
                   {group.title}
                 </div>
                 {group.results.map((result) => (
@@ -109,27 +111,27 @@ export const DocsSearch = ({ pages, onSelect, onClose }: DocsSearchProps) => {
                     id={optionId(result)}
                     role="option"
                     aria-selected={active !== null && active.id === result.id}
-                    className="zb-palette-row"
+                    className="zb-m-row zb-m-stack"
                     onMouseMove={() => setHighlight(flat.findIndex((candidate) => candidate.id === result.id))}
                     onClick={() => onSelect(result)}
                   >
-                    <span className="zb-palette-title">
+                    <span className="zb-m-title">
                       <Marked text={result.title} match={query.trim() === "" ? null : query.trim()} />
                     </span>
-                    {result.subtitle === "" ? null : <span className="zb-palette-sub">{result.subtitle}</span>}
+                    {result.subtitle === "" ? null : <span className="zb-m-sub">{result.subtitle}</span>}
                   </div>
                 ))}
               </div>
             ))}
-            {groups.length === 0 ? <p className="zb-palette-note">Nothing matches. Try a word from a page title or a heading, such as fee, proof or gate.</p> : null}
+            {groups.length === 0 ? <p className="zb-m-note">Nothing matches. Try a word from a page title or a heading, such as fee, proof or gate.</p> : null}
           </div>
         </div>
-        <div className="zb-palette-foot">
-          <span className="zb-palette-keys" aria-hidden="true">
+        <div className="zb-m-foot">
+          <span className="zb-m-keys" aria-hidden="true">
             <kbd>↑</kbd>
             <kbd>↓</kbd> move <kbd>↵</kbd> open <kbd>esc</kbd> close
           </span>
-          <span className="zb-palette-links">
+          <span className="zb-m-links">
             <button type="button" onClick={() => onSelect({ id: "page:", title: "Docs home", subtitle: "", href: "#/docs" })}>
               Docs home
             </button>

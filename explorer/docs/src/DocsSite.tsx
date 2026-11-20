@@ -303,7 +303,7 @@ export const DocsSite = ({ pages, slug, heading }: DocsSiteProps) => {
         </main>
         <footer className="zd-foot">
           <div className="zb-col zd-foot-in">
-            <span className="zd-foot-name">{SITE_NAME}</span>
+            <span>{SITE_NAME}</span>
             <a className="zd-foot-credit" href="#/">
               Open the bridge
             </a>

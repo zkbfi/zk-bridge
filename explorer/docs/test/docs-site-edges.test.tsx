@@ -179,7 +179,7 @@ describe("the search sheet", () => {
     const field = open(pagesOf({ "01-a.md": "# Bare\n\n## Part\n\n- x" }));
     fireEvent.change(field, { target: { value: "bare" } });
     const rows = screen.getAllByRole("option");
-    expect(rows.map((row) => [row.querySelector(".zb-palette-title")?.textContent, row.querySelector(".zb-palette-sub")?.textContent ?? null])).toEqual([
+    expect(rows.map((row) => [row.querySelector(".zb-m-title")?.textContent, row.querySelector(".zb-m-sub")?.textContent ?? null])).toEqual([
       ["Bare", null],
       ["Part", "Bare"],
     ]);
