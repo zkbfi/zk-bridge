@@ -507,158 +507,6 @@ and failed delivery addresses, and requires the compiled code (`BuiltCodeMismatc
    `explorer/indexer/README.md`). Then add the router to the runner's router allowlist and to the frontends
    (`isKnownDeliveryRouter`).
 
-### The router with its RouterCaller (prepared 2026-11-20, not sent)
-
-Owner, verbatim: "routercaller fix is not on testnet? well, lets get it on testnet". The third code-review round of
-2026-11-18 (`src/hardened/mediator/RouterCaller.sol`) makes the follow-up call of a delivery from a `RouterCaller` that
-the router creates in its constructor and that holds nothing. The routers live since 2026-11-11
-(`0xa125684b9479fbab64218581763788bafb520a57` on both chains, built from `cf63fff9`) make that call themselves, so a
-follow-up call `token.transfer(someone, balance)` takes whatever the router holds at that moment.
-
-**What is redeployed: the `DeliveryRouter` alone, one creation per chain.** Its constructor creates the `RouterCaller`
-in the same transaction (at the router's own nonce 1), so there is no second transaction and no second address to plan.
-Nothing else names the router: the bridge and the mediator do not (the mediator calls `onTokenBridged` on whatever
-receiver the sender named), the router names no fee contract (`FeeDirector` is a struct in the message data, not a
-contract), and the bots, the indexer, the backend and the frontends read the router from the deployment file. The
-bridge, the mediator, the token factory, the gates, the light clients, the libraries and the test tokens stay.
-
-The new router does not bring the other source changes made since `cf63fff9`: the second and first review rounds also
-changed `TokenMediator` (`MAX_CALLBACK_GAS`), `MediatorPayloads`, `ExactGasCall` (`CALL_OVERHEAD`, used by the
-mediator's callback) and `MessageBridge` (`LocalChainIdTooLarge`). The router does not depend on any of them; putting
-them live needs a layers redeploy (`REDEPLOY_MODE=layers`), with a new bridge and mediator on both chains.
-
-Configuration: `script/testnet/router-redeploy-2026-11-20.config.testnet.json` (the bridge, mediator and router of
-`deploy/deployments/sepolia-pls943.json`, deployer nonce 45 on both chains as read on 2026-11-20). The file of the
-2026-11-08 router run, `router-redeploy.config.testnet.json`, stays as it was run. The script is unchanged:
-`RedeployLayers` in `REDEPLOY_MODE=router` reads the wrapped native token, the reward address and the failed delivery
-address from the live router, and after the creation it requires the predicted address, the same four values, the
-compiled code of the router, and that `routerCaller()` is the router's nonce 1 address, holds the compiled
-`RouterCaller` code and names the router back (`requireRouterCaller`).
-
-What the new router keeps, read from the live router on 2026-11-20 (the same on both chains except the wrapped token):
-
-| | Sepolia 11155111 | 943 |
-|---|---|---|
-| `bridge()` (the mediator) | `0x571f96605921f76a24cF1388C2CaF126b15b09f7` | `0x571f96605921f76a24cF1388C2CaF126b15b09f7` |
-| `wNative()` | `0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9` (WETH) | `0x70499adEBB11Efd915E3b69E700c331778628707` (WPLS) |
-| `rewardAddress()` | `0xE73c08FcdA3ABa51009B5804d2c464229cd22DB4` | `0xE73c08FcdA3ABa51009B5804d2c464229cd22DB4` |
-| `failedDeliveryAddress()` | `0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc` | `0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc` |
-
-With nonce 45 on both chains the new router is `0x5a5fF919270c2776CBf6dB3f13228267938466Ae` and its `RouterCaller`
-`0xe7468A482aB5D0fD7666a3B7F44a2fd588EaaC48` on both. Any other transaction from the deployer first moves the nonce;
-then write the new nonce into the configuration, and the addresses change with it.
-
-**Rehearsed on 2026-11-20** (nothing sent to a public chain):
-
-- Dry run against the public RPCs (`--sender` only, no keystore, no `--broadcast`): both chains print the predicted
-  router `0x5a5f...66Ae` as `new delivery router`, and the read-back passes.
-- `eth_estimateGas` of the creation at the public nodes: **Sepolia 15,110,703** (90.07% of the EIP-7825 cap of
-  16,777,216; `CreationGasCap.t.sol` models 15,073,024), **943 2,559,073**. Sepolia still mines transactions above the
-  cap (36 of 5,105 in blocks 12,177,638 to 12,177,678), but the run sets `--gas-estimate-multiplier 110` so that the
-  gas limit stays under the cap either way (Foundry's default of 130% would ask for about 19.5 million). The router
-  cannot grow further and stay under the cap on Sepolia.
-- Broadcast against Anvil forks of both chains (`anvil --fork-url <public rpc>`, deployer impersonated, `--unlocked`):
-  both creations at nonce 45, same address on both forks, read-back passed; router code 9,028 bytes, `RouterCaller`
-  333 bytes.
-- `script/testnet/router-redeploy-check.sh <fork> 0xa125... 0x5a5f... --fork-smoke` on both forks: the four kept
-  values equal the live router's, `routerCaller` is right, and a delivery (the mediator impersonated, outside
-  `executeMessage`, so no tip) with a follow-up call `wrapped.transfer(thief, 0.001)` while the router held 0.001:
-  through the old router the thief received 0.001 and the router was emptied; through the new router the recipient
-  was paid in full, the call failed (`CallFailed`) and the router kept its tokens. A follow-up `approve` through the
-  new router succeeded with `RouterCaller` as the owner in `Approval`.
-- On the Sepolia fork a follow-up call with 100,000 gas that writes a new storage slot failed through both routers:
-  Sepolia prices a new slot far higher than 943 (`eth_estimateGas` of a first `approve` on WETH: 128,766 on Sepolia,
-  54,906 on 943 for WPLS). That is the chain, not the router; a sender who states a small `callGas` on Sepolia gets
-  `CallFailed`.
-
-The live router `0xa125...0a57` held nothing on 2026-11-20 (native coin, wrapped token, tUSD, tTKN and their copies all 0
-on both chains), so there is nothing to sweep before it retires.
-
-**Run** (the shell of `docs/testnet-run.md` step 0: `FOUNDRY_RPC_ENDPOINTS`, `KEYSTORE_NAME`, `redact`, `RUN_DIR`):
-
-1. **Build** from the commit to deploy: `forge build`. Do not rebuild between the dry run and the run.
-2. **Nonces and balance** (read only). Both must be 45, else write the new value into the configuration:
-
-   ```sh
-   cast nonce 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc --rpc-url sepolia
-   cast nonce 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc --rpc-url pulsechain_testnet_v4
-   cast wallet address --account "$KEYSTORE_NAME"    # must print 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc
-   ```
-
-3. **Dry run** (no `--broadcast`), one chain at a time. Check: `n delivery router (predicted)` and `new delivery router`
-   print the same address, and the script ends with "Script ran successfully".
-
-   ```sh
-   export CFG=script/testnet/router-redeploy-2026-11-20.config.testnet.json
-   for c in chainA chainB; do
-     REDEPLOY_CONFIG=$CFG REDEPLOY_MODE=router REDEPLOY_CHAIN=$c \
-       forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers \
-       --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc 2>&1 | redact | tee "$RUN_DIR/router-dry-run-$c.log"
-   done
-   ```
-
-4. **Sepolia (sends one transaction).** The run replaces the tracked `broadcast/RedeployLayers.s.sol/11155111/run-latest.json`
-   (the record of the 2026-11-08 router run, which stays in git history); commit the new one.
-
-   ```sh
-   REDEPLOY_CONFIG=$CFG REDEPLOY_MODE=router REDEPLOY_CHAIN=chainA \
-     forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers \
-     --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc \
-     --broadcast --slow --skip-simulation --gas-estimate-multiplier 110 2>&1 | redact | tee "$RUN_DIR/router-sepolia.log"
-   script/testnet/router-redeploy-check.sh https://ethereum-sepolia-rpc.publicnode.com \
-     0xa125684b9479fbab64218581763788bafb520a57 <new router>
-   ```
-
-   Check: the receipt has status 1 and the check script prints `ok` on every line (it is read only without
-   `--fork-smoke`).
-
-5. **943 (sends one transaction)**, with explicit fees: 943 needs a priority fee above 0.001 gwei, and Foundry's
-   default of 1 wei never gets included.
-
-   ```sh
-   REDEPLOY_CONFIG=$CFG REDEPLOY_MODE=router REDEPLOY_CHAIN=chainB \
-     forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers \
-     --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc \
-     --broadcast --slow --skip-simulation \
-     --with-gas-price 30000000 --priority-gas-price 10000000 2>&1 | redact | tee "$RUN_DIR/router-943.log"
-   script/testnet/router-redeploy-check.sh https://rpc.v4.testnet.pulsechain.com \
-     0xa125684b9479fbab64218581763788bafb520a57 <new router>
-   ```
-
-6. **Record, verification, page** (`docs/testnet-run.md`, "After a contract deployment"). In
-   `deploy/deployments/sepolia-pls943.json`, on each chain: `delivery_router` becomes the new router;
-   `delivery_routers` gets `0xa125684b9479fbab64218581763788bafb520a57` first, before the router already there; in
-   `contracts`, the entry of `0xa125...` becomes `"DeliveryRouter (retired 2026-11-20)"` in `"group": "retired"`, and two
-   live entries are added: `DeliveryRouter` (the new address) and `RouterCaller` (with `"created_by": "factory"`: the
-   router created it, so it has no creation transaction of its own and no constructor arguments), both with the
-   `source_commit` of the build and `deployed_on` of the day. Then
-   `node deploy/contracts-page/verify.mjs --pair sepolia-pls943 --commit <source commit> --dry-run`, the same without
-   `--dry-run`, and commit the record with `explorer/web/docs/pages/10-deployed-contracts.md`.
-7. **Server** (no transactions). Drain first, as on 2026-11-08: stop the traffic bot and let the runner deliver what is
-   in flight. A message sent to the old router after the switch is still delivered (the runner's unpaid rule delivers it
-   straight to the bridge, and the old router passes the tokens on without a tip). Then replace
-   `/etc/zk-bridge/deployment.json` with the new record (0644 root:root, keep a `.bak-20261120` copy), and check that no
-   other file there names a router (`grep -ril 0xa125684b /etc/zk-bridge`: only the deployment file and its backup).
-   - **Indexer: no reindex.** The indexer reads the routers from the deployment file at start (`deliveryRoutersOf`, when
-     `TokensBridged` pays a router); routers are not Ponder sources, so the build and the schema do not change. A warm
-     restart picks the new router up: `ansible-playbook indexer.yml -e commit=<running release> -e action=restart`.
-     Restart it before any message is sent to the new router. The router's events are unchanged, so its deliveries
-     read `Delivered` (`feeSource` `event`). A release that also changes `explorer/indexer`, `explorer/shared` or the
-     lockfile gets a new schema, and then `indexer.yml` runs the blue/green fill of `docs/deploy-blue-green.md` by itself.
-   - **Backend:** `ansible-playbook backend.yml -e commit=<release>` (drains proof jobs first). The RPC proxy's address
-     book and the watch read the deployment file at start.
-   - **Bots:** `ansible-playbook bots.yml -e commit=<release> -e bots=runner,status,traffic`. The runner delivers to
-     `runner.deliveryRouter`, else the deployment file's `delivery_router`; it reads `rewardAddress()` at start.
-8. **Dapp, terminal, docs.** They read `delivery_router` from the deployment file in the release, so they switch with a
-   new release: a staging release on next.zkb.fi (`docs/release.md`, "Staging"), check that its bundle and its
-   `data/contracts.json` name the new router and not `0xa125...`, then the promotion to zkb.fi.
-9. **Smoke test (sends transactions).** One relay each way through the new router, one of them with a follow-up call:
-   check `Delivered` from the new router on the destination, `AffirmationCompleted(..., true)`, and that the indexer
-   shows the transfer with `deliveryRouter` the new router and `feeSource` `event`.
-
-Rollback: point `delivery_router` back at `0xa125...0a57` (the record of the previous commit) and restart as in step 7.
-The old router keeps working, with the flaw that this redeploy removes.
-
 ### Any later router
 
 ```sh
@@ -688,3 +536,230 @@ Nothing on chain needs undoing: the old contracts keep working, untouched. Roll 
 the bots, the indexer and the release back at the old addresses (the archived deployment file), with the previous
 release of the off-chain code (the new off-chain code reads the new ABIs and the five word director). Tokens sent
 through the new contracts meanwhile stay in the new contracts and are delivered by them.
+
+## The layers of 2026-11-20 (prepared, not sent)
+
+Owner, verbatim: "routercaller fix is not on testnet? well, lets get it on testnet", then, choosing between a router
+alone and the layers: "Full layer redeploy (Recommended)". The contracts live since 2026-11-11 were built from `cf63fff9`.
+The three code-review rounds of 2026-11-18 changed four of them since: `DeliveryRouter` (the follow-up call runs from a
+`RouterCaller` that holds nothing, `MAX_CALL_GAS`, saturating fee arithmetic), `TokenMediator` and `MediatorPayloads`
+(`MAX_CALLBACK_GAS` = 10,468,731, `CallbackGasTooHigh`), `ExactGasCall` (`CALL_OVERHEAD`, in the mediator's callback and
+the router) and `MessageBridge` (`LocalChainIdTooLarge`). A router alone would leave the mediator and the bridge on the
+old code, so the testnet gets new layers 1 to 3 from `main`, as on 2026-11-08: `RedeployLayers` in `REDEPLOY_MODE=layers`.
+
+### What is redeployed, what stays
+
+Eight creations on each chain, at deployer nonce 45 to 52 on both chains, so every new contract has one address on both
+(`script/testnet/redeploy-2026-11-20.config.testnet.json`, nonces read on 2026-11-20):
+
+| Nonce | Contract | Address (both chains) | Why it is new |
+|---|---|---|---|
+| 45 | `ReceiptProofLib` | `0x5a5fF919270c2776CBf6dB3f13228267938466Ae` | source unchanged; the script deploys the bridge's libraries with it |
+| 46 | `OpeningProofLib` | `0xb3D7d5D954B3dDb01B7020c34b669aC118113427` | the same |
+| 47 | `BeaconLayoutLib` | `0xb8B1b2C701AFf6BFC4538A958Dd58ABC4dEA4eb6` | the same |
+| 48 | `MessageBridge` | `0x071da4D1B038787C16DAe145A8B8C1eDB2470F51` | changed; names the new bridge of the other chain |
+| 49 | `MediatorPayloads` | `0xc5962CCb5EB33d0Af28Ee0a187f6FfaFf9967ecb` | changed (`MAX_CALLBACK_GAS`) |
+| 50 | `TokenFactory` | `0x29ceF591840d70fBB2024a705AB185e584516b85` | names the new mediator (immutable) |
+| 51 | `TokenMediator` | `0x1D04a3B144fB7C0392F1d5459134AF87063513EA` | changed; names the new bridge and the new mediator of the other chain |
+| 52 | `DeliveryRouter` | `0xDd78014C06b49D3056FFD5F15B41F8bAd8BF047c` | changed; bound to the new mediator. Its `RouterCaller`: `0xf7Dd5d603DA6E83203BA3CAc2b7D12A92182856c` |
+
+They stay, because none of them names a bridge, a mediator or a router: the SP1 verifiers, the light clients
+(`0x64dd...6e4e` on Sepolia; `0x1dbb...d958` and `0x759b...A329` on 943), the fork registry of 943 (`0x0f09...063f`), the
+gates (`0x85fb...20f3` on both: `SealOnly` on Sepolia, `SealOnlyWithRegistry` on 943, enforcing, not sealed), and the test
+tokens tUSD and tTKN (native tokens; the mediator registers them again on their first relay). tFAU (`DeployFaucetToken`,
+on `main`, not deployed yet) is a native token too: deploy it after the layers, at nonce 53 on both chains
+(`0x077b01ea09cd6261428166558Cced08f6697f8EB` on both). Deploying it first moves the nonces and every address above.
+
+What the new contracts keep, read by the script from the contracts of 2026-11-11 (and read again on 2026-11-20 by hand):
+
+| | Sepolia 11155111 | 943 |
+|---|---|---|
+| bridge: light client / remote light client | `0x64DdC23f...76E4e` / `0x1DBBcc0b...1Fd958` | `0x1DBBcc0b...1Fd958` / `0x64DdC23f...76E4e` |
+| bridge: deposit gate | `0x85Fbe4C5...0D20F3` | `0x85Fbe4C5...0D20F3` |
+| bridge: Capella era / send cutoff | 16 / 0 (none) | 222 / 0 (none) |
+| mediator: flow limiter | none (zero address) | none (zero address) |
+| factory: home chain name (of the other chain's tokens) | "PulseChain Testnet" | "Sepolia" |
+| router: wrapped native token | WETH `0x7b79995e...98E7f9` | WPLS `0x70499adE...628707` |
+| router: reward / failed delivery address | `0xE73c08Fc...cd22DB4` / `0xF71cBAA5...b75eAc` | the same |
+
+### Gas of each creation against the cap of EIP-7825
+
+`eth_estimateGas` at the public nodes on 2026-11-20. The mediator's constructor reads its factory, which does not exist on
+the live chain yet, so its figure is the gas used on the Anvil fork; the fork follows Sepolia's prices (for the other
+seven, the gas used on the fork is 0.8% under the node's estimate, so the mediator's estimate is about 13.7 million):
+
+| Contract | Creation code | Sepolia | % of 16,777,216 | 943 |
+|---|---|---|---|---|
+| `ReceiptProofLib` | 8,749 bytes | 13,766,697 | 82.1% | 2,320,677 |
+| `OpeningProofLib` | 6,262 | 9,890,117 | 58.9% | 1,675,216 |
+| `BeaconLayoutLib` | 7,740 | 12,193,686 | 72.7% | 2,058,514 |
+| `MessageBridge` | 10,829 | 14,827,147 | 88.4% | 2,508,952 |
+| `MediatorPayloads` | 6,212 | 9,812,562 | 58.5% | 1,662,698 |
+| `TokenFactory` | 7,866 | 11,550,880 | 68.8% | 1,957,092 |
+| `TokenMediator` | 10,229 | 13,603,223 (used on the fork) | 81.1% | 1,959,995 (used on the fork) |
+| `DeliveryRouter` with its `RouterCaller` | 10,147 | 15,110,703 | 90.1% | 2,559,073 |
+
+All fit. The router is the closest: 90.1% of the cap, a little above the 90% budget of `CreationGasCap.t.sol`, whose model
+gives 15,073,024. Sepolia still mines transactions above the cap (36 of 5,105 in blocks 12,177,638 to 12,177,678), but
+`--gas-estimate-multiplier 110` keeps every gas limit under it anyway (the router: 16.6 million); Foundry's default of
+130% would ask 19.6 million for the router. The run used 100.1 million gas on the Sepolia fork and 14.3 million on the 943 fork.
+
+### Rehearsed on 2026-11-20 (nothing sent to a public chain)
+
+- `test/hardened/RedeployLayers.t.sol`: 16 of 16 pass, with
+  `test_theLayersConfigurationOf20NovemberNamesTheContractsOf11November` for the new configuration.
+- Dry run against the public RPCs (`--sender` only, no keystore): both chains print the eight addresses above, and the
+  read-back passes on both (`deployed on chain 11155111`, `deployed on chain 943`).
+- Broadcast on Anvil forks of both chains (`anvil --fork-url <public rpc>`, deployer impersonated, `--unlocked`, the flags
+  of the run below): 16 transactions with status 1, the eight addresses as planned on both forks, read-back passed.
+- `script/testnet/redeploy-check.sh` on both forks, each against the other: the wiring checks pass (the router's mediator,
+  wrapped token, reward and failed delivery addresses, `RouterCaller`; the mediator's bridge, the other chain's new
+  mediator as `mediatorContractOnOtherSide`, the chain id, the flow limiter, `MAX_CALLBACK_GAS` 10,468,731, the factory
+  naming the mediator with the old home chain name; the bridge's light clients, gate, Capella era, cutoff, the other
+  chain's new bridge as `remoteBridge`, both chain ids; `depositsOpen` false). With `--fork-smoke`, on both forks:
+  - A delivery with a follow-up call `wrapped.transfer(thief, 0.001)` while the router held 0.001: through the old router
+    the thief received 0.001; through the new one the recipient was paid in full, the call failed and the router kept its
+    tokens.
+  - A relay of the wrapped native token through the new mediator was refused with `DepositsNotOpen`. With `depositsOpen`
+    set in the fork's storage (in place of the opening proof that the runner sends live), the relay locked 0.01 in the new
+    mediator and the bridge sent its first message (nonce 0 to 1). A relay with callback gas 10,468,732 was refused with
+    `CallbackGasTooHigh`.
+
+  A delivery on the other chain needs a light-client update and message evidence from the prover, which a fork cannot
+  give; that part is the smoke test after the run (step 14).
+
+### Consequences
+
+- **New bridged copies.** A copy is `CREATE2` from the factory, so the new factory makes new copies on the first relay of
+  each token (`predictAddress` of the old and the new factory):
+
+  | Copy | On | Old (2026-11-11) | New |
+  |---|---|---|---|
+  | ztUSD (copy of 943's tUSD) | Sepolia | `0xdbe592A7d7614a10cDcA4B27D889F4f9E59F0Fa6` | `0x33de79ED0aA82F3ba2Be17197346cee90699Aae8` |
+  | ztTKN (copy of 943's tTKN) | Sepolia | `0x61FA294Fb1CA457B9F3a22e71b36971d4A1E3C20` | `0x125ab5Fd377A17D2e995d2d47FDBc1811328E3EB` |
+  | ztFAU (copy of tFAU at nonce 53) | Sepolia | never made | `0xC6FFfF21e8fcA8a6E5bC3550003E67e49B23c38c` |
+  | ztUSD (copy of Sepolia's tUSD) | 943 | `0x75dE3c47773162Be247D145619B4266e255dfFF1` | `0xb1E86eAc7cC94f2b5EB6c6d5576565E264e1572b` |
+  | ztTKN (copy of Sepolia's tTKN) | 943 | `0x96EF4e50E0BdffB2f4D1708568BdfF16416b8725` | `0xd605a297b0b036E97f82cd306b8BDd6c55A53b83` |
+  | ztFAU (copy of tFAU at nonce 53) | 943 | never made | `0xC1ABA55Cc9A1B25FF2606FC40D762285121F57b6` |
+
+- **Balances on the old contracts** (2026-11-20): the old mediator holds 4,301.07 tUSD and 4,497.14 tTKN on Sepolia and
+  4,585.73 tUSD and 4,290.16 tTKN on 943; the traffic wallet holds most of the old copies (about 4,514 ztUSD and 4,247
+  ztTKN on Sepolia, 4,258 ztUSD and 4,452 ztTKN on 943). Old copies are redeemed only through the old contracts, which
+  keep working (no owner, no pause), with a delivery on the old stack. They are test tokens: either relay the traffic
+  wallet's old copies home during the drain (four messages, each with its proofs), or leave them; the minter mints new
+  tUSD and tTKN.
+- **Messages in flight on the old stack** are delivered only by the old bridges. On 2026-11-20 the indexer counted one
+  (943 to Sepolia, waiting for finality). The runner on the new deployment does not see them, so drain first (step 1).
+  Anything left later: run a runner on the archived deployment file
+  (`deploy/deployments/archive/sepolia-pls943.2026-11-11.json`) until it is delivered.
+- **The indexer starts over.** The bridge and the mediator are Ponder sources, so the new addresses and start blocks need
+  a new schema and a full index from the new start blocks (blue/green); Explore's history starts with the new pair.
+- **The runner opens both bridges itself** (`openDeposits` after a light-client update of its own chain; each update is a
+  paid GPU proof) and sends the layout rows before the first delivery. Until then the status page shows both bridges as
+  "deposits are closed" (degraded), and sends are refused.
+- **Off-chain ABIs.** `explorer/data/src/abis` were not regenerated after the review rounds: the new errors
+  (`CallbackGasTooHigh`, `LocalChainIdTooLarge`) and views (`MAX_CALLBACK_GAS`, `MAX_CALL_GAS`, `routerCaller`) are
+  missing, so a revert with them shows as an unknown error. Regenerating (`pnpm abis`) drops `CallOutOfGas` from the
+  router ABI, which `explorer/bots/test/support/builders.ts` encodes with `deliveryRouterAbi`; fix that helper with the
+  regeneration, in the release that ships the new record.
+
+### Run
+
+The shell of `docs/testnet-run.md` step 0 (`FOUNDRY_RPC_ENDPOINTS`, `KEYSTORE_NAME`, `redact`, `RUN_DIR`). Check after
+each step; stop at the first check that fails.
+
+1. **Drain the old stack (no transactions from the deployer).** Stop the traffic bot (`systemctl stop zk-bridge-traffic`
+   on the server). Wait until `curl -s https://indexer.zkb.fi/api/counts` shows `"inFlight":0`; the runner keeps
+   delivering on the old stack meanwhile. Optionally relay the traffic wallet's old copies home (see Consequences).
+   Check: `inFlight` 0 in both directions.
+2. **Build and read (no transactions).** `forge build` at the commit to deploy; do not rebuild until the run is done.
+
+   ```sh
+   cast wallet address --account "$KEYSTORE_NAME"                                          # 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc
+   cast nonce 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc --rpc-url sepolia                 # 45
+   cast nonce 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc --rpc-url pulsechain_testnet_v4   # 45
+   ```
+
+   If a nonce moved, write the new one into the configuration: every address above changes (and they differ between the
+   chains if the nonces differ), and so does the prepared record.
+3. **Dry run (no `--broadcast`).** Check: the eight addresses of each chain match the table, and the log ends with
+   `deployed on chain 11155111`, `deployed on chain 943` and "SIMULATION COMPLETE".
+
+   ```sh
+   export CFG=script/testnet/redeploy-2026-11-20.config.testnet.json
+   REDEPLOY_CONFIG=$CFG REDEPLOY_MODE=layers forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers \
+     --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc 2>&1 | redact | tee "$RUN_DIR/layers-dry-run.log"
+   ```
+
+4. **The run (sends 16 transactions).** One command for both chains, because the bridges and mediators name their twins
+   by predicted address. Fees for both: a maximum of 1 gwei and a priority fee of 0.01 gwei (943 needs a priority fee
+   above 0.001 gwei; Foundry's 1 wei default never gets included there).
+
+   ```sh
+   REDEPLOY_CONFIG=$CFG REDEPLOY_MODE=layers forge script script/hardened/RedeployLayers.s.sol --tc RedeployLayers \
+     --account "$KEYSTORE_NAME" --sender 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc \
+     --broadcast --slow --skip-simulation --gas-estimate-multiplier 110 \
+     --with-gas-price 1000000000 --priority-gas-price 10000000 2>&1 | redact | tee "$RUN_DIR/layers.log"
+   ```
+
+   If a part stalls, resume with the same flags plus `--resume --multi`; never rerun without `--resume`. The run replaces
+   the tracked `broadcast/multi/RedeployLayers.s.sol-latest/run.json` (the record of 2026-11-11, which stays in git
+   history); commit the new one. Check: "ONCHAIN EXECUTION COMPLETE & SUCCESSFUL" and 16 receipts with status 1.
+5. **Read back (no transactions).** Check: every line `ok`, and `depositsOpen` false on both.
+
+   ```sh
+   N=0xDd78014C06b49D3056FFD5F15B41F8bAd8BF047c; OLD=0xa125684b9479fbab64218581763788bafb520a57
+   script/testnet/redeploy-check.sh https://ethereum-sepolia-rpc.publicnode.com https://rpc.v4.testnet.pulsechain.com $OLD $N $N
+   script/testnet/redeploy-check.sh https://rpc.v4.testnet.pulsechain.com https://ethereum-sepolia-rpc.publicnode.com $OLD $N $N
+   ```
+
+6. **Record, verification, page.** `deploy/deployments/archive/sepolia-pls943.2026-11-11.json` already holds the record of
+   2026-11-11. Take the prepared record commit ("PREDICTED") and correct it from the run: `start_block` of each chain =
+   the block of its first creation minus 1 (the prepared commit keeps the old start blocks), `source_commit` = the commit
+   built, `deployed_on` = the day. Then
+   `node deploy/contracts-page/verify.mjs --pair sepolia-pls943 --commit <source commit> --dry-run`, the same without
+   `--dry-run` (it ends with `generate.mjs --refresh`), and commit the record, the page and the broadcast record together.
+   Check: `node deploy/contracts-page/generate.mjs --check`.
+7. **Server: the deployment file and the runner state (no transactions).** Stop the runner
+   (`systemctl stop zk-bridge-runner`). Back up and replace `/etc/zk-bridge/deployment.json` with the new record (same
+   owner and mode as the old file; suffix `.bak-20261120`). Move aside each runner state file
+   (`<stateDirectory>/runner-sepolia-pls943-<direction>.json`): its `depositsOpen` flag is not keyed by bridge and is
+   true for the old bridges, so the runner would never open the new ones. Keep `<stateDirectory>/proof-cache/` (keyed by
+   the light client, which stays). Do not restart the running indexer until step 8 is finished: it would start on the
+   new file with the old schema. Check: `grep -ril 0x5897d3de /etc/zk-bridge` lists only the backup, and the new file
+   names `0x071da4d1b038787c16dae145a8b8c1edb2470f51` as the bridge of both chains.
+8. **Indexer: blue/green, then finish at once** (`docs/deploy-blue-green.md`, "A release with new contract addresses").
+   `ansible-playbook build.yml -e ref=<release>` prints the release's schema; it must differ from the live one
+   (`ansible-playbook status.yml`). The release carries the indexer changes made since 2026-11-11, so it should; if it
+   does not, stop: new addresses on the same schema need a schema override (`DATABASE_SCHEMA` in `indexer/indexer.env`)
+   first. Then `ansible-playbook indexer.yml -e commit=<hash> -e action=green`, look, `-e action=switch` (with
+   `-e accept_warnings=true`: the new pair has none of the old history), and `-e action=finish` at once, before the
+   backend and the bots, which read the indexer at `127.0.0.1:42069`. Check: `https://indexer.zkb.fi/ready` answers 200,
+   and `/api/counts` shows the new pair (no messages yet, the light-client updates from the new start blocks).
+9. **Backend.** `ansible-playbook backend.yml -e commit=<hash>`. It drains proof jobs first; the RPC proxy's address book
+   and the watch read the deployment file at start. Check: `/health` is ok and no job is in flight.
+10. **Runner and status.** `ansible-playbook bots.yml -e commit=<hash> -e bots=runner,status` (and `publisher` if it
+    runs). Check: the runner's `runner_started` log names `deliveryRouter` `0xdd78...047c`; after the next light-client
+    update of each chain the runner sends `openDeposits` (`DepositsOpened` on each new bridge;
+    `cast call 0x071da4D1B038787C16DAe145A8B8C1eDB2470F51 'depositsOpen()(bool)'` is true on both chains), and the status
+    page's bridge checks turn from degraded to ok.
+11. **Traffic bot, after both bridges are open.** `ansible-playbook bots.yml -e commit=<hash> -e bots=traffic`. Its token
+    list names native tokens, so it needs no change. Check: its first sends succeed (a send to a closed bridge reverts
+    with `DepositsNotOpen`).
+12. **Dapp and terminal.** A staging release on next.zkb.fi (`docs/release.md`, "Staging") with the new record, after the
+    bridges are open; check that its bundle and `data/contracts.json` name the new bridge, mediator and router and not
+    `0x5897...` or `0xa125...`. Promote to zkb.fi on the owner's word.
+13. **tFAU** (sends one transaction per chain): `script/testnet/DeployFaucetToken.s.sol` on each chain at nonce 53, then
+    its record entries (`docs/superpowers/specs/2026-11-20-testnet-faucet-design.md`).
+14. **Smoke test (sends transactions).** One router relay each way with a follow-up call, delivered: `TokensBridged` on
+    the destination, the copy at the address in the table above (the first relay of each token makes it; add each copy to
+    the record with `created_by: "factory"`), `Delivered` from the new router, and the transfer on indexer.zkb.fi with
+    `deliveryRouter` the new router.
+
+### Rollback
+
+Nothing on chain needs undoing: the contracts of 2026-11-11 keep working. Before step 7 nothing off chain has changed.
+After it: restore `/etc/zk-bridge/deployment.json.bak-20261120` and the moved runner state files, put the indexer back
+(`indexer.yml -e action=rollback` before the finish; after it, the previous release with `deploy.sh`, whose schema is
+kept for 7 days), redeploy the previous release of the backend and the bots, and keep the dapp on the release it has.
+Tokens sent through the new contracts meanwhile stay in them and are delivered by them.
