@@ -602,6 +602,16 @@ It runs the checks every 60 seconds: the services (indexer local and public, bac
 - Deploy (after `provision.sh`, which creates the user `zkb_status` and `/etc/zk-bridge/status`): copy `deploy/app-server/config/status/status.json.example` and `status.env.example` to `/etc/zk-bridge/status/` (mode 0640, owner root, group `zkb_status`), fill in the wallet addresses, the thresholds and the endpoints, then `ansible-playbook bots.yml -e commit=<hash> -e bots=status`. DNS: an A record for `status.zkb.fi` to the app server, like the other hosts; Caddy gets the certificate.
 - **The blind spot.** The service runs on the app server, so if the server is down, the page is down too, and it cannot tell you. Point a free external monitor at `https://status.zkb.fi/api/summary` (for example UptimeRobot or Better Stack, 5 minute interval). The route answers 200 while everything works or is degraded, and 503 when something is down or when the checks themselves stopped; add `?strict=1` to get 503 for degraded as well.
 
+## Redeploy the delivery router alone
+
+A new `DeliveryRouter` needs no change to the bridge or the mediator: `RedeployLayers` in `REDEPLOY_MODE=router`, one
+transaction per chain, for the running mediator, keeping the live router's wrapped token, reward address and failed
+delivery address. The steps, with the checks after each and what changes off chain (record, server deployment file,
+indexer restart without a reindex, backend, bots, release), are in
+[the redeploy plan](redeploy-2026-11-gas.md), "The router with its RouterCaller (prepared 2026-11-20, not sent)".
+`script/testnet/router-redeploy-check.sh <rpc> <old router> <new router>` compares the two routers read only after the
+run.
+
 ## After a contract deployment: the record, the verification and the page
 
 Do this after every deployment of a contract on a pair (`DeployBridge`, `RedeployLayers` in any mode, a new router, the test tokens), on the same day. The page [Deployed contracts](../explorer/web/docs/pages/10-deployed-contracts.md) is generated from the record, and a test fails when the two differ.

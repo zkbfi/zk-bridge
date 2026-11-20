@@ -1,0 +1,27 @@
+{
+  "_notes": [
+    "Input of script/hardened/RedeployLayers.s.sol in REDEPLOY_MODE=router (layer 3 alone), one chain per run (REDEPLOY_CHAIN=chainA or chainB): a DeliveryRouter whose constructor creates its RouterCaller (third code-review round of 2026-11-18), for the mediator that runs now. Runbook: docs/redeploy-2026-11-gas.md, \"The router with its RouterCaller (prepared 2026-11-20)\".",
+    "previous*: the bridge, mediator and router of deploy/deployments/sepolia-pls943.json (deployed 2026-11-11 from cf63fff9, one address on both chains). The script reads the wrapped native token, the reward address and the failed delivery address from previousRouter, so the new router keeps them, and it refuses a previousRouter whose mediator is another one.",
+    "deployerNonce: 45 on both chains, read on 2026-11-20 with `cast nonce 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc --rpc-url <alias>`. With the same nonce the new router has the same address on both chains (router 0x5a5fF919270c2776CBf6dB3f13228267938466Ae, its RouterCaller 0xe7468A482aB5D0fD7666a3B7F44a2fd588EaaC48, the router's own nonce 1). Read both again right before the run; the script refuses a nonce that differs from the chain's.",
+    "deployer: the testnet deployer 0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc (1Password vault zkb.fi, item \"testnet deployer wallet\"). The script refuses another signer.",
+    "router-redeploy.config.testnet.json is the file of the router run of 2026-11-08 and stays as it was run.",
+    "Foundry resolves rpcAlias from FOUNDRY_RPC_ENDPOINTS, as for DeployBridge (docs/testnet-run.md). Never write a key into this file."
+  ],
+  "deployer": "0xF71cBAA5a165fad2FfFf6B0D68E84D67b1f75eAc",
+  "chainA": {
+    "rpcAlias": "sepolia",
+    "chainId": "11155111",
+    "deployerNonce": "45",
+    "previousBridge": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
+    "previousMediator": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
+    "previousRouter": "0xa125684b9479fbab64218581763788bafb520a57"
+  },
+  "chainB": {
+    "rpcAlias": "pulsechain_testnet_v4",
+    "chainId": "943",
+    "deployerNonce": "45",
+    "previousBridge": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
+    "previousMediator": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
+    "previousRouter": "0xa125684b9479fbab64218581763788bafb520a57"
+  }
+}
