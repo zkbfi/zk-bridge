@@ -14,14 +14,15 @@ import type { BackendModuleContext } from "../module.ts";
 import { readHeldProofs } from "../requests/held-proofs.ts";
 import { findActiveJob, lastProofStartedAt } from "../requests/jobs.ts";
 import type { RequestService } from "../requests/service.ts";
-import { batchRuleFor, deprecatedBatchKeys } from "./batch.ts";
+import type { GpuGuardTierState } from "../gpu-guard.ts";
+import { batchRuleFor, companionProofsFor, deprecatedBatchKeys } from "./batch.ts";
 import { MIN_PARTICIPANTS } from "./decide.ts";
 import { createDeliveryGasReader } from "./delivery-gas.ts";
 import { createEconomicsReader, type DestinationToken } from "./economics.ts";
 import { createFinalityFeed } from "./feed.ts";
 import { createDepositsReader } from "./deposits.ts";
 import { decisionBoardOf } from "./decisions.ts";
-import { createDirectionWatcher, type ListedMessage } from "./watcher.ts";
+import { createDirectionWatcher, type DirectionWatcher, type ListedMessage } from "./watcher.ts";
 import { resolveWarmup } from "./warmup.ts";
 import { createWarmupStore } from "./warmup-store.ts";
 
@@ -62,6 +63,14 @@ export function watchedDirections(config: BackendConfig, pair: Pair): readonly P
   if (missing.length === 0) return directions;
   if (config.watch.enabled === true) throw new BackendConfigError(`watch.enabled needs ${missing.join(" and ")}`);
   return [];
+}
+
+/** The other direction of the pair. */
+const otherDirection = (direction: ProofDirection): ProofDirection => PROOF_DIRECTIONS.find((other) => other !== direction) as ProofDirection;
+
+/** Whether the GPU spend guard has set every tier to 0 workers (tripped or held). False when it watches no tier. */
+export function everyTierZeroed(states: readonly GpuGuardTierState[]): boolean {
+  return states.length > 0 && states.every((tier) => tier.state !== "ok");
 }
 
 const addressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
@@ -158,6 +167,9 @@ export async function startWatch(input: { context: BackendModuleContext; service
   const closed = warmupStore.closeOpenSessions(context.now());
   if (closed > 0) logger.info("warmup_sessions_closed", { count: closed });
   const stoppers: Array<() => Promise<void>> = [];
+  // When one direction starts a proof, the other may prove as its companion in the same worker session
+  // (docs/superpowers/specs/2026-11-19-one-gpu-session-both-directions-design.md).
+  const watchers = new Map<ProofDirection, DirectionWatcher>();
   for (const direction of directions) {
     const { source, destination } = sidesOf(pair, direction);
     const beaconUrl = source.beaconUrl as string;
@@ -208,7 +220,11 @@ export async function startWatch(input: { context: BackendModuleContext; service
       logger,
       now: context.now,
       onDecision: (decision) => decisionBoardOf(context).record(direction, decision),
+      companionProofs: companionProofsFor(config.watch, config.pair, direction),
+      gpuTiersZeroed: () => everyTierZeroed(context.gpuGuardState?.() ?? []),
+      onProofStarted: () => watchers.get(otherDirection(direction))?.companion(direction),
     });
+    watchers.set(direction, watcher);
     const slotMilliseconds = secondsPerSlot(source.chainId) * 1000;
     const feed = createFinalityFeed({
       chainId: source.chainId,
@@ -242,6 +258,7 @@ export async function startWatch(input: { context: BackendModuleContext; service
     warmup: ping !== null,
     lead: warmupStore.lead(resolveWarmup(warmup, context.endpointIdleTimeoutSeconds?.() ?? null)),
     batch: Object.fromEntries(Object.entries(batches).map(([direction, rule]) => [direction, { minIntervalSeconds: rule.minIntervalSeconds, lookaheadSeconds: rule.lookaheadSeconds, profitMargin: Number(rule.marginWad) / 1e18, unpricedAtMaximumPays: rule.unpricedAtMaximumPays }])),
+    companionProofs: Object.fromEntries(directions.map((direction) => [direction, companionProofsFor(config.watch, config.pair, direction)])),
   });
   return async () => {
     await Promise.all(stoppers.map((stop) => stop()));

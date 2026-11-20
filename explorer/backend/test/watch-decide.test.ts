@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { DEFAULT_POLICY, type LightClientFacts, type SourceHistory } from "../src/keepalive/plan.ts";
 import { USD, WAD, expectedFinalityAt, slotAtTime } from "@zk-bridge/shared";
 import type { BatchRule, Economics } from "../src/watch/batch.ts";
-import { DEPOSITS_LOCKED_RETRY_SECONDS, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE, decideProof, urgentReasons, handoffKey, warmupPlan, type WaitingMessage } from "../src/watch/decide.ts";
+import { DEPOSITS_LOCKED_RETRY_SECONDS, MIN_PARTICIPANTS, SYNC_COMMITTEE_SIZE, companionDecision, decideProof, urgentReasons, handoffKey, warmupPlan, type WaitingMessage } from "../src/watch/decide.ts";
 
 // A PulseChain-like clock: 10 s slots, 32 slots per epoch, 8192 slots per period, genesis at 0 for easy numbers.
 const PERIOD = 8192;
@@ -519,5 +519,82 @@ describe("urgent reasons: a proof before the minimum interval ends (2026-11-07)"
       const nowSlot = head + 13 * 360;
       expect(decide({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64, urgent: { deposits: locked, lastProofAt: null } })).toMatchObject({ due: true, why: "keep-alive" });
     });
+  });
+});
+
+describe("companionDecision (2026-11-19, one GPU session for both directions)", () => {
+  // docs/superpowers/specs/2026-11-19-one-gpu-session-both-directions-design.md, decision 2.
+  const HOUR = 3600;
+  function companion(overrides: Partial<Parameters<typeof companionDecision>[0]> = {}) {
+    return companionDecision({
+      finalizedSlot: FINALIZED,
+      participants: 500,
+      minParticipants: MIN_PARTICIPANTS,
+      facts: facts(HEAD),
+      messages: [],
+      pendingProof: null,
+      history: { kind: "not-needed" },
+      policy: DEFAULT_POLICY,
+      nowSeconds: at(NOW_SLOT),
+      minIntervalSeconds: HOUR,
+      ...overrides,
+    });
+  }
+
+  it("a waiting message the light client can cover now makes the direction a companion, with every final message", () => {
+    const verdict = companion({ messages: [message(FINALIZED - 5, "a"), message(FINALIZED - 4, "b"), message(FINALIZED + 5, "c")] });
+    expect(verdict).toMatchObject({ eligible: true, why: "messages", decision: { due: true, why: "message", messageIds: [`0x${"a".repeat(64)}`, `0x${"b".repeat(64)}`] } });
+  });
+
+  it("a message not final yet, or one the head covers, does not", () => {
+    expect(companion({ messages: [message(FINALIZED + 1)] })).toMatchObject({ eligible: false, reason: "nothing-due" });
+    expect(companion({ messages: [message(HEAD - 1)] })).toMatchObject({ eligible: false, reason: "nothing-due" });
+  });
+
+  it("a keep-alive of the age rule due within the minimum interval makes it a companion; one due later does not", () => {
+    // The head is 11.5 hours old: the 12 hour age rule calls for a keep-alive in 30 minutes, inside the hour.
+    const head = 100 * PERIOD + 10;
+    const nowSlot = head + 11.5 * 360;
+    const verdict = companion({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64 });
+    expect(verdict).toMatchObject({ eligible: true, why: "keep-alive", decision: { due: true, why: "keep-alive", handoff: false } });
+    expect((verdict as { decision: { detail: string } }).decision.detail).toMatch(/^the keep-alive is due within the minimum interval \(3600 s\): the head is 12\.5 h old/);
+    // Inside a 15 minute interval it is not due yet.
+    expect(companion({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64, minIntervalSeconds: 900 })).toMatchObject({ eligible: false, reason: "nothing-due" });
+    // With no interval only a keep-alive due now counts.
+    expect(companion({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64, minIntervalSeconds: 0 })).toMatchObject({ eligible: false, reason: "nothing-due" });
+  });
+
+  it("a keep-alive due now is a companion too", () => {
+    const head = 100 * PERIOD + 10;
+    const nowSlot = head + 13 * 360;
+    expect(companion({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64 })).toMatchObject({ eligible: true, why: "keep-alive", decision: { why: "keep-alive", handoff: false } });
+  });
+
+  it("a keep-alive within the interval that hands off to a new period is a planned handoff", () => {
+    // Finality is in period 101, the head in 100 with 101 known; the deadline (start of period 102) is 6.5 hours away,
+    // outside the 6 hour margin now and inside it within the hour. A long age rule keeps the age out of it.
+    const policy = { ...DEFAULT_POLICY, keepAliveSeconds: 48 * HOUR };
+    const head = 100 * PERIOD + 8000;
+    const nowSlot = 102 * PERIOD - Math.round((6.5 * HOUR) / SLOT);
+    expect(decide({ policy, facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64 })).toMatchObject({ due: false, why: "nothing-due" });
+    expect(companion({ policy, facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64 })).toMatchObject({ eligible: true, why: "keep-alive", decision: { handoff: true } });
+  });
+
+  it("skips only the interval: participation, a pending proof, no new finality and a stranded light client still stop it", () => {
+    const waiting = [message(FINALIZED - 5)];
+    expect(companion({ messages: waiting, participants: MIN_PARTICIPANTS - 1 })).toMatchObject({ eligible: false, reason: "insufficient-signatures", detail: "341 of 512 sync committee members signed; the program needs 342" });
+    expect(companion({ messages: waiting, participants: null })).toMatchObject({ eligible: false, reason: "insufficient-signatures" });
+    expect(companion({ messages: waiting, pendingProof: { startSlot: HEAD, newSlot: FINALIZED - 10 } })).toMatchObject({ eligible: false, reason: "proof-pending" });
+    expect(companion({ messages: waiting, finalizedSlot: HEAD })).toMatchObject({ eligible: false, reason: "not-newer" });
+    const head = 100 * PERIOD + 10;
+    const nowSlot = 103 * PERIOD;
+    expect(companion({ facts: facts(head, false), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64, history: { kind: "missing", period: 100 } })).toMatchObject({ eligible: false, reason: "stranded" });
+  });
+
+  it("a keep-alive within the interval waits while the source would sign in a period finality has not reached", () => {
+    // The head is 11.5 hours old and the clock reaches period 101 within the hour; finality stays in period 100.
+    const nowSlot = 101 * PERIOD - 100;
+    const head = nowSlot - Math.round((11.5 * HOUR) / SLOT);
+    expect(companion({ facts: facts(head), nowSeconds: at(nowSlot), finalizedSlot: nowSlot - 64 })).toMatchObject({ eligible: false, reason: "nothing-due" });
   });
 });

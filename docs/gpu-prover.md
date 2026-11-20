@@ -345,7 +345,7 @@ Before the prover sends a job (a light-client update or a fork observation) to a
 - The prover sends the job to one tier only. When that tier then fails in a way another endpoint can help (the table above), the prover goes on with the tiers not given up yet: the ones still pinged, then the next in the list.
 - After the 200 the rules of the table above apply to the job. A tier that then answers `/prove` with "not ready" (another job took the worker) is awaited up to its ready wait again, counted from that request.
 
-The backend's warm-up pings only the first tier, so in the usual case the cheap worker is ready when the job comes.
+The backend's warm-up pings only the first tier, so in the usual case the cheap worker is ready when the job comes. The warm-up is off on the server (`watch.warmup.enabled: false`) since 2026-11-19: it saved no GPU time, only about 31 s of latency, and its idle waits cost about $0.60 a day (docs/superpowers/specs/2026-11-19-one-gpu-session-both-directions-design.md).
 
 Log lines: `remote_tier_escalate` (`from_endpoint_index`, `from_endpoint`, `to_endpoint_index`, `to_endpoint`, `waited_seconds`) when a tier brings in the next, and `remote_tier_chosen` (`endpoint_index`, `endpoint`, `start_wait_ms`) when a tier answers 200 and gets the job. A tier that is given up while pinged writes `remote_endpoint_failover`. The pings are not counted in `not_ready_count`. The `prove_timing` line carries `start_wait_ms`: the time spent pinging before the job was sent. `failover_count` counts the tiers given up, not the tiers still pinged when another one won. No line shows a URL or a key.
 

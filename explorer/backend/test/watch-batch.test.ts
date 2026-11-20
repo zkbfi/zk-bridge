@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { encodeAbiParameters, encodeFunctionData, type Address, type Hex } from "viem";
 import { PROOF_COST_USD, PULSEX_FACTORIES, STABLES, USD, WAD, WPLS, tokenMediatorAbi, batchCostUsd, marginWadOf } from "@zk-bridge/shared";
 import { makeConfig } from "./support.ts";
-import { batchRuleFor, deprecatedBatchKeys, planBatch, usdText, type BatchMessage, type BatchRule, type Economics } from "../src/watch/batch.ts";
+import { batchRuleFor, companionProofsFor, deprecatedBatchKeys, planBatch, usdText, type BatchMessage, type BatchRule, type Economics } from "../src/watch/batch.ts";
 import { createEconomicsReader, type DestinationToken } from "../src/watch/economics.ts";
 
 /** The gas of one delivery that these tests count at. */
@@ -43,6 +43,19 @@ describe("batchRuleFor", () => {
     expect(batchRuleFor(mixed, "eth-pls", "first-to-second", 384).minIntervalSeconds).toBe(60);
     expect(deprecatedBatchKeys(mixed)).toEqual(["watch.maxWaitSeconds", "watch.pairs.sepolia-pls943.maxWaitSeconds", "watch.pairs.sepolia-pls943.directions.first-to-second.maxWaitSeconds"]);
     expect(deprecatedBatchKeys(makeConfig({ watch: { minIntervalSeconds: 5 } }).watch)).toEqual([]);
+  });
+
+  it("resolves companionProofs as the other fields: on by default, a direction beats its pair, a pair beats the global one", () => {
+    expect(companionProofsFor(makeConfig().watch, "sepolia-pls943", "first-to-second")).toBe(true);
+    const off = makeConfig({ watch: { pairs: { "sepolia-pls943": { companionProofs: false, directions: { "second-to-first": { companionProofs: true } } } } } }).watch;
+    expect(companionProofsFor(off, "sepolia-pls943", "first-to-second")).toBe(false);
+    expect(companionProofsFor(off, "sepolia-pls943", "second-to-first")).toBe(true);
+    expect(companionProofsFor(off, "eth-pls", "first-to-second")).toBe(true);
+    const own = makeConfig({ watch: { companionProofs: false, pairs: { "sepolia-pls943": { directions: { "first-to-second": { companionProofs: false } } }, "eth-pls": { companionProofs: true } } } }).watch;
+    expect(companionProofsFor(own, "sepolia-pls943", "first-to-second")).toBe(false);
+    expect(companionProofsFor(own, "sepolia-pls943", "second-to-first")).toBe(false);
+    expect(companionProofsFor(own, "eth-pls", "second-to-first")).toBe(true);
+    expect(() => makeConfig({ watch: { pairs: { "sepolia-pls943": { companionProofs: "yes" } } } })).toThrow();
   });
 
   it("defaults to no minimum interval, one epoch of lookahead and a margin of 1", () => {

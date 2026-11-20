@@ -51,7 +51,8 @@
   },
   "watch": {
     "pairs": {
-      "sepolia-pls943": { "minIntervalSeconds": 3600, "unpricedAtMaximumPays": false }
-    }
+      "sepolia-pls943": { "minIntervalSeconds": 3600, "unpricedAtMaximumPays": false, "companionProofs": true }
+    },
+    "warmup": { "enabled": false }
   }
 }

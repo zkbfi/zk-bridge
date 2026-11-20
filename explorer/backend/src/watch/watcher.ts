@@ -2,7 +2,9 @@
  * The watcher of one proof direction. On each new finalized header of the source chain it decides whether a proof is
  * due ({@link decideProof}) and starts the job through the request service, which applies every gate of a request. On
  * a timer it wakes the remote prover a learned lead time before a proof is expected and keeps the worker warm until the
- * job starts ({@link warmupStep}), so a worker is ready when the job starts.
+ * job starts ({@link warmupStep}), so a worker is ready when the job starts. When the other direction of the pair starts
+ * a proof, it proves too if it would prove now had its minimum interval passed ({@link companionDecision}), so both
+ * proofs share one worker start.
  */
 import { slotAtTime } from "@zk-bridge/shared";
 import type { Hex } from "viem";
@@ -13,7 +15,7 @@ import { pendingFrom, type HeldProof } from "../requests/held-proofs.ts";
 import type { Job } from "../requests/jobs.ts";
 import type { ProofRequest, SubmitResult } from "../requests/service.ts";
 import { usdText, type BatchRule, type Economics } from "./batch.ts";
-import { decideProof, warmupPlan, type DecisionInput, type DepositsFacts, type PendingProof, type WaitingMessage } from "./decide.ts";
+import { companionDecision, decideProof, warmupPlan, type DecisionInput, type DepositsFacts, type PendingProof, type WaitingMessage } from "./decide.ts";
 import type { DestinationToken } from "./economics.ts";
 import type { DecisionOutcome, WatchDecision } from "./decisions.ts";
 import type { FinalityObservation } from "./feed.ts";
@@ -90,6 +92,18 @@ export type DirectionWatcherInput = {
   readonly now: () => number;
   /** Told of each decision and, for a due one, of what came of it. `GET /directions/:direction/pipeline` shows the latest. */
   readonly onDecision?: (decision: WatchDecision) => void;
+  /**
+   * Whether this direction proves as the companion of the other direction's proof (`watch...companionProofs`). Default
+   * true.
+   */
+  readonly companionProofs?: boolean;
+  /** Whether the GPU spend guard has set every tier to 0 workers: no companion starts then. Absent: never. */
+  readonly gpuTiersZeroed?: () => boolean;
+  /**
+   * Told when this watcher started a new proof job on its own decision (not as a companion, and not by joining a job).
+   * The module asks the other direction of the pair for its companion.
+   */
+  readonly onProofStarted?: () => void;
 };
 
 /** A running watcher. */
@@ -100,6 +114,11 @@ export interface DirectionWatcher {
   scan(): Promise<void>;
   /** Resolves when no reading is being handled. */
   settled(): Promise<void>;
+  /**
+   * Looks at this direction as the companion of a proof the other direction (`triggeredBy`) just started, and starts its
+   * proof when it is eligible. Handled in turn with the readings.
+   */
+  companion(triggeredBy: ProofDirection): void;
   /** Cancels the retry timer and waits for the running work. */
   stop(): Promise<void>;
 }
@@ -125,6 +144,8 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
   let doneSlot = -1;
   let running: Promise<void> | null = null;
   let waiting: { observation: FinalityObservation; attempt: number } | null = null;
+  /** The other direction whose proof asked for a companion, while the request waits its turn. */
+  let companionWanted: ProofDirection | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let stopped = false;
   let lastSeen = "";
@@ -362,6 +383,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
     if (!("refused" in result)) {
       doneSlot = observation.finalizedSlot;
       if (decision.why === "keep-alive") keepAlivePeriod = finalizedPeriod;
+      if (result.joined !== true) input.onProofStarted?.();
       return;
     }
     if (result.refused === "duplicate") {
@@ -380,6 +402,102 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
     if (again) retry(observation, attempt + 1, result.retryAfterSeconds);
   }
 
+  /**
+   * The companion of a proof the other direction just started (docs/superpowers/specs/2026-11-19-one-gpu-session-both-
+   * directions-design.md, decision 2). It reads the light client and the messages afresh and decides with the newest
+   * finality this watcher handled, skipping only the minimum interval: no job of the direction may run, no finality is
+   * proved twice, the GPU guard must not have zeroed the tiers, and the request service applies every gate it applies to
+   * any request (the daily budget among them). A refusal is not retried. `proof_companion_skipped` is logged only while
+   * a message waits.
+   */
+  async function companion(triggeredBy: ProofDirection): Promise<void> {
+    const seen = known;
+    const nowSeconds = now() / 1000;
+    let facts: LightClientFacts;
+    let listed: readonly ListedMessage[];
+    let history: SourceHistory = { kind: "not-needed" };
+    try {
+      [facts, listed] = await Promise.all([input.readFacts(), input.readMessages()]);
+      const periods = seen === null || seen.finalizedSlot === 0 ? [] : neededHandoffPeriods(facts, { finalizedSlot: seen.finalizedSlot }, nowSeconds);
+      if (periods.length > 0) history = await input.readHistory(periods, facts.slotsPerPeriod);
+    } catch (error) {
+      logger.warn("watch_read_failed", { direction, companionOf: triggeredBy, error });
+      return;
+    }
+    const uncovered = listed.filter((message) => slotAtTime(message.timestamp, facts) > facts.headSlot).length;
+    const skip = (reason: string, detail: string): void => {
+      if (uncovered > 0) logger.info("proof_companion_skipped", { direction, triggeredBy, reason, detail, messages: uncovered });
+    };
+    // A scan reads the light client before any finality and leaves the finalized slot at 0.
+    if (seen === null || seen.finalizedSlot === 0) return skip("no-finality", "the watcher has not handled a finality of the source chain yet");
+    const finalizedSlot = seen.finalizedSlot;
+    if (finalizedSlot <= doneSlot) return skip("done", `a job already started or joined for the finalized slot ${finalizedSlot}`);
+    const active = input.findActiveJob();
+    if (active !== null) return skip("job-active", `job ${active.id} of the direction is queued or proving`);
+    if (input.gpuTiersZeroed?.() === true) return skip("gpu-guard", "the GPU spend guard has set every tier to 0 workers");
+    const verdict = companionDecision({
+      finalizedSlot,
+      participants: seen.participants,
+      minParticipants: input.minParticipants,
+      facts,
+      messages: toWaiting(listed, facts),
+      pendingProof: pendingAt(facts.headSlot),
+      history,
+      policy: input.policy,
+      nowSeconds,
+      pendingStaleSeconds: input.pendingStaleSeconds,
+      minIntervalSeconds: input.batchRule.minIntervalSeconds,
+    });
+    if (!verdict.eligible) return skip(verdict.reason, verdict.detail);
+    const { decision } = verdict;
+    const finalizedPeriod = Math.floor(finalizedSlot / facts.slotsPerPeriod);
+    const headAge = nowSeconds - (facts.genesisTime + facts.headSlot * facts.secondsPerSlot);
+    if (decision.why === "keep-alive" && keepAlivePeriod === finalizedPeriod && headAge <= input.policy.keepAliveSeconds) {
+      return skip("keep-alive-this-period", `a keep-alive already started while the source's finality was in period ${finalizedPeriod}, and the head is younger than the keep-alive age`);
+    }
+    const result = await input.submit({
+      pair: input.pairName,
+      direction,
+      reason: "finality",
+      caller: WATCH_CALLER,
+      companion: verdict.why,
+      ...(decision.why === "message" ? { messageId: decision.messageIds[0] as Hex } : decision.handoff ? { plannedHandoff: true } : {}),
+      since: now(),
+      target: { startSlot: facts.headSlot, newSlot: finalizedSlot },
+    });
+    if ("refused" in result) {
+      const why = "why" in result && result.why !== undefined ? ` (${result.why})` : "";
+      const detail = "detail" in result && result.detail !== undefined ? `: ${result.detail}` : "";
+      return skip(result.refused, `the request service refused it${why}${detail}`);
+    }
+    doneSlot = finalizedSlot;
+    if (decision.why === "keep-alive") keepAlivePeriod = finalizedPeriod;
+    logger.info("proof_companion", { direction, triggeredBy, why: verdict.why, finalizedSlot, detail: decision.detail, jobId: result.jobId });
+  }
+
+  /** Runs the waiting work one piece at a time: a companion first (it rides on the worker the other direction starts), then the newest reading. */
+  function drain(): void {
+    if (running !== null) return;
+    running = (async () => {
+      while (!stopped && (companionWanted !== null || waiting !== null)) {
+        const triggeredBy = companionWanted;
+        const next = waiting as { observation: FinalityObservation; attempt: number };
+        try {
+          if (triggeredBy !== null) {
+            companionWanted = null;
+            await companion(triggeredBy);
+          } else {
+            waiting = null;
+            await handle(next.observation, next.attempt);
+          }
+        } catch (error) {
+          logger.error("watch_failed", { direction, error });
+        }
+      }
+      running = null;
+    })();
+  }
+
   function enqueue(observation: FinalityObservation, attempt: number): void {
     if (stopped) return;
     // A newer reading replaces a scheduled retry of an older one.
@@ -389,19 +507,7 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
     }
     // A retry never overtakes a newer reading: the newer one cleared its timer above.
     waiting = { observation, attempt };
-    if (running !== null) return;
-    running = (async () => {
-      while (waiting !== null && !stopped) {
-        const next = waiting;
-        waiting = null;
-        try {
-          await handle(next.observation, next.attempt);
-        } catch (error) {
-          logger.error("watch_failed", { direction, error });
-        }
-      }
-      running = null;
-    })();
+    drain();
   }
 
   const seconds = (milliseconds: number) => Math.round(milliseconds) / 1000;
@@ -558,6 +664,11 @@ export function createDirectionWatcher(input: DirectionWatcherInput): DirectionW
 
   return {
     observe: (observation) => enqueue(observation, 0),
+    companion(triggeredBy) {
+      if (stopped || input.companionProofs === false) return;
+      companionWanted = triggeredBy;
+      drain();
+    },
     scan,
     async settled() {
       while (running !== null) await running;

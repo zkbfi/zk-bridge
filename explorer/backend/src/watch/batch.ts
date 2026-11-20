@@ -66,6 +66,16 @@ export function batchRuleFor(watch: BackendConfig["watch"], pairName: string, di
   };
 }
 
+/**
+ * Whether the direction may prove as the companion of the other direction's proof (`companionProofs`), resolved as
+ * {@link batchRuleFor} resolves its fields: the direction's beats its pair's, the pair's beats the global one. Default
+ * true.
+ */
+export function companionProofsFor(watch: BackendConfig["watch"], pairName: string, direction: ProofDirection): boolean {
+  const pair = watch.pairs[pairName];
+  return pair?.directions?.[direction]?.companionProofs ?? pair?.companionProofs ?? watch.companionProofs ?? true;
+}
+
 /** The configuration keys that use the deprecated `maxWaitSeconds`, such as `watch.pairs.sepolia-pls943.maxWaitSeconds`. */
 export function deprecatedBatchKeys(watch: BackendConfig["watch"]): string[] {
   const keys: string[] = [];

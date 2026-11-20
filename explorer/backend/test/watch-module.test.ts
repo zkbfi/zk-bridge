@@ -7,7 +7,8 @@ import { start as startRequests } from "../src/requests/module.ts";
 import { createRequestService } from "../src/requests/service.ts";
 import { DEFAULT_WARMUP } from "../src/watch/warmup.ts";
 import { createWarmupStore } from "../src/watch/warmup-store.ts";
-import { MESSAGE_LIMIT, startWatch, watchedDirections } from "../src/watch/module.ts";
+import type { GpuGuardTierState } from "../src/gpu-guard.ts";
+import { MESSAGE_LIMIT, everyTierZeroed, startWatch, watchedDirections } from "../src/watch/module.ts";
 import { createProverPing } from "../src/watch/ping.ts";
 import { PAIR, SECRETS, fakeProofNeed, makeBackend, makeConfig } from "./support.ts";
 import { fakeBeacon, finalityUpdate, flush } from "./watch-support.ts";
@@ -368,6 +369,83 @@ describe("startWatch", () => {
     expect(beacon.requests).toContain(FINALITY);
     expect(run.named("watch_read_failed")).toHaveLength(1);
     await stop();
+  });
+});
+
+describe("startWatch, one GPU session for both directions (2026-11-19)", () => {
+  const BACK = `/api/feed?${new URLSearchParams({ direction: "369>1", status: "sent,waiting_for_finality", limit: String(MESSAGE_LIMIT) })}`;
+  const chain = { getBlockNumber: async () => 1n, getBlock: async () => ({ baseFeePerGas: 1n }), readContract: async () => true };
+
+  function setup(options: { watch?: Record<string, unknown>; guard?: GpuGuardTierState[] } = {}) {
+    const beacon = fakeBeacon();
+    beacon.set(FINALITY, finalityUpdate(HEAD, 500));
+    const sent = HEAD + 100;
+    beacon.set(FEED, { items: [{ messageId: `0x${"ab".repeat(32)}`, sent: { timestamp: GENESIS + sent * SLOT } }] });
+    beacon.set(BACK, { items: [{ messageId: `0x${"cd".repeat(32)}`, sent: { timestamp: GENESIS + sent * SLOT } }] });
+    const backend = makeBackend({ config: makeConfig({ indexerUrl: "http://indexer.test", watch: { warmup: { enabled: false }, pairs: { "eth-pls": { minIntervalSeconds: 3600 } }, ...options.watch } }), proofNeed: fakeProofNeed({ needed: true, why: "waiting-message" }) });
+    const context = { ...backend.context, now: Date.now, ...(options.guard === undefined ? {} : { gpuGuardState: () => options.guard as GpuGuardTierState[] }) };
+    const service = createRequestService({ storage: context.storage, proverForJob: context.proverForJob, readProofNeed: context.readProofNeed, now: context.now, limits: context.config.limits, proverTimeoutMilliseconds: 1_800_000, logger: context.logger });
+    // second-to-first proved twenty minutes ago: inside its hour. first-to-second never proved: its message proves at once.
+    insertJob(context.storage, { id: "earlier", direction: "second-to-first", now: Date.now() - 20 * 60_000 });
+    context.storage.database.prepare("UPDATE jobs SET status = 'on-chain', new_slot = '1'").run();
+    const events = () => backend.log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    const finality = async () => {
+      const finalized = (Math.floor(sent / 32) + 1) * 32;
+      vi.setSystemTime(slotStart(finalized + 65));
+      // The feed of second-to-first (started second) sees the finality first.
+      for (const stream of [...beacon.streams].reverse()) stream.send("light_client_finality_update", finalityUpdate(finalized, 500, finalized + 65));
+      await flush(60);
+      return finalized;
+    };
+    const start = () => startWatch({ context, service, dependencies: { fetchFunction: () => beacon.fetchFunction, readLightClient: async () => lightClient, readDepositsOpen: async () => true, chainClient: () => chain } });
+    return { backend, context, service, finality, start, named: (name: string) => events().filter((event) => event.event === name) };
+  }
+
+  it("starts the other direction's proof as a companion right after the first one", async () => {
+    const run = setup();
+    const stop = await run.start();
+    await flush();
+    expect(run.named("watch_started")).toMatchObject([{ directions: ["first-to-second", "second-to-first"], companionProofs: { "first-to-second": true, "second-to-first": true } }]);
+    const finalized = await run.finality();
+    expect(run.named("proof_not_due").at(-1)).toMatchObject({ direction: "second-to-first", why: "min-interval" });
+    expect(run.named("job_started")).toMatchObject([
+      { direction: "first-to-second", why: "waiting-message" },
+      { direction: "second-to-first", why: "waiting-message", companion: "messages" },
+    ]);
+    expect(run.named("proof_companion")).toMatchObject([{ direction: "second-to-first", triggeredBy: "first-to-second", why: "messages", finalizedSlot: finalized }]);
+    expect(findActiveJob(run.context.storage, "second-to-first")).not.toBeNull();
+    await stop();
+    run.backend.prover.settleAll({ kind: "up-to-date" });
+    await run.service.settled();
+  });
+
+  it("starts no companion when a direction turns it off for itself, or when the GPU guard has zeroed every tier", async () => {
+    const off = setup({ watch: { pairs: { "eth-pls": { minIntervalSeconds: 3600, directions: { "second-to-first": { companionProofs: false } } } } } });
+    const stopOff = await off.start();
+    await flush();
+    await off.finality();
+    expect(off.named("job_started")).toMatchObject([{ direction: "first-to-second" }]);
+    expect(off.named("proof_companion_skipped")).toEqual([]);
+    await stopOff();
+    off.backend.prover.settleAll({ kind: "up-to-date" });
+    await off.service.settled();
+    const tripped: GpuGuardTierState = { tier: "gpu-24gb", endpointId: "abcdef", state: "tripped", until: null, lastTrip: null, tripsLast24h: 1 };
+    const guarded = setup({ guard: [tripped, { ...tripped, tier: "gpu-48gb", state: "held" }] });
+    const stopGuarded = await guarded.start();
+    await flush();
+    await guarded.finality();
+    expect(guarded.named("job_started")).toMatchObject([{ direction: "first-to-second" }]);
+    expect(guarded.named("proof_companion_skipped")).toMatchObject([{ direction: "second-to-first", reason: "gpu-guard" }]);
+    await stopGuarded();
+    guarded.backend.prover.settleAll({ kind: "up-to-date" });
+    await guarded.service.settled();
+  });
+
+  it("counts the tiers as zeroed only when the guard watches some and every one is tripped or held", () => {
+    const tier: GpuGuardTierState = { tier: "gpu-24gb", endpointId: "abcdef", state: "ok", until: null, lastTrip: null, tripsLast24h: 0 };
+    expect(everyTierZeroed([])).toBe(false);
+    expect(everyTierZeroed([tier, { ...tier, state: "tripped" }])).toBe(false);
+    expect(everyTierZeroed([{ ...tier, state: "held" }, { ...tier, state: "tripped" }])).toBe(true);
   });
 });
 

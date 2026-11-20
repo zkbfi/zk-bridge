@@ -69,6 +69,8 @@ function setup(
     lastProofAt?: number;
     /** The deposits of the destination bridge; absent: the deposit rule is off. */
     deposits?: () => Promise<DepositsFacts>;
+    /** `companionProofs` of the direction; absent: the default. */
+    companionProofs?: boolean;
   } = {},
 ) {
   const decisions: WatchDecision[] = [];
@@ -84,7 +86,11 @@ function setup(
     factsFail: false,
     admitAfter: 0,
     history: { kind: "serves" } as SourceHistory,
+    /** Whether the GPU spend guard has set every tier to 0 workers. */
+    zeroed: false,
   };
+  /** How often the watcher said it started a proof of its own. */
+  const started = { count: 0 };
   const submitted: ProofRequest[] = [];
   const pings: number[] = [];
   const reads = { facts: 0, messages: 0, history: 0, economics: 0, deposits: 0 };
@@ -150,10 +156,13 @@ function setup(
     logger: log.logger,
     now: Date.now,
     ...(options.recordDecisions === true ? { onDecision: (decision: WatchDecision) => void decisions.push(decision) } : {}),
+    ...(options.companionProofs === undefined ? {} : { companionProofs: options.companionProofs }),
+    gpuTiersZeroed: () => state.zeroed,
+    onProofStarted: () => void (started.count += 1),
   });
   const events = () => log.lines.map((line) => JSON.parse(line) as Record<string, unknown>);
   const sessions = () => storage.database.prepare("SELECT why, lead_seconds AS lead, started_at AS startedAt, ready_at AS readyAt, ended_at AS endedAt, outcome FROM warmup_sessions ORDER BY started_at").all();
-  return { watcher, state, submitted, pings, reads, store, storage, sessions, decisions, named: (name: string) => events().filter((event) => event.event === name) };
+  return { watcher, state, submitted, pings, reads, store, storage, sessions, decisions, started, named: (name: string) => events().filter((event) => event.event === name) };
 }
 
 /** A reading that arrived `delay` ms after its signature slot began. */
@@ -1289,5 +1298,250 @@ describe("the direction watcher, while the destination bridge waits for deposits
     run.watcher.observe(observation(HEAD + 224));
     await run.watcher.settled();
     expect(run.named("watch_deposits_read_failed")).toHaveLength(2);
+  });
+});
+
+describe("the direction watcher, as the companion of the other direction's proof (2026-11-19)", () => {
+  // docs/superpowers/specs/2026-11-19-one-gpu-session-both-directions-design.md, decision 2: when one direction starts
+  // a proof, the other proves in the same tick if it would prove now had its minimum interval passed.
+  const WAIT: BatchRule = { minIntervalSeconds: 3600, lookaheadSeconds: 384, marginWad: 10n ** 18n, unpricedAtMaximumPays: true };
+  const reading = observation(HEAD + 128);
+  /** The direction's last proof started ten minutes before the reading: well inside the hour. */
+  const LAST = reading.receivedAt - 10 * 60_000;
+
+  /** A watcher of first-to-second inside its interval, with message `a` final at the reading, which it has handled. */
+  async function waiting(options: Parameters<typeof setup>[0] = {}) {
+    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT, lastProofAt: LAST, ...options });
+    arrive(reading);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    expect(run.named("proof_not_due")).toMatchObject([{ why: "min-interval" }]);
+    return run;
+  }
+
+  it("proves a waiting message the light client can cover now at once, skipping only the minimum interval", async () => {
+    const run = await waiting();
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([
+      { pair: "sepolia-pls943", direction: "first-to-second", reason: "finality", caller: "watch", companion: "messages", messageId: id("a"), since: reading.receivedAt, target: { startSlot: HEAD, newSlot: HEAD + 128 } },
+    ]);
+    expect(run.named("proof_companion")).toMatchObject([
+      { level: "info", direction: "first-to-second", triggeredBy: "second-to-first", why: "messages", finalizedSlot: HEAD + 128, jobId: "job-1", detail: `1 waiting message is final at slot ${HEAD + 128}` },
+    ]);
+    expect(run.named("proof_companion_skipped")).toEqual([]);
+    // A companion is not a trigger: the other direction is not asked back, so there is never a third job.
+    expect(run.started.count).toBe(0);
+    // The end of the interval and the same finality again start nothing more: the job covers this finality.
+    run.state.active = null;
+    await vi.advanceTimersByTimeAsync(3_600_000);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    expect(run.submitted).toHaveLength(1);
+  });
+
+  it("proves a keep-alive due within the minimum interval, as a keep-alive companion", async () => {
+    // The head is 11.5 hours old at the reading: the 12 hour age rule calls for a keep-alive within the hour.
+    const finalized = HEAD + 3450;
+    const late = observation(finalized);
+    const run = setup({ batchRule: WAIT, lastProofAt: late.receivedAt - 10 * 60_000 });
+    arrive(late);
+    run.watcher.observe(late);
+    await run.watcher.settled();
+    expect(run.named("proof_not_due")).toMatchObject([{ why: "nothing-due" }]);
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([{ pair: "sepolia-pls943", direction: "first-to-second", reason: "finality", caller: "watch", companion: "keep-alive", since: late.receivedAt, target: { startSlot: HEAD, newSlot: finalized } }]);
+    expect(run.named("proof_companion")).toMatchObject([{ why: "keep-alive", triggeredBy: "second-to-first" }]);
+    expect(run.named("proof_companion")[0]!.detail).toMatch(/^the keep-alive is due within the minimum interval \(3600 s\)/);
+    // The period rule of keep-alives does not hold a message companion back.
+    run.state.active = null;
+    run.state.messages = [listed(finalized + 10, "b")];
+    const next = observation(finalized + 32);
+    arrive(next);
+    run.watcher.observe(next);
+    await run.watcher.settled();
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted).toHaveLength(2);
+  });
+
+  it("a handoff companion carries the planned-handoff flag, and a second keep-alive in the period waits", async () => {
+    // Finality has crossed into period 1001, the head in 1000 holds only its own committee: a handoff is due. Its own
+    // request is refused for longer than the watcher retries, so the companion asks.
+    const head = 1000 * PERIOD + 8000;
+    const run = setup({ facts: facts(head, false), batchRule: WAIT, submit: (request) => (request.companion === undefined ? { refused: "rate-limited", retryAfterSeconds: 3600, why: "limit" } : { requestId: "r", jobId: "job-c" }) });
+    const crossed = observation(1001 * PERIOD + 4);
+    arrive(crossed);
+    run.watcher.observe(crossed);
+    await run.watcher.settled();
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted.at(-1)).toMatchObject({ companion: "keep-alive", plannedHandoff: true, target: { startSlot: head, newSlot: 1001 * PERIOD + 4 } });
+    expect(run.named("proof_companion")).toMatchObject([{ why: "keep-alive" }]);
+    // The light-client reading lags: at the next finality the planner would ask again, and the period rule holds it.
+    // A message that is not final yet waits, so the skip is logged.
+    run.state.active = null;
+    run.state.messages = [listed(1001 * PERIOD + 100, "b")];
+    const next = observation(1001 * PERIOD + 36);
+    arrive(next);
+    run.watcher.observe(next);
+    await run.watcher.settled();
+    const before = run.submitted.length;
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted).toHaveLength(before);
+    expect(run.named("proof_companion_skipped").at(-1)).toMatchObject({ reason: "keep-alive-this-period", messages: 1 });
+  });
+
+  it("is not started while a job of the direction runs, a proof waits to land, or the GPU guard has zeroed the tiers", async () => {
+    const run = await waiting();
+    run.state.active = job({ id: "running" });
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    run.state.active = null;
+    run.state.held = [{ startSlot: HEAD, newSlot: HEAD + 64, where: "job", since: Date.now() }];
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    run.state.held = [];
+    run.state.zeroed = true;
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([]);
+    expect(run.named("proof_companion_skipped")).toMatchObject([
+      { level: "info", direction: "first-to-second", triggeredBy: "second-to-first", reason: "job-active", messages: 1, detail: "job running of the direction is queued or proving" },
+      { reason: "proof-pending", messages: 1 },
+      { reason: "gpu-guard", messages: 1, detail: "the GPU spend guard has set every tier to 0 workers" },
+    ]);
+    // Back to normal, it starts.
+    run.state.zeroed = false;
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.named("proof_companion")).toHaveLength(1);
+  });
+
+  it("is not started when too few of the committee signed its newest finality, or before it saw one", async () => {
+    const before = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT, lastProofAt: LAST });
+    before.watcher.companion("second-to-first");
+    await before.watcher.settled();
+    // A scan reads the light client without a finality: still none.
+    await before.watcher.scan();
+    before.watcher.companion("second-to-first");
+    await before.watcher.settled();
+    expect(before.named("proof_companion_skipped")).toMatchObject([{ reason: "no-finality" }, { reason: "no-finality" }]);
+    expect(before.submitted).toEqual([]);
+    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT, lastProofAt: LAST });
+    const weak = observation(HEAD + 128, MIN_PARTICIPANTS - 1);
+    arrive(weak);
+    run.watcher.observe(weak);
+    await run.watcher.settled();
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([]);
+    expect(run.named("proof_companion_skipped")).toMatchObject([{ reason: "insufficient-signatures", messages: 1 }]);
+  });
+
+  it("is not started when companionProofs is off for the direction, and reads and says nothing", async () => {
+    const run = await waiting({ companionProofs: false });
+    const reads = run.reads.facts;
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([]);
+    expect(run.named("proof_companion_skipped")).toEqual([]);
+    expect(run.reads.facts).toBe(reads);
+  });
+
+  it("logs a skip only when a message waits", async () => {
+    const run = setup({ batchRule: WAIT, lastProofAt: LAST });
+    arrive(reading);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    // A message the head covers already is not waiting either.
+    run.state.messages = [listed(HEAD - 5)];
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([]);
+    expect(run.named("proof_companion_skipped")).toEqual([]);
+  });
+
+  it("goes through every gate of the request service: a refusal is a skip, never retried", async () => {
+    const run = await waiting({ submit: () => ({ refused: "rate-limited", retryAfterSeconds: 60, why: "gpu-budget", detail: "the 24 h GPU budget of $5.00 for first-to-second is spent: $5.04" }) });
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(run.submitted).toHaveLength(1);
+    expect(run.named("proof_companion_skipped")).toMatchObject([{ reason: "rate-limited", messages: 1, detail: "the request service refused it (gpu-budget): the 24 h GPU budget of $5.00 for first-to-second is spent: $5.04" }]);
+    const duplicate = await waiting({ submit: () => ({ refused: "duplicate" }) });
+    duplicate.watcher.companion("second-to-first");
+    await duplicate.watcher.settled();
+    expect(duplicate.named("proof_companion_skipped")).toMatchObject([{ reason: "duplicate", detail: "the request service refused it" }]);
+  });
+
+  it("is not started again for a finality a job already started for", async () => {
+    const run = await waiting();
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    run.state.active = null;
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted).toHaveLength(1);
+    expect(run.named("proof_companion_skipped")).toMatchObject([{ reason: "done", detail: `a job already started or joined for the finalized slot ${HEAD + 128}` }]);
+  });
+
+  it("a failed read is logged and starts nothing", async () => {
+    const run = await waiting();
+    run.state.factsFail = true;
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted).toEqual([]);
+    expect(run.named("watch_read_failed")).toMatchObject([{ direction: "first-to-second", companionOf: "second-to-first", error: { message: "rpc down" } }]);
+  });
+
+  it("reads the handoff history the planner needs for the companion's finality", async () => {
+    // The head is two periods behind the finality: the planner needs the handoffs, which the source does not serve.
+    const head = 999 * PERIOD + 100;
+    const run = setup({ facts: facts(head, true), messages: [listed(1001 * PERIOD + 10, "a")], batchRule: WAIT, lastProofAt: LAST });
+    run.state.history = { kind: "missing", period: 1000 };
+    const crossed = observation(1001 * PERIOD + 36);
+    arrive(crossed);
+    run.watcher.observe(crossed);
+    await run.watcher.settled();
+    const reads = run.reads.history;
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.reads.history).toBe(reads + 1);
+    expect(run.named("proof_companion_skipped")).toMatchObject([{ reason: "stranded" }]);
+  });
+
+  it("says when it started a proof of its own; a refusal or a joined job does not", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a")] });
+    arrive(reading);
+    run.watcher.observe(reading);
+    await run.watcher.settled();
+    expect(run.started.count).toBe(1);
+    const refused = setup({ messages: [listed(HEAD + 100, "a")], submit: () => ({ refused: "duplicate" }) });
+    refused.watcher.observe(reading);
+    await refused.watcher.settled();
+    const joined = setup({ messages: [listed(HEAD + 100, "a")], submit: () => ({ requestId: "r", jobId: "other", joined: true }) });
+    joined.watcher.observe(reading);
+    await joined.watcher.settled();
+    expect([refused.started.count, joined.started.count]).toEqual([0, 0]);
+  });
+
+  it("a companion asked while the watcher handles a finality waits its turn, and a stopped watcher takes none", async () => {
+    const run = setup({ messages: [listed(HEAD + 100, "a")], batchRule: WAIT, lastProofAt: LAST });
+    arrive(reading);
+    run.watcher.observe(reading);
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.named("proof_not_due")).toMatchObject([{ why: "min-interval" }]);
+    expect(run.named("proof_companion")).toHaveLength(1);
+    await run.watcher.stop();
+    run.state.active = null;
+    run.watcher.companion("second-to-first");
+    await run.watcher.settled();
+    expect(run.submitted).toHaveLength(1);
   });
 });
