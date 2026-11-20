@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "description": "The React layer of the zkb.fi bridge screen: hooks for the fee, the verdict, prices at a block and delivery status, and the self-contained components (sheet, review sheet, token and chain icons) with a stylesheet that a host themes through CSS variables.",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22"
