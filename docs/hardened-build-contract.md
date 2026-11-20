@@ -73,7 +73,7 @@ Fetch Ethereum mainnet values (fork versions, fork epochs, genesis validators ro
 | `src/hardened/`, `src/mocks/OracleSP1Verifier.sol`, `test/hardened/`, `script/hardened/` | hardened contracts agent |
 | `light-client/` | light-client agent |
 | `harness/` | harness agent (starts after the hardened contracts exist) |
-| `foundry.toml`, `docs/` (except the section above), `README.md`, `progress.txt` | coordinator |
+| `foundry.toml`, `docs/` (except the section above), `README.md` | coordinator |
 
 ## Hardened contracts
 
