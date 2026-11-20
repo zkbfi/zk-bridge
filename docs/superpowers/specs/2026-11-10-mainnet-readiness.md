@@ -62,15 +62,15 @@ replaced (`docs/redeploy-2026-11-gas.md`, "Layer 3 later, alone").
 | What | State, with date | Source |
 |---|---|---|
 | Contracts on testnet | First deployment 2026-10-26. Layers 1 to 3 redeployed 2026-11-08: eight creations per chain, 16 receipts with status 1; Sepolia 98,325,040 gas, largest creation (`MessageBridge`) 14,587,871 gas (87% of the EIP-7825 cap of 16,777,216); chain 943 13,996,582 gas. Read-backs passed on forks of both chains. | `docs/redeploy-2026-11-gas.md`, "What happened on 2026-11-08"; `broadcast/multi/RedeployLayers.s.sol-latest/run.json` |
-| Router that emits `Delivered` | Deployed 2026-11-08 night (layer 3 alone). | `docs/redeploy-2026-11-gas.md`; commit `f2d3e6ba` |
+| Router that emits `Delivered` | Deployed 2026-11-08 night (layer 3 alone). | `docs/redeploy-2026-11-gas.md`; commit `90c12312` |
 | Gas rule | "Gas reverts up" in all three layers; `callbackGas` in layer 2, `callGas` in layer 3. | `docs/superpowers/specs/2026-11-01-gas-revert-up.md` |
 | Creation size guard | `test/hardened/CreationGasCap.t.sol` keeps every creation under 90% of the cap at 1,600 gas per runtime byte (Sepolia's price). | same file |
-| Gate | Sepolia gate `Enforcing`; 943 gate `DetectBeaconRootsAndRegistry`. Confirm-then-send in the dapp and the traffic bot, same epoch (commit `dfbc44e7`). | `src/hardened/BeaconForkGate.sol`; `docs/hardened-build-contract.md`, "Gate evidence: confirm, then send" |
-| Light clients | The backend's watcher owns keep-alive since 2026-11-06; every period's handoff archived; "stranded" only when every source lacks a handoff; deadline warning on the status page and the dapp (commit `c728891a`). | `docs/testnet-run.md`, "Keeping the light clients alive" |
-| Proving | Prove on finality (2026-10-31), adaptive warm-up, batching, profit rule, deduplication, minimum interval from the last proof (2026-11-01); one job per finality and a GPU budget per direction (commit `149469e1`); the idle timeout owned by the backend (`feat/idle-timeout-sync`). | `docs/superpowers/specs/2026-10-31-prove-on-finality.md`; `explorer/backend/README.md` |
+| Gate | Sepolia gate `Enforcing`; 943 gate `DetectBeaconRootsAndRegistry`. Confirm-then-send in the dapp and the traffic bot, same epoch (commit `5ad55d4f`). | `src/hardened/BeaconForkGate.sol`; `docs/hardened-build-contract.md`, "Gate evidence: confirm, then send" |
+| Light clients | The backend's watcher owns keep-alive since 2026-11-06; every period's handoff archived; "stranded" only when every source lacks a handoff; deadline warning on the status page and the dapp (commit `9594c63c`). | `docs/testnet-run.md`, "Keeping the light clients alive" |
+| Proving | Prove on finality (2026-10-31), adaptive warm-up, batching, profit rule, deduplication, minimum interval from the last proof (2026-11-01); one job per finality and a GPU budget per direction (commit `f92ee1c5`); the idle timeout owned by the backend (`feat/idle-timeout-sync`). | `docs/superpowers/specs/2026-10-31-prove-on-finality.md`; `explorer/backend/README.md` |
 | GPU | RTX 5090 on the RunPod serverless endpoint: warm proof about 36 s, first proof on a worker about 51 s, cold start 24 s to 412 s. Image v6 on the template; v7 did not start (cause unknown). MIG slices are handed out even when only whole GPUs are listed. | `docs/gpu-trial-2026-11-01.md` |
-| Delivery | Runner delivers paying items; since 2026-11-09 also a covered item with no paying offer after `deliverUnpaidAfterSeconds` (3600), within a daily spend cap per chain (Sepolia 0.05 ETH, 943 one million PLS). | `explorer/bots/README.md`; commit `2d3ea3e9` |
-| RPC in the dapp | One pool per chain (valve.city, pulsechain.com, publicnode), round robin, 30 s bench on 429/5xx. Beacon default `one.valve.city/beacon/vk_demo/<chain>`. | commit `90d56b05`; `explorer/web/docs/pages/08-settings-and-explore.md` |
+| Delivery | Runner delivers paying items; since 2026-11-09 also a covered item with no paying offer after `deliverUnpaidAfterSeconds` (3600), within a daily spend cap per chain (Sepolia 0.05 ETH, 943 one million PLS). | `explorer/bots/README.md`; commit `039a7b8e` |
+| RPC in the dapp | One pool per chain (valve.city, pulsechain.com, publicnode), round robin, 30 s bench on 429/5xx. Beacon default `one.valve.city/beacon/vk_demo/<chain>`. | commit `34e5daf9`; `explorer/web/docs/pages/08-settings-and-explore.md` |
 | Off-chain red team | 2026-10-29: 13 findings fixed in two rounds, none high or critical. | `docs/red-team-2026-10-29-offchain.md`, "Status" |
 | Release | Channels `next` (staging key) and `stable` (production key); stable zkb.fi is 0.1.1; `promote.sh` requires the commit on `origin/main`. | `docs/release.md` |
 | Costs, measured | GPU about $0.65 to $1.2 a day on testnet; app server €12.49 a month. | owner context, `GET /billing` (`explorer/backend/README.md`) |
@@ -91,7 +91,7 @@ decided before the audit starts. Size: depends on D1 and D2. Blocks: the audit.
 line 228); a send in an epoch nobody confirmed reverts with `ForkNotConfirmed` (`src/hardened/BeaconForkGate.sol`,
 `admit`). On Ethereum (gate `Enforcing`) an epoch is 6.4 minutes, about 225 a day, so most low-traffic sends pay a
 `confirm` first (about 42,748 gas of call, `docs/hardened-build-contract.md`) and race the epoch border (the bug fixed
-in `dfbc44e7`). A send that carries its own evidence removes the race and the second transaction. It changes layer 1
+in `5ad55d4f`). A send that carries its own evidence removes the race and the second transaction. It changes layer 1
 (a send method that passes evidence), layer 2 (the mediator's relay entry points pass it through) and layer 3 (the
 router's source entry points). This reverses the user decision of 2026-10-24 ("A send carries no gate evidence").
 - **D1.** Build sends with gate evidence before mainnet, or launch with confirm-then-send? **Decided 2026-11-10, owner:
@@ -133,7 +133,7 @@ router's source entry points). This reverses the user decision of 2026-10-24 ("A
   iterate". Decision: the backend seals both chains the same way: it watches each chain's fork, and on PulseChain it
   proves the fork observation on the GPU, posts it to the fork registry, then seals.
 - **Status 2026-11-10, seal-only gate (branch `feat/seal-only-gate`, not merged, not deployed).** Built test-first. The
-  router change below is reverted (`git revert -m 1 33f79395`): the router's entries are again the ones deployed on
+  router change below is reverted (`git revert -m 1 37f311c4`): the router's entries are again the ones deployed on
   testnet. `BeaconForkGate` gets two modes, appended to the enum: `SealOnly` (3, Ethereum and Sepolia) and
   `SealOnlyWithRegistry` (4, PulseChain and 943, whose seal can only come from the fork registry, since PulseChain has no
   beacon roots); `admit` reads the seal and returns, `seal` is unchanged, layers 1 to 3 unchanged. Receipt gas: a router
@@ -159,7 +159,7 @@ router's source entry points). This reverses the user decision of 2026-10-24 ("A
   a shape the gate does not allow wakes the seal check at once. `GET /fork-observations/:chainId/latest` serves the newest
   proof, and Explore's "Post the fork observation" posts it. Open: nothing keeps the registry's light client fresh, so
   the fold grows one update a day (limit 64); known issue 1.23.
-- **Status 2026-11-10, reverted (branch `feat/router-gate-evidence`, merged as `33f79395`, reverted on `feat/seal-only-gate`).** Built test-first. The router's
+- **Status 2026-11-10, reverted (branch `feat/router-gate-evidence`, merged as `37f311c4`, reverted on `feat/seal-only-gate`).** Built test-first. The router's
   entries are `wrapAndRelayTokens()` (no evidence), `wrapAndRelayTokens(address,bytes)` and
   `relayTokensAndCall(address,bytes,uint256,bytes)`; the old receiver forms are removed, so the dapp and the terminal
   need the new router deployed (layer 3 alone) before their release. The router reaches the gate at call time through
@@ -339,7 +339,7 @@ risk is a wrong delivery decision, **(guess)** bounded by the spend caps).
 The owner's pricing rules, verbatim:
 > "we should use 1% - the frontend's auto maximum whenever the frontend cannot determine the price"
 
-Built in the dapp (commit `2c721e8e`, `explorer/core/src/fee-rules.ts`). And: an unpriced tip at or above the 1% maximum
+Built in the dapp (commit `52dcf388`, `explorer/core/src/fee-rules.ts`). And: an unpriced tip at or above the 1% maximum
 should "deliver straight away". The runner does not do this today: an unpriced token is skipped until
 `deliverUnpaidAfterSeconds`. Size: S to M, test-first, in the runner.
 
@@ -376,7 +376,7 @@ endpoints in the pool; never ship a paid key in a static build (anti-goal).
 - **D11.** Ask valve.city for a mainnet arrangement, or rely on public RPCs plus the pool for the dapp?
 
 **F3. Copy that depends on mainnet settings.** "a low tip says the zkb.fi runner delivers it after an hour" (commit
-`d225c8ec`) is true only while `deliverUnpaidAfterSeconds` is 3600 and the cap is not spent. On mainnet: tie the text to
+`0d04cb02`) is true only while `deliverUnpaidAfterSeconds` is 3600 and the cap is not spent. On mainnet: tie the text to
 the release's configured value, or reword. Also the wait-time timeline (`feat/wait-timeline`) uses testnet
 measurements; it must read mainnet benchmarks after launch. The gate confirm step in the review (`fix/dapp-gate-confirm`)
 goes away if D1 is yes. Size: S each.
@@ -424,7 +424,7 @@ contracts that can lose funds, and the guest programs), tier 2 (deploy script, c
 `docs/audit/invariants.md`, `docs/spec-deviations.md`, `docs/zkbridge-paper-review.md`.
 
 **S3. One more internal pass on what changed since the red teams:** the split libraries, the gas rule, the router's
-`Delivered` event, the runner's unpaid rule and layout calls (commit `657e0336`). Size: M.
+`Delivered` event, the runner's unpaid rule and layout calls (commit `ff3b2a27`). Size: M.
 
 **S4. Accepted risks to confirm for real money:** no refunds (1.1), a failed release is final (1.2), no outflow cap
 (1.3, see D2), no admin (1.4), sync committee concentration on PulseChain (1.7), SP1 as the only proof system (1.8). The

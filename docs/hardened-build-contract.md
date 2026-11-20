@@ -1083,7 +1083,7 @@ more gas?", "i do not understand why wwe can't just enforce with the frontend. n
 but your implementation sounds really expensive", then, on this design: "well, yes, the middle ground was always
 correct, and it also gave us our previous, first possible upgrade path right?". The decision is in
 `docs/superpowers/specs/2026-11-10-mainnet-readiness.md`, A2. The router change of the same day (`gateEvidence` on router
-sends, merge `33f79395`) is reverted: the router's entries are again `wrapAndRelayTokens()`, `wrapAndRelayTokens(address)`
+sends, merge `37f311c4`) is reverted: the router's entries are again `wrapAndRelayTokens()`, `wrapAndRelayTokens(address)`
 and `relayTokensAndCall(address,bytes,uint256)`, the ones of the router deployed on testnet.
 
 - **Two new modes of `BeaconForkGate`**, appended to the enum so the earlier values keep their numbers: `SealOnly` (3,
@@ -1127,7 +1127,7 @@ and `relayTokensAndCall(address,bytes,uint256)`, the ones of the router deployed
   traffic bot send with no `confirm`. The status check `gate-<chainId>` says "seal-only mode" and goes down when sealed.
 
 Gas, receipt level (each call its own transaction, refund capped at a fifth; `test/hardened/SendGateGas.t.sol`, the real
-bridge and mediator; "before" is `main` at `36f765a4`, with the router of `33f79395` and an `Enforcing` gate in a
+bridge and mediator; "before" is `main` at `e6f58816`, with the router of `37f311c4` and an `Enforcing` gate in a
 confirmed epoch):
 
 | Send | Before (main) | After (seal-only gate) |

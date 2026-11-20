@@ -14,7 +14,7 @@
           "OpeningProofLib",
           "BeaconLayoutLib"
         ],
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -31,7 +31,7 @@
         "libraries": [
           "MediatorPayloads"
         ],
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -45,7 +45,7 @@
         "role": "Refuses new sends when the other chain has moved to a state layout that the proof program cannot read.",
         "group": "live",
         "source": "src/hardened/BeaconForkGate.sol:BeaconForkGate",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -59,7 +59,7 @@
         "role": "Creates the bridged copy of a token the first time that token is sent here.",
         "group": "live",
         "source": "src/hardened/mediator/TokenFactory.sol:TokenFactory",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -73,7 +73,7 @@
         "role": "Optional entry point for delivery: it wraps the native coin, delivers the message, pays a voluntary tip, unwraps, and makes the follow-up call.",
         "group": "live",
         "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -87,7 +87,7 @@
         "role": "Library that checks the receipt, transaction and log proofs of a message against a block.",
         "group": "live",
         "source": "src/hardened/ReceiptProofLib.sol:ReceiptProofLib",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -101,7 +101,7 @@
         "role": "Library that checks the opening proof that releases tokens locked by a one-way deposit.",
         "group": "live",
         "source": "src/hardened/OpeningProofLib.sol:OpeningProofLib",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -115,7 +115,7 @@
         "role": "Library that checks the beacon state layout rows (block roots, block hashes, historical summaries) that a message proof relies on.",
         "group": "live",
         "source": "src/hardened/BeaconLayoutLib.sol:BeaconLayoutLib",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -129,7 +129,7 @@
         "role": "Library that encodes and decodes the token messages that the mediator sends across the bridge.",
         "group": "live",
         "source": "src/hardened/mediator/MediatorPayloads.sol:MediatorPayloads",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -143,7 +143,7 @@
         "role": "Light client of the PulseChain testnet v4 beacon chain, kept on Sepolia. It stores finalized headers and accepts a new one only with a zero-knowledge proof.",
         "group": "live",
         "source": "src/hardened/BeaconLightClient.sol:BeaconLightClient",
-        "source_commit": "fbc62e9",
+        "source_commit": "4e86885",
         "deployed_on": "2026-10-29",
         "verified": {
           "blockscout": true,
@@ -157,7 +157,7 @@
         "role": "Checks the Groth16 zero-knowledge proofs that the light clients accept (the vendored SP1 verifier, version 6.1.0).",
         "group": "live",
         "source": "src/hardened/vendor/sp1-contracts/v6.1.0/SP1VerifierGroth16.sol:SP1Verifier",
-        "source_commit": "fbc62e9",
+        "source_commit": "4e86885",
         "deployed_on": "2026-10-29",
         "verified": {
           "blockscout": true,
@@ -171,7 +171,7 @@
         "role": "Test token zkb Test Dollar (tUSD, 6 decimals). Only the deployer can mint it.",
         "group": "tokens",
         "source": "src/testnet/TestToken.sol:TestToken",
-        "source_commit": "91133524",
+        "source_commit": "71bb2017",
         "deployed_on": "2026-11-01",
         "verified": {
           "blockscout": true,
@@ -185,7 +185,7 @@
         "role": "Test token zkb Test Token (tTKN, 18 decimals). Only the deployer can mint it.",
         "group": "tokens",
         "source": "src/testnet/TestToken.sol:TestToken",
-        "source_commit": "91133524",
+        "source_commit": "71bb2017",
         "deployed_on": "2026-11-01",
         "verified": {
           "blockscout": true,
@@ -200,7 +200,7 @@
         "group": "tokens",
         "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
         "created_by": "factory",
-        "source_commit": "91133524",
+        "source_commit": "71bb2017",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -215,7 +215,7 @@
         "group": "tokens",
         "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
         "created_by": "factory",
-        "source_commit": "91133524",
+        "source_commit": "71bb2017",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -243,7 +243,7 @@
         "role": "The delivery router before the one above. It is retired, and the record still lists it so that deliveries made through it are recognised.",
         "group": "retired",
         "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
-        "source_commit": "91133524",
+        "source_commit": "71bb2017",
         "deployed_on": "2026-11-08",
         "verified": {
           "blockscout": true,
@@ -280,7 +280,7 @@
           "OpeningProofLib",
           "BeaconLayoutLib"
         ],
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -297,7 +297,7 @@
         "libraries": [
           "MediatorPayloads"
         ],
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -311,7 +311,7 @@
         "role": "Refuses new sends when the other chain has moved to a state layout that the proof program cannot read.",
         "group": "live",
         "source": "src/hardened/BeaconForkGate.sol:BeaconForkGate",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -325,7 +325,7 @@
         "role": "Creates the bridged copy of a token the first time that token is sent here.",
         "group": "live",
         "source": "src/hardened/mediator/TokenFactory.sol:TokenFactory",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -339,7 +339,7 @@
         "role": "Optional entry point for delivery: it wraps the native coin, delivers the message, pays a voluntary tip, unwraps, and makes the follow-up call.",
         "group": "live",
         "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -353,7 +353,7 @@
         "role": "Library that checks the receipt, transaction and log proofs of a message against a block.",
         "group": "live",
         "source": "src/hardened/ReceiptProofLib.sol:ReceiptProofLib",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": false,
@@ -367,7 +367,7 @@
         "role": "Library that checks the opening proof that releases tokens locked by a one-way deposit.",
         "group": "live",
         "source": "src/hardened/OpeningProofLib.sol:OpeningProofLib",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": false,
@@ -381,7 +381,7 @@
         "role": "Library that checks the beacon state layout rows (block roots, block hashes, historical summaries) that a message proof relies on.",
         "group": "live",
         "source": "src/hardened/BeaconLayoutLib.sol:BeaconLayoutLib",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": false,
@@ -395,7 +395,7 @@
         "role": "Library that encodes and decodes the token messages that the mediator sends across the bridge.",
         "group": "live",
         "source": "src/hardened/mediator/MediatorPayloads.sol:MediatorPayloads",
-        "source_commit": "66578376",
+        "source_commit": "cf63fff9",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": false,
@@ -409,7 +409,7 @@
         "role": "Light client of the Sepolia beacon chain, kept on PulseChain testnet v4. It stores finalized headers and accepts a new one only with a zero-knowledge proof.",
         "group": "live",
         "source": "src/hardened/BeaconLightClient.sol:BeaconLightClient",
-        "source_commit": "fbc62e9",
+        "source_commit": "4e86885",
         "deployed_on": "2026-10-29",
         "verified": {
           "blockscout": true,
@@ -423,7 +423,7 @@
         "role": "Light client of the PulseChain testnet v4 beacon chain, kept on PulseChain testnet v4 itself. The fork registry reads it.",
         "group": "live",
         "source": "src/hardened/BeaconLightClient.sol:BeaconLightClient",
-        "source_commit": "fbc62e9",
+        "source_commit": "4e86885",
         "deployed_on": "2026-10-29",
         "verified": {
           "blockscout": true,
@@ -437,7 +437,7 @@
         "role": "Records the fork version and state layout of this chain's own beacon chain from proofs, so the gate can tell when the layout changes.",
         "group": "live",
         "source": "src/hardened/ForkRegistry.sol:ForkRegistry",
-        "source_commit": "fbc62e9",
+        "source_commit": "4e86885",
         "deployed_on": "2026-10-29",
         "verified": {
           "blockscout": true,
@@ -451,7 +451,7 @@
         "role": "Checks the Groth16 zero-knowledge proofs that the light clients accept (the vendored SP1 verifier, version 6.1.0).",
         "group": "live",
         "source": "src/hardened/vendor/sp1-contracts/v6.1.0/SP1VerifierGroth16.sol:SP1Verifier",
-        "source_commit": "fbc62e9",
+        "source_commit": "4e86885",
         "deployed_on": "2026-10-29",
         "verified": {
           "blockscout": true,
@@ -465,7 +465,7 @@
         "role": "Test token zkb Test Dollar (tUSD, 6 decimals). Only the deployer can mint it.",
         "group": "tokens",
         "source": "src/testnet/TestToken.sol:TestToken",
-        "source_commit": "91133524",
+        "source_commit": "71bb2017",
         "deployed_on": "2026-11-01",
         "verified": {
           "blockscout": true,
@@ -479,7 +479,7 @@
         "role": "Test token zkb Test Token (tTKN, 18 decimals). Only the deployer can mint it.",
         "group": "tokens",
         "source": "src/testnet/TestToken.sol:TestToken",
-        "source_commit": "91133524",
+        "source_commit": "71bb2017",
         "deployed_on": "2026-11-01",
         "verified": {
           "blockscout": true,
@@ -494,7 +494,7 @@
         "group": "tokens",
         "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
         "created_by": "factory",
-        "source_commit": "91133524",
+        "source_commit": "71bb2017",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": false,
@@ -509,7 +509,7 @@
         "group": "tokens",
         "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
         "created_by": "factory",
-        "source_commit": "91133524",
+        "source_commit": "71bb2017",
         "deployed_on": "2026-11-11",
         "verified": {
           "blockscout": true,
@@ -537,7 +537,7 @@
         "role": "The delivery router before the one above. It is retired, and the record still lists it so that deliveries made through it are recognised.",
         "group": "retired",
         "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
-        "source_commit": "91133524",
+        "source_commit": "71bb2017",
         "deployed_on": "2026-11-08",
         "verified": {
           "blockscout": true,

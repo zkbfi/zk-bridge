@@ -52,7 +52,7 @@ Owner, verbatim: "it looks like half of the runpod runs are failing. it is wasti
 The rule above let a keep-alive start at every finality while the committee deadline sat inside the planner's margin.
 A proof inside the head's own period cannot hand off to the next committee, so on 2026-10-31 the watcher paid for 47
 proofs in six hours that changed nothing, and 32 warm-up pings timed out on our side while RunPod still counted and
-started a worker for each. The rule now (commit c8663d76):
+started a worker for each. The rule now (commit 5e4bb5c5):
 
 - **Keep-alive due** only when a proof can make progress: the source has finalized a later period than the head's (or
   the planner needs handoff steps), the head is older than `keepAliveSeconds`, or there is no head. A young head in the

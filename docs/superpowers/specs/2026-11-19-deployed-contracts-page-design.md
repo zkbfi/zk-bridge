@@ -40,12 +40,12 @@ tables. The page is generated, so it cannot drift from the deployment record.
 
 ## Facts behind the first record (read on 2026-11-19)
 
-- Nine contracts have the same address on both chains, from `RedeployLayers` at commit 66578376 (2026-11-11): MessageBridge,
+- Nine contracts have the same address on both chains, from `RedeployLayers` at commit cf63fff9 (2026-11-11): MessageBridge,
   TokenMediator, BeaconForkGate, TokenFactory, DeliveryRouter and the libraries ReceiptProofLib, OpeningProofLib,
   BeaconLayoutLib and MediatorPayloads.
-- The light clients, the SP1 verifiers and the ForkRegistry come from `DeployBridge` at commit fbc62e9 (2026-10-29). The
+- The light clients, the SP1 verifiers and the ForkRegistry come from `DeployBridge` at commit 4e86885 (2026-10-29). The
   PulseChain testnet has two light clients: one follows Sepolia, one follows PulseChain testnet itself for the ForkRegistry.
-- The retired delivery routers and the test tokens are from commit 91133524.
+- The retired delivery routers and the test tokens are from commit 71bb2017.
 - Sepolia Blockscout shows all of its contracts as verified, labelled "partial" because `foundry.toml` sets `bytecode_hash`
   to none and `cbor_metadata` to false; Sourcify reports an exact match. PulseChain testnet Blockscout shows all verified
   except ReceiptProofLib, OpeningProofLib, BeaconLayoutLib, MediatorPayloads and one bridged token. Etherscan: none yet,

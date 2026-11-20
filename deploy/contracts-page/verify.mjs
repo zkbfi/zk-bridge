@@ -2,7 +2,7 @@
 // Verifies the source of every contract of one deployment on the explorers, then reads the status back into the record
 // and regenerates the page. Run it after every contract deployment (docs/testnet-run.md, "After a contract deployment").
 //
-//   node deploy/contracts-page/verify.mjs --pair sepolia-pls943 --commit 66578376 [options]
+//   node deploy/contracts-page/verify.mjs --pair sepolia-pls943 --commit cf63fff9 [options]
 //
 //   --pair <name>          the record, deploy/deployments/<name>.json (required)
 //   --commit <hash>        the source commit; only contracts whose `source_commit` matches it are verified (required)

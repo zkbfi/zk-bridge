@@ -341,7 +341,7 @@ Presentation choices (owner 72, "clearest to the end user"), to show the owner:
 - The price tooltip now says prices pick the default fee and its warnings but never an amount you sign (the old "never used for ... fees" was no longer true once the curve uses dollars).
 
 Left:
-- The coverage gate (100 %) still fails in web, in files this work did not cover before either (BridgeScreen, use-prices, ExplorePages, …). Measured against 03d8514, no file this work touched lost coverage. shared and indexer are at 100 %.
+- The coverage gate (100 %) still fails in web, in files this work did not cover before either (BridgeScreen, use-prices, ExplorePages, …). Measured against 5fbf675, no file this work touched lost coverage. shared and indexer are at 100 %.
 - The React and data packages (owner 73–74) are not started.
 
 Fields shown as "—" because the indexer does not record them: the transfer's user (From) when the answer has no `transfer.sender`, the nonce, the fee and each of its parts, USD on testnets, the revert reason, gas used and gas on delivery, the delivered block (not yet parsed from live answers before this change), committee signers in block drawers, and the payload/function/arguments when the answer has no `data`.

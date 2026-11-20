@@ -260,7 +260,7 @@ docs reader (`readdirSync`, `.json` files only) descends into `archive/`. No fro
 `0x3332b5f19f2b0095be68d6104329e715d5896ae188dd7e11f7d7607d2942ed71`, both on 943). Then the runner was stopped and the
 switch began.
 
-**The server** (release `911335249e98571f1943947de54ea7683d80ab96`, built with `build.yml`; every changed file has a
+**The server** (release `71bb2017039be756d8c427cf7a1ac922904d4982`, built with `build.yml`; every changed file has a
 copy with the suffix `.bak-20261108`):
 
 - `/etc/zk-bridge/deployment.json` (the one file every service reads): the new pair, mode 0644 root:root as before.
@@ -384,7 +384,7 @@ their chain, and `wNative()`, `rewardAddress()` and `failedDeliveryAddress()` eq
   Message `...0000` above stays addressed to the old router. For the runner it has no offer (its recipient is not the
   configured router), so the unpaid rule delivers it straight to the bridge; the old router then receives the tokens
   outside `executeMessage` and passes them on without a tip.
-- **Server** (release `f2d3e6ba3c8ed3a3928830b5a7db66a7842b430a`; backups with the suffix `.bak-20261108b`):
+- **Server** (release `90c12312ff40d0be531ccb618bea7d72d5cc8c26`; backups with the suffix `.bak-20261108b`):
   `/etc/zk-bridge/deployment.json` replaced (0644 root:root); no runner or traffic setting names a router. The indexer
   schema changed (fee fields), so a second green ran beside the first: `indexer.yml -e action=green` with
   `-e zkb_indexer_green_port=42071 -e zkb_green_indexer_unit=zk-bridge-indexer-pre2` filled `indexer_5bc793a78041`

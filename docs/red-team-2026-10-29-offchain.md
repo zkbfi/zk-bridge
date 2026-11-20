@@ -225,7 +225,7 @@ Method notes:
 - **Scenario.** An RPC or beacon URL with its key in the path (QuickNode `/<token>/`, Ankr `/eth/<key>`) or in a query parameter not on the list (`dkey`, `access_token`), or an `x-api-key` header, shows up in an error that is logged or returned. It is removed only if the caller passes the value as a known secret. A known secret shorter than six characters, or in its percent-encoded form, is never removed.
 - **Tests.** shared "ATTACK SUCCEEDS QuickNode path token survives …" and the five cases next to it; "ATTACK SUCCEEDS a known secret of five characters is not removed"; "ATTACK SUCCEEDS a known secret is not removed in its percent-encoded form".
 - **Suggested fix.** Every caller should pass the configured endpoint URLs (and their path and query parts) as known secrets. Also remove the percent-encoded form of each known secret. Add rules for `[?&][a-z_]*(key|token)=` and `x-api-key:`.
-- **Status.** Fixed in `ce89a03`, `d3ac139`. New rules for QuickNode, Ankr, any 32+ hex path segment without 0x, query parameters whose name ends in key/token/secret/password/auth, `x-api-key`/`api-key`/`auth-token` headers, an Authorization header of any scheme and the JSON fields `x-api-key`, `access_token`, `authorization`. A known secret is removed at any length, in its plain and percent-encoded form; one under six characters wherever it stands as a whole token. `isRegistrableSecret` decides what may become a known secret (no literals or common words; an unmarked value from 8 characters), and `urlSecrets` uses it.
+- **Status.** Fixed in `5793879`, `0a2a3f7`. New rules for QuickNode, Ankr, any 32+ hex path segment without 0x, query parameters whose name ends in key/token/secret/password/auth, `x-api-key`/`api-key`/`auth-token` headers, an Authorization header of any scheme and the JSON fields `x-api-key`, `access_token`, `authorization`. A known secret is removed at any length, in its plain and percent-encoded form; one under six characters wherever it stands as a whole token. `isRegistrableSecret` decides what may become a known secret (no literals or common words; an unmarked value from 8 characters), and `urlSecrets` uses it.
 
 ### S-7 Low: the board reader has no limit
 
@@ -257,7 +257,7 @@ Method notes:
 - **Scenario.** A message target that runs inside a batch emits an event with the bridge's signature naming item B, whose call failed. B is recorded as delivered and never retried by this runner. Forged `Transfer` events to the router shift the fee accounting.
 - **Test.** bots "ATTACK SUCCEEDS forged AffirmationCompleted from a target contract marks a failed item as delivered".
 - **Suggested fix.** Require `log.address` to be the destination bridge, and take release segments only from the mediator.
-- **Status.** Fixed in `b0f44cf`. `readReceipt` takes `AffirmationCompleted` only from the destination bridge (`DeliveryDependencies.bridge`) and cuts the logs of each item at those events, so a forged event or transfer stays inside the item of the target that wrote it.
+- **Status.** Fixed in `7fc8628`. `readReceipt` takes `AffirmationCompleted` only from the destination bridge (`DeliveryDependencies.bridge`) and cuts the logs of each item at those events, so a forged event or transfer stays inside the item of the target that wrote it.
 
 ### B-4 Low: a flood of forged proofs costs prover CPU
 
@@ -265,7 +265,7 @@ Method notes:
 - **Scenario.** The head is public, so each distinct forgery that names it passes the cheap checks and spawns one `verify` process. The payload memory is per payload. No gas is lost; msgboard proof of work is the only brake.
 - **Test.** bots "ATTACK SUCCEEDS forged-proof flood: every distinct forgery that names the current head spawns one local verify".
 - **Suggested fix.** One verify in flight per head and a cap per minute; remember refusals per head.
-- **Status.** Fixed in `22bd630`, `265ea94`, `aa41d7a`. `createVerifyGuard` (shared/prover/verify-guard.ts), shared by the runners of one process: a refusal memory per source and head (definite refusals only, exit code 1), a general budget of 30 checks a minute (16 per source), a reserve of 4 per source for proofs that reach further than any verified at the head (each claimed slot once a minute), and drops logged as `proof_verify_dropped`. A new slot after the destination clock is refused before the guard (`head-in-future`). A verifier timeout or crash gives the retryable `verify-unavailable`.
+- **Status.** Fixed in `f496cbc`, `794dbfb`, `f48d1bc`. `createVerifyGuard` (shared/prover/verify-guard.ts), shared by the runners of one process: a refusal memory per source and head (definite refusals only, exit code 1), a general budget of 30 checks a minute (16 per source), a reserve of 4 per source for proofs that reach further than any verified at the head (each claimed slot once a minute), and drops logged as `proof_verify_dropped`. A new slot after the destination clock is refused before the guard (`head-in-future`). A verifier timeout or crash gives the retryable `verify-unavailable`.
 
 ### W-1 Low: the web indexer path shows a stale proof as found
 
@@ -298,7 +298,7 @@ Method notes:
 - **Scenario.** 12 IPv4 addresses (or one IPv6 /48) fill `globalRequestsPerMinute` (120). Requests that only join an active job count too.
 - **Test.** backend "ATTACK SUCCEEDS twelve IPv4 addresses fill the global limit and lock every honest caller out for a minute".
 - **Suggested fix.** Do not count joins of an active job; give keep-alive and message requests their own budget.
-- **Status.** Fixed in `9ecfe6f`. `globalRequestsPerMinute` caps the distinct callers of a minute; a caller already counted is held only by its own limit. A /48 still gives 120 keys (K-7).
+- **Status.** Fixed in `2c579dc`. `globalRequestsPerMinute` caps the distinct callers of a minute; a caller already counted is held only by its own limit. A /48 still gives 120 keys (K-7).
 
 ### K-3 Low to medium: a slow board wastes paid proofs
 
@@ -306,7 +306,7 @@ Method notes:
 - **Scenario.** A job is failed after `prover.timeoutSeconds` (1800 s) although its proof is stored and the post is still retrying (retries take about 1.5 hours). The next tick deletes the proof and the next request pays again.
 - **Test.** backend "ATTACK SUCCEEDS a board that is slow or down for longer than prover.timeoutSeconds loses a paid GPU proof, and the next request pays for another".
 - **Suggested fix.** Skip jobs with a stored proof in `failLostJobs`, or refresh `updatedAt` on each post attempt.
-- **Status.** Fixed in `6d59721`. The publisher touches the job before each post attempt and after each failed one (`touchProvingJob`), so the lost-job check leaves it alone while the posts go on.
+- **Status.** Fixed in `493406a`. The publisher touches the job before each post attempt and after each failed one (`touchProvingJob`), so the lost-job check leaves it alone while the posts go on.
 
 ### K-4 Low to medium: a lagging RPC read deletes a good proof
 
