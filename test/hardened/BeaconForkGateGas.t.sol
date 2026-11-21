@@ -13,6 +13,13 @@ import {GateAlwaysAdmits} from "./utils/GateMocks.sol";
 /// the real gate adds on top of that call. Since the execution canaries, a send before the switch also makes four
 /// calls to one probe contract (one cold account, three warm calls) and one call to the BLS12-381 address; the numbers
 /// below cool those accounts too.
+///
+/// Toolchain: the numbers are from forge 1.9.0. Up to forge 1.8.5, `vm.cool` cooled the account but left its storage
+/// slots warm, and it left a contract created in the same test warm altogether. The detection-mode numbers measured then
+/// (9,827 over the plain send for a cold-canary send on 2026-10-22, 11,914 on 2026-11-10) missed the cold reads of the
+/// gate's storage, so they were below what a sender pays in a fresh transaction. Forge 1.9.0 cools both, and the same
+/// gate code measures 14,414. The gate itself did not get costlier: its `admit` frame is 14,715 gas at the canary
+/// commit and 14,764 now (the 49 gas are the seal-only mode check of 2026-11-10).
 contract BeaconForkGateGasTest is GateSupport {
     function setUp() public override {
         super.setUp();
@@ -74,14 +81,18 @@ contract BeaconForkGateGasTest is GateSupport {
         emit log_named_uint("  extra over plain", withGenuine - plain);
         // Before the canaries the probe cost under 1,000 gas. The opcode probe adds one cold account access (2,600 gas), the BLS12-381
         // address adds another, and each of the four probe calls burns the forwarded gas of an invalid opcode: about
-        // 10,000 gas more, bounded by the caps of the gate.
-        assertLt(withGate - plain, 12_000, "the probes and canaries stay bounded");
-        assertLt(withGenuine - plain, 12_000, "the same with a reverting beacon roots contract");
+        // 10,000 gas more, bounded by the caps of the gate. With the gate's storage cold as well (forge 1.9.0, see the
+        // contract comment) the measurement is 14,414 with no code at the address and 16,607 with the reverting genuine
+        // code. The bounds are those numbers plus about 20 percent, rounded up to the next thousand. They were 12,000
+        // when forge left the gate's storage warm.
+        assertLt(withGate - plain, 18_000, "the probes and canaries stay bounded");
+        assertLt(withGenuine - plain, 20_000, "the same with a reverting beacon roots contract");
     }
 
     /// Claim: a send in detection mode, with every canary account cold as in a fresh transaction, costs a bounded
     /// amount over the plain send. Shows: the gas through the gate of the fixture (`gateB`, built in `setUp`, so
-    /// that `vm.cool` takes effect on its probes; a contract created inside the test stays warm). Matters: this is the
+    /// that `vm.cool` takes effect on its probes even with forge 1.8.5, where a contract created inside the test stayed
+    /// warm). Measured 14,414 with forge 1.9.0; the bound is that plus about 20 percent. Matters: this is the
     /// real price a PulseChain sender pays on every send until a canary fires: the beacon roots probe, the
     /// opcode probe contract (one cold access, then warm calls) and the BLS12-381 address (a cold access).
     function test_HB02_gas_sendInDetectionModeWithColdCanaries() public {
@@ -92,7 +103,7 @@ contract BeaconForkGateGasTest is GateSupport {
         emit log_named_uint("send in detection mode, cold canaries", withGate);
         emit log_named_uint("  extra over plain", withGate - plain);
         assertGt(withGate - plain, 7_000, "control: the cold accesses are real");
-        assertLt(withGate - plain, 12_000, "bound");
+        assertLt(withGate - plain, 18_000, "bound");
     }
 
     /// Claim: the admit call alone, before detection, costs a small fixed amount. Shows: the gas of
