@@ -238,16 +238,18 @@ describe("the command line", { timeout: 60_000 }, () => {
     const out: string[] = [];
     const log: string[] = [];
     const close = vi.fn(async () => {});
-    const archive = overrides.archive ?? (await freshArchive()).archive;
+    // The archive is made only when the command opens one, as the real CLI connects only then. Each fresh archive
+    // starts an in-process Postgres (about 1 s alone, 4 to 9 s on a busy machine). Made eagerly for every call, the
+    // usage and file-only commands started one for each of the 28 calls, and the tests of this block passed 60 s under load.
     const code = await main(argv, { EXPLORER_PAIR: "sepolia-pls943" }, {
-      openArchive: async () => ({ archive, close }),
+      openArchive: async () => ({ archive: overrides.archive ?? (await freshArchive()).archive, close }),
       stateRoot: () => async () => sepolia.stateRoot,
       now: () => new Date(0),
       print: (text) => out.push(text),
       log: (text) => log.push(text),
       ...overrides,
     });
-    return { code, out: out.map((text) => JSON.parse(text) as Record<string, unknown>), log: log.join("\n"), close, archive };
+    return { code, out: out.map((text) => JSON.parse(text) as Record<string, unknown>), log: log.join("\n"), close };
   };
 
   it("parses options and flags", () => {
