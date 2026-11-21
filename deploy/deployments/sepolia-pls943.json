@@ -1,11 +1,11 @@
 {
   "chain_a": {
-    "bridge": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
+    "bridge": "0x071da4d1b038787c16dae145a8b8c1edb2470f51",
     "chain_id": 11155111,
     "contracts": [
       {
         "name": "MessageBridge",
-        "address": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
+        "address": "0x071da4d1b038787c16dae145a8b8c1edb2470f51",
         "role": "Sends messages to the other chain and delivers the ones that arrive, after it checks the proofs that link each one to a finalized header of the other chain.",
         "group": "live",
         "source": "src/hardened/MessageBridge.sol:MessageBridge",
@@ -14,8 +14,8 @@
           "OpeningProofLib",
           "BeaconLayoutLib"
         ],
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": false,
@@ -24,15 +24,15 @@
       },
       {
         "name": "TokenMediator",
-        "address": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
+        "address": "0x1d04a3b144fb7c0392f1d5459134af87063513ea",
         "role": "Moves tokens through the bridge: it locks a native token here and mints a bridged copy on the other chain, or burns a copy and unlocks the native token.",
         "group": "live",
         "source": "src/hardened/mediator/TokenMediator.sol:TokenMediator",
         "libraries": [
           "MediatorPayloads"
         ],
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": false,
@@ -55,12 +55,12 @@
       },
       {
         "name": "TokenFactory",
-        "address": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
+        "address": "0x29cef591840d70fbb2024a705ab185e584516b85",
         "role": "Creates the bridged copy of a token the first time that token is sent here.",
         "group": "live",
         "source": "src/hardened/mediator/TokenFactory.sol:TokenFactory",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": false,
@@ -69,12 +69,27 @@
       },
       {
         "name": "DeliveryRouter",
-        "address": "0xa125684b9479fbab64218581763788bafb520a57",
-        "role": "Optional entry point for delivery: it wraps the native coin, delivers the message, pays a voluntary tip, unwraps, and makes the follow-up call.",
+        "address": "0xdd78014c06b49d3056ffd5f15b41f8bad8bf047c",
+        "role": "Optional entry point for delivery: it wraps the native coin, delivers the message, pays a voluntary tip, unwraps, and has its RouterCaller make the follow-up call.",
         "group": "live",
         "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "RouterCaller",
+        "address": "0xf7dd5d603da6e83203ba3cac2b7d12a92182856c",
+        "role": "Makes the follow-up call of a delivery for the router above, which created it and is the only account that may use it. It holds nothing, so the call cannot reach tokens that sit in the router.",
+        "group": "live",
+        "source": "src/hardened/mediator/RouterCaller.sol:RouterCaller",
+        "created_by": "factory",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": false,
@@ -83,12 +98,12 @@
       },
       {
         "name": "ReceiptProofLib",
-        "address": "0x6dcc32be1802b1747465dfb2d3a1bf171eaed611",
+        "address": "0x5a5ff919270c2776cbf6db3f13228267938466ae",
         "role": "Library that checks the receipt, transaction and log proofs of a message against a block.",
         "group": "live",
         "source": "src/hardened/ReceiptProofLib.sol:ReceiptProofLib",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": false,
@@ -97,12 +112,12 @@
       },
       {
         "name": "OpeningProofLib",
-        "address": "0x9765bc0e7f57d0064b99a4ae855db16e5b5aa7ba",
+        "address": "0xb3d7d5d954b3ddb01b7020c34b669ac118113427",
         "role": "Library that checks the opening proof that releases tokens locked by a one-way deposit.",
         "group": "live",
         "source": "src/hardened/OpeningProofLib.sol:OpeningProofLib",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": false,
@@ -111,12 +126,12 @@
       },
       {
         "name": "BeaconLayoutLib",
-        "address": "0x4acd9fcef648029931ce163d343feb6d94181322",
+        "address": "0xb8b1b2c701aff6bfc4538a958dd58abc4dea4eb6",
         "role": "Library that checks the beacon state layout rows (block roots, block hashes, historical summaries) that a message proof relies on.",
         "group": "live",
         "source": "src/hardened/BeaconLayoutLib.sol:BeaconLayoutLib",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": false,
@@ -125,12 +140,12 @@
       },
       {
         "name": "MediatorPayloads",
-        "address": "0x1e68160762061624bb5fa31d589a8f31c3e44bc5",
+        "address": "0xc5962ccb5eb33d0af28ee0a187f6ffaff9967ecb",
         "role": "Library that encodes and decodes the token messages that the mediator sends across the bridge.",
         "group": "live",
         "source": "src/hardened/mediator/MediatorPayloads.sol:MediatorPayloads",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": false,
@@ -194,31 +209,15 @@
         }
       },
       {
-        "name": "BridgedToken ztUSD",
-        "address": "0xdbe592A7d7614a10cDcA4B27D889F4f9E59F0Fa6",
-        "role": "Bridged copy of tUSD from PulseChain testnet v4, created by the token factory on the first transfer.",
+        "name": "FaucetToken tFAU",
+        "address": "0x077b01ea09cd6261428166558Cced08f6697f8EB",
+        "role": "Test token zkb Faucet Token (tFAU, 18 decimals). Anyone can mint it, at most 1,000 a call.",
         "group": "tokens",
-        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
-        "created_by": "factory",
-        "source_commit": "71bb2017",
-        "deployed_on": "2026-11-11",
+        "source": "src/testnet/FaucetToken.sol:FaucetToken",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
-          "blockscout": true,
-          "etherscan": false,
-          "sourcify": true
-        }
-      },
-      {
-        "name": "BridgedToken ztTKN",
-        "address": "0x61FA294Fb1CA457B9F3a22e71b36971d4A1E3C20",
-        "role": "Bridged copy of tTKN from PulseChain testnet v4, created by the token factory on the first transfer.",
-        "group": "tokens",
-        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
-        "created_by": "factory",
-        "source_commit": "71bb2017",
-        "deployed_on": "2026-11-11",
-        "verified": {
-          "blockscout": true,
+          "blockscout": false,
           "etherscan": false,
           "sourcify": true
         }
@@ -238,6 +237,156 @@
         }
       },
       {
+        "name": "MessageBridge (retired 2026-11-20)",
+        "address": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
+        "role": "The MessageBridge of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/MessageBridge.sol:MessageBridge",
+        "libraries": [
+          "ReceiptProofLib (retired 2026-11-20)",
+          "OpeningProofLib (retired 2026-11-20)",
+          "BeaconLayoutLib (retired 2026-11-20)"
+        ],
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "TokenMediator (retired 2026-11-20)",
+        "address": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
+        "role": "The TokenMediator of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/mediator/TokenMediator.sol:TokenMediator",
+        "libraries": [
+          "MediatorPayloads (retired 2026-11-20)"
+        ],
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "TokenFactory (retired 2026-11-20)",
+        "address": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
+        "role": "The TokenFactory of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/mediator/TokenFactory.sol:TokenFactory",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "DeliveryRouter (retired 2026-11-20)",
+        "address": "0xa125684b9479fbab64218581763788bafb520a57",
+        "role": "The DeliveryRouter of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "ReceiptProofLib (retired 2026-11-20)",
+        "address": "0x6dcc32be1802b1747465dfb2d3a1bf171eaed611",
+        "role": "The ReceiptProofLib of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/ReceiptProofLib.sol:ReceiptProofLib",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "OpeningProofLib (retired 2026-11-20)",
+        "address": "0x9765bc0e7f57d0064b99a4ae855db16e5b5aa7ba",
+        "role": "The OpeningProofLib of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/OpeningProofLib.sol:OpeningProofLib",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "BeaconLayoutLib (retired 2026-11-20)",
+        "address": "0x4acd9fcef648029931ce163d343feb6d94181322",
+        "role": "The BeaconLayoutLib of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/BeaconLayoutLib.sol:BeaconLayoutLib",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "MediatorPayloads (retired 2026-11-20)",
+        "address": "0x1e68160762061624bb5fa31d589a8f31c3e44bc5",
+        "role": "The MediatorPayloads of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/mediator/MediatorPayloads.sol:MediatorPayloads",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "BridgedToken ztUSD (retired 2026-11-20)",
+        "address": "0xdbe592A7d7614a10cDcA4B27D889F4f9E59F0Fa6",
+        "role": "Bridged copy of tUSD from PulseChain testnet v4, created by the token factory on the first transfer, by the token factory of 2026-11-11. The mediator of 2026-11-20 makes a new copy; this one is redeemed only through the retired contracts.",
+        "group": "retired",
+        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
+        "created_by": "factory",
+        "source_commit": "71bb2017",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
+        "name": "BridgedToken ztTKN (retired 2026-11-20)",
+        "address": "0x61FA294Fb1CA457B9F3a22e71b36971d4A1E3C20",
+        "role": "Bridged copy of tTKN from PulseChain testnet v4, created by the token factory on the first transfer, by the token factory of 2026-11-11. The mediator of 2026-11-20 makes a new copy; this one is redeemed only through the retired contracts.",
+        "group": "retired",
+        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
+        "created_by": "factory",
+        "source_commit": "71bb2017",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": false,
+          "sourcify": true
+        }
+      },
+      {
         "name": "DeliveryRouter (retired)",
         "address": "0x3846e483c98cd0f164c29a5e40f7295a5765aba4",
         "role": "The delivery router before the one above. It is retired, and the record still lists it so that deliveries made through it are recognised.",
@@ -252,26 +401,24 @@
         }
       }
     ],
-    "delivery_router": "0xa125684b9479fbab64218581763788bafb520a57",
-    "delivery_routers": [
-      "0x3846e483c98cd0f164c29a5e40f7295a5765aba4"
-    ],
+    "delivery_router": "0xdd78014c06b49d3056ffd5f15b41f8bad8bf047c",
+    "delivery_routers": [],
     "gate": "0x85fbe4c5f7992fbd97a8e4dafc821fad3b0d20f3",
     "light_client": "0x64ddc23ff43ea0cd2ce9a13ef6681ee651e76e4e",
     "light_client_start_block": 12020692,
-    "mediator": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
-    "start_block": 12114196,
-    "token_factory": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
-    "verification_checked": "2026-11-19",
+    "mediator": "0x1d04a3b144fb7c0392f1d5459134af87063513ea",
+    "start_block": 12182516,
+    "token_factory": "0x29cef591840d70fbb2024a705ab185e584516b85",
+    "verification_checked": "2026-11-21",
     "wrapped_native": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9"
   },
   "chain_b": {
-    "bridge": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
+    "bridge": "0x071da4d1b038787c16dae145a8b8c1edb2470f51",
     "chain_id": 943,
     "contracts": [
       {
         "name": "MessageBridge",
-        "address": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
+        "address": "0x071da4d1b038787c16dae145a8b8c1edb2470f51",
         "role": "Sends messages to the other chain and delivers the ones that arrive, after it checks the proofs that link each one to a finalized header of the other chain.",
         "group": "live",
         "source": "src/hardened/MessageBridge.sol:MessageBridge",
@@ -280,8 +427,8 @@
           "OpeningProofLib",
           "BeaconLayoutLib"
         ],
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": "unsupported",
@@ -290,15 +437,15 @@
       },
       {
         "name": "TokenMediator",
-        "address": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
+        "address": "0x1d04a3b144fb7c0392f1d5459134af87063513ea",
         "role": "Moves tokens through the bridge: it locks a native token here and mints a bridged copy on the other chain, or burns a copy and unlocks the native token.",
         "group": "live",
         "source": "src/hardened/mediator/TokenMediator.sol:TokenMediator",
         "libraries": [
           "MediatorPayloads"
         ],
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": "unsupported",
@@ -321,12 +468,12 @@
       },
       {
         "name": "TokenFactory",
-        "address": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
+        "address": "0x29cef591840d70fbb2024a705ab185e584516b85",
         "role": "Creates the bridged copy of a token the first time that token is sent here.",
         "group": "live",
         "source": "src/hardened/mediator/TokenFactory.sol:TokenFactory",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": "unsupported",
@@ -335,12 +482,27 @@
       },
       {
         "name": "DeliveryRouter",
-        "address": "0xa125684b9479fbab64218581763788bafb520a57",
-        "role": "Optional entry point for delivery: it wraps the native coin, delivers the message, pays a voluntary tip, unwraps, and makes the follow-up call.",
+        "address": "0xdd78014c06b49d3056ffd5f15b41f8bad8bf047c",
+        "role": "Optional entry point for delivery: it wraps the native coin, delivers the message, pays a voluntary tip, unwraps, and has its RouterCaller make the follow-up call.",
         "group": "live",
         "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
+        "verified": {
+          "blockscout": false,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "RouterCaller",
+        "address": "0xf7dd5d603da6e83203ba3cac2b7d12a92182856c",
+        "role": "Makes the follow-up call of a delivery for the router above, which created it and is the only account that may use it. It holds nothing, so the call cannot reach tokens that sit in the router.",
+        "group": "live",
+        "source": "src/hardened/mediator/RouterCaller.sol:RouterCaller",
+        "created_by": "factory",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": "unsupported",
@@ -349,12 +511,12 @@
       },
       {
         "name": "ReceiptProofLib",
-        "address": "0x6dcc32be1802b1747465dfb2d3a1bf171eaed611",
+        "address": "0x5a5ff919270c2776cbf6db3f13228267938466ae",
         "role": "Library that checks the receipt, transaction and log proofs of a message against a block.",
         "group": "live",
         "source": "src/hardened/ReceiptProofLib.sol:ReceiptProofLib",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": false,
           "etherscan": "unsupported",
@@ -363,12 +525,12 @@
       },
       {
         "name": "OpeningProofLib",
-        "address": "0x9765bc0e7f57d0064b99a4ae855db16e5b5aa7ba",
+        "address": "0xb3d7d5d954b3ddb01b7020c34b669ac118113427",
         "role": "Library that checks the opening proof that releases tokens locked by a one-way deposit.",
         "group": "live",
         "source": "src/hardened/OpeningProofLib.sol:OpeningProofLib",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": false,
           "etherscan": "unsupported",
@@ -377,12 +539,12 @@
       },
       {
         "name": "BeaconLayoutLib",
-        "address": "0x4acd9fcef648029931ce163d343feb6d94181322",
+        "address": "0xb8b1b2c701aff6bfc4538a958dd58abc4dea4eb6",
         "role": "Library that checks the beacon state layout rows (block roots, block hashes, historical summaries) that a message proof relies on.",
         "group": "live",
         "source": "src/hardened/BeaconLayoutLib.sol:BeaconLayoutLib",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": false,
           "etherscan": "unsupported",
@@ -391,12 +553,12 @@
       },
       {
         "name": "MediatorPayloads",
-        "address": "0x1e68160762061624bb5fa31d589a8f31c3e44bc5",
+        "address": "0xc5962ccb5eb33d0af28ee0a187f6ffaff9967ecb",
         "role": "Library that encodes and decodes the token messages that the mediator sends across the bridge.",
         "group": "live",
         "source": "src/hardened/mediator/MediatorPayloads.sol:MediatorPayloads",
-        "source_commit": "cf63fff9",
-        "deployed_on": "2026-11-11",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": false,
           "etherscan": "unsupported",
@@ -488,29 +650,13 @@
         }
       },
       {
-        "name": "BridgedToken ztUSD",
-        "address": "0x75dE3c47773162Be247D145619B4266e255dfFF1",
-        "role": "Bridged copy of tUSD from Sepolia, created by the token factory on the first transfer.",
+        "name": "FaucetToken tFAU",
+        "address": "0x077b01ea09cd6261428166558Cced08f6697f8EB",
+        "role": "Test token zkb Faucet Token (tFAU, 18 decimals). Anyone can mint it, at most 1,000 a call.",
         "group": "tokens",
-        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
-        "created_by": "factory",
-        "source_commit": "71bb2017",
-        "deployed_on": "2026-11-11",
-        "verified": {
-          "blockscout": false,
-          "etherscan": "unsupported",
-          "sourcify": "unsupported"
-        }
-      },
-      {
-        "name": "BridgedToken ztTKN",
-        "address": "0x96EF4e50E0BdffB2f4D1708568BdfF16416b8725",
-        "role": "Bridged copy of tTKN from Sepolia, created by the token factory on the first transfer.",
-        "group": "tokens",
-        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
-        "created_by": "factory",
-        "source_commit": "71bb2017",
-        "deployed_on": "2026-11-11",
+        "source": "src/testnet/FaucetToken.sol:FaucetToken",
+        "source_commit": "743ebb2e",
+        "deployed_on": "2026-11-21",
         "verified": {
           "blockscout": true,
           "etherscan": "unsupported",
@@ -532,6 +678,156 @@
         }
       },
       {
+        "name": "MessageBridge (retired 2026-11-20)",
+        "address": "0x5897d3de91d59fb691e3887d6ffbba072384293a",
+        "role": "The MessageBridge of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/MessageBridge.sol:MessageBridge",
+        "libraries": [
+          "ReceiptProofLib (retired 2026-11-20)",
+          "OpeningProofLib (retired 2026-11-20)",
+          "BeaconLayoutLib (retired 2026-11-20)"
+        ],
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "TokenMediator (retired 2026-11-20)",
+        "address": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
+        "role": "The TokenMediator of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/mediator/TokenMediator.sol:TokenMediator",
+        "libraries": [
+          "MediatorPayloads (retired 2026-11-20)"
+        ],
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "TokenFactory (retired 2026-11-20)",
+        "address": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
+        "role": "The TokenFactory of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/mediator/TokenFactory.sol:TokenFactory",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "DeliveryRouter (retired 2026-11-20)",
+        "address": "0xa125684b9479fbab64218581763788bafb520a57",
+        "role": "The DeliveryRouter of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/mediator/DeliveryRouter.sol:DeliveryRouter",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "ReceiptProofLib (retired 2026-11-20)",
+        "address": "0x6dcc32be1802b1747465dfb2d3a1bf171eaed611",
+        "role": "The ReceiptProofLib of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/ReceiptProofLib.sol:ReceiptProofLib",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": false,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "OpeningProofLib (retired 2026-11-20)",
+        "address": "0x9765bc0e7f57d0064b99a4ae855db16e5b5aa7ba",
+        "role": "The OpeningProofLib of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/OpeningProofLib.sol:OpeningProofLib",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": false,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "BeaconLayoutLib (retired 2026-11-20)",
+        "address": "0x4acd9fcef648029931ce163d343feb6d94181322",
+        "role": "The BeaconLayoutLib of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/BeaconLayoutLib.sol:BeaconLayoutLib",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": false,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "MediatorPayloads (retired 2026-11-20)",
+        "address": "0x1e68160762061624bb5fa31d589a8f31c3e44bc5",
+        "role": "The MediatorPayloads of 2026-11-11 to 2026-11-20, replaced by the redeploy of 2026-11-20. It is retired, and the record still lists it so that transfers made through it stay readable.",
+        "group": "retired",
+        "source": "src/hardened/mediator/MediatorPayloads.sol:MediatorPayloads",
+        "source_commit": "cf63fff9",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": false,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "BridgedToken ztUSD (retired 2026-11-20)",
+        "address": "0x75dE3c47773162Be247D145619B4266e255dfFF1",
+        "role": "Bridged copy of tUSD from Sepolia, created by the token factory on the first transfer, by the token factory of 2026-11-11. The mediator of 2026-11-20 makes a new copy; this one is redeemed only through the retired contracts.",
+        "group": "retired",
+        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
+        "created_by": "factory",
+        "source_commit": "71bb2017",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": false,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
+        "name": "BridgedToken ztTKN (retired 2026-11-20)",
+        "address": "0x96EF4e50E0BdffB2f4D1708568BdfF16416b8725",
+        "role": "Bridged copy of tTKN from Sepolia, created by the token factory on the first transfer, by the token factory of 2026-11-11. The mediator of 2026-11-20 makes a new copy; this one is redeemed only through the retired contracts.",
+        "group": "retired",
+        "source": "src/hardened/mediator/BridgedToken.sol:BridgedToken",
+        "created_by": "factory",
+        "source_commit": "71bb2017",
+        "deployed_on": "2026-11-11",
+        "verified": {
+          "blockscout": true,
+          "etherscan": "unsupported",
+          "sourcify": "unsupported"
+        }
+      },
+      {
         "name": "DeliveryRouter (retired)",
         "address": "0xbea5f0fd3712b02c25bda32c7719fb9373c0fa20",
         "role": "The delivery router before the one above. It is retired, and the record still lists it so that deliveries made through it are recognised.",
@@ -546,18 +842,16 @@
         }
       }
     ],
-    "delivery_router": "0xa125684b9479fbab64218581763788bafb520a57",
-    "delivery_routers": [
-      "0xbea5f0fd3712b02c25bda32c7719fb9373c0fa20"
-    ],
+    "delivery_router": "0xdd78014c06b49d3056ffd5f15b41f8bad8bf047c",
+    "delivery_routers": [],
     "fork_registry": "0x0f094a965f280599b41f57a5182955f4afad063f",
     "gate": "0x85fbe4c5f7992fbd97a8e4dafc821fad3b0d20f3",
     "light_client": "0x1dbbcc0bc25de5f6ae122fb0009b3ee4931fd958",
     "light_client_start_block": 25767015,
-    "mediator": "0x571f96605921f76a24cf1388c2caf126b15b09f7",
-    "start_block": 25877713,
-    "token_factory": "0x2436b1826a4879e90b565638147fe1c5c24364e5",
-    "verification_checked": "2026-11-19",
+    "mediator": "0x1d04a3b144fb7c0392f1d5459134af87063513ea",
+    "start_block": 25958608,
+    "token_factory": "0x29cef591840d70fbb2024a705ab185e584516b85",
+    "verification_checked": "2026-11-21",
     "wrapped_native": "0x70499adebb11efd915e3b69e700c331778628707"
   }
 }
