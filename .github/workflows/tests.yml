@@ -1,0 +1,133 @@
+# The test suites, on every push and pull request, so a reader of the repository sees them run.
+#
+#   job contracts  forge build and forge test with the default profile (the Solidity suites in test/).
+#   job explorer   per package of explorer/ (a matrix): tsc --noEmit and the vitest suite with its coverage thresholds,
+#                  or for the two bun packages (terminal, e2e) bun test with its coverage thresholds.
+#   job docs       script/check-forbidden-names.sh and script/check-docs-public.sh.
+#
+# No test is skipped or excluded here. A job that is red shows a real failing test or a real finding.
+# Not run here: the indexer integration suite (vitest.integration.config.ts, needs Anvil and Postgres), the bots
+# integration suite, the Playwright browser tests of web and the Rust tests of light-client/.
+#
+# Pinning (docs/sp1-version-policy.md): every action is pinned by full commit SHA, each release older than 28 days.
+# Foundry is pinned to an exact release. pnpm is the version of explorer/package.json (packageManager).
+# No repository secret is used; the token has read access to the contents only.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # foundry.toml pins solc 0.8.28 (forge downloads it) and the isolate setting that the 1.4.4 to 1.8.5 change affected.
+  FOUNDRY_VERSION: v1.9.0
+  NODE_VERSION: 22 # explorer/package.json engines: node >=22
+
+jobs:
+  contracts:
+    name: contracts (forge)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository with its submodules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@dba66c27052e63476d886f22216e119ba7e615bf # v1.9.2
+        with:
+          version: ${{ env.FOUNDRY_VERSION }}
+          cache: true
+
+      - name: forge build
+        run: forge build
+
+      - name: forge test
+        run: forge test
+
+  explorer:
+    name: explorer (${{ matrix.package }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every package runs vitest through its `test` script, except the two with runner: bun (bun test).
+        package: [backend, bots, core, data, docs, indexer, react, release, shared, status, web, landing]
+        include:
+          - package: terminal
+            runner: bun
+          - package: e2e
+            runner: bun
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: explorer/package.json
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: explorer/pnpm-lock.yaml
+
+      - name: Install Bun
+        if: matrix.runner == 'bun'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install the dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: explorer
+
+      # Several packages import the built output of @zkb/data.
+      - name: Build @zkb/data
+        run: pnpm build
+        working-directory: explorer/data
+
+      - name: Type check
+        if: matrix.package != 'landing'
+        run: pnpm typecheck
+        working-directory: explorer/${{ matrix.package }}
+
+      - name: Test
+        run: ${{ matrix.runner == 'bun' && 'bun test' || 'pnpm test' }}
+        working-directory: explorer/${{ matrix.package }}
+
+  docs:
+    name: docs checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: No tracked file names the removed project
+        run: script/check-forbidden-names.sh
+
+      # The private patterns live in the untracked .git/info/forbidden-patterns of the owner's checkout. A CI checkout
+      # has none, which the script's own variable says on purpose.
+      - name: Published pages hold nothing private
+        run: script/check-docs-public.sh
+        env:
+          DOCS_GATE_WITHOUT_PRIVATE_PATTERNS: "1"
