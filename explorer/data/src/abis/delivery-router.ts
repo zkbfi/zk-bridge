@@ -85,6 +85,19 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "function",
+    "name": "MAX_CALL_GAS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MULTIPLIER_OF_TOTAL",
     "inputs": [],
     "outputs": [
@@ -461,6 +474,19 @@ export const deliveryRouterAbi = [
   },
   {
     "type": "function",
+    "name": "routerCaller",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "contract RouterCaller"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "sweep",
     "inputs": [
       {
@@ -653,17 +679,6 @@ export const deliveryRouterAbi = [
       }
     ],
     "anonymous": false
-  },
-  {
-    "type": "error",
-    "name": "CallOutOfGas",
-    "inputs": [
-      {
-        "name": "gasAmount",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ]
   },
   {
     "type": "error",

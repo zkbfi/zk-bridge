@@ -49,6 +49,19 @@ export const tokenMediatorAbi = [
   },
   {
     "type": "function",
+    "name": "MAX_CALLBACK_GAS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "NAME_CONNECTOR",
     "inputs": [],
     "outputs": [
@@ -765,6 +778,22 @@ export const tokenMediatorAbi = [
     "inputs": [
       {
         "name": "gasAmount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "CallbackGasTooHigh",
+    "inputs": [
+      {
+        "name": "callbackGas",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maximum",
         "type": "uint256",
         "internalType": "uint256"
       }
