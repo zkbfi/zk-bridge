@@ -1,7 +1,7 @@
 import { encodeAbiParameters, encodeErrorResult, type Hex } from "viem";
 import { describe, expect, it } from "vitest";
 import { beaconForkGateAbi, bridgedTokenAbi, messageBridgeAbi } from "../src/index.js";
-import { BRIDGE_ERROR_ABI, decodeRevert, isForkNotConfirmed, revertDataOf, revertText } from "../src/revert-text.js";
+import { BRIDGE_ERROR_ABI, faucetTokenErrorAbi, decodeRevert, isForkNotConfirmed, revertDataOf, revertText } from "../src/revert-text.js";
 
 const SEPOLIA = { chainName: "Sepolia" };
 
@@ -31,6 +31,13 @@ describe("revert text", () => {
     expect(revertText(reverted(data, "nested"), SEPOLIA)).toBe("The contract reverted with ERC20InsufficientBalance (sender 0x8D43a3DF4951652d04bA29098D292136Af004Bdd, balance 1, needed 2).");
     expect(revertText(reverted(encodeErrorResult({ abi: messageBridgeAbi, errorName: "DepositsNotOpen" })), SEPOLIA)).toBe("The contract reverted with DepositsNotOpen.");
     expect(isForkNotConfirmed(reverted(data))).toBe(false);
+  });
+
+  it("reads AboveMaxMint of the testnet faucet token plainly, with the amounts in whole tokens", () => {
+    const over = encodeErrorResult({ abi: faucetTokenErrorAbi, errorName: "AboveMaxMint", args: [2_500n * 10n ** 18n, 1_000n * 10n ** 18n] });
+    expect(revertText(reverted(over), SEPOLIA)).toBe("The test token mints at most 1,000 tFAU in one call, and this call asked for 2,500 tFAU. Nothing was minted.");
+    const odd = encodeErrorResult({ abi: faucetTokenErrorAbi, errorName: "AboveMaxMint", args: [1_000n * 10n ** 18n + 5n * 10n ** 17n, 1_000n * 10n ** 18n] });
+    expect(revertText(reverted(odd), SEPOLIA)).toContain("asked for 1,000.5 tFAU");
   });
 
   it("reads Error(string) and Panic(uint256)", () => {

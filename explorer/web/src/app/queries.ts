@@ -5,9 +5,12 @@
 import { useQuery } from "@tanstack/react-query";
 import type { Address, Hex } from "viem";
 import type { DeliveryCostReport } from "@zk-bridge/shared";
-import type { FeedFilter } from "@terminal/model/types";
+import type { FeedFilter, TokenInfo } from "@terminal/model/types";
 import type { RouterAddressesReading } from "@terminal/chain/live-reads";
+import { withFaucetTokens } from "../faucet/faucet-model";
 import { useServices } from "./services";
+
+const NO_TOKENS: readonly TokenInfo[] = [];
 
 const POLL_MILLISECONDS = 15_000;
 
@@ -58,13 +61,20 @@ export const useTokens = (pairId: string) => {
   return useQuery({ queryKey: ["tokens", pairId], queryFn: () => dataSource.listTokens(pairId), refetchInterval: 60_000 });
 };
 
-/** The balances and allowances of an account on both chains. Needs the tokens. */
-export const useSnapshots = (account: Address | null, pairId: string) => {
+/**
+ * The balances and allowances of an account on both chains. Needs the tokens.
+ *
+ * @param account The account, or null.
+ * @param pairId The pair.
+ * @param extra Tokens to read besides the listed ones, such as the testnet faucet token, which the indexer lists only after its first bridging.
+ */
+export const useSnapshots = (account: Address | null, pairId: string, extra: readonly TokenInfo[] = NO_TOKENS) => {
   const { chainAccess } = useServices();
   const tokens = useTokens(pairId);
+  const read = withFaucetTokens(tokens.data ?? [], extra);
   return useQuery({
-    queryKey: ["snapshots", pairId, account, tokens.data?.length ?? 0],
-    queryFn: () => chainAccess.readSnapshots({ account: account as Address, tokens: tokens.data ?? [] }),
+    queryKey: ["snapshots", pairId, account, read.length],
+    queryFn: () => chainAccess.readSnapshots({ account: account as Address, tokens: read }),
     enabled: account !== null && tokens.data !== undefined,
     refetchInterval: POLL_MILLISECONDS,
     // The RPC transport already retries; the next poll is the retry after that. Retrying here too multiplied the requests.

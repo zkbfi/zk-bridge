@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { parseInline, parseMarkdown, slugify } from "../../src/docs/markdown";
 
+describe("the faucet block", () => {
+  it("reads a fenced faucet block that names a chain as a block of its own", () => {
+    expect(parseMarkdown("Before\n\n```faucet\nchain: 11155111\n```\n\nAfter").map((block) => block.kind)).toEqual(["paragraph", "faucet", "paragraph"]);
+    expect(parseMarkdown("```faucet\n  chain:   943  \n```")).toEqual([{ kind: "faucet", chainId: 943 }]);
+  });
+
+  it("keeps a faucet block with any other body, and any other language, as plain code", () => {
+    expect(parseMarkdown("```faucet\nchain: sepolia\n```")).toEqual([{ kind: "code", text: "chain: sepolia" }]);
+    expect(parseMarkdown("```faucet\n```")).toEqual([{ kind: "code", text: "" }]);
+    expect(parseMarkdown("```ts\nchain: 943\n```")).toEqual([{ kind: "code", text: "chain: 943" }]);
+  });
+});
+
 describe("parseMarkdown", () => {
   it("reads headings with identifiers, paragraphs, lists, tables and code", () => {
     const blocks = parseMarkdown(["# Title", "", "Some **bold** and `code` text.", "", "- one", "- two", "", "1. first", "2. second", "", "| A | B |", "|---|---|", "| 1 | 2 |", "", "```", "raw", "```"].join("\n"));

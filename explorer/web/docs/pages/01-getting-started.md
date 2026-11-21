@@ -31,6 +31,7 @@ You can send tokens in both directions, and send a message to a contract on the 
 
 - A browser wallet that holds the tokens you want to move.
 - A little of the source chain's coin for gas: ETH on Ethereum, PLS on PulseChain.
+- While the app runs on the test networks, test tokens and gas for them. The page [Get testnet tokens](11-get-testnet-tokens.md) links the gas faucets and mints a free test token on each chain.
 - Some patience. A transfer takes about a quarter of an hour, because the bridge waits until the source chain can no longer undo your send.
 
 ## Your first transfer
@@ -87,3 +88,4 @@ The app has a sample mode that shows built-in data and simulates every send. Not
 - Settings, search and Explore: themes, your RPC endpoint per chain, every service the app uses, and finding anything.
 - Safety: what you trust.
 - Glossary: every term.
+- Get testnet tokens: gas and a free test token for the test networks.

@@ -63,6 +63,8 @@ describe("DocsMarkdown", () => {
   it("an https link leaves without the referrer; a route stays a hash link; code blocks can take focus to scroll", () => {
     show("[out](https://example.org) and [in](#/docs/safety)\n\n```\ncode\n```");
     expect(screen.getByRole("link", { name: "out" })).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByRole("link", { name: "out" })).toHaveAttribute("target", "_blank");
+    expect(screen.getByRole("link", { name: "in" })).not.toHaveAttribute("target");
     expect(screen.getByRole("link", { name: "in" })).toHaveAttribute("href", "#/docs/safety");
     expect(screen.getByText("code").closest("pre")).toHaveAttribute("tabindex", "0");
   });

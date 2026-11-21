@@ -79,6 +79,8 @@ describe("the native coin carries a tip", () => {
     renderWithWallet(<Shell />, { wallet: connectedWallet() });
     await waitFor(() => expect(screen.getByRole("button", { name: /^Delivery settings/ })).toHaveTextContent(/^No tip$/));
     await waitFor(() => expect(document.querySelector(".zb-go")?.textContent).toBe("Bridge"));
-    expect(document.querySelector(".zb-verdict")).toBeNull();
+    // The balances load after the button reads Bridge, and their "loading" note is a verdict for a moment. Wait it out:
+    // a fee warning would not clear, so it still fails here.
+    await waitFor(() => expect(document.querySelector(".zb-verdict")).toBeNull());
   });
 });

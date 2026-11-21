@@ -28,5 +28,6 @@ describe("the dev-only ?watch= address", () => {
     expect(screen.getByText(DEPLOYER)).toBeInTheDocument();
     expect(port!.status).toBe("connected");
     await expect(port!.sendTransaction({ chainId: 11155111, to: DEPLOYER, data: "0x", value: 0n, gas: 21000n })).rejects.toThrow(/watching/i);
+    await expect(port!.watchAsset({ chainId: 11155111, address: DEPLOYER, symbol: "tFAU", decimals: 18 })).rejects.toThrow(/watching/i);
   });
 });

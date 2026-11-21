@@ -18,6 +18,14 @@ export type WalletTransaction = {
   readonly gas: bigint;
 };
 
+/** A token for the wallet to list, on the chain where it lives. */
+export type WalletToken = {
+  readonly chainId: number;
+  readonly address: Address;
+  readonly symbol: string;
+  readonly decimals: number;
+};
+
 /** The wallet of the viewer. */
 export interface WalletPort {
   readonly status: WalletStatus;
@@ -36,6 +44,8 @@ export interface WalletPort {
   switchChain(chainId: number): Promise<void>;
   /** Signs and sends. It switches the wallet to the chain of the transaction first. It rejects when the viewer declines. */
   sendTransaction(transaction: WalletTransaction): Promise<Hash>;
+  /** Asks the wallet to list a token (`wallet_watchAsset`), switching to the token's chain first. It rejects when the viewer declines or the wallet cannot. */
+  watchAsset(token: WalletToken): Promise<void>;
 }
 
 /** Context of the wallet. */

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { rpcTransport } from "../app/rpc-transport";
-import { createConfig, injected, useConnect, useConnection, useConnectors, useDisconnect, useSendTransaction, useSwitchChain, WagmiProvider, type Config, type Connector, type Transport } from "wagmi";
+import { createConfig, injected, useConnect, useConnection, useConnectors, useDisconnect, useSendTransaction, useSwitchChain, useWatchAsset, WagmiProvider, type Config, type Connector, type Transport } from "wagmi";
 import type { Chain } from "viem";
 import { rpcChain } from "@terminal/chain/rpc-transport";
 import type { PairConfig } from "@terminal/model/types";
@@ -85,6 +85,7 @@ const WalletBridge = ({ children, projectId, kit, loadKit }: BridgeProps) => {
   const { disconnect } = useDisconnect();
   const { switchChainAsync } = useSwitchChain();
   const { sendTransactionAsync } = useSendTransaction();
+  const { watchAssetAsync } = useWatchAsset();
   const [picker, setPicker] = useState<{ readonly error: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const wallets = useMemo(() => pickableWallets(connectors), [connectors]);
@@ -137,8 +138,14 @@ const WalletBridge = ({ children, projectId, kit, loadKit }: BridgeProps) => {
         if (connection.chainId !== transaction.chainId) await switchChainAsync({ chainId: transaction.chainId });
         return sendTransactionAsync({ chainId: transaction.chainId, to: transaction.to, data: transaction.data, value: transaction.value, gas: transaction.gas });
       },
+      async watchAsset(token) {
+        // The wallet lists a token on the chain it is on, so it moves to the token's chain first.
+        if (connection.chainId !== token.chainId) await switchChainAsync({ chainId: token.chainId });
+        const listed = await watchAssetAsync({ type: "ERC20", options: { address: token.address, symbol: token.symbol, decimals: token.decimals } });
+        if (!listed) throw new Error("The wallet did not add the token.");
+      },
     }),
-    [connection.status, connection.address, connection.chainId, connection.connector, projectId, connectors.length, connect, disconnect, switchChainAsync, sendTransactionAsync],
+    [connection.status, connection.address, connection.chainId, connection.connector, projectId, connectors.length, connect, disconnect, switchChainAsync, sendTransactionAsync, watchAssetAsync],
   );
   const listed: readonly PickableWallet[] = wallets.map((wallet) => ({ id: wallet.uid, name: wallet.name, icon: wallet.icon }));
   // A connection closes the list, whichever way it was made.

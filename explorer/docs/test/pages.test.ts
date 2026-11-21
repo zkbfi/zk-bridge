@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Block, Inline } from "@web/docs/markdown";
 import { slugOfPageId } from "@web/docs/slug";
-import { collectPages, describePage, findUnresolvedLinks, joinPath, markdownPathOf, routeOf, SITE_INPUT, SITE_PAGES, type DocsSiteInput } from "../src/pages";
+import { collectPages, describePage, findUnresolvedLinks, joinPath, markdownPathOf, pagesForChains, routeOf, SITE_INPUT, SITE_PAGES, type DocsSiteInput } from "../src/pages";
 import { parseMarkdown } from "@web/docs/markdown";
 
 const small = (overrides: Partial<DocsSiteInput> = {}): DocsSiteInput => ({
@@ -135,7 +135,7 @@ describe("the real pages (moved here from the dapp's old docs view, with the che
   const helpPages = SITE_PAGES.filter((page) => page.group === "help");
 
   it("holds every help page, in reading order", () => {
-    expect(helpPages.map((page) => slugOfPageId(page.id))).toEqual(["getting-started", "how-the-bridge-works", "bridging-tokens", "sending-messages", "fees-explained", "safety", "running-a-bot", "settings-and-explore", "glossary", "deployed-contracts"]);
+    expect(helpPages.map((page) => slugOfPageId(page.id))).toEqual(["getting-started", "how-the-bridge-works", "bridging-tokens", "sending-messages", "fees-explained", "safety", "running-a-bot", "settings-and-explore", "glossary", "deployed-contracts", "get-testnet-tokens"]);
   });
 
   it("gives every help page a title and at least two headings that the search can find", () => {
@@ -184,7 +184,7 @@ describe("the real pages", () => {
   it("publishes every help page, and nothing from docs/superpowers", () => {
     const ids = SITE_PAGES.map((page) => page.id);
     expect(ids).toContain("help/getting-started");
-    expect(ids.filter((id) => id.startsWith("help/"))).toHaveLength(10);
+    expect(ids.filter((id) => id.startsWith("help/"))).toHaveLength(11);
     expect(ids.filter((id) => id.startsWith("superpowers"))).toEqual([]);
     expect(Object.keys(SITE_INPUT.operatorPages).filter((key) => key.includes("superpowers"))).toEqual([]);
   });
@@ -219,5 +219,42 @@ describe("the real pages", () => {
   it("every real page holds no placeholder that the build left unresolved and no front matter text", () => {
     for (const source of Object.values(SITE_INPUT.userPages)) expect(source).not.toContain("{{");
     for (const page of SITE_PAGES) expect(JSON.stringify(page.blocks), page.id).not.toContain("verified_release");
+  });
+});
+
+describe("pages about particular chains", () => {
+  const front = (chains: string): string => `---\ntitle: T\nsummary: x\naudience: user\nchains: ${chains}\nverified_release: 0.1.0\n---\n\n`;
+  const pages = collectPages({
+    userPages: {
+      "01-first.md": `${front("all")}# First\n\nSee [the faucet](03-faucet.md#mint) and [second](02-second.md).`,
+      "02-second.md": "# Second\n\nNo front matter.",
+      "03-faucet.md": `${front("[11155111, 943]")}# Faucet\n\n## Mint\n\ntext`,
+      "04-one.md": `${front("943")}# One\n\ntext`,
+      "05-broken.md": "---\n  nested: no\n---\n\n# Broken\n\ntext",
+      "06-odd.md": `${front("[]")}# Odd\n\ntext`,
+    },
+    operatorPages: {},
+  });
+
+  it("reads the chains of the front matter: all, a list, one id, or all when the block does not say", () => {
+    expect(pages.map((page) => page.chains)).toEqual(["all", "all", [11155111, 943], [943], "all", "all"]);
+  });
+
+  it("shows only the all pages when no chain ids are given", () => {
+    expect(pagesForChains(pages).map((page) => page.id)).toEqual(["help/first", "help/second", "help/broken", "help/odd"]);
+  });
+
+  it("shows a page of chains only when every one of its chains is in the pair", () => {
+    expect(pagesForChains(pages, [11155111, 943]).map((page) => page.id)).toEqual(pages.map((page) => page.id));
+    expect(pagesForChains(pages, [11155111]).map((page) => page.id)).not.toContain("help/faucet");
+    expect(pagesForChains(pages, [943, 11155111]).map((page) => page.id)).toContain("help/one");
+  });
+
+  it("returns the same pages when none is left out, and turns a link to a page that is left out into plain text", () => {
+    const everything = pagesForChains(pages, [11155111, 943]);
+    expect(everything).toBe(pages);
+    const [first] = pagesForChains(pages, [1, 369]);
+    expect(linksIn(first?.blocks ?? [])).toEqual(["#/docs/second"]);
+    expect(JSON.stringify(first?.blocks)).toContain("the faucet");
   });
 });

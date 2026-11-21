@@ -9,7 +9,7 @@ import { parseMarkdown, type Block, type Inline } from "@web/docs/markdown";
 import { slugOfPageId } from "@web/docs/slug";
 import publicOperatorPages from "virtual:public-operator-pages";
 import docsFacts from "virtual:docs-facts";
-import { splitFrontMatter } from "../machine/front-matter";
+import { parseFrontMatterBlock, splitFrontMatter } from "../machine/front-matter";
 import { resolvePlaceholders } from "../machine/placeholders";
 
 /** Which set of files a page comes from. */
@@ -45,6 +45,8 @@ export type DocsSitePage = {
   /** The address part of the page, and of its Markdown file `docs/<slug>.md` (see `markdownPathOf`). */
   readonly slug: string;
   readonly group: DocsSiteGroup;
+  /** The chains the page is about, from its front matter: `all`, or the chain ids the running pair must hold (see {@link pagesForChains}). */
+  readonly chains: "all" | readonly number[];
   /** The group of the front page that lists it. Operator pages are about running the bridge. */
   readonly section: DocsSiteSection;
   readonly title: string;
@@ -75,6 +77,7 @@ type SourcePage = {
   /** The folder-relative path that links resolve against, such as `help/03-bridging-tokens.md`. */
   readonly path: string;
   readonly title: string;
+  readonly chains: "all" | readonly number[];
   readonly blocks: readonly Block[];
 };
 
@@ -117,18 +120,35 @@ export const markdownPathOf = (id: string): string => `docs/${slugOfPageId(id)}.
 /** The text of a file below its front matter, which the machine-readable files carry and the page does not show. */
 const bodyOf = (source: string): string => splitFrontMatter(source).body;
 
+/**
+ * The `chains` of the front matter of a file: `all`, or the chain ids it lists. A file with no front matter, with a block
+ * that does not read, or with no usable `chains` is about all chains (the machine check refuses such a block in a real page).
+ */
+const chainsOf = (source: string): "all" | readonly number[] => {
+  const { raw } = splitFrontMatter(source);
+  if (raw === null) return "all";
+  let chains: unknown;
+  try {
+    chains = parseFrontMatterBlock(raw).chains;
+  } catch {
+    return "all";
+  }
+  if (typeof chains === "number") return [chains];
+  return Array.isArray(chains) && chains.length > 0 && chains.every((id) => typeof id === "number") ? (chains as number[]) : "all";
+};
+
 const readUserPage = ([key, source]: readonly [string, string]): SourcePage & { readonly order: number } => {
   const file = key.split("/").pop() as string;
   const match = /^(\d+)-(.+)\.md$/.exec(file);
   if (match === null) throw new Error(`The help file "${key}" needs a name like 01-getting-started.md.`);
   const blocks = parseMarkdown(bodyOf(source));
-  return { order: Number(match[1]), id: `help/${match[2]}`, group: "help", path: `help/${file}`, title: titleOf(blocks, match[2] as string), blocks };
+  return { order: Number(match[1]), id: `help/${match[2]}`, group: "help", path: `help/${file}`, title: titleOf(blocks, match[2] as string), chains: chainsOf(source), blocks };
 };
 
 const readOperatorPage = ([key, source]: readonly [string, string]): SourcePage => {
   const path = placeBelowDocs(key);
   const blocks = parseMarkdown(bodyOf(source));
-  return { id: path.replace(/\.md$/, ""), group: "operator", path, title: titleOf(blocks, path), blocks };
+  return { id: path.replace(/\.md$/, ""), group: "operator", path, title: titleOf(blocks, path), chains: chainsOf(source), blocks };
 };
 
 const readPages = (input: DocsSiteInput): readonly SourcePage[] => {
@@ -232,6 +252,8 @@ const wordCount = (blocks: readonly Block[]): number =>
   blocks
     .map((block) => {
       if (block.kind === "heading" || block.kind === "code") return block.text;
+      // The faucet block reads as a short panel: a title, the token, the address and two buttons.
+      if (block.kind === "faucet") return "Mint tFAU token address add to wallet";
       if (block.kind === "paragraph" || block.kind === "quote") return textOf(block.children);
       if (block.kind === "list") return block.items.map(textOf).join(" ");
       return [...block.header, ...block.rows.flat()].map(textOf).join(" ");
@@ -283,7 +305,7 @@ export const collectPages = (input: DocsSiteInput): DocsSitePage[] => {
     );
     const section: DocsSiteSection = page.group === "operator" ? "run" : (HELP_SECTIONS[page.id.slice("help/".length)] ?? "use");
     const minutes = Math.max(1, Math.round(wordCount(page.blocks) / 200));
-    return { id: page.id, slug: slugOfPageId(page.id), group: page.group, section, title: page.title, description: describePage(page.blocks), minutes, blocks, headings };
+    return { id: page.id, slug: slugOfPageId(page.id), group: page.group, chains: page.chains, section, title: page.title, description: describePage(page.blocks), minutes, blocks, headings };
   });
 };
 
@@ -300,6 +322,26 @@ export const findUnresolvedLinks = (input: DocsSiteInput): UnresolvedLink[] => {
       .filter((href) => resolveLink(pages, page, href).kind === "missing")
       .map((href) => ({ from: page.path, href })),
   );
+};
+
+/**
+ * The pages that the running pair shows. A page whose front matter lists chains (the testnet faucet page lists Sepolia and
+ * PulseChain testnet v4) is shown only when every listed chain is in the pair, so a build on any other pair has no such
+ * page. A page for `all` chains always shows. With no chain ids given, only the `all` pages show.
+ *
+ * @param pages Every page of the site.
+ * @param chainIds The chain ids of the pair the page runs on.
+ */
+export const pagesForChains = (pages: readonly DocsSitePage[], chainIds: readonly number[] = []): readonly DocsSitePage[] => {
+  const shown = pages.filter((page) => page.chains === "all" || page.chains.every((id) => chainIds.includes(id)));
+  if (shown.length === pages.length) return pages;
+  const hidden = pages.filter((page) => !shown.includes(page)).map((page) => routeOf(page.id, ""));
+  // A link to a page that is left out would open "Not found", so it reads as plain text, as a link to an unpublished file does.
+  const pointsAtHidden = (href: string): boolean => hidden.some((route) => href === route || href.startsWith(`${route}/`));
+  return shown.map((page) => ({
+    ...page,
+    blocks: page.blocks.map((block) => mapBlock(block, (item): readonly Inline[] => (item.kind === "link" && pointsAtHidden(item.href) ? item.children : [item]))),
+  }));
 };
 
 /** The pages of the real files, read when the site is built. */

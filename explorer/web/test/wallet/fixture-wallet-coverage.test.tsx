@@ -57,6 +57,12 @@ describe("FixtureWalletProvider", () => {
     expect(current().chainId).toBe(369);
   });
 
+  it("lists a token by moving to its chain, and lists nothing", async () => {
+    render(<FixtureWalletProvider initialChainId={1} startConnected><Capture /></FixtureWalletProvider>);
+    await act(async () => current().watchAsset({ chainId: 369, address: `0x${"56".repeat(20)}`, symbol: "tFAU", decimals: 18 }));
+    expect(current().chainId).toBe(369);
+  });
+
   it("sends without a callback", async () => {
     render(<FixtureWalletProvider initialChainId={1} startConnected><Capture /></FixtureWalletProvider>);
     let hash: string | undefined;
