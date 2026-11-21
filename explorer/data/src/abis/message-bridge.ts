@@ -1385,6 +1385,17 @@ export const messageBridgeAbi = [
   },
   {
     "type": "error",
+    "name": "LocalChainIdTooLarge",
+    "inputs": [
+      {
+        "name": "chainId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "LogIndexOutOfRange",
     "inputs": [
       {

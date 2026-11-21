@@ -154,8 +154,8 @@ export const SKIPPED_ALREADY_DELIVERED: ItemResultInput = { success: false, retu
 export const SKIPPED_ANCHOR_NOT_STORED: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: messageBridgeAbi, errorName: "AnchorNotStored", args: [100n, word(2)] }) };
 /** The delivery reverts because the gas left is too little for the exact gas of a call. */
 export const SKIPPED_INSUFFICIENT_GAS: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: deliveryRouterAbi, errorName: "InsufficientGas", args: [1n, 2n] }) };
-/** The delivery reverts because a call ran out of its gas. */
-export const SKIPPED_CALL_OUT_OF_GAS: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: deliveryRouterAbi, errorName: "CallOutOfGas", args: [1n] }) };
+/** The delivery reverts because a call ran out of its gas (`ExactGasCall.CallOutOfGas`; only the mediator ABI carries it). */
+export const SKIPPED_CALL_OUT_OF_GAS: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: tokenMediatorAbi, errorName: "CallOutOfGas", args: [1n] }) };
 /** The delivery reverts because the release of the tokens ran out of gas. */
 export const SKIPPED_RELEASE_OUT_OF_GAS: ItemResultInput = { success: false, returnData: encodeErrorResult({ abi: tokenMediatorAbi, errorName: "ReleaseOutOfGas", args: [address(0x77)] }) };
 /** The bridge reverts for another reason. */
