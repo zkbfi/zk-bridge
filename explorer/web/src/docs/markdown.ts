@@ -1,7 +1,12 @@
 /**
  * A small Markdown reader for the documentation pages. It reads only what the pages use: headings, paragraphs, bulleted
- * and numbered lists, tables, block quotes, code blocks, and inline bold, italic, code and links. It builds a tree of data, not
- * HTML, so the page renders it as React elements and nothing is ever injected as markup.
+ * and numbered lists, tables, block quotes, code blocks, one custom block (the faucet block, below), and inline bold,
+ * italic, code and links. It builds a tree of data, not HTML, so the page renders it as React elements and nothing is
+ * ever injected as markup.
+ *
+ * The faucet block is a fenced block whose language is `faucet` and whose body is `chain: <chain id>`. The docs site
+ * draws it as the mint of the testnet faucet token on that chain (see `explorer/docs/src/FaucetBlock.tsx`). A faucet
+ * block with any other body stays a plain code block.
  */
 
 /** A piece of text inside a block. */
@@ -19,7 +24,8 @@ export type Block =
   | { readonly kind: "list"; readonly ordered: boolean; readonly items: readonly (readonly Inline[])[] }
   | { readonly kind: "table"; readonly header: readonly (readonly Inline[])[]; readonly rows: readonly (readonly (readonly Inline[])[])[] }
   | { readonly kind: "quote"; readonly children: readonly Inline[] }
-  | { readonly kind: "code"; readonly text: string };
+  | { readonly kind: "code"; readonly text: string }
+  | { readonly kind: "faucet"; readonly chainId: number };
 
 /**
  * Turns a heading into an identifier for a link: lowercase words joined by dashes.
@@ -87,6 +93,7 @@ const isTableRule = (line: string): boolean => /^\|[\s:|-]+\|$/.test(line.trim()
 const cellsOf = (line: string): readonly (readonly Inline[])[] =>
   line.trim().slice(1, -1).split("|").map((cell) => parseInline(cell.trim()));
 
+const FAUCET_BODY = /^chain:\s*(\d+)$/;
 const BULLET = /^\s*[-*]\s+(.*)$/;
 const NUMBERED = /^\s*\d+\.\s+(.*)$/;
 const HEADING = /^(#{1,4})\s+(.*)$/;
@@ -108,11 +115,13 @@ export const parseMarkdown = (source: string): readonly Block[] => {
     if (line.trim() === "") {
       index += 1;
     } else if (line.startsWith("```")) {
+      const language = line.slice(3).trim();
       const body: string[] = [];
       index += 1;
       while (index < lines.length && !at(index).startsWith("```")) body.push(at(index++));
       index += 1;
-      blocks.push({ kind: "code", text: body.join("\n") });
+      const faucet = language === "faucet" ? FAUCET_BODY.exec(body.join("\n").trim()) : null;
+      blocks.push(faucet === null ? { kind: "code", text: body.join("\n") } : { kind: "faucet", chainId: Number(captured(faucet, 1)) });
     } else if (heading !== null) {
       const text = captured(heading, 2).trim();
       blocks.push({ kind: "heading", level: captured(heading, 1).length as 1 | 2 | 3 | 4, id: slugify(text), text });

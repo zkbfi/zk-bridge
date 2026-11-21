@@ -245,7 +245,7 @@ export const Shell = () => {
   const actionsPort = useMemo(() => ({ open: (name: FormDialogName) => openDialog(name) }), [openDialog]);
 
   // The docs are their own frame (header, search, footer), loaded on demand as a separate chunk.
-  if (route.name === "docs") return <DocsRoute slug={route.slug} heading={route.heading} />;
+  if (route.name === "docs") return <DocsRoute slug={route.slug} heading={route.heading} chainIds={[pair.first.chainId, pair.second.chainId]} />;
 
   return (
     <ActionsContext.Provider value={actionsPort}>

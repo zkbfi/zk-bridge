@@ -61,7 +61,7 @@ export const usePaletteSearch = (input: PaletteSearchInput): PaletteSearch => {
   useEffect(() => {
     if (!needsDocs) return;
     let cancelled = false;
-    void loadDocEntries().then(
+    void loadDocEntries([pair.first.chainId, pair.second.chainId]).then(
       (entries) => {
         if (!cancelled) setLoadedDocs(entries);
       },
@@ -70,7 +70,7 @@ export const usePaletteSearch = (input: PaletteSearchInput): PaletteSearch => {
     return () => {
       cancelled = true;
     };
-  }, [needsDocs]);
+  }, [needsDocs, pair]);
   const docPages = input.docPages ?? loadedDocs;
 
   const local = useMemo(

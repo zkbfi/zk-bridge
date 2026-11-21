@@ -5,7 +5,7 @@
  * the node's own message.
  */
 import { beaconForkGateAbi, bridgedTokenAbi, deliveryRouterAbi, messageBridgeAbi, tokenMediatorAbi } from "./abis/index.js";
-import { decodeErrorResult, toFunctionSelector, type Abi, type Hex } from "viem";
+import { decodeErrorResult, parseAbi, toFunctionSelector, type Abi, type Hex } from "viem";
 
 type AbiError = Extract<Abi[number], { type: "error" }>;
 
@@ -19,11 +19,14 @@ export type DecodedRevert = {
 
 const errorKey = (item: AbiError): string => toFunctionSelector(`function ${item.name}(${item.inputs.map((input) => input.type).join(",")})`);
 
-/** Every custom error of the bridge contracts, one entry per selector. */
+/** The one custom error of the testnet faucet token (`src/testnet/FaucetToken.sol`, tFAU): a mint above the cap of one call. */
+export const faucetTokenErrorAbi = parseAbi(["error AboveMaxMint(uint256 amount, uint256 cap)"]);
+
+/** Every custom error of the bridge contracts and of the testnet faucet token, one entry per selector. */
 export const BRIDGE_ERROR_ABI: Abi = (() => {
   const seen = new Set<string>();
   const errors: AbiError[] = [];
-  for (const abi of [beaconForkGateAbi, messageBridgeAbi, tokenMediatorAbi, deliveryRouterAbi, bridgedTokenAbi] as readonly Abi[]) {
+  for (const abi of [beaconForkGateAbi, messageBridgeAbi, tokenMediatorAbi, deliveryRouterAbi, bridgedTokenAbi, faucetTokenErrorAbi] as readonly Abi[]) {
     for (const item of abi) {
       if (item.type !== "error") continue;
       const key = errorKey(item);
@@ -60,6 +63,13 @@ export const decodeRevert = (error: unknown): DecodedRevert | null => {
 
 const valueText = (value: unknown): string => String(value);
 
+/** An amount of an 18 decimal token in whole units with a comma between thousands: `2,500`, `1,000.5`. */
+const tokensText = (units: bigint): string => {
+  const whole = (units / 10n ** 18n).toLocaleString("en-US");
+  const fraction = (units % 10n ** 18n).toString().padStart(18, "0").replace(/0+$/, "");
+  return fraction === "" ? whole : `${whole}.${fraction}`;
+};
+
 /** Where the revert happened, for the sentences. */
 export type RevertContext = {
   /** The chain of the transaction, such as `Sepolia`. */
@@ -86,6 +96,8 @@ export const revertText = (error: unknown, context: RevertContext): string | nul
       return `The ${context.chainName} deposit gate is sealed. It admits no send.`;
     case "HeaderNotInCurrentEpoch":
       return `The confirmation names a beacon header of epoch ${valueText(args[0])}, and the chain is in epoch ${valueText(args[1])} now. A new confirmation is needed.`;
+    case "AboveMaxMint":
+      return `The test token mints at most ${tokensText(args[1] as bigint)} tFAU in one call, and this call asked for ${tokensText(args[0] as bigint)} tFAU. Nothing was minted.`;
     case "Error":
       return `The contract reverted: ${valueText(args[0])}.`;
     case "Panic":

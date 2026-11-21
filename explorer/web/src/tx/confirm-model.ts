@@ -263,6 +263,7 @@ const headlineOf = (step: WebStep, decoded: readonly DisplayArgument[]): Pick<Co
       return { amountText, destinationText: destinationOf(recipient, chainName) };
     }
     case "approve":
+    case "mint":
       return { amountText: tokenAmountText(valueOf(decoded, "amount"), disclosure.amountToken), destinationText: null };
     case "requireToPassMessage":
       return { amountText: null, destinationText: destinationOf(valueOf(decoded, "target"), chainName) };

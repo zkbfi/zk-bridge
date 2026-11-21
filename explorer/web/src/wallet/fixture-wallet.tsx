@@ -46,6 +46,9 @@ export const FixtureWalletProvider = ({ initialChainId, account = FIXTURE_ACCOUN
         onSend?.(FIXTURE_TRANSACTION_HASH);
         return FIXTURE_TRANSACTION_HASH;
       },
+      async watchAsset(token) {
+        setChainId(token.chainId);
+      },
     }),
     [connected, chainId, account, onSend],
   );

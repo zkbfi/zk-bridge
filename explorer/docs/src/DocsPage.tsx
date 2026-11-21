@@ -10,19 +10,21 @@ import "@web/bridge/bridge.css";
 import "@web/explore/explore.css";
 import "./docs.css";
 import { DocsSite } from "./DocsSite";
-import { SITE_PAGES } from "./pages";
+import { pagesForChains, SITE_PAGES } from "./pages";
 
 /** Props of {@link DocsPage}. */
 export type DocsPageProps = {
   readonly slug: string | null;
   readonly heading: string | null;
+  /** The chain ids of the pair the app runs on. A page about chains the pair does not hold (the testnet faucet page) is left out. */
+  readonly chainIds?: readonly number[];
 };
 
 /**
  * The docs site over the real pages.
  *
- * @param props The page and the heading from the address.
+ * @param props The page and the heading from the address, and the chains of the pair.
  */
-const DocsPage = ({ slug, heading }: DocsPageProps) => <DocsSite pages={SITE_PAGES} slug={slug} heading={heading} />;
+const DocsPage = ({ slug, heading, chainIds }: DocsPageProps) => <DocsSite pages={pagesForChains(SITE_PAGES, chainIds)} slug={slug} heading={heading} />;
 
 export default DocsPage;

@@ -99,3 +99,12 @@ describe("the Omnibridge mark", () => {
     expect(screen.getByRole("option").querySelector("sub")?.textContent).toBe("4");
   });
 });
+
+describe("the mint action of a row", () => {
+  const coins = nativeTokensOf(FIXTURE_PAIR);
+  it("shows no action unless the screen gives both the test and the handler", () => {
+    renderWithWallet(<TokenPicker tokens={[USDC, ...coins]} selected={USDC} snapshots={[]} onMint={vi.fn()} onPick={vi.fn()} onClose={vi.fn()} />, { wallet: connectedWallet() });
+    expect(screen.queryByRole("button", { name: /^Mint 1,000/ })).toBeNull();
+  });
+});
+

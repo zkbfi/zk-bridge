@@ -34,6 +34,9 @@ export const WatchWalletProvider = ({ account, chainId, children }: { readonly a
       sendTransaction: async () => {
         throw new Error("Watching an address only; nothing is sent.");
       },
+      watchAsset: async () => {
+        throw new Error("Watching an address only; no wallet lists a token.");
+      },
     }),
     [account, chainId],
   );

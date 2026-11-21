@@ -7,12 +7,16 @@
  * The three calls that the terminal ABIs lack come from the generated ABIs: `openDeposits(OpeningProof)` on the message bridge, `seal(bytes)` on the
  * deposit gate and `observe(bytes,bytes)` on the fork registry. `knownAbis` stays first, so a function that both hold decodes as before.
  *
+ * The faucet token's `mint` calls (the testnet token tFAU) are listed last; its `AboveMaxMint` error is read plainly by
+ * `revertText` in `@zk-bridge/shared`.
+ *
  * The router ABI is the generated one from `@zk-bridge/shared`, so a new router function reaches the review when that ABI
  * is generated again. `test/tx/confirm-decode-every-send.test.ts` decodes every send the dapp can build.
  */
 import { erc20Abi, parseAbi, type Abi } from "viem";
 import { beaconForkGateAbi, deliveryRouterAbi, forkRegistryAbi, messageBridgeAbi as generatedMessageBridgeAbi } from "@zk-bridge/shared";
 import { knownAbis } from "@terminal/tx/abis";
+import { faucetAbi } from "../faucet/faucet-model";
 
 /** Every ABI that the confirm dialog can decode a transaction with. */
-export const confirmableAbis: readonly Abi[] = [...knownAbis, deliveryRouterAbi, generatedMessageBridgeAbi, beaconForkGateAbi, forkRegistryAbi, erc20Abi, parseAbi(["function confirm(bytes evidence)"])];
+export const confirmableAbis: readonly Abi[] = [...knownAbis, deliveryRouterAbi, generatedMessageBridgeAbi, beaconForkGateAbi, forkRegistryAbi, erc20Abi, parseAbi(["function confirm(bytes evidence)"]), faucetAbi];

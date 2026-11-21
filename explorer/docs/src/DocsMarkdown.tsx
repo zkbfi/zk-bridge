@@ -5,6 +5,7 @@
  */
 import type { ReactNode } from "react";
 import { Num } from "@web/bridge/Num";
+import { FaucetBlock } from "./FaucetBlock";
 import type { Block, Inline } from "@web/docs/markdown";
 
 /** A shown number with three or more zeros after the point, anywhere in a text (the app's leading-zeros rule). */
@@ -37,10 +38,10 @@ const renderInline = (items: readonly Inline[], key: string, numbers = false): R
     if (item.kind === "code") return <code key={itemKey} className="zd-code">{item.text}</code>;
     if (item.kind === "bold") return <strong key={itemKey}>{renderInline(item.children, itemKey, numbers)}</strong>;
     if (item.kind === "italic") return <em key={itemKey}>{renderInline(item.children, itemKey, numbers)}</em>;
-    // An https address leaves the site, so it opens without handing over the page or its address. A route stays a hash link.
+    // An https address leaves the site, so it opens in a new tab without handing over the page or its address. A route stays a hash link.
     const leaves = item.href.startsWith("https:");
     return (
-      <a key={itemKey} className="zd-a" href={item.href} rel={leaves ? "noopener noreferrer" : undefined}>
+      <a key={itemKey} className="zd-a" href={item.href} {...(leaves ? { rel: "noopener noreferrer", target: "_blank" } : {})}>
         {renderInline(item.children, itemKey, numbers)}
       </a>
     );
@@ -82,6 +83,7 @@ const renderBlock = (block: Block, index: number): ReactNode => {
       </div>
     );
   }
+  if (block.kind === "faucet") return <FaucetBlock key={key} chainId={block.chainId} />;
   if (block.kind === "code") {
     return (
       <pre key={key} className="zd-pre" tabIndex={0}>

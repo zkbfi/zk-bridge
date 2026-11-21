@@ -15,6 +15,8 @@ export type DocsRouteProps = {
   readonly slug: string | null;
   /** The heading named by the address, or null. */
   readonly heading: string | null;
+  /** The chain ids of the pair the app runs on, for the pages that are about particular chains. */
+  readonly chainIds?: readonly number[];
 };
 
 type BoundaryState = { readonly failed: boolean };
@@ -41,9 +43,9 @@ class DocsBoundary extends Component<{ readonly children: ReactNode }, BoundaryS
 /**
  * The docs route: a short loading line while the chunk downloads, then the docs site.
  *
- * @param props The page and the heading from the address.
+ * @param props The page and the heading from the address, and the chains of the pair.
  */
-export const DocsRoute = ({ slug, heading }: DocsRouteProps) => (
+export const DocsRoute = ({ slug, heading, chainIds }: DocsRouteProps) => (
   <DocsBoundary>
     <Suspense
       fallback={
@@ -52,7 +54,7 @@ export const DocsRoute = ({ slug, heading }: DocsRouteProps) => (
         </main>
       }
     >
-      <DocsPage slug={slug} heading={heading} />
+      <DocsPage slug={slug} heading={heading} {...(chainIds === undefined ? {} : { chainIds })} />
     </Suspense>
   </DocsBoundary>
 );

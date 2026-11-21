@@ -24,13 +24,20 @@ export type TokenPickerProps = {
   readonly omnibridgeNativeOf?: (token: TokenInfo) => TokenInfo | null;
   /** Reads a pasted address that is in no list (custom tokens), on the given chain; null when it is not a token. */
   readonly resolveCustom?: (address: string, side: ChainSide) => Promise<TokenInfo | null>;
+  /** Tokens (by `<side>:<address>`, lowercase) that stay listed with no balance and no history: the testnet faucet token. */
+  readonly pinned?: ReadonlySet<string>;
+  /** Whether a token has a small "Mint 1,000" action in its row (only the testnet faucet token). */
+  readonly mintable?: (token: TokenInfo) => boolean;
+  /** Starts the mint of a token that is `mintable`. */
+  readonly onMint?: (token: TokenInfo) => void;
   readonly onPick: (token: TokenInfo) => void;
   readonly onClose: () => void;
 };
 
 type Tab = "all" | ChainSide;
 
-const keyOf = (token: TokenInfo): string => `${token.side}:${token.address.toLowerCase()}`;
+/** The key of a token in the sets of the picker: `<side>:<address>`, the address in lowercase. */
+export const keyOf = (token: TokenInfo): string => `${token.side}:${token.address.toLowerCase()}`;
 
 /** The user's balance of a token, from the snapshots, or null when unknown. */
 const balanceOf = (token: TokenInfo, snapshots: readonly ChainSnapshotResult[]): bigint | null => tokenBalance(token, snapshots);
@@ -45,6 +52,7 @@ export const pickerRows = (input: {
   readonly tokens: readonly TokenInfo[];
   readonly snapshots: readonly ChainSnapshotResult[];
   readonly used?: ReadonlySet<string>;
+  readonly pinned?: ReadonlySet<string>;
   readonly query: string;
   readonly tab: Tab;
   readonly selected: TokenInfo;
@@ -54,7 +62,7 @@ export const pickerRows = (input: {
   return input.tokens.filter((token) => {
     if (input.tab !== "all" && token.side !== input.tab) return false;
     if (query !== "") return token.symbol.toLowerCase().includes(query) || token.address.toLowerCase().includes(query);
-    if (isNativeToken(token) || !known(token.side)) return true;
+    if (isNativeToken(token) || !known(token.side) || input.pinned?.has(keyOf(token)) === true) return true;
     const balance = balanceOf(token, input.snapshots);
     return (balance !== null && balance > 0n) || input.used?.has(keyOf(token)) === true || keyOf(token) === keyOf(input.selected);
   });
@@ -87,7 +95,7 @@ const BridgeGlyph = () => (
  *
  * @param props The tokens, the selection, the balances and the handlers.
  */
-export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () => null, omnibridgeNativeOf = () => null, resolveCustom, onPick, onClose }: TokenPickerProps) => {
+export const TokenPicker = ({ tokens, selected, snapshots, used, pinned, mintable, onMint, priceOf = () => null, omnibridgeNativeOf = () => null, resolveCustom, onPick, onClose }: TokenPickerProps) => {
   const { pair } = useServices();
   const [query, setQuery] = useState("");
   // The picker opens on the chain the transfer leaves from, so every row offered is a token of the current direction
@@ -97,7 +105,7 @@ export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () =>
   const [focused, setFocused] = useState<string | null>(null);
   const [tip, setTip] = useState<string | null>(null);
   const [custom, setCustom] = useState<TokenInfo | "loading" | "none" | null>(null);
-  const listed = useMemo(() => pickerRows({ tokens, snapshots, used, query, tab, selected }), [tokens, snapshots, used, query, tab, selected]);
+  const listed = useMemo(() => pickerRows({ tokens, snapshots, used, pinned, query, tab, selected }), [tokens, snapshots, used, pinned, query, tab, selected]);
   const rows = useMemo(() => (custom !== null && typeof custom === "object" ? [...listed, custom] : listed), [listed, custom]);
   // A pasted address that is in no list is read on-chain (on the chosen tab's chain, else the sending chain).
   useEffect(() => {
@@ -201,6 +209,11 @@ export const TokenPicker = ({ tokens, selected, snapshots, used, priceOf = () =>
                   </b>
                   <small>{price === null ? "—" : <>$<Num text={price} /></>}</small>
                 </span>
+                {onMint !== undefined && mintable !== undefined && mintable(token) ? (
+                  <button type="button" className="zb-mint" aria-label={`Mint 1,000 ${token.symbol} on ${chainOf(token.side).name}`} onClick={(event) => { event.stopPropagation(); onMint(token); }}>
+                    Mint 1,000
+                  </button>
+                ) : null}
                 <span className="zb-token-balance">{balance === null ? null : <Num text={amountText(balance, token.decimals)} />}</span>
               </li>
             );

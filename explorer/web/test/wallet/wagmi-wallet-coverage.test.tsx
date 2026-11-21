@@ -14,6 +14,7 @@ const wagmi = vi.hoisted(() => ({
   disconnect: vi.fn(),
   switchChainAsync: vi.fn(),
   sendTransactionAsync: vi.fn(),
+  watchAssetAsync: vi.fn(),
 }));
 
 // The real provider stays. Only the hooks that read and drive a browser wallet become controllable, because jsdom has no wallet.
@@ -25,6 +26,7 @@ vi.mock("wagmi", async (importOriginal) => ({
   useDisconnect: () => ({ disconnect: wagmi.disconnect }),
   useSwitchChain: () => ({ switchChainAsync: wagmi.switchChainAsync }),
   useSendTransaction: () => ({ sendTransactionAsync: wagmi.sendTransactionAsync }),
+  useWatchAsset: () => ({ watchAssetAsync: wagmi.watchAssetAsync }),
 }));
 
 const RPC_URLS = { 1: "https://eth.example.org", 369: "https://pls.example.org" } as const;
@@ -59,6 +61,7 @@ beforeEach(() => {
   wagmi.disconnect.mockReset();
   wagmi.switchChainAsync.mockReset().mockResolvedValue(undefined);
   wagmi.sendTransactionAsync.mockReset().mockResolvedValue(HASH);
+  wagmi.watchAssetAsync.mockReset().mockResolvedValue(true);
 });
 
 describe("createWalletConfig: the endpoints", () => {
@@ -151,5 +154,32 @@ describe("useWallet", () => {
     expect(() => render(<Capture />)).toThrow("useWallet needs a WalletContext provider above it.");
     quiet.mockRestore();
     expect(screen.queryByText(/./)).toBeNull();
+  });
+
+  it("asks the wallet to list a token on its own chain, switching to that chain first", async () => {
+    wagmi.connection = connected(1);
+    const port = await mount();
+    const calls: string[] = [];
+    wagmi.switchChainAsync.mockImplementation(async () => void calls.push("switch"));
+    wagmi.watchAssetAsync.mockImplementation(async () => {
+      calls.push("watch");
+      return true;
+    });
+    const address = `0x${"56".repeat(20)}` as const;
+    await port.watchAsset({ chainId: 369, address, symbol: "tFAU", decimals: 18 });
+    expect(calls).toEqual(["switch", "watch"]);
+    expect(wagmi.watchAssetAsync).toHaveBeenCalledWith({ type: "ERC20", options: { address, symbol: "tFAU", decimals: 18 } });
+  });
+
+  it("lists a token without a switch when the wallet is on its chain, and passes on a refusal", async () => {
+    wagmi.connection = connected(369);
+    const port = await mount();
+    const address = `0x${"56".repeat(20)}` as const;
+    await port.watchAsset({ chainId: 369, address, symbol: "tFAU", decimals: 18 });
+    expect(wagmi.switchChainAsync).not.toHaveBeenCalled();
+    wagmi.watchAssetAsync.mockRejectedValue(new Error("User rejected the request."));
+    await expect(port.watchAsset({ chainId: 369, address, symbol: "tFAU", decimals: 18 })).rejects.toThrow("User rejected the request.");
+    wagmi.watchAssetAsync.mockResolvedValue(false);
+    await expect(port.watchAsset({ chainId: 369, address, symbol: "tFAU", decimals: 18 })).rejects.toThrow("The wallet did not add the token.");
   });
 });

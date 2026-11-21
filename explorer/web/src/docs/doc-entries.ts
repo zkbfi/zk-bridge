@@ -30,8 +30,10 @@ export const entriesOf = (pages: readonly SitePageLike[]): readonly DocEntry[] =
 /**
  * Downloads the docs pages (a separate chunk) and lists them for the palette. Call it when a search needs the docs,
  * never while the page starts.
+ *
+ * @param chainIds The chain ids of the pair the app runs on: a page about other chains (the testnet faucet page) is left out.
  */
-export const loadDocEntries = async (): Promise<readonly DocEntry[]> => {
-  const { SITE_PAGES } = await import("@docs/pages");
-  return entriesOf(SITE_PAGES);
+export const loadDocEntries = async (chainIds: readonly number[]): Promise<readonly DocEntry[]> => {
+  const { SITE_PAGES, pagesForChains } = await import("@docs/pages");
+  return entriesOf(pagesForChains(SITE_PAGES, chainIds));
 };

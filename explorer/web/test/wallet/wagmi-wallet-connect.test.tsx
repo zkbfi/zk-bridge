@@ -34,6 +34,7 @@ vi.mock("wagmi", async (importOriginal) => {
     useDisconnect: () => ({ disconnect: wagmi.disconnect }),
     useSwitchChain: () => ({ switchChainAsync: wagmi.switchChainAsync }),
     useSendTransaction: () => ({ sendTransactionAsync: wagmi.sendTransactionAsync }),
+    useWatchAsset: () => ({ watchAssetAsync: async () => true }),
   };
 });
 vi.mock("../../src/wallet/appkit", () => ({ loadAppKit: appkit.loadAppKit }));

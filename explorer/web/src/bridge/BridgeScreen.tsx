@@ -33,7 +33,10 @@ import { iconSubjectOf } from "./image-source";
 import { Num } from "./Num";
 import { dollarsSpanWords, dollarsText as dollarsOf } from "./number";
 import { TokenIcon } from "./TokenIcon";
-import { TokenPicker } from "./TokenPicker";
+import { keyOf, TokenPicker } from "./TokenPicker";
+import { FaucetHelp } from "../faucet/FaucetHelp";
+import { faucetTokensOf, GAS_FAUCETS, isFaucetToken, nativeBalanceOf, withFaucetTokens } from "../faucet/faucet-model";
+import { useMint } from "../faucet/use-mint";
 import { routerWarningOf } from "../tx/tip-copy";
 import { ForkCutoverLine, forkPauseOf } from "../fork/ForkCutoverLine";
 import { useForkCutover } from "../fork/use-fork";
@@ -103,7 +106,11 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
   const known = useTokens(pair.id).data ?? [];
   const [customTokens, setCustomTokens] = useState<readonly TokenInfo[]>([]);
   // The native coins come last in the list; the default token is still the source chain's gas token (tokenFor).
-  const tokens = useMemo(() => [...known, ...customTokens, ...nativeTokensOf(pair)], [known, customTokens, pair]);
+  // On the testnet pair the faucet token tFAU is listed too, before anyone has bridged it (the indexer lists a token after its first bridging).
+  const faucetTokens = useMemo(() => faucetTokensOf(pair), [pair]);
+  const tokens = useMemo(() => [...withFaucetTokens(known, faucetTokens), ...customTokens, ...nativeTokensOf(pair)], [known, faucetTokens, customTokens, pair]);
+  const pinned = useMemo(() => new Set(faucetTokens.map(keyOf)), [faucetTokens]);
+  const { mint, dialog: mintDialog } = useMint();
   const rpcFor = (chainId: number): string | null => rpcUrlFor(connection?.resolved().rpcUrls[chainId]?.value, configuration.rpcUrls[chainId], defaultRpcUrl(chainId));
   const resolveCustom = useCallback(
     async (address: string, side: "first" | "second"): Promise<TokenInfo | null> => {
@@ -114,7 +121,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [pair, configuration, connection],
   );
-  const snapshots = useSnapshots(account, pair.id).data;
+  const snapshots = useSnapshots(account, pair.id, faucetTokens).data;
   const heads = useHeads(pair.id).data;
   const used = useUsedTokens(account, pair.id).data;
   const gate = usePairHealth().data?.find((entry) => entry.pairId === pair.id)?.gates[sourceSide(route.dir)];
@@ -741,6 +748,13 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
               )}
             </span>
           </div>
+          {faucetTokens.length === 0 || account === null ? null : (
+            <FaucetHelp
+              gas={nativeBalanceOf(side, snapshots ?? []) === 0n ? GAS_FAUCETS[source.chainId]! : null}
+              noTokens={token !== null && isFaucetToken(token, faucetTokens) && balance === 0n}
+              onMint={() => mint(source.chainId)}
+            />
+          )}
         </div>
       </section>
 
@@ -876,7 +890,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
         </div>
       </section>
 
-      {menu === "token" && token !== null ? <TokenPicker tokens={tokens} selected={token} snapshots={snapshots ?? []} {...(used === undefined ? {} : { used })} resolveCustom={resolveCustom} priceOf={(subject) => { const price = priceOf(subject); return price === null ? null : usdText(priceNumber(price)); }} onPick={pick} onClose={() => setMenu(null)} /> : null}
+      {menu === "token" && token !== null ? <TokenPicker tokens={tokens} selected={token} snapshots={snapshots ?? []} {...(used === undefined ? {} : { used })} resolveCustom={resolveCustom} pinned={pinned} mintable={(picked) => isFaucetToken(picked, faucetTokens)} onMint={(picked) => { setMenu(null); mint((picked.side === "first" ? pair.first : pair.second).chainId); }} priceOf={(subject) => { const price = priceOf(subject); return price === null ? null : usdText(priceNumber(price)); }} onPick={pick} onClose={() => setMenu(null)} /> : null}
       {review && token !== null && amount !== null ? (
         <ReviewSheet onClose={() => setReview(false)}>
             <ReviewRow label="You send"><b>{inline(tokenIcon(token, null, 16), amountText(amount, token.decimals), token.symbol)} on {source.name}</b></ReviewRow>
@@ -929,6 +943,7 @@ export const BridgeScreen = ({ route, onRoute, fixture, linked = [] }: BridgeScr
             {draft.status === "ready" ? null : <p className="zb-verdict">{draft.reason}</p>}
         </ReviewSheet>
       ) : null}
+      {mintDialog}
       {signing === null ? null : <TransactionDialog
           steps={signing.steps}
           variant="sheet"

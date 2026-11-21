@@ -497,6 +497,14 @@
 .zb-tabs [role="tab"] { display: inline-flex; align-items: center; gap: 6px; padding: 8px 0; font-weight: 600; font-size: var(--zb-step-0); color: var(--zb-muted); border-bottom: 3px solid transparent; margin-bottom: -1px; }
 .zb-tabs [aria-selected="true"] { color: var(--zb-ink); border-bottom-color: var(--zb-accent); }
 .zb-token-name { display: flex; flex-direction: column; line-height: 1.25; }
+/* The small "Mint 1,000" action of the testnet faucet token, in its picker row: a pill like the others, smaller. */
+.zb-mint { display: inline-flex; align-items: center; min-height: 28px; padding: 2px 12px; border-radius: 999px; font-weight: 600; font-size: var(--zb-step--1); background: var(--zb-pill); color: var(--zb-pill-ink); border: 1.5px solid var(--zb-pill-edge); cursor: pointer; white-space: nowrap; }
+.zb-mint:hover { border-color: var(--zb-accent); }
+/* What is missing on a testnet (no gas coin, no tFAU), under the amount. Plain text with links, as the balance line. */
+.zb-help { margin: 6px 0 0; font-size: var(--zb-step--1); line-height: 1.4; }
+.zb-band-from .zb-help { color: var(--zb-from-muted); }
+.zb-band-from .zb-help .zb-link { color: inherit; }
+.zb-help .zb-link { background: none; border: 0; padding: 0; font: inherit; font-weight: 600; cursor: pointer; }
 .zb-token-balance { margin-left: auto; font-variant-numeric: tabular-nums; }
 
 /* The search band (owner, 2026-11-06: "i still do like the streaked input+close button ... revisit the dividing line between

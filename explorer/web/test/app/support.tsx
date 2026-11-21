@@ -26,6 +26,7 @@ export const connectedWallet = (overrides: Partial<WalletPort> = {}): WalletPort
   sendTransaction: async () => {
     throw new Error("The test did not expect a send.");
   },
+  watchAsset: async () => undefined,
   ...overrides,
 });
 
