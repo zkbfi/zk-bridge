@@ -166,10 +166,10 @@ Where two documents disagree, the code wins, and in `docs/hardened-build-contrac
 - **What is left.** A reproducible proving job.
 - **Link.** [`docs/server-prover.md`](../server-prover.md), [`docs/gpu-prover.md`](../gpu-prover.md).
 
-### 2.4 Testnet runs the 2026-11-11 contracts, not the current main
-- **What.** The bridge has run on Sepolia and PulseChain testnet v4 since 2026-11-11 (the contracts in [`deploy/deployments/sepolia-pls943.json`](../../deploy/deployments/sepolia-pls943.json)), end to end with real proofs: the backend proves light-client updates on a GPU worker every hour, a traffic bot sends tokens both ways, and a runner delivers them. The e2e harness is in `e2e/`. The fixes of code review rounds 1 to 3 (the mediator's callback gas cap, `MediatorPayloads`, `ExactGasCall`, `MessageBridge`, and `RouterCaller`) are on main but not on testnet.
-- **What is left.** A redeploy of the bridge layer (bridge, mediator, factory, router) from main, so the audited code is the deployed code; prepared and rehearsed on forks before it is sent.
-- **Link.** [`docs/testnet-run.md`](../testnet-run.md), [`docs/redeploy-2026-11-gas.md`](../redeploy-2026-11-gas.md).
+### 2.4 Testnet runs the current contracts
+- **Status.** Fixed on 2026-11-21. The bridge layer (`MessageBridge`, `TokenMediator`, `MediatorPayloads`, `TokenFactory`, `DeliveryRouter` with its `RouterCaller`, and the bridge's three libraries) was redeployed on Sepolia and PulseChain testnet v4 from `743ebb2e`, with the fixes of code review rounds 1 to 3, at the same addresses on both chains (deployer nonces 45 to 52; 16 transactions, all successful; the wiring checks of `script/testnet/redeploy-check.sh` pass on both chains). The light clients, gates, fork registry and verifiers stay (none names a bridge, mediator or router). The contracts of 2026-11-11 are retired in the record and keep working for anything left on them.
+- **What is there.** End to end with real proofs: the backend proves light-client updates on a GPU worker every hour, a traffic bot sends tokens both ways, and a runner delivers them. The e2e harness is in `e2e/`.
+- **Link.** [`deploy/deployments/sepolia-pls943.json`](../../deploy/deployments/sepolia-pls943.json), [`docs/redeploy-2026-11-gas.md`](../redeploy-2026-11-gas.md) "The layers of 2026-11-20".
 
 ### 2.5 Who pays for proving (H-15)
 - **What.** Decided: a funded operator runs the prover and pays gas; the contracts take no proving fee. Delivery tips are voluntary. The operator server exists and is in this repository: `explorer/backend` schedules light-client updates and runs the prover on rented GPU workers, a publisher posts the updates, and the runner bot delivers messages and pays their gas (`deploy/app-server/`, `docs/bots.md`). On testnet the GPU cost was about $1.30 a day on 2026-11-20 (hourly updates in both directions).
