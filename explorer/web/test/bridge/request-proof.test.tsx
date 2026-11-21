@@ -116,7 +116,9 @@ describe("Request a proof on the Activity screen", () => {
     await userEvent.click(button);
     expect(await screen.findByText("A proof to the newest finality is already made or running. The next finality comes in about 1 s; ask again then.")).toBeInTheDocument();
     expect(button).toBeDisabled();
-    await waitFor(() => expect(button).toBeEnabled(), { timeout: 3000 });
+    // The wait is a real 1 s timer. The wait for it is the default of test/setup.ts (10 s): a 3 s limit here was missed
+    // on a busy machine during a full coverage run.
+    await waitFor(() => expect(button).toBeEnabled());
   });
 
   it("says when the prover does not take the request", async () => {

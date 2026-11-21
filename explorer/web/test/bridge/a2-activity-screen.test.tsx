@@ -8,7 +8,10 @@ import { addPending, clearPending } from "../../src/bridge/pending";
 import { buildTestServices } from "../render";
 import { connectedWallet, disconnectedWallet, renderWithWallet } from "../app/support";
 
-const NOW = Math.floor(Date.now() / 1000);
+// The screen groups rows under "Today" by the UTC day, and the rows below are an hour old. With the real clock they fell on
+// the previous UTC day in the first hour of each UTC day, and the tests that look for "Today" failed then. The clock is
+// pinned to noon UTC.
+const NOW = Date.UTC(2026, 10, 20, 12) / 1000;
 const item = (overrides: Partial<FeedItem>): FeedItem =>
   ({
     id: `0x${"aa".repeat(32)}`,
@@ -39,8 +42,14 @@ const renderFeed = (feed: readonly FeedItem[], extra: { readonly nativeBalance?:
   });
 };
 
-beforeEach(() => clearPending());
-afterEach(() => clearPending());
+beforeEach(() => {
+  vi.setSystemTime(NOW * 1000);
+  clearPending();
+});
+afterEach(() => {
+  clearPending();
+  vi.useRealTimers();
+});
 
 describe("the Activity screen without a wallet", () => {
   it("asks to connect and connects on the button", async () => {
