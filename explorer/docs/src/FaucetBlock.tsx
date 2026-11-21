@@ -44,7 +44,6 @@ export const FaucetBlock = ({ chainId }: FaucetBlockProps) => {
   };
   return (
     <section className="zd-faucet" aria-label={`Mint ${FAUCET_SYMBOL} on ${chain.name}`}>
-      <p className="zd-faucet-title">Mint {FAUCET_SYMBOL} on {chain.name}</p>
       <dl className="zd-faucet-facts">
         <div>
           <dt>Token</dt>

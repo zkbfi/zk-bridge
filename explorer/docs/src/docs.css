@@ -71,7 +71,10 @@ html, body { margin: 0; background: var(--zb-page); }
 .zd-h3 { margin: 26px 0 6px; font-size: var(--zb-step-0); font-weight: 700; }
 .zd-h4 { margin: 20px 0 4px; font-size: var(--zb-step--1); font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--zb-muted); }
 .zd-p { margin: 0 0 14px; }
+/* The UI kit's reset sets list-style: none on every ol and ul; docs lists show their numbers and bullets again. */
 .zd-list { margin: 0 0 14px; padding-left: 1.4em; }
+ul.zd-list { list-style: disc outside; }
+ol.zd-list { list-style: decimal outside; }
 .zd-list li { margin: 4px 0; }
 .zd-list li::marker { color: var(--zb-accent-text); }
 .zd-a { color: var(--zb-accent-text); font-weight: 600; text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
@@ -83,7 +86,6 @@ html, body { margin: 0; background: var(--zb-page); }
 /* Callouts: a note on the pale band surface with the accent edge; a warning in the app's warning style (.zb-warnbox). */
 /* The faucet block: a raised panel (the page is the layer below it), with the facts of the token, then two pills. */
 .zd-faucet { margin: 0 0 18px; padding: 14px 16px; background: var(--zb-raised); color: var(--zb-raised-ink); border: 1px solid var(--zb-raised-edge); box-shadow: var(--zb-elev-1); }
-.zd-faucet-title { margin: 0 0 8px; font-weight: 700; font-size: var(--zb-step-0); }
 .zd-faucet-facts { margin: 0 0 12px; display: grid; gap: 6px; }
 .zd-faucet-facts > div { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: 10px; }
 .zd-faucet-facts dt { font-size: var(--zb-step-micro); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--zb-muted); padding-top: 3px; }
