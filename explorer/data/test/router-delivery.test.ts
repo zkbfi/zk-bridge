@@ -44,8 +44,8 @@ const handOffRefused = (token: Hex, value: bigint) =>
   log(ROUTER, encodeEventTopics({ abi: deliveryRouterAbi, eventName: "HandOffRefused", args: { token } }) as Hex[], amount(value));
 const callFailed = (target: Hex, recipient: Hex, gasGiven: bigint) =>
   log(ROUTER, encodeEventTopics({ abi: deliveryRouterAbi, eventName: "CallFailed", args: { target, recipient } }) as Hex[], amount(gasGiven));
-const deliveryFailed = (token: Hex, recipient: Hex, value: bigint) =>
-  log(ROUTER, encodeEventTopics({ abi: deliveryRouterAbi, eventName: "DeliveryFailed", args: { token, recipient } }) as Hex[], encodeAbiParameters(parseAbiParameters("uint256, uint8"), [value, 0]));
+const deliveryFailed = (token: Hex, recipient: Hex, value: bigint, reason = 0) =>
+  log(ROUTER, encodeEventTopics({ abi: deliveryRouterAbi, eventName: "DeliveryFailed", args: { token, recipient } }) as Hex[], encodeAbiParameters(parseAbiParameters("uint256, uint8"), [value, reason]));
 
 /** One delivery to the router: the mint to the router, `TokensBridged`, the router's logs, then the bridge's end. */
 const deliveryLogs = (value: bigint, routerLogs: () => readonly DeliveryLog[]) => {
@@ -167,6 +167,15 @@ describe("routerDeliveryFromLogs: a router without the event (transfer logs)", (
   it("reads the reason of a hand-off and a refusal by the failed delivery address", () => {
     const logs = deliveryLogs(100n, () => [deliveryFailed(TOKEN, RECIPIENT, 100n), handOffRefused(TOKEN, 100n)]);
     expect(routerDeliveryFromLogs(input(100n, logs))).toMatchObject({ handedOff: true, handOffReason: "PayoutRefused", handOffRefused: true, callFailed: null });
+  });
+
+  it("names each reason of the router's Reason enum, and no reason for a value the enum does not have", () => {
+    const reasonOf = (reason: number) => routerDeliveryFromLogs(input(100n, deliveryLogs(100n, () => [deliveryFailed(TOKEN, RECIPIENT, 100n, reason), transfer(TOKEN, ROUTER, FAILED, 100n)])));
+    expect(reasonOf(0)).toMatchObject({ handedOff: true, handOffReason: "PayoutRefused" });
+    expect(reasonOf(1)).toMatchObject({ handedOff: true, handOffReason: "InvalidTerms" });
+    expect(reasonOf(2)).toMatchObject({ handedOff: true, handOffReason: "Reentered" });
+    // A router built later with a fourth reason: the hand-off still shows, with no reason rather than a wrong one.
+    expect(reasonOf(3)).toMatchObject({ handedOff: true, handOffReason: null });
   });
 
   it("leaves a native fee to the terms: the amount is the wrapped token's Withdrawal", () => {

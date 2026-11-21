@@ -72,11 +72,26 @@ export function proofMessage(direction: ProofDirection, startSlot: bigint, newSl
   });
 }
 
-/** A fresh in-memory Postgres (PGlite) with the archive schema. */
+/**
+ * The data directory of one empty, migrated PGlite, made once per test file. `initdb` and the migration are most of
+ * the start of a PGlite (about 3 to 5 s on a busy machine); loading this copy takes about a third of that.
+ */
+let migratedDataDirectory: Promise<File | Blob> | undefined;
+const migratedTemplate = (): Promise<File | Blob> => {
+  migratedDataDirectory ??= (async () => {
+    const database = new PGlite();
+    await createProofArchive(database as unknown as SqlExecutor).migrate();
+    const dump = await database.dumpDataDir("none");
+    await database.close();
+    return dump;
+  })();
+  return migratedDataDirectory;
+};
+
+/** A fresh in-memory Postgres (PGlite) with the archive schema: its own copy of an empty, migrated database. */
 export async function freshArchive(): Promise<{ database: PGlite; sql: SqlExecutor; archive: ProofArchive }> {
-  const database = new PGlite();
+  const database = new PGlite({ loadDataDir: await migratedTemplate() });
   const sql = database as unknown as SqlExecutor;
   const archive = createProofArchive(sql);
-  await archive.migrate();
   return { database, sql, archive };
 }

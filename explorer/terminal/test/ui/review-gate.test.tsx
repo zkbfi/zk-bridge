@@ -93,9 +93,26 @@ describe('the review modal and the deposit gate', () => {
     app = await renderApp({ width: 120, height: 40 })
     const { chainAccess, header, root } = enforcingGateChain()
     const asked: string[] = []
+    // The beacon node answers the fork cutover's three reads as a real node would (a schedule whose only fork is the
+    // genesis one, so no fork is coming) and the gate's header read. It used to answer every path with the header, so the
+    // cutover found no schedule and fell back to the copy bundled with the release; the test then passed only while that
+    // copy was at most seven days old, and failed from 2026-11-18 on.
+    const answers: Record<string, unknown> = {
+      '/eth/v1/config/fork_schedule': {
+        data: [
+          { previous_version: '0x00000000', current_version: '0x00000000', epoch: '0' },
+          { previous_version: '0x00000000', current_version: '0x01000000', epoch: '18446744073709551615' },
+        ],
+      },
+      '/eth/v1/beacon/genesis': { data: { genesis_time: '0', genesis_validators_root: `0x${'d8'.repeat(32)}`, genesis_fork_version: '0x00000000' } },
+      '/eth/v1/config/spec': { data: { SECONDS_PER_SLOT: '12', SLOTS_PER_EPOCH: '32' } },
+    }
     globalThis.fetch = (async (url: string) => {
       asked.push(url)
-      return new Response(JSON.stringify({ data: { header: { message: header } } }), { status: 200 })
+      const path = new URL(url).pathname
+      if (path.startsWith('/eth/v1/beacon/headers/')) return new Response(JSON.stringify({ data: { header: { message: header } } }), { status: 200 })
+      const answer = answers[path]
+      return answer === undefined ? new Response('not found', { status: 404 }) : new Response(JSON.stringify(answer), { status: 200 })
     }) as unknown as typeof fetch
     const connection = { resolved: () => ({ beaconUrls: { [chain.chainId]: { value: 'https://beacon.example', source: 'user' } } }) } as unknown as ConnectionRuntime
     const closed: string[] = []

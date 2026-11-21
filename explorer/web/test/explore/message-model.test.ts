@@ -166,6 +166,13 @@ describe("what a router delivery really did", () => {
     expect(outcome.paragraphs[1]).toContain("stay in the router until anyone calls sweep");
   });
 
+  it("says that the router handed off without naming a reason when the indexer has none (a reason value it does not know)", async () => {
+    const outcome = outcomeOf(await routed({ received: 0n, handOffReason: null, handOffRefused: true }), FIXTURE_PAIR, FAILED)!;
+    expect(outcome.kind).toBe("handed-off");
+    expect(outcome.paragraphs[0]).toBe(`The router could not pay ${RECIPIENT}. It handed 0.0001 USDC to the router's failed delivery address (${FAILED}).`);
+    expect(outcome.paragraphs[1]).toContain("refused the hand-off too");
+  });
+
   it("says that the recipient kept the tokens when the call after the payout failed, with the target and its gas", async () => {
     const target = "0x00000000000000000000000000000000000000c1" as const;
     const outcome = outcomeOf(await routed({ received: 100n, callFailed: { target, recipient: RECIPIENT, callGas: 50_000n } }), FIXTURE_PAIR)!;
