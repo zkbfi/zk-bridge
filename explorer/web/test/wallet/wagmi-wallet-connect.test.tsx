@@ -223,14 +223,21 @@ describe("with a project id: Reown AppKit", () => {
   });
 
   it("tolerates storage that cannot be read", async () => {
-    const spy = vi.spyOn(window.localStorage, "getItem").mockImplementation(() => {
+    // Replace the whole object: window.localStorage is jsdom's Storage under some Node versions and Node's own
+    // (Node 25 and later) under others, and a spy on a method of either may never be reached. The call count below
+    // proves the throwing read ran.
+    const getItem = vi.fn(() => {
       throw new Error("blocked");
     });
+    const original = Object.getOwnPropertyDescriptor(window, "localStorage");
+    Object.defineProperty(window, "localStorage", { configurable: true, get: () => ({ getItem }) });
     try {
       await mount(PROJECT_ID);
+      expect(getItem).toHaveBeenCalledWith("wagmi.recentConnectorId");
       expect(appkit.loadAppKit).not.toHaveBeenCalled();
     } finally {
-      spy.mockRestore();
+      if (original === undefined) Reflect.deleteProperty(window, "localStorage");
+      else Object.defineProperty(window, "localStorage", original);
     }
   });
 
